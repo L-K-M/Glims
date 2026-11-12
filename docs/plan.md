@@ -5158,3 +5158,18 @@ Cancel, source close, Apply, Undo/Redo and Recorder admission. A cached calculat
 image reduces repeated 12 MP preview retrieval from 310–338 ms to 0.87–1.41 ms,
 before viewport rendering. Full-engine UI and standalone results are tracked
 with the integration pull request. See [ink-levels-preview.md](ink-levels-preview.md).
+
+
+### Authoritative ink identity candidate (2026-11-12)
+
+Slot 189 exposes validated document-scoped ink UUIDs and canonical CMYK roles
+without using display names as identity. Swift also exposes committed scalar
+Levels independently of the preview API. The loader now copies only the
+advertised API prefix into a zeroed current table; the real older 184-slot
+producer first reproduced a load refusal, then passed 27 live checks. All four
+current producers pass 1,269 native identity checks and 104 Swift wrapper
+checks each, plus general conformance. Twelve decoder/guard-page tests and
+130 Python preflight checks pass. Native and Swift independent reviews are
+clear after the loader fix. This is a prerequisite for ink Recorder support,
+not completed recording/replay. See `ink-channel-identity.md`. CI and full app
+qualification remain integration gates.

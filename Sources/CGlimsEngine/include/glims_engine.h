@@ -1087,6 +1087,30 @@ typedef enum GlimsEffectCommand {
   GLIMS_EFFECT_TO_BOTTOM = 6
 } GlimsEffectCommand;
 
+typedef enum GlimsInkRole {
+  GLIMS_INK_ROLE_UNSPECIFIED = 0,
+  GLIMS_INK_ROLE_CYAN        = 1,
+  GLIMS_INK_ROLE_MAGENTA     = 2,
+  GLIMS_INK_ROLE_YELLOW      = 3,
+  GLIMS_INK_ROLE_BLACK       = 4
+} GlimsInkRole;
+
+/* Ink channel identity: read-only metadata for a component document ink plane.
+ * color_mode is a facade GlimsColorMode value (not a native enum). UUID is
+ * document-scoped durable plane identity; never equate unrelated documents
+ * solely by UUID or names. ordinal is zero-based in canonical persisted map
+ * order, count is the map count. For CMYK, role comes from canonical CMYK map
+ * order (C,M,Y,K). For Multichannel, role is GLIMS_INK_ROLE_UNSPECIFIED
+ * regardless of ink name/RGB. */
+typedef struct GlimsInkChannelIdentity {
+  uint32_t struct_size;
+  uint32_t color_mode;
+  uint32_t role;
+  uint32_t ordinal;
+  uint32_t count;
+  uint8_t  uuid[16];
+} GlimsInkChannelIdentity;
+
 /* The image's color model, as image_color_info reports it and
  * image_convert_mode takes. Facade-owned values only; the engine's own
  * enum never crosses this boundary. */
@@ -3723,6 +3747,22 @@ typedef struct GlimsEngineAPI {
    * Cleanup remains available if source component metadata is damaged. */
   GlimsStatus (*image_ink_snapshot_end) (GlimsEngine *engine, GlimsImageID image,
                                         uint64_t token);
+  /* Slot189: read-only ink channel identity for a component document ink plane.
+   * Caller must supply out with at least readable struct_size. A NULL output or
+   * struct_size < sizeof(GlimsInkChannelIdentity) returns INVALID_ARGUMENT
+   * without writing any byte. For accepted capacity, the caller's struct_size
+   * and extension tail are preserved; every failure (including admission
+   * failure/NOT_RUNNING) clears the entire known payload; on success only the
+   * known fields are filled. Metadata read: allowed while busy like
+   * image_components, never requires the channel to be selected, performs no
+   * edit-readiness checks, no pixel reads, and no mutation/dirty/history/
+   * selection/file-identity changes. Canonical persisted map order defines
+   * ordinal/count; CMYK role follows canonical C,M,Y,K order and Multichannel
+   * reports GLIMS_INK_ROLE_UNSPECIFIED. UUID is document-scoped durable plane
+   * identity and must not be used to equate unrelated documents. */
+  GlimsStatus (*image_ink_channel_identity)(GlimsEngine *engine, GlimsImageID image,
+                                            GlimsItemID channel,
+                                            GlimsInkChannelIdentity *out);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

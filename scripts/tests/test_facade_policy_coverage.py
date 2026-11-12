@@ -14,16 +14,20 @@ class FacadePolicyCoverageTests(unittest.TestCase):
     def test_current_bindings_are_complete(self):
         errors, count = COVERAGE.check(ROOT)
         self.assertEqual(errors, [])
-        self.assertGreater(count, 170)
+        self.assertEqual(count, 189)
 
     def test_missing_misrouted_and_bypassing_bindings_refuse(self):
         cases = [
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_ink_snapshot_begin,', 'GLIMS_FACADE_OP_image_duplicate,'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_ink_snapshot_levels,', 'GLIMS_FACADE_OP_image_levels_ink,'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_ink_snapshot_apply,', 'GLIMS_FACADE_OP_image_levels_ink,'),
+            ('Engine/engine.c', 'GLIMS_FACADE_OP_image_ink_channel_identity,', 'GLIMS_FACADE_OP_image_components,'),
             ('Engine/facade-operations.def',
              'GLIMS_FACADE(image_ink_snapshot_end, api_image_ink_snapshot_end, IMAGE, CLEANUP)',
              'GLIMS_FACADE(image_ink_snapshot_end, api_image_ink_snapshot_end, IMAGE, COMPONENT)'),
+            ('Engine/facade-operations.def',
+             'GLIMS_FACADE(image_ink_channel_identity, api_image_ink_channel_identity, IMAGE, COMPONENT)',
+             'GLIMS_FACADE(image_ink_channel_identity, api_image_ink_channel_identity, IMAGE, ORDINARY)'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_levels_ink,', 'GLIMS_FACADE_OP_image_edit_ink,'),
             ('Engine/facade-operations.def',
              'GLIMS_FACADE(image_levels_ink, api_image_levels_ink, IMAGE, COMPONENT)',

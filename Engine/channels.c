@@ -690,3 +690,58 @@ glims_image_set_quick_mask (GlimsEngine  *engine,
 
   return GLIMS_STATUS_OK;
 }
+
+static void
+clear_ink_channel_identity_payload (GlimsInkChannelIdentity *out)
+{
+  guint32 struct_size = out->struct_size;
+
+  memset (out, 0, sizeof (*out));
+  out->struct_size = struct_size;
+}
+
+GlimsStatus
+glims_image_ink_channel_identity (GlimsEngine             *engine,
+                                  GlimsImageID             id,
+                                  GlimsItemID              channel_id,
+                                  GlimsInkChannelIdentity *out)
+{
+  GlimsOpenImage   *open;
+  GlimsPlateStorage storage;
+  guint             index;
+
+  /* Capacity precondition is validated at the facade wrapper. Reset the known
+   * payload on every internal failure path so direct/internal calls are safe. */
+  if (! out || out->struct_size < sizeof (*out))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  clear_ink_channel_identity_payload (out);
+  open = glims_lookup_image (engine, id);
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  if (! glims_plate_storage_read_open (open, &storage))
+    return GLIMS_STATUS_UNSUPPORTED;
+
+  if (channel_id == 0)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  for (index = 0; index < storage.map.count; index++)
+    {
+      if (gimp_item_get_id (GIMP_ITEM (storage.planes[index])) == channel_id)
+        break;
+    }
+  if (index == storage.map.count)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  out->color_mode = storage.map.mode == GLIMS_PLATE_MODE_CMYK
+                      ? GLIMS_COLOR_MODE_CMYK
+                      : GLIMS_COLOR_MODE_MULTICHANNEL;
+  out->role = (storage.map.mode == GLIMS_PLATE_MODE_CMYK && index < 4)
+                ? (GLIMS_INK_ROLE_CYAN + index)
+                : GLIMS_INK_ROLE_UNSPECIFIED;
+  out->ordinal = index;
+  out->count = storage.map.count;
+  memcpy (out->uuid, storage.map.entries[index].uuid, 16);
+  return GLIMS_STATUS_OK;
+}
