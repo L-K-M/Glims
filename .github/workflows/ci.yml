@@ -35,6 +35,8 @@ jobs:
       # the native Mac job still checks its optimized implementation.
       - name: Check optimized and sanitized component metadata codec
         run: bash scripts/test-plate-map.sh
+      - name: Check optimized and sanitized native CMYK PSD codec
+        run: bash scripts/test-cmyk-psd-codec.sh
 
   build-test:
     name: Build, Test & Package
@@ -79,6 +81,9 @@ jobs:
       - name: Check private component metadata codec
         timeout-minutes: 5
         run: bash scripts/test-plate-map.sh optimized
+      - name: Check private native CMYK PSD codec
+        timeout-minutes: 5
+        run: bash scripts/test-cmyk-psd-codec.sh optimized
 
       - name: Build
         run: swift build

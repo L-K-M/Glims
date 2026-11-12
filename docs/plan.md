@@ -5073,3 +5073,16 @@ post-dab redraws and 1.9 seconds for its first fit-view conversion under shared
 load. Full app checks on the other engines, packaging and CI remain in progress;
 this integration has not replaced the qualified installed app. See
 [cmyk-documents.md](cmyk-documents.md) for the admitted command scope and tests.
+
+### Private native-CMYK PSD codec (2026-11-12)
+
+A bounded planar PSD serializer is being qualified before enabling native CMYK
+export. It preserves U8/U16 ink integers and exact ICC bytes without an RGB
+round trip, limits dimensions/file size before output and distinguishes source
+from sink failures. It remains private and unused by the editor. Independent
+byte-layout/refusal tests and source review are in progress; destination
+transaction and actual export UI integration remain separate. The independent
+byte fixture now passes 315 checks in optimized and ASan/UBSan builds; source
+review found no confirmed important findings. Native adapter and CI checks
+remain pending. See
+[cmyk-psd-codec.md](cmyk-psd-codec.md).
