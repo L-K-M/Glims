@@ -4066,6 +4066,31 @@ api_image_edit_ink (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel
                             image_edit_ink_on_engine, &a, error);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  const GlimsInkLevelsSettings *settings;
+  char **error;
+} InkLevelsArgs;
+
+static GlimsStatus
+image_levels_ink_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkLevelsArgs *a = data;
+  return glims_image_levels_ink (engine, a->image, a->channel, a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_levels_ink (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel,
+                      const GlimsInkLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  InkLevelsArgs a = { image, channel, settings, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_levels_ink,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_levels_ink_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

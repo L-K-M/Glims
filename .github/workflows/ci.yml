@@ -43,6 +43,8 @@ jobs:
         run: bash scripts/test-cmyk-psd-file-faults.sh
       - name: Check optimized and sanitized scalar ink arithmetic
         run: bash scripts/test-component-scalar.sh
+      - name: Check optimized and sanitized scalar ink Levels
+        run: bash scripts/test-component-levels.sh
 
   build-test:
     name: Build, Test & Package
@@ -99,6 +101,10 @@ jobs:
       - name: Check scalar ink arithmetic
         timeout-minutes: 5
         run: bash scripts/test-component-scalar.sh optimized
+
+      - name: Check scalar ink Levels
+        timeout-minutes: 5
+        run: bash scripts/test-component-levels.sh optimized
 
       - name: Build
         run: swift build

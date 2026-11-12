@@ -5129,3 +5129,14 @@ CMYK/Multichannel checks with development trees blocked; fresh/cached/relocated
 launches take 1.720/1.408/3.202 seconds. The actual Fill sheet is visually usable;
 Tool Options scroll presentation is being checked separately. Latest CI and merge
 remain pending before installation. See [component-edits.md](component-edits.md).
+
+### Native ink Levels foundation (2026-11-12)
+
+An additive scalar Levels transaction now preserves native CMYK/Multichannel
+samples, selection weighting and exact Undo without RGB conversion. The kernel
+passes 131,713 optimized/sanitized checks. All four engines pass 1,534 Levels,
+1,314 prior scalar-edit and 39 ownership/cancellation checks each, as well as
+general conformance. Numeric and native integration reviews found no remaining
+important findings. A frozen-source modeless preview and its controls are next;
+the foundation does not enable an ink Levels menu by itself. See
+[component-levels.md](component-levels.md).

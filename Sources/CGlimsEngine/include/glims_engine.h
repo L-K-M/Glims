@@ -804,6 +804,14 @@ typedef struct GlimsLevelsChannel {
   double high_output;       /* finite 0..1; default 1 */
 } GlimsLevelsChannel;
 
+/* Scalar ink intensities: 0 is full ink, 1 is paper. No RGB/TRC conversion. */
+typedef struct GlimsInkLevelsSettings {
+  uint32_t struct_size;
+  GlimsLevelsChannel value;
+  uint32_t clamp_input;     /* exactly 0 or 1 */
+  uint32_t clamp_output;    /* exactly 0 or 1 */
+} GlimsInkLevelsSettings;
+
 typedef struct GlimsLevelsSettings {
   uint32_t struct_size;
   uint32_t trc;             /* GlimsColorTRC: LINEAR/NONLINEAR/PERCEPTUAL; default LINEAR */
@@ -3671,6 +3679,21 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_edit_ink) (GlimsEngine *engine, GlimsImageID image,
                                 GlimsItemID channel, uint32_t operation,
                                 double intensity, double opacity, char **error);
+  /* Slot184: atomically apply Levels to the explicit sole selected native
+   * ink plane. Same ownership, selection, lock, cancellation and Undo contract
+   * as slot183. Settings require struct_size >= sizeof(GlimsInkLevelsSettings),
+   * finite endpoints in [0,1], gamma in [0.1,10], and Boolean clamp flags.
+   * Equal input endpoints subtract low_input; otherwise normalize by their
+   * signed difference. Clamp input if requested, apply pow(t,1/gamma) only
+   * to positive t, map output endpoints, then clamp output if requested.
+   * The current selection blends that mapped target with original samples
+   * once. Integer results round half up; finite extended float is retained
+   * when unclamped. Invalid affected samples/overflow refuse before publication.
+   * Identity results make no Undo. Immutable settings are borrowed until return.
+   * This is a committed edit, not a preview session. Clears *error. */
+  GlimsStatus (*image_levels_ink) (GlimsEngine *engine, GlimsImageID image,
+                                  GlimsItemID channel, const GlimsInkLevelsSettings *settings,
+                                  char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

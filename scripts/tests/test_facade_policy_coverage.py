@@ -18,6 +18,10 @@ class FacadePolicyCoverageTests(unittest.TestCase):
 
     def test_missing_misrouted_and_bypassing_bindings_refuse(self):
         cases = [
+            ('Engine/engine.c', 'GLIMS_FACADE_OP_image_levels_ink,', 'GLIMS_FACADE_OP_image_edit_ink,'),
+            ('Engine/facade-operations.def',
+             'GLIMS_FACADE(image_levels_ink, api_image_levels_ink, IMAGE, COMPONENT)',
+             'GLIMS_FACADE(image_levels_ink, api_image_levels_ink, IMAGE, ORDINARY)'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_edit_ink,', 'GLIMS_FACADE_OP_image_clear,'),
             ('Engine/facade-operations.def',
              'GLIMS_FACADE(image_edit_ink, api_image_edit_ink, IMAGE, COMPONENT)',
