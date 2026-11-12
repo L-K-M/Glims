@@ -59,6 +59,56 @@ final class EngineSession: @unchecked Sendable {
         case similarColors = 1, selection
     }
 
+    enum InkEditOperation: UInt32 {
+        case fill = 0, clear = 1, invert = 2
+
+        var title: String {
+            switch self {
+            case .fill: return "Fill Ink Channel"
+            case .clear: return "Clear Ink Channel"
+            case .invert: return "Invert Ink Channel"
+            }
+        }
+    }
+
+    struct InkEdit: Equatable {
+        let operation: InkEditOperation
+        let intensity: Double
+        let opacity: Double
+
+        static let clear = InkEdit(operation: .clear, intensity: 1, opacity: 1)
+        static let invert = InkEdit(operation: .invert, intensity: 0, opacity: 1)
+
+        var isValid: Bool {
+            guard intensity.isFinite, opacity.isFinite else { return false }
+            switch operation {
+            case .fill: return (0...1).contains(intensity) && (0...1).contains(opacity)
+            case .clear: return intensity == 1 && opacity == 1
+            case .invert: return intensity == 0 && opacity == 1
+            }
+        }
+    }
+
+    var supportsInkEdits: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_edit_ink),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_edit_ink) else { return false }
+        return api.image_edit_ink != nil
+    }
+
+    func editInk(_ image: Int32, channel: Int32, settings: InkEdit) throws {
+        guard supportsInkEdits, let edit = api.image_edit_ink else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink-channel edits.")
+        }
+        guard channel > 0, settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose one ink channel and valid ink amount and opacity values.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(edit(engine, image, channel, settings.operation.rawValue,
+                       settings.intensity, settings.opacity, &error), error)
+    }
+
     /// How a pattern fill paints (GlimsPatternFillSettings): the pattern
     /// tiled from the drawable's origin instead of a solid color. It has
     /// no color fields of its own; the pattern comes from the resource

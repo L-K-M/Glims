@@ -5119,3 +5119,22 @@ sizes, the 120-point minimum, scrolling and stable sizing across tool switches
 remain unchanged. A real CMYK window reproduced the partly hidden explanation;
 the revised first-launch window shows it completely and stays outside the canvas.
 The debug build passes. This is a default-layout change, not a scrolling repair.
+
+### Native ink Fill, Clear and Invert (2026-11-12)
+
+Selected CMYK and Multichannel ink planes now have explicit scalar Fill, Clear
+and linear Invert routes, with selection weighting and exact native Undo. The
+Fill sheet accepts ink amount and opacity without changing color-picker state;
+other generic filters remain gated. Staging, cancellation and publication retain
+source samples and precision. An accepted operation reserves its Recorder entry
+before busy observers can Stop or begin another epoch, and drains before Close.
+
+All four engines pass 1,314 numeric and 39 ownership/cancellation checks each;
+828 optimized/sanitized scalar checks and a separate 197,397-check numeric probe
+pass. The pinned actual-window fixture passes 246 checks, including the observed
+and fixed six-failure Recorder regression. All 1,526 units and all 16 actual-window
+cases across the four engines pass. The standalone app passes native/full/ink-edit/
+CMYK/Multichannel checks with development trees blocked; fresh/cached/relocated
+launches take 1.720/1.408/3.202 seconds. The actual Fill sheet is visually usable;
+Tool Options scroll presentation is being checked separately. Latest CI and merge
+remain pending before installation. See [component-edits.md](component-edits.md).

@@ -10,6 +10,9 @@ import AppKit
 @MainActor
 enum FillForm {
     static func present(in document: ImageDocument, on window: NSWindow) {
+        if document.colorInfo.mode.usesInkChannels {
+            return InkFillForm.present(in: document, on: window)
+        }
         guard document.acceptsEdits, window.attachedSheet == nil else {
             if !document.acceptsEdits {
                 document.onError?(document.isClosing

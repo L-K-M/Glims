@@ -4039,6 +4039,33 @@ api_image_export_native_cmyk_psd (GlimsEngine *engine, GlimsImageID image,
                             image_export_native_cmyk_psd_on_engine, &a, error);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  uint32_t operation;
+  double intensity, opacity;
+  char **error;
+} InkEditArgs;
+
+static GlimsStatus
+image_edit_ink_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkEditArgs *a = data;
+  return glims_image_edit_ink (engine, a->image, a->channel, a->operation,
+                               a->intensity, a->opacity, a->error);
+}
+
+static GlimsStatus
+api_image_edit_ink (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel,
+                    uint32_t operation, double intensity, double opacity, char **error)
+{
+  if (error) *error = NULL;
+  InkEditArgs a = { image, channel, operation, intensity, opacity, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_edit_ink,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_edit_ink_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

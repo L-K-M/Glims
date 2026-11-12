@@ -15,10 +15,17 @@ final class EngineActivityTests: XCTestCase {
         let activity = EngineActivity()
         let release = DispatchSemaphore(value: 0)
         var finished = false
+        var admissions = 0
         defer { release.signal() }
-        XCTAssertTrue(activity.perform(label: "Saving", work: { release.wait() }) { finished = true })
+        XCTAssertTrue(activity.perform(label: "Saving", didAdmit: {
+            XCTAssertTrue(activity.isBusy)
+            admissions += 1
+        }, work: { release.wait() }) { finished = true })
+        XCTAssertEqual(admissions, 1)
         XCTAssertTrue(activity.isBusy)
-        XCTAssertFalse(activity.perform(label: "Overlapping", work: { XCTFail("Refused work ran") }) {})
+        XCTAssertFalse(activity.perform(label: "Overlapping", didAdmit: { admissions += 1 },
+                                        work: { XCTFail("Refused work ran") }) {})
+        XCTAssertEqual(admissions, 1, "Refused work never reserves command state")
         release.signal()
         waitUntil { finished }
         XCTAssertFalse(activity.isBusy)
