@@ -5094,3 +5094,12 @@ remain pending. See
 The private PSD codec now compiles into all four adapters, whose normal
 conformance, XCF and TIFF suites pass 9,818 checks in total. Actual native
 file export is a separate integration; the codec remains unused by the editor.
+
+### Tool Options first-launch visibility (2026-11-12)
+
+The default Tool Options content height increases from 190 to 300 points so the
+paint controls and native-ink explanation fit without scrolling. Existing saved
+sizes, the 120-point minimum, scrolling and stable sizing across tool switches
+remain unchanged. A real CMYK window reproduced the partly hidden explanation;
+the revised first-launch window shows it completely and stays outside the canvas.
+The debug build passes. This is a default-layout change, not a scrolling repair.
