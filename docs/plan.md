@@ -5401,3 +5401,26 @@ prefixes and exact sample ownership. Independent native, fixture and Swift
 transport reviews are clear. Hosted CI and the application panel remain
 separate gates. See
 [ink-curves.md](ink-curves.md); this does not claim Photoshop parity.
+
+### Selected-ink freehand Curves panel candidate (2026-11-12)
+
+The actual CMYK/Multichannel Curves menu now routes to a modeless freehand
+panel, with whole-table graph edits, explicit sample index/output, Reset,
+owned preview, Apply and Cancel. Levels and Curves share counted snapshot
+cleanup while retaining separate typed capability gates. All 1,644 Swift
+tests pass; all four engines pass 174 Curves and 505 existing Levels workflow
+checks each. Independent panel and lifecycle reviews are clear. Hosted CI
+remains open. Smooth points and Curves Recorder commands are subsequent work;
+this is neither an installed feature nor a Photoshop-parity claim.
+
+### Smooth selected-ink Curves (candidate)
+
+The modeless Curves panel supports Smooth points, corner types, exact numeric
+input, pointer and keyboard editing, and Freehand conversion using the checked
+sampler. Completed edits preserve the original-image preview/Apply lifecycle;
+invalid drafts and excessive point counts refuse visibly. Reset and cancelled
+pointer gestures restore defined states. Parent regressions reproduced and
+fixed draft-loss, rounding and keyboard ownership defects. Pinned native UI
+passes 243 checks and the full prior Swift suite passes 1,665; additional
+pointer cancellation tests pass. Independent production review is clear.
+Four-engine UI qualification, fixture review and hosted CI remain in progress.

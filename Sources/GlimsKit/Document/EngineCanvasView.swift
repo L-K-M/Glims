@@ -89,6 +89,21 @@ final class EngineCanvasView: NSView {
     })
     var inkLevelsPreviewImage: CGImage? { inkLevelsPixels.image }
     var inkLevelsPreviewIsCurrent: Bool { inkLevelsPixels.isCurrent }
+    private var inkCurvesPreviewToken: UInt64?
+    private var inkCurvesPreviewSettings = EngineSession.InkCurvesSettings()
+    var onInkCurvesPreviewChange: ((Bool, String?) -> Void)?
+    private lazy var inkCurvesPixels: InkCurvesPixelPreview = InkCurvesPixelPreview(render: { [weak self] request, completion in
+        guard let self else { return completion(.failure(ImageDocument.DocumentError.closed)) }
+        self.document.renderInkCurvesPreview(request, completion: completion)
+    }, changed: { [weak self] in
+        guard let self else { return }
+        self.needsDisplay = true
+        self.onInkCurvesPreviewChange?(self.inkCurvesPixels.isCurrent, nil)
+    }, failed: { [weak self] error in
+        self?.onInkCurvesPreviewChange?(false, error.localizedDescription)
+    })
+    var inkCurvesPreviewImage: CGImage? { inkCurvesPixels.image }
+    var inkCurvesPreviewIsCurrent: Bool { inkCurvesPixels.isCurrent }
     /// Destination observer tokens for the owning window and its associated
     /// screen; swapped on window changes and removed on detach/close. The
     /// blocks hold `self` weakly, so no observer retain cycle.
@@ -305,6 +320,9 @@ final class EngineCanvasView: NSView {
         inkLevelsPreviewToken = nil
         inkLevelsPixels.update(nil)
         onInkLevelsPreviewChange = nil
+        inkCurvesPreviewToken = nil
+        inkCurvesPixels.update(nil)
+        onInkCurvesPreviewChange = nil
         onRenderMetricsChange = nil
         tools.cancelFloatingShape()
         tools.stopHintEvents()
@@ -621,6 +639,7 @@ final class EngineCanvasView: NSView {
         setNeedsRender()
         refreshTransformPixelPreview()
         refreshInkLevelsPixelPreview()
+        refreshInkCurvesPixelPreview()
         surroundColor.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -645,6 +664,10 @@ final class EngineCanvasView: NSView {
                         dirtyRect: dirtyRect, context: context)
         }
         if let image = inkLevelsPixels.image, let request = inkLevelsPixels.displayedRequest {
+            drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
+                        dirtyRect: dirtyRect, context: context)
+        }
+        if let image = inkCurvesPixels.image, let request = inkCurvesPixels.displayedRequest {
             drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
                         dirtyRect: dirtyRect, context: context)
         }
@@ -693,6 +716,28 @@ final class EngineCanvasView: NSView {
                               width: visibleRect.width / scale, height: visibleRect.height / scale)
             .intersection(CGRect(origin: .zero, size: size))
         inkLevelsPixels.update(.init(token: token, settings: inkLevelsPreviewSettings,
+            imageSize: size, destination: destination, proof: softProof,
+            viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
+    }
+
+    func setInkCurvesPreview(token: UInt64?, settings: EngineSession.InkCurvesSettings = .init()) {
+        inkCurvesPreviewToken = token
+        inkCurvesPreviewSettings = settings
+        refreshInkCurvesPixelPreview(retryFailure: true)
+        needsDisplay = true
+    }
+
+    private func refreshInkCurvesPixelPreview(retryFailure: Bool = false) {
+        guard !renderingStopped, !document.isClosing, document.filterPreviewIsOpen,
+              let token = inkCurvesPreviewToken, !visibleRect.intersection(bounds).isEmpty else {
+            inkCurvesPixels.update(nil)
+            return
+        }
+        let size = CGSize(width: document.info.width, height: document.info.height)
+        let viewport = CGRect(x: visibleRect.minX / scale, y: visibleRect.minY / scale,
+                              width: visibleRect.width / scale, height: visibleRect.height / scale)
+            .intersection(CGRect(origin: .zero, size: size))
+        inkCurvesPixels.update(.init(token: token, settings: inkCurvesPreviewSettings,
             imageSize: size, destination: destination, proof: softProof,
             viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
     }
