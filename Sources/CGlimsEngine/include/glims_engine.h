@@ -804,6 +804,14 @@ typedef struct GlimsLevelsChannel {
   double high_output;       /* finite 0..1; default 1 */
 } GlimsLevelsChannel;
 
+/* Scalar ink intensities: 0 is full ink, 1 is paper. No RGB/TRC conversion. */
+typedef struct GlimsInkLevelsSettings {
+  uint32_t struct_size;
+  GlimsLevelsChannel value;
+  uint32_t clamp_input;     /* exactly 0 or 1 */
+  uint32_t clamp_output;    /* exactly 0 or 1 */
+} GlimsInkLevelsSettings;
+
 typedef struct GlimsLevelsSettings {
   uint32_t struct_size;
   uint32_t trc;             /* GlimsColorTRC: LINEAR/NONLINEAR/PERCEPTUAL; default LINEAR */
@@ -3671,6 +3679,50 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_edit_ink) (GlimsEngine *engine, GlimsImageID image,
                                 GlimsItemID channel, uint32_t operation,
                                 double intensity, double opacity, char **error);
+  /* Slot184: atomically apply Levels to the explicit sole selected native
+   * ink plane. Same ownership, selection, lock, cancellation and Undo contract
+   * as slot183. Settings require struct_size >= sizeof(GlimsInkLevelsSettings),
+   * finite endpoints in [0,1], gamma in [0.1,10], and Boolean clamp flags.
+   * Equal input endpoints subtract low_input; otherwise normalize by their
+   * signed difference. Clamp input if requested, apply pow(t,1/gamma) only
+   * to positive t, map output endpoints, then clamp output if requested.
+   * The current selection blends that mapped target with original samples
+   * once. Integer results round half up; finite extended float is retained
+   * when unclamped. Invalid affected samples/overflow refuse before publication.
+   * Identity results make no Undo. Immutable settings are borrowed until return.
+   * This is a committed edit, not a preview session. Clears *error. */
+  GlimsStatus (*image_levels_ink) (GlimsEngine *engine, GlimsImageID image,
+                                  GlimsItemID channel, const GlimsInkLevelsSettings *settings,
+                                  char **error);
+  /* Slots185–188: immutable native-ink preview baseline, owned by the source
+   * image. Begin captures one selected unlocked ink plus every plane, selection,
+   * profile and display attribute; only one token per image may be live.
+   * The private baseline has no public image ID. Tokens never repeat within an
+   * engine. Begin zeros *token on failure. Ordinary source edits remain possible;
+   * Apply refuses if preview-relevant state no longer matches the baseline.
+   * Closing the source or stopping the engine frees the baseline. */
+  GlimsStatus (*image_ink_snapshot_begin) (GlimsEngine *engine, GlimsImageID image,
+                                          GlimsItemID channel, uint64_t *token, char **error);
+  /* Recompute from the frozen original, never from an earlier preview. Returns
+   * a separate owned image that the caller renders and closes with image_close.
+   * It has no document/Recorder identity. Zeros *copy on failure; source pixels,
+   * selection, history and file identity are untouched. */
+  GlimsStatus (*image_ink_snapshot_levels) (GlimsEngine *engine, GlimsImageID image,
+                                           uint64_t token, const GlimsInkLevelsSettings *settings,
+                                           GlimsImageID *copy, char **error);
+  /* Compare all native plane and mask bytes plus map/profile/visibility under
+   * the edit gate before staging. Revalidate the sole original target after the
+   * last nested dispatch, then publish one Undo without yielding. No-op success
+   * also requires a matching baseline. Success consumes the token; cancellation,
+   * stale state and errors retain it and publish nothing. */
+  GlimsStatus (*image_ink_snapshot_apply) (GlimsEngine *engine, GlimsImageID image,
+                                          uint64_t token, const GlimsInkLevelsSettings *settings,
+                                          char **error);
+  /* Discard the baseline without changing source pixels/history. Refuses BUSY
+   * during an active native operation, NOT_FOUND for expired/foreign tokens.
+   * Cleanup remains available if source component metadata is damaged. */
+  GlimsStatus (*image_ink_snapshot_end) (GlimsEngine *engine, GlimsImageID image,
+                                        uint64_t token);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -74,6 +74,21 @@ final class EngineCanvasView: NSView {
     var transformPreviewImage: CGImage? { transformPixels.image }
     var transformPreviewRequest: TransformPixelPreview.Request? { transformPixels.displayedRequest }
     var transformPreviewIsPending: Bool { transformPixels.isPending }
+    private var inkLevelsPreviewToken: UInt64?
+    private var inkLevelsPreviewSettings = EngineSession.InkLevelsSettings()
+    var onInkLevelsPreviewChange: ((Bool, String?) -> Void)?
+    private lazy var inkLevelsPixels: InkLevelsPixelPreview = InkLevelsPixelPreview(render: { [weak self] request, completion in
+        guard let self else { return completion(.failure(ImageDocument.DocumentError.closed)) }
+        self.document.renderInkLevelsPreview(request, completion: completion)
+    }, changed: { [weak self] in
+        guard let self else { return }
+        self.needsDisplay = true
+        self.onInkLevelsPreviewChange?(self.inkLevelsPixels.isCurrent, nil)
+    }, failed: { [weak self] error in
+        self?.onInkLevelsPreviewChange?(false, error.localizedDescription)
+    })
+    var inkLevelsPreviewImage: CGImage? { inkLevelsPixels.image }
+    var inkLevelsPreviewIsCurrent: Bool { inkLevelsPixels.isCurrent }
     /// Destination observer tokens for the owning window and its associated
     /// screen; swapped on window changes and removed on detach/close. The
     /// blocks hold `self` weakly, so no observer retain cycle.
@@ -287,6 +302,9 @@ final class EngineCanvasView: NSView {
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
         transformPixels.update(nil)
+        inkLevelsPreviewToken = nil
+        inkLevelsPixels.update(nil)
+        onInkLevelsPreviewChange = nil
         onRenderMetricsChange = nil
         tools.cancelFloatingShape()
         tools.stopHintEvents()
@@ -602,6 +620,7 @@ final class EngineCanvasView: NSView {
         // to request tiles; viewDidMoveToWindow alone leaves a gray canvas.
         setNeedsRender()
         refreshTransformPixelPreview()
+        refreshInkLevelsPixelPreview()
         surroundColor.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -622,19 +641,12 @@ final class EngineCanvasView: NSView {
             // Replace the whole composite, including its transparent pixels.
             // Painting a warped target over the old composite would leave the
             // original layer visible beneath it and break masks/blend modes.
-            context.saveGState()
-            context.clip(to: bounds)
-            Self.transparencyChecks.setFill()
-            let rect = CGRect(x: request.renderArea.minX / request.renderScale * scale,
-                              y: request.renderArea.minY / request.renderScale * scale,
-                              width: Double(image.width) / request.renderScale * scale,
-                              height: Double(image.height) / request.renderScale * scale)
-            rect.intersection(dirtyRect).fill()
-            context.interpolationQuality = request.renderScale < deviceScale ? .low : .none
-            context.translateBy(x: rect.minX, y: rect.maxY)
-            context.scaleBy(x: 1, y: -1)
-            context.draw(image, in: CGRect(origin: .zero, size: rect.size))
-            context.restoreGState()
+            drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
+                        dirtyRect: dirtyRect, context: context)
+        }
+        if let image = inkLevelsPixels.image, let request = inkLevelsPixels.displayedRequest {
+            drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
+                        dirtyRect: dirtyRect, context: context)
         }
         // The grid draws between the image and the selection/path/guide
         // overlays: on top of the pixels, under everything else.
@@ -645,6 +657,44 @@ final class EngineCanvasView: NSView {
         if showsGuides { drawGuidesOverlay() }
         drawGuideGhost()
         tools.drawOverlay(scale: scale)
+    }
+
+    private func drawPreview(_ image: CGImage, area: CGRect, renderScale: Double,
+                             dirtyRect: CGRect, context: CGContext) {
+        context.saveGState()
+        context.clip(to: bounds)
+        Self.transparencyChecks.setFill()
+        let rect = CGRect(x: area.minX / renderScale * scale, y: area.minY / renderScale * scale,
+                          width: Double(image.width) / renderScale * scale,
+                          height: Double(image.height) / renderScale * scale)
+        rect.intersection(dirtyRect).fill()
+        context.interpolationQuality = renderScale < deviceScale ? .low : .none
+        context.translateBy(x: rect.minX, y: rect.maxY)
+        context.scaleBy(x: 1, y: -1)
+        context.draw(image, in: CGRect(origin: .zero, size: rect.size))
+        context.restoreGState()
+    }
+
+    func setInkLevelsPreview(token: UInt64?, settings: EngineSession.InkLevelsSettings = .init()) {
+        inkLevelsPreviewToken = token
+        inkLevelsPreviewSettings = settings
+        refreshInkLevelsPixelPreview(retryFailure: true)
+        needsDisplay = true
+    }
+
+    private func refreshInkLevelsPixelPreview(retryFailure: Bool = false) {
+        guard !renderingStopped, !document.isClosing, document.filterPreviewIsOpen,
+              let token = inkLevelsPreviewToken, !visibleRect.intersection(bounds).isEmpty else {
+            inkLevelsPixels.update(nil)
+            return
+        }
+        let size = CGSize(width: document.info.width, height: document.info.height)
+        let viewport = CGRect(x: visibleRect.minX / scale, y: visibleRect.minY / scale,
+                              width: visibleRect.width / scale, height: visibleRect.height / scale)
+            .intersection(CGRect(origin: .zero, size: size))
+        inkLevelsPixels.update(.init(token: token, settings: inkLevelsPreviewSettings,
+            imageSize: size, destination: destination, proof: softProof,
+            viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
     }
 
     /// Projection-only changes do not necessarily reload document state.

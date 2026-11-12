@@ -1012,6 +1012,7 @@ open_image_free (gpointer data)
 {
   GlimsOpenImage *open = data;
 
+  glims_ink_snapshot_free (open->ink_snapshot);
   glims_item_sets_free (open->item_sets);
   glims_plate_preview_free (open->component_preview);
   g_clear_pointer (&open->component_cmyk_profile, g_bytes_unref);
@@ -4064,6 +4065,114 @@ api_image_edit_ink (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_edit_ink,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_edit_ink_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  const GlimsInkLevelsSettings *settings;
+  char **error;
+} InkLevelsArgs;
+
+static GlimsStatus
+image_levels_ink_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkLevelsArgs *a = data;
+  return glims_image_levels_ink (engine, a->image, a->channel, a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_levels_ink (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel,
+                      const GlimsInkLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  InkLevelsArgs a = { image, channel, settings, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_levels_ink,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_levels_ink_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  uint64_t token;
+  uint64_t *result_token;
+  GlimsImageID *copy;
+  const GlimsInkLevelsSettings *settings;
+  char **error;
+} InkSnapshotArgs;
+
+static GlimsStatus
+image_ink_snapshot_begin_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkSnapshotArgs *a = data;
+  return glims_image_ink_snapshot_begin (engine, a->image, a->channel, a->result_token, a->error);
+}
+
+static GlimsStatus
+api_image_ink_snapshot_begin (GlimsEngine *engine, GlimsImageID image,
+                           GlimsItemID channel, uint64_t *token, char **error)
+{
+  if (error) *error = NULL;
+  if (token) *token = 0;
+  InkSnapshotArgs a = { .image = image, .channel = channel, .result_token = token, .error = error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_snapshot_begin,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_ink_snapshot_begin_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_ink_snapshot_levels_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkSnapshotArgs *a = data;
+  return glims_image_ink_snapshot_levels (engine, a->image, a->token, a->settings, a->copy, a->error);
+}
+
+static GlimsStatus
+api_image_ink_snapshot_levels (GlimsEngine *engine, GlimsImageID image,
+                           uint64_t token, const GlimsInkLevelsSettings *settings, GlimsImageID *copy, char **error)
+{
+  if (error) *error = NULL;
+  if (copy) *copy = 0;
+  InkSnapshotArgs a = { .image = image, .token = token, .settings = settings, .copy = copy, .error = error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_snapshot_levels,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_ink_snapshot_levels_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_ink_snapshot_apply_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkSnapshotArgs *a = data;
+  return glims_image_ink_snapshot_apply (engine, a->image, a->token, a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_ink_snapshot_apply (GlimsEngine *engine, GlimsImageID image,
+                           uint64_t token, const GlimsInkLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  InkSnapshotArgs a = { .image = image, .token = token, .settings = settings, .error = error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_snapshot_apply,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_ink_snapshot_apply_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_ink_snapshot_end_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkSnapshotArgs *a = data;
+  return glims_image_ink_snapshot_end (engine, a->image, a->token);
+}
+
+static GlimsStatus
+api_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID image,
+                           uint64_t token)
+{
+  InkSnapshotArgs a = { .image = image, .token = token };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_snapshot_end,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_ink_snapshot_end_on_engine, &a, NULL);
 }
 
 static const GlimsEngineAPI api_v1 = {

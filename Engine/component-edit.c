@@ -3,14 +3,39 @@
 #include "engine-private.h"
 #include "plate-storage.h"
 #include "component-scalar.h"
+#include "component-levels.h"
 
 #include <math.h>
 #include <string.h>
 #include "core/gimpchannel.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-duplicate.h"
 #include "core/gimpitem.h"
 #include "core/gimpprogress.h"
+
+typedef struct _GlimsInkSnapshot {
+  guint64 token;
+  GlimsItemID target;
+  guint target_index;
+  guint8 target_uuid[16];
+  /* Not adopted or exposed through an image ID. Only derived work copies
+   * enter engine->images; callers cannot change this immutable baseline. */
+  GimpImage *frozen;
+  /* One private calculated image avoids repeating the full-plane edit for
+   * each viewport. Public results are duplicates, never this cached image. */
+  GimpImage *calculated;
+  GlimsComponentLevels calculated_levels;
+} GlimsInkSnapshot;
+
+void
+glims_ink_snapshot_free (GlimsInkSnapshot *snapshot)
+{
+  if (!snapshot) return;
+  g_object_unref (snapshot->frozen);
+  g_clear_object (&snapshot->calculated);
+  g_free (snapshot);
+}
 
 typedef struct {
   GlimsEngine *engine;
@@ -60,18 +85,99 @@ selected_ink (GlimsOpenImage *open, GlimsItemID id, const GlimsPlateStorage *sto
   return NULL;
 }
 
-GlimsStatus
-glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
-                      uint32_t operation, double intensity, double opacity, char **error)
+static gboolean
+snapshot_metadata_matches (GlimsOpenImage *open, const GlimsInkSnapshot *snapshot,
+                           GlimsPlateStorage *current, GlimsPlateStorage *frozen)
 {
-  if (error) *error = NULL;
-  if (!channel || operation > GLIMS_INK_EDIT_INVERT ||
-      !isfinite (intensity) || intensity < 0 || intensity > 1 ||
-      !isfinite (opacity) || opacity < 0 || opacity > 1 ||
-      (operation == GLIMS_INK_EDIT_CLEAR && (intensity != 1 || opacity != 1)) ||
-      (operation == GLIMS_INK_EDIT_INVERT && (intensity != 0 || opacity != 1)))
-    return GLIMS_STATUS_INVALID_ARGUMENT;
+  guint8 a[GLIMS_PLATE_MAP_MAX_SIZE], b[GLIMS_PLATE_MAP_MAX_SIZE];
+  size_t a_size, b_size;
+  if (!glims_plate_storage_read_open (open, current) ||
+      glims_plate_storage_read (snapshot->frozen, frozen) != GLIMS_PLATE_STORAGE_VALID ||
+      !glims_plate_map_encode (&current->map, a, sizeof a, &a_size) ||
+      !glims_plate_map_encode (&frozen->map, b, sizeof b, &b_size) ||
+      a_size != b_size || memcmp (a, b, a_size) ||
+      current->profile_size != frozen->profile_size ||
+      (current->profile_size && memcmp (current->profile, frozen->profile, current->profile_size)) ||
+      snapshot->target_index >= current->map.count ||
+      memcmp (current->map.entries[snapshot->target_index].uuid, snapshot->target_uuid, 16) ||
+      selected_ink (open, snapshot->target, current) !=
+        GIMP_DRAWABLE (current->planes[snapshot->target_index]))
+    return FALSE;
+  for (guint i = 0; i < current->map.count; i++)
+    if (current->visible[i] != frozen->visible[i] ||
+        g_strcmp0 (gimp_object_get_name (current->planes[i]),
+                   gimp_object_get_name (frozen->planes[i])))
+      return FALSE;
+  return TRUE;
+}
 
+/* No version counter in the facade covers both scalar samples and selection.
+ * Compare exact native bytes under busy ownership, including hidden inks. */
+static GlimsStatus
+snapshot_pixels_match (GlimsOpenImage *open, const GlimsInkSnapshot *snapshot,
+                       InkEditProgress *state, char **error)
+{
+  GlimsPlateStorage current, frozen;
+  GeglBuffer *live[GLIMS_PLATE_LIMIT + 1] = { NULL };
+  GeglBuffer *saved[GLIMS_PLATE_LIMIT + 1] = { NULL };
+  GlimsStatus status;
+  if (!snapshot_metadata_matches (open, snapshot, &current, &frozen)) goto stale;
+  guint32 source[4096], baseline[4096];
+  /* Resolve and own every buffer before the first cooperative dispatch.
+   * Borrowed storage plane pointers never cross that dispatch boundary. */
+  for (guint plane = 0; plane <= current.map.count; plane++)
+    {
+      GimpDrawable *a = plane < current.map.count ? GIMP_DRAWABLE (current.planes[plane]) :
+                         GIMP_DRAWABLE (gimp_image_get_mask (open->image));
+      GimpDrawable *b = plane < frozen.map.count ? GIMP_DRAWABLE (frozen.planes[plane]) :
+                         GIMP_DRAWABLE (gimp_image_get_mask (snapshot->frozen));
+      live[plane] = g_object_ref (gimp_drawable_get_buffer (a));
+      saved[plane] = g_object_ref (gimp_drawable_get_buffer (b));
+    }
+  for (guint plane = 0; plane <= current.map.count; plane++)
+    {
+      const Babl *format = gegl_buffer_get_format (live[plane]);
+      gint size = babl_format_get_bytes_per_pixel (format);
+      if (format != gegl_buffer_get_format (saved[plane]) || size < 1 || size > 4) goto stale;
+      for (guint y = 0; y < current.map.height; y++)
+        for (guint x = 0; x < current.map.width; )
+          {
+            if (!continue_edit (state)) { status = GLIMS_STATUS_CANCELLED; goto finish; }
+            guint count = MIN (4096, current.map.width - x);
+            GeglRectangle row = { (gint) x, (gint) y, (gint) count, 1 };
+            gegl_buffer_get (live[plane], &row, 1, format, source,
+                              GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+            gegl_buffer_get (saved[plane], &row, 1, format, baseline,
+                              GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+            if (memcmp (source, baseline, count * size)) goto stale;
+            state->completed += count;
+            x += count;
+          }
+    }
+  status = GLIMS_STATUS_OK;
+  goto finish;
+stale:
+  if (error) *error = g_strdup ("The image changed after this preview began. Close Levels and try again.");
+  status = GLIMS_STATUS_INVALID_ARGUMENT;
+finish:
+  for (guint i = 0; i < G_N_ELEMENTS (live); i++)
+    {
+      g_clear_object (&live[i]);
+      g_clear_object (&saved[i]);
+    }
+  return status;
+}
+
+typedef bool (*InkRow) (GlimsComponentScalarFormat format, const void *settings,
+                        size_t count, const void *source, const float *mask,
+                        void *destination, bool *changed);
+
+static GlimsStatus
+apply_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+           const char *title, gboolean skip_calculation,
+           InkRow calculate, const void *settings, const GlimsInkSnapshot *snapshot,
+           char **error)
+{
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   GlimsStatus status = glims_edit_ready (engine, open, error);
@@ -92,7 +198,7 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
     }
   status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
   if (status != GLIMS_STATUS_OK) return status;
-  if (opacity == 0) return GLIMS_STATUS_OK;
+  if (skip_calculation) return GLIMS_STATUS_OK;
 
   GlimsComponentScalarFormat format;
   switch (storage.map.storage)
@@ -103,14 +209,15 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
     default: return GLIMS_STATUS_UNSUPPORTED;
     }
 
-  GeglRectangle region;
+  GeglRectangle region = { 0, 0, 0, 0 };
   if (!gimp_item_mask_intersect (GIMP_ITEM (target), &region.x, &region.y,
                                   &region.width, &region.height))
-    return GLIMS_STATUS_OK;
+    {
+      if (!snapshot) return GLIMS_STATUS_OK;
+      region = (GeglRectangle) { 0, 0, 0, 0 };
+    }
   GimpChannel *selection = gimp_image_get_mask (open->image);
   gboolean masked = !gimp_channel_is_empty (selection);
-  const char *title = operation == GLIMS_INK_EDIT_FILL ? "Fill Ink" :
-                      operation == GLIMS_INK_EDIT_CLEAR ? "Clear Ink" : "Invert Ink";
 
   /* Own every native object used after dispatch. Busy gates other edits;
    * the candidate and selection snapshot contain no borrowed storage state. */
@@ -123,10 +230,18 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
   const Babl *native_format = gegl_buffer_get_format (source);
   InkEditProgress state = { .engine = engine,
     .total = (guint64) region.width * region.height };
+  if (snapshot)
+    state.total += ((guint64) storage.map.count + 1) * storage.map.width * storage.map.height;
   state.progress = glims_progress_new (engine);
   engine->progress = state.progress;
   gulong cancel_handler = g_signal_connect (state.progress, "cancel", G_CALLBACK (cancel_edit), &state);
   gimp_progress_start (GIMP_PROGRESS (state.progress), TRUE, "%s", title);
+
+  if (snapshot)
+    {
+      status = snapshot_pixels_match (open, snapshot, &state, error);
+      if (status != GLIMS_STATUS_OK) goto finish;
+    }
 
   /* At most 4096 samples per scalar/selection read. Staged GEGL tiles use
    * copy-on-write and its existing cache/spill policy; no whole-image malloc. */
@@ -146,11 +261,10 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
           gegl_buffer_get (mask, &row, 1, babl_format ("Y float"), coverage,
                             GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
         bool row_changed = false;
-        if (!glims_component_scalar_row (format,
-              operation == GLIMS_INK_EDIT_INVERT ? GLIMS_COMPONENT_SCALAR_INVERT : GLIMS_COMPONENT_SCALAR_FILL,
-              intensity, opacity, count, input, mask ? coverage : NULL, output, &row_changed))
+        if (!calculate (format, settings, count, input,
+                         mask ? coverage : NULL, output, &row_changed))
           {
-            if (error) *error = g_strdup ("The selected ink or selection contains nonfinite or invalid samples. No pixels were changed.");
+            if (error) *error = g_strdup ("The ink edit contains invalid samples or produces an unrepresentable value. No pixels were changed.");
             status = GLIMS_STATUS_INVALID_ARGUMENT;
             goto finish;
           }
@@ -166,7 +280,7 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
       }
 
   if (!continue_edit (&state)) { status = GLIMS_STATUS_CANCELLED; goto finish; }
-  if (changed)
+  if (changed || snapshot)
     {
       /* Re-resolve after nested dispatch, then publish without yielding.
        * The existing native drawable Undo snapshots exact scalar bytes before
@@ -182,12 +296,25 @@ glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
           status = GLIMS_STATUS_INVALID_ARGUMENT;
           goto finish;
         }
+      if (snapshot)
+        {
+          GlimsPlateStorage baseline;
+          if (!snapshot_metadata_matches (current, snapshot, &current_storage, &baseline))
+            {
+              if (error) *error = g_strdup ("The image changed before Levels could be applied.");
+              status = GLIMS_STATUS_INVALID_ARGUMENT;
+              goto finish;
+            }
+        }
       status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
       if (status != GLIMS_STATUS_OK) goto finish;
-      gimp_drawable_push_undo (target, title, NULL, damage.x, damage.y, damage.width, damage.height);
-      gegl_buffer_copy (candidate, &damage, GEGL_ABYSS_NONE, source, &damage);
-      gimp_drawable_update (target, damage.x, damage.y, damage.width, damage.height);
-      gimp_image_flush (image);
+      if (changed)
+        {
+          gimp_drawable_push_undo (target, title, NULL, damage.x, damage.y, damage.width, damage.height);
+          gegl_buffer_copy (candidate, &damage, GEGL_ABYSS_NONE, source, &damage);
+          gimp_drawable_update (target, damage.x, damage.y, damage.width, damage.height);
+          gimp_image_flush (image);
+        }
     }
   status = GLIMS_STATUS_OK;
 
@@ -203,4 +330,220 @@ finish:
   g_object_unref (image);
   engine->busy--;
   return status;
+}
+
+typedef struct {
+  GlimsComponentScalarOperation operation;
+  double intensity, opacity;
+} ScalarEdit;
+
+static bool
+scalar_row (GlimsComponentScalarFormat format, const void *settings,
+            size_t count, const void *source, const float *mask,
+            void *destination, bool *changed)
+{
+  const ScalarEdit *s = settings;
+  return glims_component_scalar_row (format, s->operation, s->intensity, s->opacity,
+                                     count, source, mask, destination, changed);
+}
+
+static bool
+levels_row (GlimsComponentScalarFormat format, const void *settings,
+            size_t count, const void *source, const float *mask,
+            void *destination, bool *changed)
+{
+  return glims_component_levels_row (format, settings, count, source, mask,
+                                     destination, changed);
+}
+
+GlimsStatus
+glims_image_edit_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+                      uint32_t operation, double intensity, double opacity, char **error)
+{
+  if (error) *error = NULL;
+  if (!channel || operation > GLIMS_INK_EDIT_INVERT ||
+      !isfinite (intensity) || intensity < 0 || intensity > 1 ||
+      !isfinite (opacity) || opacity < 0 || opacity > 1 ||
+      (operation == GLIMS_INK_EDIT_CLEAR && (intensity != 1 || opacity != 1)) ||
+      (operation == GLIMS_INK_EDIT_INVERT && (intensity != 0 || opacity != 1)))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  const char *title = operation == GLIMS_INK_EDIT_FILL ? "Fill Ink" :
+                      operation == GLIMS_INK_EDIT_CLEAR ? "Clear Ink" : "Invert Ink";
+  const ScalarEdit settings = {
+    operation == GLIMS_INK_EDIT_INVERT ? GLIMS_COMPONENT_SCALAR_INVERT : GLIMS_COMPONENT_SCALAR_FILL,
+    intensity, opacity
+  };
+  return apply_ink (engine, id, channel, title, opacity == 0, scalar_row, &settings, NULL, error);
+}
+
+static gboolean
+read_levels (const GlimsInkLevelsSettings *settings, GlimsComponentLevels *values)
+{
+  if (!settings || settings->struct_size < sizeof *settings) return FALSE;
+  *values = (GlimsComponentLevels) {
+    settings->value.low_input, settings->value.high_input, settings->value.gamma,
+    settings->value.low_output, settings->value.high_output,
+    settings->clamp_input, settings->clamp_output
+  };
+  bool changed;
+  return glims_component_levels_row (GLIMS_COMPONENT_SCALAR_U8, values, 0,
+                                      NULL, NULL, NULL, &changed);
+}
+
+GlimsStatus
+glims_image_levels_ink (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
+                        const GlimsInkLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  GlimsComponentLevels values;
+  if (!channel || !read_levels (settings, &values))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  return apply_ink (engine, id, channel, "Levels Ink", FALSE, levels_row, &values, NULL, error);
+}
+
+GlimsStatus
+glims_image_ink_snapshot_begin (GlimsEngine *engine, GlimsImageID id,
+                                GlimsItemID channel, uint64_t *token, char **error)
+{
+  if (error) *error = NULL;
+  if (token) *token = 0;
+  if (!channel || !token) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (open->ink_snapshot || g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  if (engine->next_ink_snapshot_token == G_MAXUINT64)
+    return GLIMS_STATUS_FAILED;
+  GlimsPlateStorage storage;
+  if (!glims_plate_storage_read_open (open, &storage)) return GLIMS_STATUS_UNSUPPORTED;
+  GimpDrawable *target = selected_ink (open, channel, &storage);
+  if (!target) return GLIMS_STATUS_INVALID_ARGUMENT;
+  status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  engine->busy++;
+  GimpImage *frozen = gimp_image_duplicate (open->image);
+  engine->busy--;
+  if (!frozen) return glims_fail (error, NULL, "The ink preview could not be prepared.");
+  GlimsInkSnapshot *snapshot = g_new0 (GlimsInkSnapshot, 1);
+  snapshot->frozen = frozen;
+  snapshot->target = channel;
+  for (guint i = 0; i < storage.map.count; i++)
+    if (GIMP_DRAWABLE (storage.planes[i]) == target) snapshot->target_index = i;
+  memcpy (snapshot->target_uuid, storage.map.entries[snapshot->target_index].uuid, 16);
+  GlimsPlateStorage a, b;
+  if (!snapshot_metadata_matches (open, snapshot, &a, &b))
+    {
+      glims_ink_snapshot_free (snapshot);
+      return glims_fail (error, NULL, "The ink preview could not preserve the source document.");
+    }
+  snapshot->token = ++engine->next_ink_snapshot_token;
+  open->ink_snapshot = snapshot;
+  *token = snapshot->token;
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsInkSnapshot *
+find_snapshot (GlimsOpenImage *open, uint64_t token)
+{
+  return open && token && open->ink_snapshot && open->ink_snapshot->token == token
+           ? open->ink_snapshot : NULL;
+}
+
+static gboolean
+same_levels (const GlimsComponentLevels *a, const GlimsComponentLevels *b)
+{
+  return a->low_input == b->low_input && a->high_input == b->high_input &&
+         a->gamma == b->gamma && a->low_output == b->low_output &&
+         a->high_output == b->high_output && a->clamp_input == b->clamp_input &&
+         a->clamp_output == b->clamp_output;
+}
+
+GlimsStatus
+glims_image_ink_snapshot_levels (GlimsEngine *engine, GlimsImageID id,
+                                 uint64_t token, const GlimsInkLevelsSettings *settings,
+                                 GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  GlimsComponentLevels values;
+  if (!result || !read_levels (settings, &values)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsInkSnapshot *snapshot = find_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  gboolean cached = snapshot->calculated && same_levels (&snapshot->calculated_levels, &values);
+  engine->busy++;
+  GimpImage *copy = gimp_image_duplicate (cached ? snapshot->calculated : snapshot->frozen);
+  engine->busy--;
+  if (!copy) return glims_fail (error, NULL, "The ink preview could not be rendered.");
+  GlimsImageID copy_id = 0;
+  status = glims_adopt_image (engine, copy, &copy_id);
+  if (status != GLIMS_STATUS_OK) { g_object_unref (copy); return status; }
+  GlimsPlateStorage storage;
+  GlimsOpenImage *copy_open = glims_lookup_image (engine, copy_id);
+  if (!glims_plate_storage_read_open (copy_open, &storage) ||
+      snapshot->target_index >= storage.map.count ||
+      memcmp (storage.map.entries[snapshot->target_index].uuid, snapshot->target_uuid, 16))
+    status = GLIMS_STATUS_UNSUPPORTED;
+  else if (!cached)
+    {
+      GlimsItemID target = gimp_item_get_id (GIMP_ITEM (storage.planes[snapshot->target_index]));
+      status = apply_ink (engine, copy_id, target, "Preview Levels", FALSE,
+                          levels_row, &values, NULL, error);
+    }
+  if (status != GLIMS_STATUS_OK) glims_release_image (engine, copy_id);
+  else
+    {
+      if (!cached)
+        {
+          engine->busy++;
+          GimpImage *calculated = gimp_image_duplicate (copy);
+          engine->busy--;
+          /* A cache allocation failure does not invalidate the owned result. */
+          if (calculated)
+            {
+              g_clear_object (&snapshot->calculated);
+              snapshot->calculated = calculated;
+              snapshot->calculated_levels = values;
+            }
+        }
+      *result = copy_id;
+    }
+  return status;
+}
+
+GlimsStatus
+glims_image_ink_snapshot_apply (GlimsEngine *engine, GlimsImageID id,
+                                uint64_t token, const GlimsInkLevelsSettings *settings,
+                                char **error)
+{
+  if (error) *error = NULL;
+  GlimsComponentLevels values;
+  if (!read_levels (settings, &values)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsInkSnapshot *snapshot = find_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = apply_ink (engine, id, snapshot->target, "Levels Ink", FALSE,
+                                 levels_row, &values, snapshot, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      open->ink_snapshot = NULL;
+      glims_ink_snapshot_free (snapshot);
+    }
+  return status;
+}
+
+GlimsStatus
+glims_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID id, uint64_t token)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsInkSnapshot *snapshot = find_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy) return GLIMS_STATUS_BUSY;
+  open->ink_snapshot = NULL;
+  glims_ink_snapshot_free (snapshot);
+  return GLIMS_STATUS_OK;
 }
