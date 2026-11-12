@@ -22,6 +22,59 @@ typedef struct {
   gboolean *invoked;
 } FacadeCall;
 
+/* Lab shares native scalar storage, not ink editing semantics. New component
+ * operations must be admitted explicitly rather than inherit permission. */
+static gboolean
+component_lab_operation_allowed (GlimsFacadeOperation operation)
+{
+  switch (operation)
+    {
+    case GLIMS_FACADE_OP_image_info:
+    case GLIMS_FACADE_OP_image_layers:
+    case GLIMS_FACADE_OP_image_color_info:
+    case GLIMS_FACADE_OP_image_render:
+    case GLIMS_FACADE_OP_image_render_to_profile:
+    case GLIMS_FACADE_OP_image_save:
+    case GLIMS_FACADE_OP_image_save_copy:
+    case GLIMS_FACADE_OP_image_undo_info:
+    case GLIMS_FACADE_OP_image_history:
+    case GLIMS_FACADE_OP_image_undo:
+    case GLIMS_FACADE_OP_image_redo:
+    case GLIMS_FACADE_OP_image_history_move:
+    case GLIMS_FACADE_OP_selection_bounds:
+    case GLIMS_FACADE_OP_selection_outline:
+    case GLIMS_FACADE_OP_paths:
+    case GLIMS_FACADE_OP_image_quick_mask:
+    case GLIMS_FACADE_OP_image_guides:
+    case GLIMS_FACADE_OP_image_grid:
+    case GLIMS_FACADE_OP_image_floating_selection:
+    case GLIMS_FACADE_OP_image_selected_layers:
+    case GLIMS_FACADE_OP_image_selected_items:
+      return TRUE;
+    default:
+      return FALSE;
+    }
+}
+
+static gboolean
+stroke_references_lab_image (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GHashTableIter iter;
+  gpointer value;
+
+  /* Retained source drawables matter as well as the destination. The adopted
+   * mode remains authoritative even if persistent metadata is damaged. */
+  g_hash_table_iter_init (&iter, engine->images);
+  while (g_hash_table_iter_next (&iter, NULL, &value))
+    {
+      GlimsOpenImage *open = value;
+      if (open->component_document && open->component_mode == GLIMS_PLATE_MODE_LAB &&
+          glims_stroke_references_image (engine, id, open->image))
+        return TRUE;
+    }
+  return FALSE;
+}
+
 static gboolean
 component_image (GlimsEngine *engine, GimpImage *image)
 {
@@ -115,12 +168,26 @@ dispatch (GlimsEngine *engine, gpointer data)
               if (call->error) *call->error = strdup ("The document's component storage is damaged or unsupported.");
               return GLIMS_STATUS_UNSUPPORTED;
             }
+          if (storage.map.mode == GLIMS_PLATE_MODE_LAB &&
+              !component_lab_operation_allowed (call->operation))
+            {
+              if (call->error) *call->error = strdup ("This command is not available for Lab component documents.");
+              return GLIMS_STATUS_UNSUPPORTED;
+            }
         }
     }
-  if (descriptor->policy == POLICY_COMPONENT_STROKE && target_is_component (engine, call->target))
+  if (descriptor->policy == POLICY_COMPONENT_STROKE)
     {
-      GlimsStatus status = glims_stroke_component_ready (engine, call->target.id);
-      if (status != GLIMS_STATUS_OK) return status;
+      if (stroke_references_lab_image (engine, call->target.id))
+        {
+          if (call->error) *call->error = strdup ("This command is not available for Lab component documents.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
+      if (target_is_component (engine, call->target))
+        {
+          GlimsStatus status = glims_stroke_component_ready (engine, call->target.id);
+          if (status != GLIMS_STATUS_OK) return status;
+        }
     }
   if (call->invoked) *call->invoked = TRUE;
   return call->func (engine, call->data);

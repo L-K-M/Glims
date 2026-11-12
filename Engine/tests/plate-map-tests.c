@@ -34,7 +34,89 @@ static void fail_encode_cap(const GlimsPlateMap *map, size_t capacity, const cha
   CHECK(!glims_plate_map_encode(map,bytes,capacity,&written),label);
   CHECK(written==0 && !memcmp(bytes,unchanged,sizeof bytes),"failed encode preserves output and resets count");
 }
+/* Literal Lab D50 metadata, independent of the encoder: 48x32, U8, three
+ * canonical-role UUIDs. All nine reserved RGB doubles are positive zero. */
+static const uint8_t lab_literal[160] = {
+  'G','L','I','M','S','P','M','1',
+  [8]=1, [12]=48, [16]=32, [20]=3, [24]=3, [28]=1, [32]=2,
+  [40]=1, [55]=11, [80]=2, [95]=22, [120]=3, [135]=33
+};
+static void lab_checks(void) {
+  GlimsPlateMap lab={0}, back={0}, invalid;
+  uint8_t bytes[GLIMS_PLATE_MAP_MAX_SIZE], bad[sizeof lab_literal];
+  size_t written=0;
+  CHECK(glims_plate_map_decode(lab_literal,sizeof lab_literal,&lab),"independent Lab wire decodes");
+  CHECK(lab.mode==GLIMS_PLATE_MODE_LAB && lab.encoding==GLIMS_PLATE_ENCODING_LAB_D50 &&
+        lab.count==3 && lab.width==48 && lab.height==32,"Lab owned fields match literal");
+  CHECK(lab.entries[0].uuid[15]==11 && lab.entries[1].uuid[15]==22 &&
+        lab.entries[2].uuid[15]==33,"Lab role order is persisted UUID order");
+  for(uint32_t storage=1;storage<=3;storage++) {
+    lab.storage=storage; memcpy(bad,lab_literal,sizeof bad);bad[28]=(uint8_t)storage;
+    memset(bytes,0xa5,sizeof bytes);
+    CHECK(glims_plate_map_validate(&lab),"Lab storage format validates");
+    CHECK(glims_plate_map_encode(&lab,bytes,sizeof bytes,&written),"Lab storage encodes");
+    CHECK(written==sizeof bad && !memcmp(bytes,bad,sizeof bad),"Lab wire matches literal at every precision");
+    CHECK(bytes[sizeof bad]==0xa5,"Lab encoding preserves extra capacity");
+    CHECK(glims_plate_map_decode(bytes,written,&back) && back.storage==storage &&
+          back.count==3 && back.mode==3 && back.encoding==2,"Lab format round trip");
+  }
+  CHECK(glims_plate_map_decode(lab_literal,sizeof lab_literal,&lab),"restore Lab U8 fixture");
+  for(size_t length=0;length<sizeof lab_literal;length++) reject(lab_literal,length,"Lab truncated wire refuses");
+  fail_encode_cap(&lab,sizeof lab_literal-1,"Lab insufficient capacity refuses atomically");
+  const uint32_t wrong_counts[]={1,2,4,32};
+  for(size_t n=0;n<sizeof wrong_counts/sizeof wrong_counts[0];n++) {
+    GlimsPlateMap base={.width=48,.height=32,.count=wrong_counts[n],.mode=1,.storage=1,.encoding=1};
+    for(uint32_t i=0;i<base.count;i++)base.entries[i].uuid[15]=(uint8_t)(i+1);
+    CHECK(glims_plate_map_encode(&base,bytes,sizeof bytes,&written),"consistent wrong-count base encodes");
+    bytes[24]=3;bytes[32]=2;reject(bytes,written,"Lab count must be exactly three");
+    base.mode=3;base.encoding=2;fail_encode_cap(&base,sizeof bytes,"Lab invalid host count refuses");
+  }
+  const uint32_t wrong_encodings[]={0,1,3,UINT32_MAX};
+  for(size_t n=0;n<sizeof wrong_encodings/sizeof wrong_encodings[0];n++) {
+    invalid=lab;invalid.encoding=wrong_encodings[n];
+    fail_encode_cap(&invalid,sizeof bytes,"Lab wrong host encoding refuses");
+    memcpy(bad,lab_literal,sizeof bad);
+    for(unsigned i=0;i<4;i++)bad[32+i]=(uint8_t)(wrong_encodings[n]>>(8*i));
+    reject(bad,sizeof bad,"Lab wrong wire encoding refuses");
+  }
+  for(uint32_t mode=1;mode<=2;mode++) {
+    GlimsPlateMap old={.width=1,.height=1,.count=mode==2?4:3,.mode=mode,.storage=1,.encoding=1};
+    for(uint32_t i=0;i<old.count;i++)old.entries[i].uuid[15]=(uint8_t)(i+1);
+    CHECK(glims_plate_map_encode(&old,bytes,sizeof bytes,&written),"old component map still encodes");
+    bytes[32]=2;reject(bytes,written,"old component mode refuses Lab encoding");
+    old.encoding=2;fail_encode_cap(&old,sizeof bytes,"old host mode refuses Lab encoding");
+  }
+  const uint64_t reserved_bad[]={
+    UINT64_C(0x8000000000000000), /* negative zero */
+    UINT64_C(1), /* smallest positive subnormal */
+    UINT64_C(0x3fe0000000000000), /* .5 */
+    UINT64_C(0x3ff0000000000000), /* 1 */
+    UINT64_C(0x7ff0000000000000), /* +inf */
+    UINT64_C(0xfff0000000000000), /* -inf */
+    UINT64_C(0x7ff8000000000000), /* quiet NaN */
+    UINT64_C(0x7ff0000000000001)  /* signaling NaN */
+  };
+  for(unsigned plane=0;plane<3;plane++)for(unsigned component=0;component<3;component++) {
+    for(size_t n=0;n<sizeof reserved_bad/sizeof reserved_bad[0];n++) {
+      invalid=lab;memcpy(&invalid.entries[plane].ink_rgb[component],&reserved_bad[n],8);
+      fail_encode_cap(&invalid,sizeof bytes,"Lab reserved host RGB requires exact positive zero");
+      memcpy(bad,lab_literal,sizeof bad);
+      for(unsigned i=0;i<8;i++)bad[40+40*plane+16+8*component+i]=(uint8_t)(reserved_bad[n]>>(8*i));
+      reject(bad,sizeof bad,"Lab reserved wire RGB requires all zero bits");
+    }
+  }
+  invalid=lab;memset(invalid.entries[2].uuid,0,16);
+  fail_encode_cap(&invalid,sizeof bytes,"Lab last zero UUID refuses");
+  memcpy(bad,lab_literal,sizeof bad);memset(bad+120,0,16);reject(bad,sizeof bad,"Lab wire zero UUID refuses");
+  invalid=lab;memcpy(invalid.entries[2].uuid,invalid.entries[0].uuid,16);
+  fail_encode_cap(&invalid,sizeof bytes,"Lab last duplicate UUID refuses");
+  memcpy(bad,lab_literal,sizeof bad);memcpy(bad+120,bad+40,16);reject(bad,sizeof bad,"Lab wire duplicate UUID refuses");
+  invalid=lab;invalid.mode=4;fail_encode_cap(&invalid,sizeof bytes,"unknown host mode four refuses");
+  memcpy(bad,lab_literal,sizeof bad);bad[24]=4;reject(bad,sizeof bad,"unknown wire mode four refuses");
+}
+
 int main(void) {
+  lab_checks();
   GlimsPlateMap map={0};uint8_t encoded[144],bad[121],unaligned[121];size_t written=0;
   CHECK(glims_plate_map_decode(literal,sizeof literal,&map),"independent literal decodes");
   CHECK(map.width==48 && map.height==32 && map.count==2 && map.mode==1 && map.storage==1 && map.encoding==1,"owned fields match the literal");
@@ -169,19 +251,19 @@ int main(void) {
   memcpy(cmyk_bad,cmyk_literal,sizeof cmyk_literal); memset(cmyk_bad+120,0,16); reject(cmyk_bad,sizeof cmyk_literal,"CMYK decode rejects zero UUID");
   invalid=cmyk; invalid.entries[1].ink_rgb[1]=2.0; fail_encode_cap(&invalid,sizeof cmyk_literal,"CMYK encode rejects out-of-range ink");
   memcpy(cmyk_bad,cmyk_literal,sizeof cmyk_literal); cmyk_bad[104]=0; cmyk_bad[105]=0; cmyk_bad[106]=0; cmyk_bad[107]=0; cmyk_bad[108]=0; cmyk_bad[109]=0; cmyk_bad[110]=0; cmyk_bad[111]=0x40; reject(cmyk_bad,sizeof cmyk_literal,"CMYK decode rejects out-of-range ink");
-  /* Unknown modes refuse validate/encode/decode (mode 0,3,UINT32_MAX). */
-  const uint8_t unknown_modes[][4]={{0,0,0,0},{3,0,0,0},{0xff,0xff,0xff,0xff}};
+  /* Unknown modes refuse validate/encode/decode (mode 0,4,UINT32_MAX). */
+  const uint8_t unknown_modes[][4]={{0,0,0,0},{4,0,0,0},{0xff,0xff,0xff,0xff}};
   for (size_t i=0; i<sizeof unknown_modes/sizeof unknown_modes[0]; i++) {
     memcpy(bad,literal,sizeof literal);
     memcpy(bad+24,unknown_modes[i],sizeof unknown_modes[i]);
     reject(bad,sizeof literal,"unknown mode refuses decode");
   }
   invalid=map; invalid.mode=0; fail_encode_cap(&invalid,sizeof literal,"mode 0 refuses encode");
-  invalid.mode=3; fail_encode_cap(&invalid,sizeof literal,"mode 3 refuses encode");
+  invalid.mode=4; fail_encode_cap(&invalid,sizeof literal,"mode 4 refuses encode");
   invalid.mode=UINT32_MAX; fail_encode_cap(&invalid,sizeof literal,"mode UINT32_MAX refuses encode");
   CHECK(glims_plate_map_validate(&map),"canonical multichannel still valid");
   invalid=map; invalid.mode=0; CHECK(!glims_plate_map_validate(&invalid),"mode 0 refuses validate");
-  invalid.mode=3; CHECK(!glims_plate_map_validate(&invalid),"mode 3 refuses validate");
+  invalid.mode=4; CHECK(!glims_plate_map_validate(&invalid),"mode 4 refuses validate");
   invalid.mode=UINT32_MAX; CHECK(!glims_plate_map_validate(&invalid),"mode UINT32_MAX refuses validate");
   /* Multichannel 1 and 32 still roundtrip; existing literal unchanged; parameterized 1..32. */
   CHECK(glims_plate_map_decode(literal,sizeof literal,&map),"existing literal still decodes");

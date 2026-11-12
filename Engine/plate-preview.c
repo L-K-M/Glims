@@ -1,5 +1,6 @@
 #include "plate-preview.h"
 #include "plate-cmyk-preview.h"
+#include "plate-lab-preview.h"
 #include <cairo.h>
 #include <math.h>
 #include <string.h>
@@ -108,9 +109,14 @@ create (const GlimsPlateStorage *storage)
   GeglNode *last, *crop;
   GeglRectangle extent = { 0, 0, storage->map.width, storage->map.height };
 
-  if (storage->map.mode != GLIMS_PLATE_MODE_CMYK)
-    for (guint i = 0; i < G_N_ELEMENTS (required); i++)
-      if (!gegl_has_operation (required[i])) return NULL;
+  if (storage->map.mode == GLIMS_PLATE_MODE_MULTICHANNEL)
+    {
+      for (guint i = 0; i < G_N_ELEMENTS (required); i++)
+        if (!gegl_has_operation (required[i])) return NULL;
+    }
+  else if (storage->map.mode != GLIMS_PLATE_MODE_CMYK &&
+           storage->map.mode != GLIMS_PLATE_MODE_LAB)
+    return NULL;
   preview = g_try_new0 (GlimsPlatePreview, 1);
   if (!preview) return NULL;
   g_mutex_init (&preview->dirty_lock);
@@ -118,16 +124,20 @@ create (const GlimsPlateStorage *storage)
   preview->dirty = TRUE;
   preview->dirty_rect = extent;
   memcpy (preview->visible, storage->visible, sizeof preview->visible);
-  if (storage->map.mode == GLIMS_PLATE_MODE_CMYK)
+  if (storage->map.mode == GLIMS_PLATE_MODE_CMYK ||
+      storage->map.mode == GLIMS_PLATE_MODE_LAB)
     {
-      preview->profile = g_bytes_new (storage->profile, storage->profile_size);
-      for (guint i = 0; i < 4; i++)
+      if (storage->map.mode == GLIMS_PLATE_MODE_CMYK)
+        preview->profile = g_bytes_new (storage->profile, storage->profile_size);
+      for (guint i = 0; i < storage->map.count; i++)
         {
           preview->planes[i] = g_object_ref (gimp_drawable_get_buffer (GIMP_DRAWABLE (storage->planes[i])));
           preview->changed[i] = g_signal_connect (preview->planes[i], "changed",
                                                   G_CALLBACK (plane_changed), preview);
         }
-      preview->validate = glims_plate_cmyk_preview_new (storage);
+      preview->validate = storage->map.mode == GLIMS_PLATE_MODE_CMYK
+                            ? glims_plate_cmyk_preview_new (storage)
+                            : glims_plate_lab_preview_new (storage);
       if (!preview->validate) { glims_plate_preview_free (preview); return NULL; }
       preview->buffer = gegl_buffer_new (&extent, babl_format ("RGBA float"));
       gimp_tile_handler_validate_assign (preview->validate, preview->buffer);
@@ -201,10 +211,14 @@ glims_plate_preview_prepare (GimpImage *image, GlimsPlatePreview **preview,
   g_mutex_unlock (&(*preview)->dirty_lock);
   if (dirty)
     gimp_tile_handler_validate_invalidate ((*preview)->validate, &damage);
-  if ((*preview)->map.mode == GLIMS_PLATE_MODE_CMYK)
+  if ((*preview)->map.mode == GLIMS_PLATE_MODE_CMYK ||
+      (*preview)->map.mode == GLIMS_PLATE_MODE_LAB)
     {
       GeglRectangle extent = { 0, 0, storage.map.width, storage.map.height };
-      glims_plate_cmyk_preview_prepare ((*preview)->validate, &extent);
+      if ((*preview)->map.mode == GLIMS_PLATE_MODE_CMYK)
+        glims_plate_cmyk_preview_prepare ((*preview)->validate, &extent);
+      else
+        glims_plate_lab_preview_prepare ((*preview)->validate, &extent);
     }
   *buffer = (*preview)->buffer;
   return GLIMS_STATUS_OK;
@@ -213,6 +227,11 @@ glims_plate_preview_prepare (GimpImage *image, GlimsPlatePreview **preview,
 gboolean
 glims_plate_preview_succeeded (GlimsPlatePreview *preview)
 {
-  return !preview || preview->map.mode != GLIMS_PLATE_MODE_CMYK ||
-         glims_plate_cmyk_preview_succeeded (preview->validate);
+  if (!preview)
+    return TRUE;
+  if (preview->map.mode == GLIMS_PLATE_MODE_CMYK)
+    return glims_plate_cmyk_preview_succeeded (preview->validate);
+  if (preview->map.mode == GLIMS_PLATE_MODE_LAB)
+    return glims_plate_lab_preview_succeeded (preview->validate);
+  return TRUE;
 }

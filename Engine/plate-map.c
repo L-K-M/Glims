@@ -40,11 +40,23 @@ bool glims_plate_map_validate(const GlimsPlateMap *map)
 {
     if (!map || !map->width || map->width > INT32_MAX ||
         !map->height || map->height > INT32_MAX ||
-        !map->count || map->count > GLIMS_PLATE_LIMIT ||
-        !(map->mode == GLIMS_PLATE_MODE_MULTICHANNEL ||
-          (map->mode == GLIMS_PLATE_MODE_CMYK && map->count == 4)) ||
-        map->storage < GLIMS_PLATE_STORAGE_U8 || map->storage > GLIMS_PLATE_STORAGE_FLOAT ||
-        map->encoding != GLIMS_PLATE_ENCODING_INTENSITY)
+        !map->count || map->count > GLIMS_PLATE_LIMIT)
+        return false;
+
+    if (map->mode == GLIMS_PLATE_MODE_CMYK) {
+        if (map->count != 4 || map->encoding != GLIMS_PLATE_ENCODING_INTENSITY)
+            return false;
+    } else if (map->mode == GLIMS_PLATE_MODE_MULTICHANNEL) {
+        if (map->encoding != GLIMS_PLATE_ENCODING_INTENSITY)
+            return false;
+    } else if (map->mode == GLIMS_PLATE_MODE_LAB) {
+        if (map->count != 3 || map->encoding != GLIMS_PLATE_ENCODING_LAB_D50)
+            return false;
+    } else {
+        return false;
+    }
+
+    if (map->storage < GLIMS_PLATE_STORAGE_U8 || map->storage > GLIMS_PLATE_STORAGE_FLOAT)
         return false;
 
     for (uint32_t i = 0; i < map->count; i++) {
@@ -56,10 +68,12 @@ bool glims_plate_map_validate(const GlimsPlateMap *map)
             if (!memcmp(entry->uuid, map->entries[j].uuid, sizeof entry->uuid))
                 return false;
         for (unsigned j = 0; j < 3; j++) {
-            /* Bit validation also rejects signaling NaNs without evaluating them.
-             * Binary64 positive values have monotonically ordered bit patterns. */
+            /* Bit checks reject signaling NaNs without evaluating them. Lab
+             * reserves these fields; existing ink modes also admit host -0. */
             uint64_t bits = color_bits(&entry->ink_rgb[j]);
-            if (bits > one_bits && bits != negative_zero_bits) return false;
+            if (map->mode == GLIMS_PLATE_MODE_LAB) {
+                if (bits != 0) return false;
+            } else if (bits > one_bits && bits != negative_zero_bits) return false;
         }
     }
     return true;

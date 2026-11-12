@@ -1120,7 +1120,8 @@ typedef enum GlimsColorMode {
   GLIMS_COLOR_MODE_GRAYSCALE = 2,
   GLIMS_COLOR_MODE_INDEXED   = 3,
   GLIMS_COLOR_MODE_MULTICHANNEL = 4,
-  GLIMS_COLOR_MODE_CMYK = 5
+  GLIMS_COLOR_MODE_CMYK = 5,
+  GLIMS_COLOR_MODE_LAB = 6
 } GlimsColorMode;
 
 /* The component type of the image's precision. */
@@ -3763,6 +3764,15 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_ink_channel_identity)(GlimsEngine *engine, GlimsImageID image,
                                             GlimsItemID channel,
                                             GlimsInkChannelIdentity *out);
+  /* Slot190: create three authoritative D50 L/a/b planes, initially neutral
+   * white. Accepts U8, U16 (ICC v4 encoding) or physical FLOAT components and
+   * dimensions 1..engine maximum. No supplied ICC profile is required. This
+   * initial native contract supports view, XCF save/reopen and history;
+   * RGB/ink operations refuse rather than reinterpret the stored Lab values.
+   * Clears *error and zeros *result on every failure. */
+  GlimsStatus (*image_new_lab) (GlimsEngine *engine, int32_t width, int32_t height,
+                                uint32_t component, GlimsImageID *result,
+                                char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

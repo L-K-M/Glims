@@ -104,7 +104,12 @@ glims_image_components (GlimsEngine         *engine,
   memset (state, 0, sizeof (*state));
   if (open->component_document)
     {
-      state->mode = open->component_cmyk_profile ? GLIMS_COMPONENT_MODE_CMYK : GLIMS_COMPONENT_MODE_MULTICHANNEL;
+      switch (open->component_mode)
+        {
+        case GLIMS_PLATE_MODE_CMYK: state->mode = GLIMS_COMPONENT_MODE_CMYK; break;
+        case GLIMS_PLATE_MODE_MULTICHANNEL: state->mode = GLIMS_COMPONENT_MODE_MULTICHANNEL; break;
+        default: return GLIMS_STATUS_UNSUPPORTED;
+        }
       return GLIMS_STATUS_OK;
     }
   switch (gimp_image_get_base_type (open->image))
