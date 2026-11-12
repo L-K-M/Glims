@@ -69,9 +69,11 @@ Saving and exporting are two separate jobs:
 PSD offers Layers and Merged appearance for RGB and grayscale images.
 Layers retains raster layers and masks, but renders effects into their pixels;
 blending can change when the exported file is reopened. Merged appearance
-captures the visible image as one layer, including transparency. PSD exports
-8-bit source channels at 8-bit and higher precision at 16-bit; out-of-range
-HDR values cannot be retained. Keep the XCF document for full editing.
+captures the visible image as one layer, including transparency. The bundled image
+engine exports 8-bit source channels at 8-bit and higher precision at 16-bit,
+which cannot retain out-of-range HDR values. The supported development engine
+also writes 32-bit PSD for float/u32 sources. Keep XCF for full editing and
+the original precision.
 
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.

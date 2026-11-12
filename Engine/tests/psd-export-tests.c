@@ -46,7 +46,7 @@ static void header(const char *path,int width,int height,int mode,int depth) {
   unsigned char bytes[26]={0};FILE *f=fopen(path,"rb");size_t n=f?fread(bytes,1,sizeof bytes,f):0;if(f)fclose(f);
   CHECK(n==26 && !memcmp(bytes,"8BPS",4) && be16(bytes+4)==1 && be32(bytes+18)==(unsigned)width &&
     be32(bytes+14)==(unsigned)height && be16(bytes+24)==(unsigned)mode,"independent PSD header has expected signature, canvas and mode");
-  CHECK(be16(bytes+22)==(unsigned)depth,"PSD uses 8-bit for u8 sources and 16-bit for higher precision");
+  CHECK(be16(bytes+22)==(unsigned)depth,"PSD declares the expected native encoding depth");
 }
 static int layers(GlimsImageID image,GlimsLayerInfo rows[16]) {
   int32_t count=0; memset(rows,0,sizeof(GlimsLayerInfo)*16);require(api->image_layers(engine,image,rows,16,&count));return count;
@@ -74,7 +74,13 @@ static void roundtrip(GlimsImageID image,const char *path,unsigned layout,int co
   } else { ok=export(image,path,&s);CHECK(ok,"configured PSD export succeeds"); }
   if(ok) {
     GlimsColorInfo color={0};require(api->image_color_info(engine,image,&color));
-    header(path,info_before.width,info_before.height,mode,color.component==GLIMS_COLOR_COMPONENT_U8?8:16);
+    int major=0,minor=0;sscanf(api->engine_version(engine),"%d.%d",&major,&minor);
+    /* The supported development engine adds 32-bit PSD writing; stable
+     * 3.2/3.0 writers quantize these source components to 16-bit instead. */
+    int depth=color.component==GLIMS_COLOR_COMPONENT_U8?8:16;
+    if((major>3 || (major==3 && minor>=3)) &&
+       (color.component==GLIMS_COLOR_COMPONENT_FLOAT || color.component==GLIMS_COLOR_COMPONENT_U32)) depth=32;
+    header(path,info_before.width,info_before.height,mode,depth);
     GlimsImageID reopened=0;require(api->image_open(engine,path,&reopened,NULL));
     GlimsLayerInfo rows[16];int m=layers(reopened,rows);CHECK(m==count,"reopened PSD has the requested layer structure");
     if(layout==GLIMS_PSD_MERGED) {

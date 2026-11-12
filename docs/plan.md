@@ -4723,8 +4723,9 @@ changed blending. Merged appearance copies the canvas-clipped visible
 projection into one alpha-capable layer of a private image. The source's
 layers, selected target, effects, pixels, dirty state and Undo remain intact.
 The private duplicate preserves its working profile and image metadata.
-PSD output is 8-bit for u8 source channels and 16-bit for higher precision;
-HDR range cannot survive that integer encoding. XCF remains the editable save.
+The stable engines write 8-bit for u8 source channels and 16-bit for higher
+precision; HDR range cannot survive that integer encoding. The development
+engine also writes 32-bit PSD for float/u32 sources. XCF remains the editable save.
 
 The additive facade tail retains the historical 48-byte PNG/JPEG/TIFF
 settings prefix, accepts unaligned and larger future structs, and requires
@@ -4740,3 +4741,12 @@ space before writing. No upstream source is patched. This guard and the
 expanded matrix, actual save-panel workflow, full app and bundle checks
 remain in progress. Independent C source review found no important issue
 before the profile guard; the follow-up and Swift form review remain open.
+
+
+PSD matrix follow-up: all four native conformance suites pass. The stable
+engines pass PSD cases with the explicit old-profile refusals. Master exposed
+an overly narrow test/documentation assumption: its PSD writer supports
+32-bit float/u32 output, unlike the stable writers. Source inspection and the
+actual file headers confirm this improvement; the oracle and copy now state
+the engine-specific depth without suppressing the newer capability. The
+remaining native rerun and actual Export/Repeat Export checks are pending.

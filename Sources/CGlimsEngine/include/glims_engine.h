@@ -3575,8 +3575,9 @@ typedef struct GlimsEngineAPI {
    * success remembers the exported path. Active strokes/previews are BUSY.
    * Input's known prefix is copied (unaligned input and larger future tails
    * accepted); path is borrowed until return. PSD requires its complete
-   * layout tail. PSD supports RGB/grayscale, 8-bit source at 8-bit and
-   * higher precision reduced to 16-bit. Engines before 3.2.6 refuse profiles
+   * layout tail. PSD supports RGB/grayscale; native writers choose output
+   * depth (stable 3.2/3.0: 8/16-bit; development: also 32-bit float/u32).
+   * Engines before 3.2.6 refuse profiles
    * outside their default encoding space. Clears *error when supplied. */
   GlimsStatus (*image_export_configured) (GlimsEngine *engine, GlimsImageID image,
                                          const char *path,

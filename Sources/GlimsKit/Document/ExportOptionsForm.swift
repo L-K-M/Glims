@@ -73,8 +73,8 @@ struct ExportSettings: Equatable {
 
         var explanation: String {
             switch self {
-            case .layers: return "Keeps layers and masks. Effects are rendered into layers; blending may change. Higher precision is reduced to 16-bit."
-            case .merged: return "Exports the visible image as one layer, including transparency. Higher precision is reduced to 16-bit."
+            case .layers: return "Keeps layers and masks. Effects are rendered into layers; blending may change. Save XCF to retain full editing and precision."
+            case .merged: return "Exports the visible image as one layer, including transparency. Save XCF to retain full editing and precision."
             }
         }
     }
