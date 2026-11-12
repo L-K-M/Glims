@@ -22,6 +22,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  component-codec:
+    name: Component codec sanitizers
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Xcode 26's ASan executable hangs before output on the hosted macOS
+      # 26.7.2 image. Keep both sanitizers required on this portable C codec;
+      # the native Mac job still checks its optimized implementation.
+      - name: Check optimized and sanitized component metadata codec
+        run: bash scripts/test-plate-map.sh
+
   build-test:
     name: Build, Test & Package
     runs-on: macos-26
@@ -61,6 +75,10 @@ jobs:
 
       - name: Check conformance runner ABI refusal
         run: scripts/test-conformance-abi.sh
+
+      - name: Check private component metadata codec
+        timeout-minutes: 5
+        run: bash scripts/test-plate-map.sh optimized
 
       - name: Build
         run: swift build
