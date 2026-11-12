@@ -25,6 +25,7 @@ final class ImageDocument {
     private(set) var name: String
     /// The file the image belongs to and whether it needs saving.
     private(set) var fileState: DocumentFileState
+    private(set) var lastExportSettings: ExportSettings?
     /// This document's page setup, changed by File ▸ Page Setup and read
     /// by Print: per document, like an NSDocument's print info. Editing
     /// it touches neither the image nor the file state.
@@ -4358,14 +4359,22 @@ final class ImageDocument {
             || PlugInCommands.running?.document === self
     }
 
-    func export(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+    func export(to url: URL, settings: ExportSettings? = nil,
+                completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
         enqueueExclusive(effect: .readsPixels, label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
-            do { try session.export(image, to: url.path); result = nil } catch { result = error }
+            do {
+                if let settings { try session.export(image, to: url.path, settings: settings) }
+                else { try session.export(image, to: url.path) }
+                result = nil
+            } catch { result = error }
             DispatchQueue.main.async {
-                if result == nil { self.fileState.noteExported(to: url) }
+                if result == nil {
+                    self.fileState.noteExported(to: url)
+                    self.lastExportSettings = settings
+                }
                 completion(result)
             }
         }
@@ -4909,7 +4918,7 @@ final class ImageDocument {
             record = filterPreviewRecords[filter]
             // An admitted Apply of a supported session reserves its Recorder row
             // now; preview writes, Cancel and refused admissions never do.
-            if ["gimp:levels", "gimp:curves"].contains(record?.operation ?? ""), recorder.isRecording {
+            if ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation"].contains(record?.operation ?? ""), recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
@@ -4934,6 +4943,10 @@ final class ImageDocument {
                 do {
                     if record?.operation == "gimp:curves" {
                         command = .applyCurves(try session.curvesSettings(filter))
+                    } else if record?.operation == "gimp:color-balance" {
+                        command = .applyColorBalance(try session.colorBalanceSettings(filter))
+                    } else if record?.operation == "gimp:hue-saturation" {
+                        command = .applyHueSaturation(try session.hueSaturationSettings(filter))
                     } else {
                         command = .applyLevels(try session.levelsSettings(filter))
                     }
@@ -5823,7 +5836,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .completeStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .completeStroke: return true
         default: return false
         }
     }

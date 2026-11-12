@@ -65,16 +65,16 @@ echo "==> Reading GIMP's build flags"
 meson introspect --targets "$BUILD" > "$OUT/targets.json"
 python3 -I "$ROOT/scripts/adapter-flags.py" "$OUT/targets.json" "$BUILD" "$INSTALL" "$OUT"
 
-# Compression recovery runs in the adapter, before the image is adopted.
+# Compression recovery and TIFF import preparation run in the adapter.
 # Keep its existing prefix dependencies in the frozen response file so
 # isolated native fixtures and bundle collection use the same link inputs.
-python3 -I - "$OUT/link.rsp" "$PREFIX/lib/libbz2.dylib" "$PREFIX/lib/liblzma.dylib" <<'PYCOMPRESSION'
+python3 -I - "$OUT/link.rsp" "$PREFIX/lib/libbz2.dylib" "$PREFIX/lib/liblzma.dylib" "$PREFIX/lib/libtiff.dylib" <<'PYCOMPRESSION'
 from pathlib import Path
 import shlex
 import sys
 libraries = [Path(value) for value in sys.argv[2:]]
 if not all(path.is_file() for path in libraries):
-    raise SystemExit("The dependency prefix needs its bzip2 and liblzma libraries")
+    raise SystemExit("The dependency prefix needs its bzip2, liblzma and libtiff libraries")
 with Path(sys.argv[1]).open("a") as output:
     output.write("\n" + shlex.join(map(str, libraries)) + "\n")
 PYCOMPRESSION
@@ -116,6 +116,12 @@ xcrun clang @"$OUT/compile.rsp" -I"$ROOT/Engine" -std=c11 -O2 -Wall -Wextra \
 xcrun clang++ -o "$OUT/glims-xcf-compressed-tests" "$OUT/xcf-compressed-tests.o" \
   "$OUT/obj/xcf-compressed.o" "$OUT/obj/xcf-gzip.o" @"$OUT/link.rsp"
 
+# Exercise TIFF chain filtering and malformed-file admission without GIMP.
+xcrun clang @"$OUT/compile.rsp" -I"$ROOT/Engine" -std=c11 -O2 -Wall -Wextra \
+  -c "$ROOT/Engine/tests/tiff-import-tests.c" -o "$OUT/tiff-import-tests.o"
+xcrun clang++ -o "$OUT/glims-tiff-import-tests" "$OUT/tiff-import-tests.o" \
+  "$OUT/obj/tiff-import.o" @"$OUT/link.rsp"
+
 exported="$(nm -gU "$OUT/libglimsengine.dylib" | awk '{print $3}')"
 [[ "$exported" == "_glims_engine_get_api" ]] || die "the adapter exports more than glims_engine_get_api: $exported"
 echo "-- $OUT/libglimsengine.dylib ($(du -h "$OUT/libglimsengine.dylib" | cut -f1)), exports only glims_engine_get_api"
@@ -142,6 +148,12 @@ if [[ "$MODE" == test ]]; then
         "$OUT/glims-xcf-compressed-tests" || status=$?
   cat "$OUT/codec-test.log"
   (( status == 0 )) || die "the compressed XCF codec tests failed (status $status)"
+  status=0
+  run_with_timeout 60 "$OUT/tiff-import-test.log" \
+    env HOME="$WORK/home" XDG_CACHE_HOME="$WORK/cache" \
+        "$OUT/glims-tiff-import-tests" "$WORK" || status=$?
+  cat "$OUT/tiff-import-test.log"
+  (( status == 0 )) || die "the TIFF import preparation tests failed (status $status)"
 fi
 
 if [[ "$MODE" == perf ]]; then

@@ -1,0 +1,218 @@
+/* Explicit native export settings, without loading libgimp into the app.
+ * The file/image lifetime and exported-state sequence follows upstream
+ * GIMP_3_2_8 app/file/file-save.c (GPL-3.0-or-later). Only local paths are
+ * accepted by the facade. Upstream file plug-ins run in their own processes. */
+#include "engine-private.h"
+#include <math.h>
+#include <string.h>
+#include "core/gimp.h"
+#include "core/gimpcontext.h"
+#include "core/gimpdocumentlist.h"
+#include "core/gimpimage.h"
+#include "core/gimpprogress.h"
+#include "pdb/gimpprocedure.h"
+#include "plug-in/gimppluginmanager-file.h"
+#include "plug-in/gimppluginprocedure.h"
+
+static gboolean
+settings_valid (const GlimsExportSettings *s)
+{
+  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_TIFF &&
+         isfinite (s->jpeg_quality) && s->jpeg_quality >= 0 && s->jpeg_quality <= 1 &&
+         s->jpeg_progressive <= 1 && s->jpeg_optimize <= 1 &&
+         s->jpeg_subsampling <= GLIMS_JPEG_BOTH &&
+         s->png_compression >= 0 && s->png_compression <= 9 &&
+         s->png_interlaced <= 1 && s->png_preserve_transparent_color <= 1 &&
+         s->tiff_compression <= GLIMS_TIFF_PACK_BITS &&
+         s->tiff_preserve_transparent_color <= 1;
+}
+
+/* Bind by name and type, never by incidental upstream argument offsets.
+ * The caller also runs each native param spec's validator before executing. */
+static GValue *
+argument (GimpProcedure *proc, GimpValueArray *args, const char *name, GType type)
+{
+  for (gint i = 0; i < proc->num_args; i++)
+    if (strcmp (g_param_spec_get_name (proc->args[i]), name) == 0)
+      {
+        GValue *value = gimp_value_array_index (args, i);
+        return G_VALUE_TYPE (value) == type ? value : NULL;
+      }
+  return NULL;
+}
+
+static gboolean
+set_bool (GimpProcedure *p, GimpValueArray *a, const char *name, gboolean value)
+{
+  GValue *v = argument (p, a, name, G_TYPE_BOOLEAN);
+  if (!v) return FALSE;
+  g_value_set_boolean (v, value);
+  return TRUE;
+}
+static gboolean
+set_choice (GimpProcedure *p, GimpValueArray *a, const char *name, const char *value)
+{
+  GValue *v = argument (p, a, name, G_TYPE_STRING);
+  if (!v) return FALSE;
+  g_value_set_string (v, value);
+  return TRUE;
+}
+
+static gboolean
+configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s)
+{
+  static const char *jpeg_sampling[] = { "sub-sampling-1x1", "sub-sampling-2x1",
+                                        "sub-sampling-1x2", "sub-sampling-2x2" };
+  static const char *tiff_compression[] = { "none", "lzw", "adobe_deflate", "packbits" };
+  GValue *number;
+  switch (s->format)
+    {
+    case GLIMS_EXPORT_JPEG:
+      number = argument (p, a, "quality", G_TYPE_DOUBLE);
+      if (!number) return FALSE;
+      g_value_set_double (number, s->jpeg_quality);
+      return set_bool (p, a, "progressive", s->jpeg_progressive) &&
+             set_bool (p, a, "optimize", s->jpeg_optimize) &&
+             set_choice (p, a, "sub-sampling", jpeg_sampling[s->jpeg_subsampling]);
+    case GLIMS_EXPORT_PNG:
+      number = argument (p, a, "compression", G_TYPE_INT);
+      if (!number) return FALSE;
+      g_value_set_int (number, s->png_compression);
+      return set_bool (p, a, "interlaced", s->png_interlaced) &&
+             set_bool (p, a, "save-transparent", s->png_preserve_transparent_color);
+    case GLIMS_EXPORT_TIFF:
+      return set_choice (p, a, "compression", tiff_compression[s->tiff_compression]) &&
+             set_bool (p, a, "save-transparent-pixels", s->tiff_preserve_transparent_color) &&
+             /* The native noninteractive TIFF loader includes the thumbnail
+              * IFD as a layer. Omit that redundant image so round trips keep
+              * the exported dimensions and composite. */
+             set_bool (p, a, "include-thumbnail", FALSE);
+    default:
+      return FALSE;
+    }
+}
+
+GlimsStatus
+glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
+                               const char *path, const GlimsExportSettings *settings,
+                               char **error)
+{
+  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export" };
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpPlugInProcedure *file_proc;
+  GimpProcedure *proc;
+  GimpImage *image;
+  GimpExportOptions *options;
+  GimpValueArray *args, *returns;
+  GValue *run, *image_arg, *file_arg, *options_arg;
+  GFile *file;
+  GError *gerror = NULL;
+  GlimsProgress *progress;
+  GimpPDBStatusType status;
+  gboolean valid;
+
+  if (!settings_valid (settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy || g_hash_table_size (engine->strokes) ||
+      g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+
+  file = g_file_new_for_path (path);
+  file_proc = gimp_plug_in_manager_file_procedure_find (engine->gimp->plug_in_manager,
+                  GIMP_FILE_PROCEDURE_GROUP_EXPORT, file, &gerror);
+  if (!file_proc)
+    {
+      g_object_unref (file);
+      return glims_fail (error, gerror, "No exporter supports this filename.");
+    }
+  if (strcmp (gimp_object_get_name (file_proc), procedures[settings->format]) != 0)
+    {
+      g_object_unref (file);
+      if (error) *error = g_strdup ("The filename extension does not match the selected export format.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  proc = GIMP_PROCEDURE (file_proc);
+  args = gimp_procedure_get_arguments (proc);
+  run = argument (proc, args, "run-mode", GIMP_TYPE_RUN_MODE);
+  image_arg = argument (proc, args, "image", GIMP_TYPE_IMAGE);
+  file_arg = argument (proc, args, "file", G_TYPE_FILE);
+  options_arg = argument (proc, args, "options", GIMP_TYPE_EXPORT_OPTIONS);
+  if (!run || !image_arg || !file_arg || !options_arg || !configure (proc, args, settings))
+    {
+      gimp_value_array_unref (args);
+      g_object_unref (file);
+      if (error) *error = g_strdup ("This engine does not provide the requested export controls.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  options = g_object_new (GIMP_TYPE_EXPORT_OPTIONS, NULL);
+  g_value_set_enum (run, GIMP_RUN_NONINTERACTIVE);
+  g_value_set_object (image_arg, open->image);
+  g_value_set_object (file_arg, file);
+  g_value_set_object (options_arg, options);
+  g_object_unref (options);
+  valid = TRUE;
+  for (gint i = 0; i < proc->num_args; i++)
+    if (g_param_value_validate (proc->args[i], gimp_value_array_index (args, i)))
+      valid = FALSE;
+  if (!valid)
+    {
+      gimp_value_array_unref (args);
+      g_object_unref (file);
+      if (error) *error = g_strdup ("This engine cannot represent the requested export settings.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  if (g_file_query_exists (file, NULL))
+    {
+      GFileInfo *info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+                  G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE, G_FILE_QUERY_INFO_NONE, NULL, &gerror);
+      if (!info || g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR ||
+          !g_file_info_get_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE))
+        {
+          g_clear_object (&info);
+          gimp_value_array_unref (args);
+          g_object_unref (file);
+          return glims_fail (error, gerror, "The export destination is not a writable regular file.");
+        }
+      g_object_unref (info);
+    }
+
+  /* Plug-ins nest a main loop: retain the image, never use `open` afterward. */
+  image = g_object_ref (open->image);
+  gimp_image_saving (image);
+  progress = glims_progress_new (engine);
+  engine->progress = progress;
+  engine->busy++;
+  returns = gimp_procedure_execute (proc, engine->gimp, gimp_get_user_context (engine->gimp),
+                                     GIMP_PROGRESS (progress), args, &gerror);
+  engine->busy--;
+  if (gimp_progress_is_active (GIMP_PROGRESS (progress)))
+    gimp_progress_end (GIMP_PROGRESS (progress));
+  engine->progress = NULL;
+  g_object_unref (progress);
+  status = returns ? g_value_get_enum (gimp_value_array_index (returns, 0)) : GIMP_PDB_EXECUTION_ERROR;
+  g_clear_pointer (&returns, gimp_value_array_unref);
+  gimp_value_array_unref (args);
+  if (status == GIMP_PDB_SUCCESS)
+    {
+      gimp_image_set_exported_file (image, file);
+      gimp_image_set_export_proc (image, file_proc);
+      gimp_image_set_imported_file (image, NULL);
+      gimp_image_export_clean_all (image);
+      gimp_image_exported (image, file);
+      gimp_document_list_add_file (GIMP_DOCUMENT_LIST (engine->gimp->documents), file,
+                                   g_slist_nth_data (file_proc->mime_types_list, 0));
+    }
+  gimp_image_flush (image);
+  g_object_unref (image);
+  g_object_unref (file);
+  if (status == GIMP_PDB_CANCEL)
+    {
+      g_clear_error (&gerror);
+      return GLIMS_STATUS_CANCELLED;
+    }
+  if (status != GIMP_PDB_SUCCESS)
+    return glims_fail (error, gerror, "The image could not be exported.");
+  g_clear_error (&gerror);
+  return GLIMS_STATUS_OK;
+}

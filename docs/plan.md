@@ -4553,3 +4553,163 @@ tests and the focused save/load/rebind/replay workflow pass on all four
 engines. The complete editor matrix and independent integration review are
 running.
 This slice does not establish complete Recorder coverage or Photoshop 4 parity.
+
+
+### Explicit native export controls (2026-11-12 candidate)
+
+File > Export has a format chooser and PNG compression/interlacing/transparent
+color, JPEG quality/progressive/optimization/chroma sampling, and lossless TIFF
+compression/transparent-color controls. Successful settings belong to the
+document and Repeat Export reuses them; Cancel and failed writes do not replace
+the last successful request. Save remains XCF-only.
+
+Additive facade slot 178 validates an owned immutable settings prefix and binds
+the native file procedure by argument name and type before noninteractive
+execution. All four native conformance suites and 60 focused checks per engine pass,
+including independent PNG/JPEG/TIFF header checks, exact PNG/TIFF reopen
+pixels, invalid-input refusal and preservation of source pixels, document
+dirty state and Undo/Redo. Small TIFF round trips reproduced an upstream
+loader issue: its embedded thumbnail became an extra 256-pixel layer. This
+export path omits that redundant thumbnail. Existing external TIFF files with
+thumbnail IFDs still require separate import qualification.
+
+The focused hosted `GLIMS_SMOKE_CASE=export-options` workflow passes on all
+four engines through actual native Export button input, including Repeat
+Export, a refused write, Cancel, and unchanged source pixels/history/dirty
+state. It prints the fixture-only destination and requires an external UI
+driver within 90 seconds; it is separate from the headless default suite.
+Transparent-color fixtures verify exact hidden RGB and partial alpha in PNG
+and TIFF. A regression reproduced JPEG quality losing precision when an
+untouched rounded display was accepted. The fix preserves that exact stored
+value while applying explicitly typed rounded text; 1,418 Swift tests pass.
+The sheet starts in the last successful export folder; isolated UI fixtures
+supply their own initial folder before presentation. The final full editor
+and packaged export checks remain in progress. This does not establish native
+CMYK/Lab editing, complete Photoshop 4 parity or complete Recorder/batch coverage.
+
+### Recorded new Color Balance adjustments (2026-11-12 candidate)
+
+New Color Balance Apply records its final native settings — all nine signed
+corrections across shadows, midtones and highlights plus Preserve Lightness —
+behind queued preview writes, retaining its begin-time layer if selection
+changes. Format version 8 uses owned semantic JSON field names; versions 1
+through 7 retain their existing meaning and strict tagged schemas. Cancel
+records nothing, a failed commit settles failure while retaining its capture
+metadata for retry, and mask/channel targets or existing-effect edits remain
+explicit unsupported rows after a successful commit.
+
+`RecorderColorBalanceValue` detaches the owned file value and validates the
+finite −1...1 native range at codec decode, encode, both bridge directions
+and the snapshot boundary. Replay reuses the shared layer-adjustment
+admission: current membership, RGB/grayscale mode, pixel lock and
+mask/channel/Quick Mask role checks against the freshly bound layer, then
+one new effect with one Undo. No engine or facade code changed and no new
+native slot was needed; the typed whole-settings read/set API already
+existed.
+
+The focused `GLIMS_SMOKE_CASE=recorder-color-balance` workflow drives the
+real panel through openNativeFilter: accepted Apply and Cancel,
+successful-only capture, save/load, explicit rebinding on a second image,
+exact pixels against an independent native oracle, committed-effect setting
+preservation, Undo/Redo, lock and role refusals, failed-Apply retry, and
+unsupported existing-effect/mask/channel rows. Twelve focused
+codec/value/binding/snapshot tests cover independent all-nine-nonzero
+fixtures with both luminosity states, unknown/missing/extra fields, wrong
+types, nonfinite and out-of-range corrections, version anchoring and wrong
+bindings.
+
+The final code builds and passes 1,401 Swift tests and all 31 focused native
+workflow checks on each of GIMP 3.2.8, 3.2.0, 3.0.8 and master. Independent
+SWE-2 review found no important product-code defects. Its minor test finding
+was addressed by reading the effect identity again after Redo. The first
+native run also exposed a fixture assumption: the real panel intentionally
+refuses ordinary layer switching. The test now proves that refusal, then
+uses the native layer-selection seam to exercise begin-time capture under
+an external selection change. No production admission was relaxed.
+
+CI and final integrated-package promotion remain open. This slice adds the
+Color Balance family only; other adjustments and existing-effect replay
+remain open.
+
+
+### Recorded new Hue/Saturation adjustments (2026-11-12 candidate, unrun)
+
+New Hue/Saturation Apply records its final native settings — the global
+overlap plus all seven named ranges' signed hue, saturation and lightness
+corrections (21 values) — behind queued preview writes, retaining its
+begin-time layer if selection changes. Format version 9 uses owned semantic
+JSON field names; versions 1 through 8 retain their existing meaning and
+strict tagged schemas. Cancel records nothing, a failed commit settles
+failure while retaining its capture metadata for retry, and mask/channel
+targets or existing-effect edits remain explicit unsupported rows after a
+successful commit.
+
+`RecorderHueSaturationValue` detaches the owned file value and validates
+the finite −1...1 correction and 0...1 overlap contracts at codec decode,
+encode, both bridge directions and the snapshot boundary. Replay reuses
+the shared layer-adjustment admission: current membership, RGB/grayscale
+mode, pixel lock and mask/channel/Quick Mask role checks against the
+freshly bound layer, then one new `gimp:hue-saturation` effect with one
+Undo; a failed set or commit aborts the fresh session. No engine or
+facade code changed and no new native slot was needed; the typed
+whole-settings read/set API already existed.
+
+The focused `GLIMS_SMOKE_CASE=recorder-hue-saturation` workflow drives the
+real panel through openNativeFilter: accepted Apply and Cancel,
+successful-only capture, save/load, explicit rebinding on a second image,
+exact pixels against an independent native oracle, committed-effect
+setting preservation, Undo/Redo, lock and role refusals, failed-Apply
+retry, and unsupported existing-effect/mask/channel rows. Focused
+codec/value/binding/snapshot tests cover independent all-nonzero fixtures,
+unknown/missing/extra fields, wrong types, nonfinite and out-of-range
+corrections and overlap, version anchoring and wrong bindings.
+
+This slice adds the Hue/Saturation family only; other adjustments and
+existing-effect replay remain open. Status: the code builds with
+`swift build --build-tests`, but no `swift test` run and no GUI or
+native-engine check has run on this change yet — the root's full
+GUI/native run remains outstanding before this can be called verified.
+
+### TIFF thumbnail import candidate (2026-11-12)
+
+Open and Open as Layers now prepare mixed TIFF main-directory chains in a
+private copy, removing only directories explicitly tagged as reduced-image
+thumbnails. Ordinary pages and original source bytes are preserved. This
+fixes thumbnails becoming layers and enlarging the canvas without modifying
+upstream code. Linked Place retains its original monitored source path.
+See [TIFF import](tiff-import.md) for the 13 reproduced baseline failures,
+parser/cleanup tests and pending integration qualification.
+
+TIFF review follow-up: preparation is restricted to the registered TIFF
+loader, so camera-raw containers with TIFF magic retain their preview IFDs.
+The scan now also has a 512 MiB cumulative allocation cap. Strict refusal
+of malformed/over-limit chains is deliberate; externally compressed TIFFs
+remain on the native compressor path. The pinned native and staging tests
+pass after these changes; the combined four-engine check is next.
+
+Export qualification follow-up: the full editor suite passes on all four
+engines, and the standalone bundle passes native conformance, the 60-check
+export fixture, the full editor suite and the externally driven native
+Export/Repeat Export workflow with development trees inaccessible. Real
+PNG/TIFF/JPEG screenshots exposed tight accessory margins; the form now has
+insets and shorter transparent-pixel labels. All 1,418 units and the actual
+native picker workflow pass after that layout-only change. The final
+combined package will include it.
+
+### File and Recorder integration checkpoint (2026-11-12)
+
+The combined source includes export settings and the native save panel,
+recorded Color Balance and Hue/Saturation, and TIFF thumbnail preparation.
+Color Balance passes all 1,401 units and 31 dedicated native AppKit checks
+per engine. Hue/Saturation passes all 1,413 units and 31 dedicated checks
+per engine, including the actual panel, pixel oracle, save/load/rebinding,
+Undo/Redo, native role refusals and failed-Apply retry. Its independent
+source review found no important defect. These supersede the earlier unrun
+notes for those two candidates.
+
+The first combined engine run passed native conformance, 102 TIFF and 60
+export checks on all four engines. The final TIFF loader gate/memory bound
+and Export sheet spacing are now integrated and are undergoing the affected
+checks and final application/package qualification. No completed package is
+claimed for this combined revision yet; Photoshop 4 parity, native CMYK/Lab
+editing, wider Recorder coverage and folder batch processing remain open.

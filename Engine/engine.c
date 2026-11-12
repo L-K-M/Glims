@@ -3399,6 +3399,32 @@ static GlimsStatus filter_curves_set_on_engine (GlimsEngine *e, gpointer data)
   GlimsCurvesArgs *a = data;
   return glims_filter_curves_set (e, a->filter, a->settings, a->error);
 }
+typedef struct {
+  GlimsImageID image;
+  const char *path;
+  GlimsExportSettings settings;
+  char **error;
+} GlimsExportArgs;
+static GlimsStatus image_export_configured_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsExportArgs *a = data;
+  return glims_image_export_configured (e, a->image, a->path, &a->settings, a->error);
+}
+static GlimsStatus api_image_export_configured (GlimsEngine *e, GlimsImageID image,
+                                                const char *path,
+                                                const GlimsExportSettings *settings,
+                                                char **error)
+{
+  uint32_t size;
+  GlimsExportArgs a = { .image = image, .path = path, .error = error };
+  if (error) *error = NULL;
+  if (!settings || !path || !*path) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof a.settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&a.settings, settings, sizeof a.settings);
+  return glims_engine_call (e, image_export_configured_on_engine, &a);
+}
+
 static GlimsStatus api_filter_curves_set (GlimsEngine *e, GlimsFilterID filter,
                                          const GlimsCurvesSnapshot *settings, char **error)
 {
@@ -3718,6 +3744,7 @@ static const GlimsEngineAPI api_v1 = {
   .layer_transform_matrix_captured = api_layer_transform_matrix_captured,
   .image_transform_preview = api_image_transform_preview,
   .filter_curves_set = api_filter_curves_set,
+  .image_export_configured = api_image_export_configured,
 };
 
 __attribute__ ((visibility ("default")))
