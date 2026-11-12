@@ -86,11 +86,10 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         let ink = target?.colorInfo.mode == .multichannel
         if showsInkTools != ink {
             showsInkTools = ink
-            grid.slots = ToolID.paletteSlots.compactMap { group in
-                let tools = group.filter { $0.isAvailable(in: target?.colorInfo.mode) }
-                guard !tools.isEmpty else { return nil }
-                return ClassicToolGrid.Slot(tools: tools.map {
-                    ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut, image: $0.image)
+            grid.slots = ToolID.paletteSlots.map { group in
+                ClassicToolGrid.Slot(tools: group.map {
+                    ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,
+                        image: $0.image, isEnabled: $0.isAvailable(in: target?.colorInfo.mode))
                 })
             }
         }
@@ -291,12 +290,14 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     func retarget(to target: ImageDocument?) {
         // A different (or closing) document invalidates an open chooser, so
         // its late native results cannot restore a stale sheet.
+        let modeChanged = document?.colorInfo.mode != target?.colorInfo.mode
         if target !== document {
             document = target
             if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
             if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
             rebindTransformObserver()
         }
+        if modeChanged && isViewLoaded { rebuild() }
     }
 
     private var targetWindowController: DocumentWindowController? {
@@ -380,6 +381,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
 
         if tool.paintTool != nil {
             addPaintRows(for: tool, brush: state.brush(for: tool))
+            if document?.colorInfo.mode == .multichannel {
+                stack.addArrangedSubview(hint("Paint the selected ink channel. Black adds full ink; white removes ink. Gray sets intermediate coverage."))
+            }
         } else if tool.isSelectionTool {
             addSelectionRows(for: tool)
         } else if tool == .gradient {

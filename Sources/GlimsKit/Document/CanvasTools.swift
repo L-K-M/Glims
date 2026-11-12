@@ -294,7 +294,8 @@ final class CanvasToolController {
         else if tool == .crop, let crop = pendingCrop { phase = .cropReady(width: Int(crop.width), height: Int(crop.height)) }
         else if tool == .transform, transformSession?.isIdentity == false { phase = .transformReady }
         else { phase = .idle }
-        return ToolHintPolicy.hint(tool: tool, phase: phase, flags: flags)
+        return ToolHintPolicy.hint(tool: tool, phase: phase, flags: flags,
+                                   mode: document.colorInfo.mode)
     }
 
     private func hintChanged(_ reason: ToolHintPolicy.Refresh) {

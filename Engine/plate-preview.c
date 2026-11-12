@@ -14,8 +14,10 @@ struct _GlimsPlatePreview {
   GeglBuffer *planes[GLIMS_PLATE_LIMIT];
   gulong changed[GLIMS_PLATE_LIMIT];
   /* A GEGL write may emit from a worker. Only the engine thread touches
-   * graph/validator state; the signal merely schedules invalidation. */
-  gint dirty;
+   * graph/validator state; the signal accumulates bounded image damage. */
+  GMutex dirty_lock;
+  gboolean dirty;
+  GeglRectangle dirty_rect;
 };
 
 static void
@@ -23,8 +25,17 @@ plane_changed (GeglBuffer *buffer, const GeglRectangle *rect,
                GlimsPlatePreview *preview)
 {
   (void) buffer;
-  (void) rect;
-  g_atomic_int_set (&preview->dirty, 1);
+  GeglRectangle extent = { 0, 0, preview->map.width, preview->map.height };
+  GeglRectangle damage;
+  if (rect && !gegl_rectangle_intersect (&damage, rect, &extent)) return;
+  if (!rect) damage = extent;
+  g_mutex_lock (&preview->dirty_lock);
+  if (preview->dirty)
+    gegl_rectangle_bounding_box (&preview->dirty_rect, &preview->dirty_rect, &damage);
+  else
+    preview->dirty_rect = damage;
+  preview->dirty = TRUE;
+  g_mutex_unlock (&preview->dirty_lock);
 }
 
 void
@@ -43,6 +54,7 @@ glims_plate_preview_free (GlimsPlatePreview *preview)
   g_clear_object (&preview->buffer);
   g_clear_object (&preview->validate);
   g_clear_object (&preview->graph);
+  g_mutex_clear (&preview->dirty_lock);
   g_free (preview);
 }
 
@@ -90,7 +102,10 @@ create (const GlimsPlateStorage *storage)
     if (!gegl_has_operation (required[i])) return NULL;
   preview = g_try_new0 (GlimsPlatePreview, 1);
   if (!preview) return NULL;
+  g_mutex_init (&preview->dirty_lock);
   preview->map = storage->map;
+  preview->dirty = TRUE;
+  preview->dirty_rect = extent;
   memcpy (preview->visible, storage->visible, sizeof preview->visible);
   preview->graph = gegl_node_new ();
   last = solid (preview->graph, white);
@@ -130,7 +145,6 @@ create (const GlimsPlateStorage *storage)
   preview->buffer = gegl_buffer_new (&extent, babl_format ("RGBA float"));
   preview->validate = GIMP_TILE_HANDLER_VALIDATE (gimp_tile_handler_validate_new (crop));
   gimp_tile_handler_validate_assign (preview->validate, preview->buffer);
-  g_atomic_int_set (&preview->dirty, 1);
   return preview;
 }
 
@@ -152,9 +166,15 @@ glims_plate_preview_prepare (GimpImage *image, GlimsPlatePreview **preview,
       *preview = create (&storage);
       if (!*preview) return GLIMS_STATUS_FAILED;
     }
-  if (g_atomic_int_compare_and_exchange (&(*preview)->dirty, 1, 0))
-    gimp_tile_handler_validate_invalidate ((*preview)->validate,
-                                           gegl_buffer_get_extent ((*preview)->buffer));
+  /* Consume damage once. A later write remains pending for the next read,
+   * including one arriving while the validator processes this rectangle. */
+  g_mutex_lock (&(*preview)->dirty_lock);
+  gboolean dirty = (*preview)->dirty;
+  GeglRectangle damage = (*preview)->dirty_rect;
+  (*preview)->dirty = FALSE;
+  g_mutex_unlock (&(*preview)->dirty_lock);
+  if (dirty)
+    gimp_tile_handler_validate_invalidate ((*preview)->validate, &damage);
   *buffer = (*preview)->buffer;
   return GLIMS_STATUS_OK;
 }

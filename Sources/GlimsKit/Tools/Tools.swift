@@ -17,7 +17,7 @@ enum ToolID: String, CaseIterable {
     case hand, zoom
 
     /// Match the native component routes; unavailable tools are excluded
-    /// from the palette and shortcuts before they can start an interaction.
+    /// from shortcuts and disabled in the palette before an interaction starts.
     func isAvailable(in mode: EngineSession.ColorMode?) -> Bool {
         guard mode == .multichannel else { return true }
         switch self {

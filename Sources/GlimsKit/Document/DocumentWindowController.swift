@@ -464,7 +464,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func refreshIdleStatus(_ reason: ToolHintPolicy.Refresh) {
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
-        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(imageDocument.info.layerCount) layer\(imageDocument.info.layerCount == 1 ? "" : "s")\(undo)"
+        let multichannel = imageDocument.colorInfo.mode == .multichannel
+        let count = multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
+        let item = multichannel ? "ink channel" : "layer"
+        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(undo)"
         let current = statusBar.message
         let message = ToolHintPolicy.status(current: current, isError: statusIsError,
             progressActive: statusProgressActive, activity: EngineActivity.shared.label,

@@ -182,7 +182,7 @@ static void set_tag(GimpImage *image,const guint8 *bytes,guint32 length,guint32 
 }
 static GlimsStatus corruption(GlimsEngine *e,gpointer data) {
   Scene *s=data;GimpImage *source=glims_lookup_image(e,s->id)->image;
-  for(unsigned kind=0;kind<10;kind++) {
+  for(unsigned kind=0;kind<13;kind++) {
     GimpImage *copy=gimp_image_duplicate(source);GlimsPlateStorage storage;
     CHECK(copy && glims_plate_storage_read(copy,&storage)==GLIMS_PLATE_STORAGE_VALID,"native duplicate preserves all component identities");
     if(!copy)continue;
@@ -211,6 +211,12 @@ static GlimsStatus corruption(GlimsEngine *e,gpointer data) {
     if(kind==9) {
       GimpLayer *layer=gimp_layer_new(copy,W,H,gimp_image_get_layer_format(copy,FALSE),"Unexpected layer",1,GIMP_LAYER_MODE_NORMAL);
       CHECK(gimp_image_add_layer(copy,layer,NULL,0,FALSE),"unexpected layer added for malformed fixture");
+    }
+    if(kind>=10) {
+      guint8 bytes[2]={kind==10?2:1,0};
+      GimpParasite *tag=gimp_parasite_new(GLIMS_PLATE_VISIBLE_PARASITE,
+        kind==12?0:GIMP_PARASITE_PERSISTENT,kind==11?2:1,bytes);
+      gimp_item_parasite_attach(first,tag,FALSE);gimp_parasite_free(tag);
     }
     memset(&storage,0xa5,sizeof storage);
     CHECK(glims_plate_storage_read(copy,&storage)==GLIMS_PLATE_STORAGE_INVALID,"damaged or unsupported native component layout refuses");
@@ -262,6 +268,108 @@ static void numeric_paint(GlimsEngine *engine) {
       }
 }
 
+/* Half selection coverage has the declared precision quantization tolerance.
+ * No paint output supplies the expected blend or untouched samples. */
+static GlimsStatus fractional_selection(GlimsEngine *engine,gpointer data) {
+  Scene *s=data;GimpImage *image=glims_lookup_image(engine,s->id)->image;
+  GimpChannel *mask=gimp_image_get_mask(image);float samples[W*H];
+  for(unsigned y=0;y<H;y++)for(unsigned x=0;x<W;x++)samples[y*W+x]=x>=W/2?.5f:0;
+  gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(mask)),GEGL_RECTANGLE(0,0,W,H),0,
+                  babl_format("Y float"),samples,GEGL_AUTO_ROWSTRIDE);
+  gimp_drawable_update(GIMP_DRAWABLE(mask),0,0,W,H);
+  CHECK(!gimp_channel_is_empty(mask),"fractional selection is active for ink painting");
+  return GLIMS_STATUS_OK;
+}
+static void selection_and_accumulation(GlimsEngine *engine) {
+  for(unsigned precision=1;precision<=3;precision++)for(unsigned tool=0;tool<3;tool++) {
+    Scene s={0};char *error=NULL;
+    uint32_t component=precision==1?GLIMS_COLOR_COMPONENT_U8:precision==2?GLIMS_COLOR_COMPONENT_U16:GLIMS_COLOR_COMPONENT_FLOAT;
+    CHECK(api->image_new_multichannel(engine,W,H,component,N,&s.id,&error)==GLIMS_STATUS_OK,"selection/timer fixture creates");
+    if(!s.id){api->free_string(error);continue;}
+    CHECK(glims_engine_call(engine,setup,&s)==GLIMS_STATUS_OK,"selection/timer oracle seeds raw samples");
+    if(tool!=2)CHECK(glims_engine_call(engine,fractional_selection,&s)==GLIMS_STATUS_OK,"native half selection installed");
+    memcpy(s.actual,s.before,sizeof s.actual);double before=raw_value(&s,2,8*W+12);
+    GlimsBrushSettings brush={.struct_size=sizeof brush,.tool=tool==0?GLIMS_PAINT_PAINTBRUSH:tool==1?GLIMS_PAINT_PENCIL:GLIMS_PAINT_AIRBRUSH,
+      .size=11,.opacity=.5,.hardness=1,.rate=tool==2?100:0,.flow=100,.exposure=-1};
+    GlimsStrokePoint point={12.5,8.5,1,0,0,100};GlimsStrokeID stroke=0;
+    CHECK(api->stroke_begin(engine,s.id,s.ids[2],&brush,&point,&stroke,&error)==GLIMS_STATUS_OK && stroke,"selection/timer ink stroke begins");
+    if(tool!=2 && stroke){
+      GlimsStrokePoint points[]={{15.5,8.5,1,0,0,110},{12.5,8.5,1,0,0,120}};
+      CHECK(api->stroke_continue(engine,stroke,points,2)==GLIMS_STATUS_OK,"constant stroke revisits the original pixel");
+    }
+    if(tool==2)g_usleep(180000); /* Let the real engine-loop timer stamp at rest. */
+    if(stroke)CHECK(api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,"selection/timer stroke finishes");
+    CHECK(glims_engine_call(engine,snapshot,&s)==GLIMS_STATUS_OK,"selection/timer result reads authoritative planes");
+    double actual=raw_value(&s,2,8*W+12);
+    if(tool!=2){
+      double tolerance=precision==1?2./255:precision==2?2./65535:1e-6;
+      CHECK(fabs(actual-before*.75)<=tolerance,"fractional selection blends once across repeated Brush/Pencil stamps");
+      size_t stride=s.bytes/(W*H);gboolean outside=TRUE;
+      for(unsigned y=0;y<H;y++)for(unsigned x=0;x<W/2;x++)
+        {
+        gboolean equal=!memcmp(s.actual[2]+(y*W+x)*stride,s.before[2]+(y*W+x)*stride,stride);
+        if(!equal && precision==3){
+          float a,b;memcpy(&a,s.actual[2]+(y*W+x)*stride,4);memcpy(&b,s.before[2]+(y*W+x)*stride,4);
+          /* Native float painting can round within its paint bounds even
+           * where selection coverage is zero. Integer samples stay exact. */
+          equal=fabsf(a-b)<=2*(nextafterf(b,INFINITY)-b);
+        }
+        outside &= equal;
+      }
+      CHECK(outside,"masked samples stay exact for integers and within two float ULPs");
+    }else CHECK(actual<before*.45,"stationary Airbrush accumulates beyond its first half-opacity dab");
+    CHECK(same(&s,s.before,2),"selection/timer stroke preserves unselected ink planes");
+    memcpy(s.after,s.actual,sizeof s.after);
+    if(tool==2){
+      g_usleep(100000);
+      CHECK(glims_engine_call(engine,snapshot,&s)==GLIMS_STATUS_OK && same(&s,s.after,-1),"ended Airbrush leaves no live timer mutation");
+    }
+    CHECK(api->image_undo(engine,s.id)==GLIMS_STATUS_OK && glims_engine_call(engine,snapshot,&s)==GLIMS_STATUS_OK && same(&s,s.before,-1),"selection/timer Undo restores all exact samples");
+    CHECK(api->image_redo(engine,s.id)==GLIMS_STATUS_OK && glims_engine_call(engine,snapshot,&s)==GLIMS_STATUS_OK && same(&s,s.after,-1),"selection/timer Redo restores all exact samples");
+    CHECK(glims_engine_call(engine,release_preview,&s)==GLIMS_STATUS_OK,"selection/timer preview releases");
+    CHECK(api->image_close(engine,s.id)==GLIMS_STATUS_OK,"selection/timer fixture closes");api->free_string(error);
+  }
+}
+
+typedef struct { GlimsImageID id; gint first,second; } DamageCheck;
+static GlimsStatus inspect_damage(GlimsEngine *engine,gpointer data) {
+  DamageCheck *d=data;GlimsOpenImage *open=glims_lookup_image(engine,d->id);GeglBuffer *buffer=NULL;
+  if(!open || glims_plate_preview_prepare(open->image,&open->component_preview,&buffer)!=GLIMS_STATUS_OK)return GLIMS_STATUS_FAILED;
+  GimpTileHandlerValidate *handler=gimp_tile_handler_validate_get_assigned(buffer);
+  CHECK(handler && cairo_region_contains_point(handler->dirty_region,d->first,d->first),"paint damage includes the changed scalar samples");
+  if(d->second>=0)CHECK(handler && cairo_region_contains_point(handler->dirty_region,d->second,d->second),"separated pending strokes both invalidate their samples");
+  CHECK(handler && !cairo_region_contains_point(handler->dirty_region,500,500),"local strokes preserve distant valid preview tiles");
+  return GLIMS_STATUS_OK;
+}
+static void preview_damage(GlimsEngine *engine) {
+  GlimsImageID id=0;char *error=NULL;GlimsChannelInfo channels[4];int32_t count=0;
+  CHECK(api->image_new_multichannel(engine,512,512,GLIMS_COLOR_COMPONENT_FLOAT,4,&id,&error)==GLIMS_STATUS_OK,"preview damage fixture creates");
+  if(!id){api->free_string(error);return;}
+  guint8 *pixels=g_malloc(512*512*4);
+  CHECK(api->image_channels(engine,id,channels,4,&count)==GLIMS_STATUS_OK && count==4,"preview damage obtains native ink targets");
+  CHECK(api->image_render(engine,id,1,(GlimsRect){0,0,512,512},pixels,512*4)==GLIMS_STATUS_OK &&
+        api->image_render(engine,id,.25,(GlimsRect){0,0,128,128},pixels,128*4)==GLIMS_STATUS_OK,"preview caches full and quarter-scale paper");
+  GlimsBrushSettings brush={.struct_size=sizeof brush,.tool=GLIMS_PAINT_PENCIL,.size=31,.opacity=1,.hardness=1,.rate=0,.flow=100,.exposure=-1};
+  GlimsStrokePoint point={20.5,20.5,1,0,0,100};GlimsStrokeID stroke=0;
+  CHECK(api->stroke_begin(engine,id,channels[0].id,&brush,&point,&stroke,&error)==GLIMS_STATUS_OK &&
+        api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,"preview damage paints its first ink");
+  DamageCheck damage={id,20,-1};CHECK(glims_engine_call(engine,inspect_damage,&damage)==GLIMS_STATUS_OK,"first paint damage is consumed safely");
+  CHECK(api->image_render(engine,id,1,(GlimsRect){20,20,1,1},pixels,4)==GLIMS_STATUS_OK &&
+        pixels[0]==0 && pixels[1]==255 && pixels[2]==255 && pixels[3]==255,"single-pixel read updates the cached preview after damage");
+  for(unsigned i=0;i<2;i++){
+    point.x=point.y=i?400.5:200.5;stroke=0;
+    CHECK(api->stroke_begin(engine,id,channels[i].id,&brush,&point,&stroke,&error)==GLIMS_STATUS_OK &&
+          api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,"preview accumulates a separated ink stroke before reading");
+  }
+  damage=(DamageCheck){id,200,400};CHECK(glims_engine_call(engine,inspect_damage,&damage)==GLIMS_STATUS_OK,"separated damage is consumed safely");
+  CHECK(api->image_render(engine,id,.25,(GlimsRect){0,0,128,128},pixels,128*4)==GLIMS_STATUS_OK,"quarter-scale cached view refreshes all pending ink damage");
+  const guint8 cyan[]={0,255,255,255},magenta[]={255,0,255,255},white[]={255,255,255,255};
+  CHECK(!memcmp(pixels+(5*128+5)*4,cyan,4) && !memcmp(pixels+(50*128+50)*4,cyan,4) &&
+        !memcmp(pixels+(100*128+100)*4,magenta,4) && !memcmp(pixels+(125*128+125)*4,white,4),
+        "scaled reads retain all separated edits and untouched paper exactly");
+  CHECK(api->image_close(engine,id)==GLIMS_STATUS_OK,"preview damage fixture closes");g_free(pixels);api->free_string(error);
+}
+
 static void channel_attributes(GlimsEngine *engine, const char *work) {
   GlimsImageID id=0;char *error=NULL;GlimsChannelInfo row={0};int32_t count=0;
   CHECK(api->image_new_multichannel(engine,32,32,GLIMS_COLOR_COMPONENT_U8,1,&id,&error)==GLIMS_STATUS_OK,"ink attributes fixture creates");
@@ -300,7 +408,17 @@ static void channel_attributes(GlimsEngine *engine, const char *work) {
   if(id){
     CHECK(api->image_channels(engine,id,&row,1,&count)==GLIMS_STATUS_OK && !strcmp(row.name,"Spot red") && row.visible && row.color.red==1,"XCF retains ink attributes");
     CHECK(api->image_render(engine,id,1,rect,pixel,4)==GLIMS_STATUS_OK && pixel[0]==255 && pixel[1]==0 && pixel[2]==0,"XCF retains exact ink coverage and display color");
-    api->image_close(engine,id);
+    change=(GlimsChannelChange){.struct_size=sizeof change,.properties=GLIMS_CHANNEL_VISIBLE,.visible=0};
+    CHECK(api->channel_change(engine,id,row.id,&change,&error)==GLIMS_STATUS_OK && api->image_save(engine,id,path,&error)==GLIMS_STATUS_OK,"hidden ink state saves to XCF");
+    api->image_close(engine,id);id=0;
+    CHECK(api->image_open(engine,path,&id,&error)==GLIMS_STATUS_OK && id,"hidden ink document reopens");
+    if(id){
+      CHECK(api->image_channels(engine,id,&row,1,&count)==GLIMS_STATUS_OK && !row.visible,"XCF preserves hidden ink state");
+      CHECK(api->image_render(engine,id,1,rect,pixel,4)==GLIMS_STATUS_OK && pixel[0]==255 && pixel[1]==255 && pixel[2]==255,"hidden reopened ink renders paper");
+      change.visible=1;
+      CHECK(api->channel_change(engine,id,row.id,&change,&error)==GLIMS_STATUS_OK && api->image_render(engine,id,1,rect,pixel,4)==GLIMS_STATUS_OK && pixel[0]==255 && pixel[1]==0 && pixel[2]==0,"revealing reopened ink recovers its exact coverage");
+      api->image_close(engine,id);
+    }
   }
   api->free_string(error);g_free(path);
 }
@@ -349,5 +467,7 @@ int main(int argc,char **argv) {
   }
   channel_attributes(engine,argv[1]);
   numeric_paint(engine);
+  selection_and_accumulation(engine);
+  preview_damage(engine);
   api->stop(engine);g_free(user);g_free(cache);printf("%u component-editor checks, %u failures\n",checks,failures);return failures?1:0;
 }
