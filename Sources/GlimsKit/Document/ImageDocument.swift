@@ -25,6 +25,7 @@ final class ImageDocument {
     private(set) var name: String
     /// The file the image belongs to and whether it needs saving.
     private(set) var fileState: DocumentFileState
+    private(set) var lastExportSettings: ExportSettings?
     /// This document's page setup, changed by File ▸ Page Setup and read
     /// by Print: per document, like an NSDocument's print info. Editing
     /// it touches neither the image nor the file state.
@@ -4358,14 +4359,22 @@ final class ImageDocument {
             || PlugInCommands.running?.document === self
     }
 
-    func export(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+    func export(to url: URL, settings: ExportSettings? = nil,
+                completion: @escaping @MainActor (Error?) -> Void) {
         guard !isClosing else { return completion(DocumentError.closed) }
         guard !isTransferringClipboard, !PlugInCommands.isRunning else { return completion(DocumentError.busy) }
         enqueueExclusive(effect: .readsPixels, label: "Exporting \(url.lastPathComponent)", rejected: { completion(DocumentError.busy) }) { [session, image] in
             let result: Error?
-            do { try session.export(image, to: url.path); result = nil } catch { result = error }
+            do {
+                if let settings { try session.export(image, to: url.path, settings: settings) }
+                else { try session.export(image, to: url.path) }
+                result = nil
+            } catch { result = error }
             DispatchQueue.main.async {
-                if result == nil { self.fileState.noteExported(to: url) }
+                if result == nil {
+                    self.fileState.noteExported(to: url)
+                    self.lastExportSettings = settings
+                }
                 completion(result)
             }
         }

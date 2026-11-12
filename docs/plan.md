@@ -4497,3 +4497,26 @@ tests and the focused save/load/rebind/replay workflow pass on all four
 engines. The complete editor matrix and independent integration review are
 running.
 This slice does not establish complete Recorder coverage or Photoshop 4 parity.
+
+
+### Explicit native export controls (2026-11-12 candidate)
+
+File > Export has a format chooser and PNG compression/interlacing/transparent
+color, JPEG quality/progressive/optimization/chroma sampling, and lossless TIFF
+compression/transparent-color controls. Successful settings belong to the
+document and Repeat Export reuses them; Cancel and failed writes do not replace
+the last successful request. Save remains XCF-only.
+
+Additive facade slot 178 validates an owned immutable settings prefix and binds
+the native file procedure by argument name and type before noninteractive
+execution. All four native conformance suites and 52 focused checks pass,
+including independent PNG/JPEG/TIFF header checks, exact PNG/TIFF reopen
+pixels, invalid-input refusal and preservation of source pixels, document
+dirty state and Undo/Redo. Small TIFF round trips reproduced an upstream
+loader issue: its embedded thumbnail became an extra 256-pixel layer. This
+export path omits that redundant thumbnail. Existing external TIFF files with
+thumbnail IFDs still require separate import qualification.
+
+The native save-sheet workflow, Repeat Export and transparent-color fixtures
+are in verification. This does not establish native CMYK/Lab editing, complete
+Photoshop 4 parity or complete Recorder/batch coverage.

@@ -136,6 +136,27 @@ typedef struct GlimsLayerInfo {
   int32_t     filter_count;  /* non-destructive filters on the layer */
 } GlimsLayerInfo;
 
+/* Owned export choices. These values never encode an upstream enum. */
+typedef enum { GLIMS_EXPORT_PNG = 1, GLIMS_EXPORT_JPEG = 2,
+               GLIMS_EXPORT_TIFF = 3 } GlimsExportFormat;
+typedef enum { GLIMS_JPEG_FULL = 0, GLIMS_JPEG_HORIZONTAL = 1,
+               GLIMS_JPEG_VERTICAL = 2, GLIMS_JPEG_BOTH = 3 } GlimsJPEGSubsampling;
+typedef enum { GLIMS_TIFF_NONE = 0, GLIMS_TIFF_LZW = 1,
+               GLIMS_TIFF_DEFLATE = 2, GLIMS_TIFF_PACK_BITS = 3 } GlimsTIFFCompression;
+typedef struct GlimsExportSettings {
+  uint32_t struct_size;
+  uint32_t format;
+  double   jpeg_quality;                 /* finite 0..1 */
+  uint32_t jpeg_progressive;             /* booleans are exactly 0 or 1 */
+  uint32_t jpeg_optimize;
+  uint32_t jpeg_subsampling;
+  int32_t  png_compression;              /* 0..9, lossless at every level */
+  uint32_t png_interlaced;
+  uint32_t png_preserve_transparent_color;
+  uint32_t tiff_compression;
+  uint32_t tiff_preserve_transparent_color;
+} GlimsExportSettings;
+
 typedef struct GlimsImageInfo {
   int32_t width;
   int32_t height;
@@ -3540,6 +3561,18 @@ typedef struct GlimsEngineAPI {
    * entry clears *error when supplied. */
   GlimsStatus (*filter_curves_set) (GlimsEngine *engine, GlimsFilterID filter,
                                    const GlimsCurvesSnapshot *settings, char **error);
+
+  /* Slot178: noninteractive PNG, JPEG or TIFF export with explicit settings.
+   * All fields are validated, including inactive formats. The filename's
+   * exporter must match format. Unsupported native argument contracts fail
+   * before writing. No document-save state, pixels or Undo entry is changed;
+   * success remembers the exported path. Active strokes/previews are BUSY.
+   * Input's known prefix is copied (unaligned input and larger future tails
+   * accepted); path is borrowed until return. Clears *error when supplied. */
+  GlimsStatus (*image_export_configured) (GlimsEngine *engine, GlimsImageID image,
+                                         const char *path,
+                                         const GlimsExportSettings *settings,
+                                         char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

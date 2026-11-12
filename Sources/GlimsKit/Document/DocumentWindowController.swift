@@ -2873,21 +2873,25 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard canStartFileWrite() else { return }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
-        let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.png, .jpeg, .tiff]
-        savePanel.nameFieldStringValue = DocumentFileState.suggestedBaseName(imageDocument.name) + ".png"
-        savePanel.beginSheetModal(for: window!) { [weak self] response in
-            guard response == .OK, let url = savePanel.url, let self else { return }
-            self.exportTo(url)
+        guard let window else { return }
+        var settings = imageDocument.lastExportSettings ?? ExportSettings()
+        if let url = imageDocument.fileState.lastExportURL,
+           let format = ExportFormat.forFileExtension(url.pathExtension) { settings.format = format }
+        let export = ExportSavePanel(baseName: DocumentFileState.suggestedBaseName(imageDocument.name),
+                                     settings: settings)
+        export.panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = export.panel.url, let self,
+                  export.form.commitEditing() else { return }
+            self.exportTo(url, settings: export.form.settings)
         }
     }
 
     @objc func repeatExport(_ sender: Any?) {
         guard let url = imageDocument.fileState.lastExportURL else { return exportDocument(sender) }
-        exportTo(url)
+        exportTo(url, settings: imageDocument.lastExportSettings)
     }
 
-    private func exportTo(_ url: URL) {
+    private func exportTo(_ url: URL, settings: ExportSettings? = nil) {
         guard canStartFileWrite() else { return }
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
@@ -2897,7 +2901,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return
         }
         statusBar.message = "Exporting \(url.lastPathComponent)…"
-        imageDocument.export(to: url) { [self] error in
+        imageDocument.export(to: url, settings: settings) { [self] error in
             defer { release() }
             if let error { imageDocument.onError?(String(describing: error)) }
             else { statusBar.message = "Exported \(url.lastPathComponent)" }

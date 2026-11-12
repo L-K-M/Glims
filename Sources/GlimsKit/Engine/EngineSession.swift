@@ -615,6 +615,12 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_export(engine, image, path, &error), error)
     }
 
+    func export(_ image: Int32, to path: String, settings: ExportSettings) throws {
+        var value = try settings.nativeValue()
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_export_configured(engine, image, path, &value, &error), error)
+    }
+
     func saveCopy(_ image: Int32, to path: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_save_copy(engine, image, path, &error), error)
