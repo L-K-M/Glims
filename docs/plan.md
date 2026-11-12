@@ -5112,6 +5112,15 @@ Three independent source reviews found no important findings. Qualified source
 fixture-only compatibility fix leaves the qualified editor behavior unchanged.
 See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
 
+### Tool Options first-launch visibility (2026-11-12)
+
+The default Tool Options content height increases from 190 to 300 points so the
+paint controls and native-ink explanation fit without scrolling. Existing saved
+sizes, the 120-point minimum, scrolling and stable sizing across tool switches
+remain unchanged. A real CMYK window reproduced the partly hidden explanation;
+the revised first-launch window shows it completely and stays outside the canvas.
+The debug build passes. This is a default-layout change, not a scrolling repair.
+
 ### Native ink Fill, Clear and Invert (2026-11-12)
 
 Selected CMYK and Multichannel ink planes now have explicit scalar Fill, Clear
