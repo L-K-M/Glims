@@ -4248,6 +4248,29 @@ api_image_ink_channel_identity (GlimsEngine *engine, GlimsImageID image,
   return status;
 }
 
+static GlimsStatus
+image_lab_axes_on_engine (GlimsEngine *engine, gpointer data)
+{
+  GlimsArgs *a = data;
+  return glims_image_lab_axes (engine, a->image, a->out);
+}
+
+static GlimsStatus
+api_image_lab_axes (GlimsEngine *engine, GlimsImageID image, GlimsLabAxes *out)
+{
+  if (!out || out->struct_size < sizeof (*out))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsLabAxes empty = { .struct_size = out->struct_size };
+  memcpy (out, &empty, sizeof empty);
+  GlimsArgs a = { .image = image, .out = out };
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_axes,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_axes_on_engine, &a, NULL);
+  if (status != GLIMS_STATUS_OK)
+    memcpy (out, &empty, sizeof empty);
+  return status;
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

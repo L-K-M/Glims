@@ -1182,6 +1182,28 @@ typedef struct GlimsColorInfo {
   char     profile_label[256];  /* UTF-8, truncated; "" when none */
 } GlimsColorInfo;
 
+/* Fixed-D50 Lab axes, independent of ink roles and native GIMP enums. */
+typedef enum GlimsLabAxisRole {
+  GLIMS_LAB_AXIS_LIGHTNESS = 0,
+  GLIMS_LAB_AXIS_A = 1,
+  GLIMS_LAB_AXIS_B = 2
+} GlimsLabAxisRole;
+
+typedef struct GlimsLabAxisInfo {
+  GlimsItemID id;           /* Current document-scoped native handle. */
+  uint32_t role;            /* GlimsLabAxisRole; canonical map order. */
+  uint32_t selected;        /* Exactly 0 or 1; this read does not select. */
+  uint8_t uuid[16];         /* Durable document-scoped identity, never a name. */
+  char name[256];           /* UTF-8 display name, truncated at a character boundary. */
+} GlimsLabAxisInfo;
+
+typedef struct GlimsLabAxes {
+  uint32_t struct_size;
+  uint32_t component;       /* GlimsColorComponent: U8, U16 or FLOAT. */
+  uint32_t count;           /* Exactly 3 on success, zero on failure. */
+  GlimsLabAxisInfo axes[3];  /* L*, a*, b* in that order, regardless of UI names. */
+} GlimsLabAxes;
+
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
  * GimpConvertPaletteType never crosses this boundary. */
@@ -3773,6 +3795,17 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_new_lab) (GlimsEngine *engine, int32_t width, int32_t height,
                                 uint32_t component, GlimsImageID *result,
                                 char **error);
+  /* Slot191: read-only typed Lab axis metadata. Ordinary and ink documents
+   * refuse; no ink interpretation or pixel conversion is involved. Allowed
+   * while busy like image_color_info; reads no pixels and changes no selection,
+   * dirty state, history or file identity. Output requires a readable
+   * struct_size >= sizeof(GlimsLabAxes); NULL/short output is INVALID_ARGUMENT
+   * and remains untouched. Accepted capacity preserves caller struct_size and
+   * any extension tail, and clears the entire known payload on every failure,
+   * including failed admission and NOT_RUNNING. UUIDs remain document-scoped;
+   * equality never establishes identity between unrelated documents. */
+  GlimsStatus (*image_lab_axes) (GlimsEngine *engine, GlimsImageID image,
+                                 GlimsLabAxes *out);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

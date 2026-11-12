@@ -225,6 +225,8 @@ GlimsStatus glims_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID imag
 GlimsStatus glims_image_ink_channel_identity (GlimsEngine *engine, GlimsImageID image,
                                               GlimsItemID channel,
                                               GlimsInkChannelIdentity *out);
+GlimsStatus glims_image_lab_axes (GlimsEngine *engine, GlimsImageID image,
+                                  GlimsLabAxes *out);
 gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID stroke, GimpImage *image);
 
 /* The largest pixel buffer the facade accepts, and its overflow-safe
