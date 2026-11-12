@@ -55,6 +55,16 @@ failed-step stopping and XCF reopen with a retained UUID/new native ID. The
 fixture initially attempted confirmation before queued XCF setup events were
 delivered; an explicit main-queue barrier now establishes that checkpoint.
 
-The full unit suite, actual Fill/Levels controls, combined bundle and launch
-qualification are tracked in the integration PR. This slice does not complete
-Recorder coverage or Photoshop 4 parity.
+All 1,570 unit tests pass. The four-engine UI matrix exposed a development
+adapter path defect: removing its build worktree broke Python and Script-Fu
+plug-in discovery on the subsequent master run. Adapter builds now resolve
+shared engine/dependency trees to physical paths before embedding runtime
+paths or writing link response files. The original menu assertion is retained;
+the rebuilt adapter and affected full run are being checked again.
+
+The focused `recorder-ink-bindings` fixture drives real CMYK and Multichannel
+Load sheets, including duplicate display names, an explicit non-first ink,
+Cancel/reopen and pixel/history/selection preservation. It compiles; runtime
+qualification, combined bundle and launch results are tracked in the
+integration PR. This slice does not complete Recorder coverage or Photoshop 4
+parity.

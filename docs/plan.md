@@ -1168,9 +1168,9 @@ run or push happened in this slice.
 
 ## Later, before any public release
 
-- Developer ID signing and notarization for the app, GTK3, Python and every
-  plug-in executable; third-party plug-ins probably need library validation
-  disabled. Lucerne and the other apps currently ship ad-hoc signed.
+- Verify the ad-hoc signatures of the app and bundled executables. The user
+  explicitly excluded notarization; Developer ID signing and notarization are
+  not release gates for this task.
 - A process for shipping engine security fixes within days. GIMP's file
   loaders had high-severity bugs in 2025 (for example CVE-2025-14424 in XCF
   and CVE-2025-10925 in ILBM).

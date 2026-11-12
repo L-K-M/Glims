@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "ink-edits", "ink-levels"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "ink-edits", "ink-levels", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -161,6 +161,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink-bindings" {
+                try exerciseRecorderInkBindings(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (ink Recorder binding UI)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink" {
                 try exerciseRecorderInk(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (ink Recorder)" : "FAILED: \(failures) failure(s)")
