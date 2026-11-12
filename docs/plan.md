@@ -4971,3 +4971,68 @@ No new document mode is exposed. See [component-admission.md](component-admissio
 for boundaries and reproduced review findings. PR #228 merged at `3965d22`
 after 214 admission checks and full app checks passed on all four engines,
 with latest native CI passing and both direct-review findings closed.
+
+### Multichannel editor in progress (2026-11-12)
+
+New Image now offers Multichannel documents with 1–32 authoritative native ink
+channels at 8-bit integer, 16-bit integer or 32-bit float precision. These
+documents contain no editable RGB proxy layer. The derived preview combines
+linear RGB ink attenuation over paper and passes through the normal display ICC
+transform. It is an ink preview, not an ICC press proof. Native CMYK, Lab and
+duotone editing remain separate work.
+
+All three scalar formats now use linear native storage: intensity zero means
+full ink, one means paper. The earlier private non-linear integer prototype is
+refused rather than reinterpreted. A brush foreground maps to numeric intensity
+by `0.2126*R + 0.7152*G + 0.0722*B` over its normalized RGB values; equal RGB
+values therefore paint that exact intensity. Native Brush/Pencil/Airbrush cores
+retain mask geometry, pressure, opacity and Undo, while fixed scalar parameters
+exclude inherited blend modes, gradients and brush pixmaps. Other edits remain
+behind the explicit component operation policy until separately qualified.
+
+Channels show the persisted ink order and permit single-channel targeting,
+preview visibility, naming and ink-color edits. Combined attributes form one
+native Undo step and survive XCF reopening. Optional `glims/plate-visible`
+metadata contains one persistent byte, zero or one; absence means visible.
+Invalid metadata refuses before editing. Channel opacity is not a second ink
+coverage control. The preview cache follows both pixels and attributes and is
+discarded when native buffer identity changes or validation fails.
+
+All four engines pass adapter conformance, 171 storage checks, 215 facade-policy
+checks and 4,060 public editor/native assertions. The latter include 108 numeric
+paint cases, raw-plane preservation, exact Undo/Redo, derived full/half-scale
+display, XCF reopening, malformed-layout refusal and ink attributes. Fractional
+selections, repeated constant Brush/Pencil stamps, stationary Airbrush timers and
+hidden-ink reopening have additional coverage. Unselected planes stay byte-exact;
+masked samples in the painted plane stay exact for integers and within two float
+ULPs. The float tolerance records measured native painting roundoff.
+
+The actual window fixture passes on all four engines at all three precisions:
+canvas painting and displayed pixels, palette target changes, one-step Undo,
+Save/reopen and unsupported-action refusal. The first window integration exposed
+a missing component-model enum; a regression reproduced it and now passes. All
+1,516 unit tests pass. Stable disabled tool slots use Rigi PR #23, whose 156 tests,
+gallery smoke, release build and latest CI pass; #23 is merged. Ink-specific status and options explain
+coverage without advertising unavailable color sampling.
+
+Separate independent source reviews of preview ownership/cache/ICC handling and
+factory/paint/admission found no confirmed important findings. Those reviews do
+not qualify external native scheduling or runtime behavior. The actual New Image
+controls pass for all precisions, including invalid-count refusal and selected
+mode delivery. Updated units and focused UI workflows pass on all four engines;
+the full app suite passed on all four before the local preview-damage change.
+
+A 4096×3072, 32-ink image exposed whole-image invalidation after a small dab.
+The preview now accumulates bounded damage under a mutex and consumes it on the
+engine thread; changes arriving later remain pending for the next read. The old
+adapter fails two new distant-cache preservation assertions; the fix passes,
+including separated edits, single-pixel reads and cached quarter-scale reads.
+A separate delta review found no confirmed important issue. With a 1024×768
+viewport at 25%, post-dab rendering fell from 489 to 8.7 ms for U8 and 492 to
+7.7 ms for float on this Mac. Warm reads took about 7 ms; cold 32-ink fit-view
+reads still took about half a second. These are engine timings, not complete
+pointer-to-display latency. Reproduce with `python3 scripts/test-component-perf.py --library /absolute/path/to/libglimsengine.dylib --work /tmp/component-perf`.
+
+Latest Glims CI and a qualified standalone bundle remain in progress. The
+installed app remains the previously qualified revision. This is not Photoshop 4
+parity.

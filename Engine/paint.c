@@ -12,6 +12,8 @@
 #include "engine-private.h"
 #include "brush-fingerprint.h"
 #include "stroke-dynamics-fingerprint.h"
+#include "plate-storage.h"
+#include "component-paint.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -70,6 +72,7 @@ typedef struct
   GimpPaintOptions *options;
   GlimsStrokeInputVersion input_version;
   guint32          last_time_ms; /* V2 only, after an entire accepted packet */
+  gboolean         component_stroke;
 } GlimsStroke;
 
 /* Live source options may still sample another document on every motion.
@@ -84,6 +87,21 @@ glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID id, GimpImage 
     for (GList *iter = GIMP_SOURCE_OPTIONS (stroke->options)->src_drawables; iter; iter = iter->next)
       if (gimp_item_get_image (GIMP_ITEM (iter->data)) == image) return TRUE;
   return FALSE;
+}
+
+GlimsStatus
+glims_stroke_component_ready (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  GlimsPlateStorage storage;
+  if (!stroke || !stroke->component_stroke) return GLIMS_STATUS_UNSUPPORTED;
+  GlimsOpenImage *open = glims_lookup_image (engine, gimp_image_get_id (stroke->image));
+  if (!open || open->image != stroke->image || !open->component_document ||
+      glims_plate_storage_read (stroke->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  for (guint i = 0; i < storage.map.count; i++)
+    if (GIMP_DRAWABLE (storage.planes[i]) == stroke->drawable) return GLIMS_STATUS_OK;
+  return GLIMS_STATUS_UNSUPPORTED;
 }
 
 /* The paint info (core and options type) behind a Glims paint tool, or
@@ -563,6 +581,7 @@ stroke_begin_common (GlimsEngine              *engine,
   gint                id;
   GlimsStatus         status;
   uint32_t            locks = GLIMS_LOCK_PIXELS;
+  GType               component_type = 0;
 
   if (out)
     *out = 0;  /* a refused call leaves no stroke id behind */
@@ -582,6 +601,24 @@ stroke_begin_common (GlimsEngine              *engine,
       if (error)
         *error = strdup ("Groups cannot be painted on.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (open->component_document)
+    {
+      GlimsPlateStorage storage;
+      gboolean target_valid = FALSE;
+      component_type = glims_component_paint_type (brush->tool);
+      if (!component_type ||
+          glims_plate_storage_read (open->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+        return GLIMS_STATUS_UNSUPPORTED;
+      for (guint i = 0; i < storage.map.count; i++)
+        if (GIMP_DRAWABLE (storage.planes[i]) == drawable) target_valid = TRUE;
+      if (!target_valid) return GLIMS_STATUS_UNSUPPORTED;
+      if (!recordable_first_point (first) || !isfinite (brush->size) || brush->size > 10000 ||
+          !isfinite (brush->opacity) || brush->opacity < 0 || brush->opacity > 1 ||
+          !isfinite (brush->red) || brush->red < 0 || brush->red > 1 ||
+          !isfinite (brush->green) || brush->green < 0 || brush->green > 1 ||
+          !isfinite (brush->blue) || brush->blue < 0 || brush->blue > 1)
+        return GLIMS_STATUS_INVALID_ARGUMENT;
     }
   status = glims_check_sponge_target (drawable, brush, error);
   if (status != GLIMS_STATUS_OK) return status;
@@ -608,12 +645,25 @@ stroke_begin_common (GlimsEngine              *engine,
   stroke->image     = g_object_ref (open->image);
   stroke->drawable  = g_object_ref (drawable);
   stroke->options   = glims_make_paint_options (engine->gimp, info, brush, brush_resource);
-  stroke->core      = g_object_new (info->paint_type, "undo-desc",
+  stroke->core      = g_object_new (component_type ? component_type : info->paint_type, "undo-desc",
                         brush->tool == GLIMS_PAINT_SPONGE_SATURATE ? "Sponge Saturate" :
                         brush->tool == GLIMS_PAINT_SPONGE_DESATURATE ? "Sponge Desaturate" : info->blurb, NULL);
   stroke->input_version = first_coords_v2 ? GLIMS_STROKE_INPUT_V2 : GLIMS_STROKE_INPUT_V1;
   stroke->last_time_ms = first->time_ms;
   glims_set_tool_options (stroke->options, brush, source);
+  stroke->component_stroke = open->component_document;
+  if (stroke->component_stroke)
+    {
+      /* A numeric gray foreground is a direct ink intensity, so 50% gray
+       * remains 0.5 in every storage precision. Colored foregrounds use
+       * their Rec.709 luma in the same normalized display-RGB coordinates. */
+      gfloat intensity = 0.2126 * brush->red + 0.7152 * brush->green + 0.0722 * brush->blue;
+      GeglColor *color = gegl_color_new (NULL);
+      gegl_color_set_pixel (color, babl_format ("Y float"), &intensity);
+      gimp_context_set_foreground (GIMP_CONTEXT (stroke->options), color);
+      g_object_unref (color);
+    }
+
 
   GlimsStrokeCaptureFacts captured = { .struct_size = sizeof captured };
   if (facts && !capture_stroke_facts (engine, open->image, drawable, brush, first, stroke->options, &captured))
@@ -794,6 +844,13 @@ glims_stroke_continue (GlimsEngine            *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (count > 0 && ! points)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  if (stroke->component_stroke)
+    {
+      if (count > 65536) return GLIMS_STATUS_INVALID_ARGUMENT;
+      for (i = 0; i < count; i++)
+        if (!recordable_first_point (&points[i])) return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
 
   for (i = 0; i < count; i++)
     {

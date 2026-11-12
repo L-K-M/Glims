@@ -7,8 +7,10 @@
  * image_quick_mask_cmd_callback). Runs on the engine thread.
  */
 #include "engine-private.h"
+#include "plate-storage.h"
 
 #include <string.h>
+#include <math.h>
 
 #include "core/gimp.h"
 #include "core/gimpchannel.h"
@@ -100,6 +102,8 @@ glims_image_components (GlimsEngine         *engine,
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   memset (state, 0, sizeof (*state));
+  if (open->component_document)
+    { state->mode = GLIMS_COMPONENT_MODE_MULTICHANNEL; return GLIMS_STATUS_OK; }
   switch (gimp_image_get_base_type (open->image))
     {
     case GIMP_RGB:     state->mode = GLIMS_COMPONENT_MODE_RGB;     break;
@@ -218,6 +222,30 @@ glims_image_channels (GlimsEngine      *engine,
   if (! count || capacity < 0 || (! rows && capacity > 0))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
+  if (open->component_document)
+    {
+      GlimsPlateStorage storage;
+      if (glims_plate_storage_read (open->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+        { *count = 0; return GLIMS_STATUS_UNSUPPORTED; }
+      *count = storage.map.count;
+      selected = gimp_image_get_selected_channels (open->image);
+      for (guint n = 0; n < storage.map.count && n < (guint) capacity; n++)
+        {
+          GlimsChannelInfo *row = &rows[n];
+          GimpChannel *channel = storage.planes[n];
+          memset (row, 0, sizeof *row);
+          row->id = gimp_item_get_id (GIMP_ITEM (channel));
+          g_strlcpy (row->name, gimp_object_get_name (GIMP_OBJECT (channel)), sizeof row->name);
+          row->selected = g_list_find (selected, channel) != NULL;
+          row->visible = storage.visible[n];
+          row->opacity = 1.0;
+          row->color = (GlimsColor) { storage.map.entries[n].ink_rgb[0],
+                                     storage.map.entries[n].ink_rgb[1],
+                                     storage.map.entries[n].ink_rgb[2], 1.0 };
+        }
+      return GLIMS_STATUS_OK;
+    }
+
   channels = gimp_image_get_channel_list (open->image);
   /* The engine's own selected list, not a copy: do not free. */
   selected  = gimp_image_get_selected_channels (open->image);
@@ -302,6 +330,80 @@ glims_channel_from_selection (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Ink colors describe the preview, not GIMP's temporary channel overlays.
+ * Validate every field before changing either the native item or metadata. */
+static GlimsStatus
+component_channel_change (GlimsOpenImage *open, GimpChannel *channel,
+                          const GlimsChannelChange *change, char **error)
+{
+  GlimsPlateStorage storage;
+  guint index;
+  guint8 encoded[GLIMS_PLATE_MAP_MAX_SIZE];
+  size_t length = 0;
+  GError *gerror = NULL;
+  if (glims_plate_storage_read (open->image, &storage) != GLIMS_PLATE_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  for (index = 0; index < storage.map.count; index++)
+    if (storage.planes[index] == channel) break;
+  if (index == storage.map.count) return GLIMS_STATUS_NOT_FOUND;
+  if ((change->properties & GLIMS_CHANNEL_NAME) &&
+      (!memchr (change->name, '\0', sizeof change->name) ||
+       !g_utf8_validate (change->name, -1, NULL) || quick_mask_name (change->name)))
+    {
+      glims_fail (error, NULL, "Enter a valid ink name of at most 255 bytes.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if ((change->properties & GLIMS_CHANNEL_OPACITY) && change->opacity != 1.0)
+    {
+      glims_fail (error, NULL, "Ink coverage is stored in its pixels; channel opacity must be 100%.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (change->properties & GLIMS_CHANNEL_COLOR)
+    {
+      const double rgb[] = { change->color.red, change->color.green, change->color.blue };
+      for (guint c = 0; c < 3; c++)
+        {
+          if (!isfinite (rgb[c]) || rgb[c] < 0 || rgb[c] > 1 || change->color.alpha != 1)
+            {
+              glims_fail (error, NULL, "Choose an opaque ink color with finite RGB values from 0 to 1.");
+              return GLIMS_STATUS_INVALID_ARGUMENT;
+            }
+          storage.map.entries[index].ink_rgb[c] = rgb[c];
+        }
+      if (!glims_plate_map_encode (&storage.map, encoded, sizeof encoded, &length))
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (!change->properties) return GLIMS_STATUS_OK;
+  gimp_image_undo_group_start (open->image, GIMP_UNDO_GROUP_DRAWABLE_MOD, "Ink Attributes");
+  if ((change->properties & GLIMS_CHANNEL_NAME) &&
+      !gimp_item_rename (GIMP_ITEM (channel), *change->name ? change->name : "Ink", &gerror))
+    {
+      gimp_image_undo_group_end (open->image);
+      return glims_fail (error, gerror, "The ink could not be renamed.");
+    }
+  if (change->properties & GLIMS_CHANNEL_COLOR)
+    {
+      GimpParasite *mapping = gimp_parasite_new (GLIMS_PLATE_MAP_PARASITE,
+        GIMP_PARASITE_PERSISTENT | GIMP_PARASITE_UNDOABLE, length, encoded);
+      gimp_image_parasite_attach (open->image, mapping, TRUE);
+      gimp_parasite_free (mapping);
+    }
+  if (change->properties & GLIMS_CHANNEL_VISIBLE)
+    {
+      guint8 visible = change->visible != 0;
+      GimpParasite *attribute = gimp_parasite_new (GLIMS_PLATE_VISIBLE_PARASITE,
+        GIMP_PARASITE_PERSISTENT | GIMP_PARASITE_UNDOABLE, 1, &visible);
+      gimp_item_parasite_attach (GIMP_ITEM (channel), attribute, TRUE);
+      gimp_parasite_free (attribute);
+    }
+  gimp_image_undo_group_end (open->image);
+  gimp_image_flush (open->image);
+  GeglRectangle rect = { 0, 0, storage.map.width, storage.map.height };
+  glims_emit (open->engine, GLIMS_EVENT_CHANNELS_CHANGED, open->image, NULL, NULL);
+  glims_emit (open->engine, GLIMS_EVENT_PROJECTION_CHANGED, open->image, &rect, NULL);
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_channel_change (GlimsEngine              *engine,
                       GlimsImageID              id,
@@ -328,6 +430,9 @@ glims_channel_change (GlimsEngine              *engine,
   channel = find_channel (open->image, channel_id);
   if (! channel)
     return GLIMS_STATUS_NOT_FOUND;
+
+  if (open->component_document)
+    return component_channel_change (open, channel, change, error);
 
   /* The name decides which channel is the Quick Mask's, so renaming
    * across it is a lifecycle change, not an attribute edit: an ordinary
@@ -404,6 +509,9 @@ glims_channel_command (GlimsEngine  *engine,
   if (command != GLIMS_CHANNEL_SELECT && command != GLIMS_CHANNEL_DUPLICATE &&
       command != GLIMS_CHANNEL_DELETE)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  if (open->component_document && (command != GLIMS_CHANNEL_SELECT || channel_id == 0))
+    return GLIMS_STATUS_UNSUPPORTED;
 
   /* Selecting another edit target is not a change, so like layer_select
    * it stays allowed while a session runs. */

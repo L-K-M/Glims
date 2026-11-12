@@ -111,5 +111,7 @@ glims_image_duplicate (GlimsEngine *engine, GlimsImageID id,
   if (status != GLIMS_STATUS_OK) return status;
   copy = gimp_image_duplicate (open->image);
   if (! copy) return glims_fail (error, NULL, "The image snapshot could not be created.");
-  return glims_adopt_image (engine, copy, result);
+  GlimsStatus adopted = glims_adopt_image (engine, copy, result);
+  if (adopted != GLIMS_STATUS_OK) g_object_unref (copy);
+  return adopted;
 }

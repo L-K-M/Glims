@@ -30,6 +30,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private let screenModes = NSSegmentedControl(labels: DocumentScreenMode.allCases.map(\.title),
         trackingMode: .selectOne, target: nil, action: nil)
     private weak var targetDocument: ImageDocument?
+    private var showsInkTools = false
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
     private var colorEditor: ToolColorEditorController { .shared }
@@ -82,6 +83,20 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 
     func retarget(to target: ImageDocument?) {
         targetDocument = target
+        let ink = target?.colorInfo.mode == .multichannel
+        if showsInkTools != ink {
+            showsInkTools = ink
+            grid.slots = ToolID.paletteSlots.map { group in
+                ClassicToolGrid.Slot(tools: group.map {
+                    ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,
+                        image: $0.image, isEnabled: $0.isAvailable(in: target?.colorInfo.mode))
+                })
+            }
+        }
+        if !ToolState.shared.current.isAvailable(in: target?.colorInfo.mode) {
+            ToolState.shared.select(.paintbrush)
+        }
+        stateChanged()
         refreshScreenMode()
     }
 
@@ -121,6 +136,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 
     @objc private func toolChosen(_ sender: ClassicToolGrid) {
         guard let id = sender.selectedToolID, let tool = ToolID(rawValue: id) else { return }
+        guard tool.isAvailable(in: targetDocument?.colorInfo.mode) else { stateChanged(); return }
         ToolState.shared.select(tool)
     }
 
@@ -274,12 +290,14 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     func retarget(to target: ImageDocument?) {
         // A different (or closing) document invalidates an open chooser, so
         // its late native results cannot restore a stale sheet.
+        let modeChanged = document?.colorInfo.mode != target?.colorInfo.mode
         if target !== document {
             document = target
             if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
             if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
             rebindTransformObserver()
         }
+        if modeChanged && isViewLoaded { rebuild() }
     }
 
     private var targetWindowController: DocumentWindowController? {
@@ -363,6 +381,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
 
         if tool.paintTool != nil {
             addPaintRows(for: tool, brush: state.brush(for: tool))
+            if document?.colorInfo.mode == .multichannel {
+                stack.addArrangedSubview(hint("Paint the selected ink channel. Black adds full ink; white removes ink. Gray sets intermediate coverage."))
+            }
         } else if tool.isSelectionTool {
             addSelectionRows(for: tool)
         } else if tool == .gradient {

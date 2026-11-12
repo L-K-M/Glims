@@ -145,6 +145,13 @@ glims_image_color_info (GlimsEngine   *engine,
   info->component = facade_component (gimp_babl_component_type (precision));
   info->trc       = facade_trc (gimp_babl_trc (precision));
 
+  if (open->component_document)
+    {
+      info->mode = GLIMS_COLOR_MODE_MULTICHANNEL;
+      g_strlcpy (info->profile_label, "Ink preview (sRGB)", sizeof info->profile_label);
+      return GLIMS_STATUS_OK;
+    }
+
   /* Embedded means an ICC profile parasite travels with the image (and
    * so with its files); the label is the effective profile's — the
    * image's own when it has one, the engine's builtin fallback for its

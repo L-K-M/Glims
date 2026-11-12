@@ -6,6 +6,7 @@
 
 #define GLIMS_PLATE_MAP_PARASITE "glims/plate-map"
 #define GLIMS_PLATE_UUID_PARASITE "glims/plate-uuid"
+#define GLIMS_PLATE_VISIBLE_PARASITE "glims/plate-visible"
 
 typedef enum {
   GLIMS_PLATE_STORAGE_NONE,
@@ -18,6 +19,9 @@ typedef struct {
   /* Borrowed, in persisted component order. Do not retain across any edit,
    * Undo or nested main loop; read again at the next operation boundary. */
   GimpChannel *planes[GLIMS_PLATE_LIMIT];
+  /* Optional persistent one-byte plane attribute, absent means visible.
+   * Kept separate from GIMP's channel overlay visibility. */
+  gboolean visible[GLIMS_PLATE_LIMIT];
 } GlimsPlateStorage;
 
 /* Distinguishes an ordinary image from damaged/unsupported known metadata.

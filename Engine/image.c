@@ -6,6 +6,7 @@
 #include "effect-state.h"
 #include "foreign-effect-load.h"
 #include "tiff-import.h"
+#include "plate-preview.h"
 
 #include <math.h>
 #include <string.h>
@@ -178,6 +179,12 @@ undo_event (GimpImage      *image,
   glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_LAYERS_CHANGED, image, NULL, NULL);
   glims_emit (open->engine, GLIMS_EVENT_CHANNELS_CHANGED, image, NULL, NULL);
+  if (open->component_document &&
+      (event == GIMP_UNDO_EVENT_UNDO || event == GIMP_UNDO_EVENT_REDO))
+    {
+      GeglRectangle rect = { 0, 0, gimp_image_get_width (image), gimp_image_get_height (image) };
+      glims_emit (open->engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &rect, NULL);
+    }
 }
 
 static void
@@ -228,12 +235,33 @@ guide_changed (GimpImage      *image,
   glims_emit (open->engine, GLIMS_EVENT_GUIDES, image, NULL, NULL);
 }
 
+static void
+component_projection_update (GimpDrawable *drawable, gint x, gint y,
+                             gint width, gint height, GlimsOpenImage *open)
+{
+  (void) drawable;
+  GeglRectangle rect = { x, y, width, height };
+  glims_emit (open->engine, GLIMS_EVENT_PROJECTION_CHANGED, open->image, &rect, NULL);
+}
+
 GlimsStatus
 glims_adopt_image (GlimsEngine  *engine,
                    GimpImage    *image,
                    GlimsImageID *id)
 {
+  GlimsPlateStorage storage;
+  GlimsPlateStorageState state = glims_plate_storage_read (image, &storage);
+  if (id) *id = 0;
+  if (state == GLIMS_PLATE_STORAGE_INVALID) return GLIMS_STATUS_UNSUPPORTED;
   GlimsOpenImage *open = g_new0 (GlimsOpenImage, 1);
+  open->component_document = state == GLIMS_PLATE_STORAGE_VALID;
+  if (open->component_document)
+    for (guint i = 0; i < storage.map.count; i++)
+      {
+        open->component_planes[i] = g_object_ref (GIMP_DRAWABLE (storage.planes[i]));
+        open->component_updates[i] = g_signal_connect (storage.planes[i], "update",
+          G_CALLBACK (component_projection_update), open);
+      }
 
   open->image  = image;
   open->engine = engine;
@@ -316,7 +344,13 @@ glims_image_new (GlimsEngine   *engine,
   gimp_image_undo_enable (image);
   gimp_image_clean_all (image);
 
-  return glims_adopt_image (engine, image, out);
+  GlimsStatus adopted = glims_adopt_image (engine, image, out);
+  if (adopted != GLIMS_STATUS_OK)
+    {
+      g_object_unref (image);
+      glims_fail (error, NULL, "The file's component planes or ink definitions are damaged or unsupported.");
+    }
+  return adopted;
 }
 
 static GimpImage *
@@ -484,7 +518,13 @@ glims_image_open (GlimsEngine   *engine,
       return restore_status;
     }
 
-  return glims_adopt_image (engine, image, out);
+  GlimsStatus adopted = glims_adopt_image (engine, image, out);
+  if (adopted != GLIMS_STATUS_OK)
+    {
+      g_object_unref (image);
+      glims_fail (error, NULL, "The file's component planes or ink definitions are damaged or unsupported.");
+    }
+  return adopted;
 }
 
 GlimsStatus
@@ -694,6 +734,17 @@ glims_projection_prepare_read (GlimsOpenImage  *open,
       fabs (((double) area.x + area.width) / sampling_scale) > MAX_RENDER_SAMPLE_COORD ||
       fabs (((double) area.y + area.height) / sampling_scale) > MAX_RENDER_SAMPLE_COORD)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  if (open->component_document)
+    {
+      GlimsStatus status = glims_plate_preview_prepare (open->image,
+                                                       &open->component_preview, &buffer);
+      if (status != GLIMS_STATUS_OK) return status;
+      if (scale != 1.0 || (area.width == 1 && area.height == 1))
+        validate_area (buffer, scale, area);
+      *buffer_out = buffer;
+      return GLIMS_STATUS_OK;
+    }
 
   /* Hand pending updates to the projection as invalid tiles without
    * rendering them; reading the buffer then renders only the tiles this

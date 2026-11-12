@@ -17,9 +17,10 @@ relocation on this Mac. These timings do not establish every machine's latency.
 No notarization is requested or required for this task.
 
 This is not yet a claim of complete Photoshop 4 parity. Native CMYK/Lab,
-duotone and Multichannel editing, broader Recorder coverage, PSD fidelity and
-physical-input/VoiceOver qualification remain open. Private component storage
-work is not yet a public document mode. See [the plan](plan.md) for current
+duotone editing, broader Recorder coverage, PSD fidelity and physical-input/
+VoiceOver qualification remain open. The Multichannel editor in PR #229 builds
+on merged component storage and offers real ink-channel painting, selection,
+attributes, Undo and XCF persistence; final qualification is still in progress. See [the plan](plan.md) for current
 slice evidence and [the earlier verification report](editor-verification.md)
 for its exact historical scope. Dated reports below retain their original
 scope and pending notes.

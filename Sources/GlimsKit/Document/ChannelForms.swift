@@ -29,26 +29,30 @@ enum ChannelForms {
     static func edit(_ id: Int32, in document: ImageDocument, on window: NSWindow) {
         guard document.acceptsEdits, window.attachedSheet == nil,
               let row = document.channels.first(where: { $0.id == id }) else { return }
+        let isInk = document.colorInfo.mode == .multichannel
         let name = NSTextField(string: row.name)
         name.isEnabled = !row.isQuickMask
         name.setAccessibilityLabel("Channel name")
         let color = NSColorWell(frame: NSRect(x: 0, y: 0, width: 64, height: 28))
         color.color = row.color.withAlphaComponent(1)
-        color.setAccessibilityLabel("Overlay color")
+        color.setAccessibilityLabel(isInk ? "Ink color" : "Overlay color")
         let opacity = NSTextField(string: NumberFormatter.localizedString(from: NSNumber(value: row.opacity * 100), number: .decimal))
         opacity.setAccessibilityLabel("Overlay opacity, percent")
-        let grid = NSGridView(views: [
+        var fields: [[NSView]] = [
             [NSTextField(labelWithString: "Name:"), name],
-            [NSTextField(labelWithString: "Overlay color:"), color],
-            [NSTextField(labelWithString: "Opacity (%):"), opacity],
-        ])
+            [NSTextField(labelWithString: isInk ? "Ink color:" : "Overlay color:"), color],
+        ]
+        if !isInk { fields.append([NSTextField(labelWithString: "Opacity (%):"), opacity]) }
+        let grid = NSGridView(views: fields)
         grid.rowSpacing = 8
         grid.columnSpacing = 12
         name.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         grid.setFrameSize(grid.fittingSize)
         let alert = NSAlert()
-        alert.messageText = row.isQuickMask ? "Quick Mask Attributes" : "Channel Attributes"
-        alert.informativeText = "The overlay marks the masked-out area. Opacity changes its display, not the channel pixels."
+        alert.messageText = isInk ? "Ink Attributes" : row.isQuickMask ? "Quick Mask Attributes" : "Channel Attributes"
+        alert.informativeText = isInk
+            ? "Choose the ink's preview color. Black pixels carry full ink; white pixels show the paper."
+            : "The overlay marks the masked-out area. Opacity changes its display, not the channel pixels."
         alert.accessoryView = grid
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel")
@@ -61,12 +65,13 @@ enum ChannelForms {
                 return
             }
             guard let value = validName(name.stringValue),
-                  let alpha = opacityValue(opacity.stringValue) else {
+                  let alpha = isInk ? 1.0 : opacityValue(opacity.stringValue) else {
                 document.onError?("Enter a channel name and an opacity from 0 to 100%; shorten very long names.")
                 return
             }
             document.changeChannel(id, .init(name: row.isQuickMask ? nil : value,
-                                             opacity: alpha, color: color.color.withAlphaComponent(alpha)))
+                                             opacity: isInk ? nil : alpha,
+                                             color: color.color.withAlphaComponent(alpha)))
         }
     }
 

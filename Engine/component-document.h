@@ -1,0 +1,25 @@
+/* Engine-thread-only factory for validated, adopted component documents. */
+#ifndef GLIMS_COMPONENT_DOCUMENT_H
+#define GLIMS_COMPONENT_DOCUMENT_H
+
+#include "engine-private.h"
+
+/* Creates and adopts a flat Multichannel document of `channel_count`
+ * authoritative scalar ink planes (1..GLIMS_PLATE_LIMIT), each initially
+ * paper. `component` is a facade GlimsColorComponent: only U8, U16 and
+ * FLOAT are accepted, mapped onto the private plate-map storage values.
+ * Dimensions are 1..GIMP_MAX_IMAGE_SIZE. Stable UUID identities and the
+ * default ink definitions persist through the plate map; display names
+ * are applied through native item rename without Undo entries or dirty
+ * state. On entry *result is set to 0 and *error to NULL when supplied.
+ * On success the engine owns the image and *result its id. On failure
+ * nothing is published and every owned temporary is released. */
+GlimsStatus glims_image_new_multichannel (GlimsEngine *engine,
+                                          int32_t      width,
+                                          int32_t      height,
+                                          uint32_t     component,
+                                          uint32_t     channel_count,
+                                          GlimsImageID *result,
+                                          char       **error);
+
+#endif
