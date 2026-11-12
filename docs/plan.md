@@ -4586,3 +4586,86 @@ The sheet starts in the last successful export folder; isolated UI fixtures
 supply their own initial folder before presentation. The final full editor
 and packaged export checks remain in progress. This does not establish native
 CMYK/Lab editing, complete Photoshop 4 parity or complete Recorder/batch coverage.
+
+### Recorded new Color Balance adjustments (2026-11-12 candidate)
+
+New Color Balance Apply records its final native settings — all nine signed
+corrections across shadows, midtones and highlights plus Preserve Lightness —
+behind queued preview writes, retaining its begin-time layer if selection
+changes. Format version 8 uses owned semantic JSON field names; versions 1
+through 7 retain their existing meaning and strict tagged schemas. Cancel
+records nothing, a failed commit settles failure while retaining its capture
+metadata for retry, and mask/channel targets or existing-effect edits remain
+explicit unsupported rows after a successful commit.
+
+`RecorderColorBalanceValue` detaches the owned file value and validates the
+finite −1...1 native range at codec decode, encode, both bridge directions
+and the snapshot boundary. Replay reuses the shared layer-adjustment
+admission: current membership, RGB/grayscale mode, pixel lock and
+mask/channel/Quick Mask role checks against the freshly bound layer, then
+one new effect with one Undo. No engine or facade code changed and no new
+native slot was needed; the typed whole-settings read/set API already
+existed.
+
+The focused `GLIMS_SMOKE_CASE=recorder-color-balance` workflow drives the
+real panel through openNativeFilter: accepted Apply and Cancel,
+successful-only capture, save/load, explicit rebinding on a second image,
+exact pixels against an independent native oracle, committed-effect setting
+preservation, Undo/Redo, lock and role refusals, failed-Apply retry, and
+unsupported existing-effect/mask/channel rows. Twelve focused
+codec/value/binding/snapshot tests cover independent all-nine-nonzero
+fixtures with both luminosity states, unknown/missing/extra fields, wrong
+types, nonfinite and out-of-range corrections, version anchoring and wrong
+bindings.
+
+The final code builds and passes 1,401 Swift tests and all 31 focused native
+workflow checks on each of GIMP 3.2.8, 3.2.0, 3.0.8 and master. Independent
+SWE-2 review found no important product-code defects. Its minor test finding
+was addressed by reading the effect identity again after Redo. The first
+native run also exposed a fixture assumption: the real panel intentionally
+refuses ordinary layer switching. The test now proves that refusal, then
+uses the native layer-selection seam to exercise begin-time capture under
+an external selection change. No production admission was relaxed.
+
+CI and final integrated-package promotion remain open. This slice adds the
+Color Balance family only; other adjustments and existing-effect replay
+remain open.
+
+
+### Recorded new Hue/Saturation adjustments (2026-11-12 candidate, unrun)
+
+New Hue/Saturation Apply records its final native settings — the global
+overlap plus all seven named ranges' signed hue, saturation and lightness
+corrections (21 values) — behind queued preview writes, retaining its
+begin-time layer if selection changes. Format version 9 uses owned semantic
+JSON field names; versions 1 through 8 retain their existing meaning and
+strict tagged schemas. Cancel records nothing, a failed commit settles
+failure while retaining its capture metadata for retry, and mask/channel
+targets or existing-effect edits remain explicit unsupported rows after a
+successful commit.
+
+`RecorderHueSaturationValue` detaches the owned file value and validates
+the finite −1...1 correction and 0...1 overlap contracts at codec decode,
+encode, both bridge directions and the snapshot boundary. Replay reuses
+the shared layer-adjustment admission: current membership, RGB/grayscale
+mode, pixel lock and mask/channel/Quick Mask role checks against the
+freshly bound layer, then one new `gimp:hue-saturation` effect with one
+Undo; a failed set or commit aborts the fresh session. No engine or
+facade code changed and no new native slot was needed; the typed
+whole-settings read/set API already existed.
+
+The focused `GLIMS_SMOKE_CASE=recorder-hue-saturation` workflow drives the
+real panel through openNativeFilter: accepted Apply and Cancel,
+successful-only capture, save/load, explicit rebinding on a second image,
+exact pixels against an independent native oracle, committed-effect
+setting preservation, Undo/Redo, lock and role refusals, failed-Apply
+retry, and unsupported existing-effect/mask/channel rows. Focused
+codec/value/binding/snapshot tests cover independent all-nonzero fixtures,
+unknown/missing/extra fields, wrong types, nonfinite and out-of-range
+corrections and overlap, version anchoring and wrong bindings.
+
+This slice adds the Hue/Saturation family only; other adjustments and
+existing-effect replay remain open. Status: the code builds with
+`swift build --build-tests`, but no `swift test` run and no GUI or
+native-engine check has run on this change yet — the root's full
+GUI/native run remains outstanding before this can be called verified.
