@@ -3,13 +3,14 @@ import AppKit
 @MainActor
 extension EngineSmokeTest {
     static func exerciseExportOptions(_ session: EngineSession, work: URL,
-                                       documents: DocumentList, psd: Bool = false, cmyk: Bool = false, gif: Bool = false) throws {
+                                       documents: DocumentList, psd: Bool = false, cmyk: Bool = false, gif: Bool = false,
+                                       bitmap: ExportFormat? = nil) throws {
         func wait(seconds: TimeInterval = 20, _ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(seconds)
             while !condition() && Date() < deadline { EngineSmokeTestHost.pumpEvents() }
         }
         let image: Int32
-        if psd || gif {
+        if psd || gif || bitmap != nil {
             let base = ClipboardImage(width: 32, height: 24,
                 pixels: Data((0..<(32 * 24)).flatMap { _ in [UInt8(20), 180, 70, 64] }), origin: .zero)
             image = try session.newImage(pixels: base)
@@ -72,6 +73,13 @@ extension EngineSmokeTest {
                   && panel.nameFieldStringValue.hasSuffix(".gif") && !form.gifExplanation.isHidden,
                   "the actual Export sheet selects GIF and shows its color/transparency policy")
         }
+        if let bitmap {
+            form.selectFormat(bitmap)
+            let policy = bitmap == .bmp ? form.bmpExplanation : form.tgaExplanation
+            check(form.commitEditing() && panel.allowedContentTypes == [bitmap.contentType]
+                  && panel.nameFieldStringValue.hasSuffix("." + bitmap.preferredExtension) && !policy.isHidden,
+                  "the actual Export sheet selects the bitmap format and shows its color/transparency policy")
+        }
         if cmyk {
             form.psdColorPopup.selectItem(at: PsdOutputColor.allCases.firstIndex(of: .cmyk)!)
             form.psdColorPopup.sendAction(form.psdColorPopup.action, to: form.psdColorPopup.target)
@@ -86,7 +94,7 @@ extension EngineSmokeTest {
             check(form.commitEditing() && form.settings.psdCmykProfile != nil,
                   "the actual Export sheet captures the explicitly chosen ICC bytes")
         }
-        let file = work.appendingPathComponent("native-export-options." + (psd ? "psd" : gif ? "gif" : "jpg"))
+        let file = work.appendingPathComponent("native-export-options." + (bitmap?.preferredExtension ?? (psd ? "psd" : gif ? "gif" : "jpg")))
         // The native picker resolves /var to /private/var on this Mac.
         func remembersDestination() -> Bool {
             document.fileState.lastExportURL?.resolvingSymlinksInPath() == file.resolvingSymlinksInPath()
@@ -113,7 +121,9 @@ extension EngineSmokeTest {
               "accepting Export writes the image and remembers its exact settings: \(exportError ?? "ok")")
         guard FileManager.default.fileExists(atPath: file.path) else { return }
         let first = try Data(contentsOf: file)
-        check(gif ? first.starts(with: Data("GIF8".utf8)) : psd ? first.starts(with: Data("8BPS".utf8)) :
+        check(bitmap == .bmp ? first.starts(with: Data("BM".utf8)) :
+              bitmap == .tga ? (first.count >= 18 && first[2] == 2 && first[16] == 32 && first[17] == 0x28) :
+              gif ? first.starts(with: Data("GIF8".utf8)) : psd ? first.starts(with: Data("8BPS".utf8)) :
               (first.starts(with: [0xff, 0xd8]) && first.range(of: Data([0xff, 0xc0])) != nil),
               "the actual sheet produces the requested file format")
         func checkCmykEncoding(_ bytes: Data) {
@@ -128,9 +138,9 @@ extension EngineSmokeTest {
         checkCmykEncoding(first)
         var firstReopened: Data?
         func checkMergedAppearance() throws {
-            guard psd || gif else { return }
+            guard psd || gif || bitmap != nil else { return }
             var captured: Result<(Int, Data), Error>?
-            EngineActivity.shared.performWhenReady(label: "Checking exported PSD", work: {
+            EngineActivity.shared.performWhenReady(label: "Checking exported image", work: {
                 let result = Result { () throws -> (Int, Data) in
                     let reopened = try session.openImage(path: file.path)
                     defer { try? session.closeImage(reopened) }
@@ -139,7 +149,7 @@ extension EngineSmokeTest {
                 DispatchQueue.main.async { captured = result }
             })
             wait { captured != nil && !EngineActivity.shared.isBusy }
-            guard let captured else { throw NSError(domain: "PSD export fixture", code: 1) }
+            guard let captured else { throw NSError(domain: "Image export fixture", code: 1) }
             let (layers, pixels) = try captured.get()
             check(layers == 1, "visible-image export combines the two source layers into one output layer")
             if gif {
@@ -157,7 +167,7 @@ extension EngineSmokeTest {
                 else { firstReopened = pixels }
             } else {
                 check(pixels.count == original.count && zip(pixels, original).allSatisfy { abs(Int($0) - Int($1)) <= 1 },
-                      "reopened PSD retains the visible colors and partial alpha within one 8-bit level")
+                      "reopened image retains the visible colors and partial alpha within one 8-bit level")
             }
         }
         try checkMergedAppearance()

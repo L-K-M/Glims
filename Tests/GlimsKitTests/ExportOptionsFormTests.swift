@@ -36,7 +36,7 @@ final class ExportOptionsFormTests: XCTestCase {
     }
 
     func testEveryFormatHasATitleAndAnExtensionThatParsesBack() {
-        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd, .gif])
+        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd, .gif, .bmp, .tga])
         for format in ExportFormat.allCases {
             XCTAssertFalse(format.title.isEmpty)
             XCTAssertFalse(format.preferredExtension.isEmpty)

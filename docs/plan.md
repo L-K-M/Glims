@@ -4879,3 +4879,16 @@ and wrong-extension refusal preserving existing destination bytes. The bounded
 GIF parser independently checks little-endian dimensions, frame count, loop
 extensions and interlace. Native matrix, UI, review and bundle qualification
 remain pending.
+
+
+### BMP and TGA output candidate (2026-11-12)
+
+The Export and Batch form offers BMP and TGA with explicit fixed output
+policies. Both export a private canvas-clipped visible projection as 32-bit
+sRGB with partial alpha, reducing higher precision to eight-bit channels.
+BMP uses uncompressed V5 RGBA with sRGB metadata; TGA uses uncompressed
+truecolor, top-left origin and no embedded ICC profile. Gray/indexed sources
+are converted to RGB only in the private copy to preserve their transparency.
+The source document and XCF save retain their mode, profile, layers and Undo.
+Older BMP readers may ignore alpha; this is stated in the form and manual.
+Native, actual Export/Repeat Export, Batch and release qualification are pending.

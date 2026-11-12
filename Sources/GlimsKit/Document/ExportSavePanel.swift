@@ -47,6 +47,8 @@ extension ExportFormat {
         case .tiff: return .tiff
         case .psd: return UTType("com.adobe.photoshop-image")!
         case .gif: return .gif
+        case .bmp: return .bmp
+        case .tga: return UTType("com.truevision.tga-image")!
         }
     }
 }
