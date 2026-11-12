@@ -35,6 +35,7 @@
 #include "paint/gimpairbrush.h"
 #include "paint/gimppaintcore.h"
 #include "paint/gimppaintoptions.h"
+#include "paint/gimpsourceoptions.h"
 
 /* Engine names; resolved at run time so a missing one fails visibly. */
 #define PRESSURE_SIZE_DYNAMICS  "Pressure Size"
@@ -70,6 +71,20 @@ typedef struct
   GlimsStrokeInputVersion input_version;
   guint32          last_time_ms; /* V2 only, after an entire accepted packet */
 } GlimsStroke;
+
+/* Live source options may still sample another document on every motion.
+ * Check both destination and retained sources on the serialized engine thread. */
+gboolean
+glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID id, GimpImage *image)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  if (!stroke) return FALSE;
+  if (stroke->image == image) return TRUE;
+  if (GIMP_IS_SOURCE_OPTIONS (stroke->options))
+    for (GList *iter = GIMP_SOURCE_OPTIONS (stroke->options)->src_drawables; iter; iter = iter->next)
+      if (gimp_item_get_image (GIMP_ITEM (iter->data)) == image) return TRUE;
+  return FALSE;
+}
 
 /* The paint info (core and options type) behind a Glims paint tool, or
  * NULL when the engine lacks the tool. */

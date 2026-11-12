@@ -4959,3 +4959,13 @@ profile/proof rendering, component selection, clipboard/export, history, file
 admission and each supported edit need dedicated component routes and independent
 oracles. A valid parasite alone must never switch the user-visible mode or allow
 ordinary layer/projection operations to edit a derived representation.
+
+
+### Private component command admission (2026-11-12)
+
+A single internal manifest now binds every public facade function and its typed
+owner before engine-thread execution. The initial policy refuses ordinary image
+operations on synthetic component witnesses, including cross-image sources and
+handle-only continuations, while preserving cleanup and ordinary-document work.
+No new document mode is exposed. See [component-admission.md](component-admission.md)
+for boundaries, reproduced review findings and pending final qualification.

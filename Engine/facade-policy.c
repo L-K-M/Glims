@@ -1,0 +1,139 @@
+#include "facade-policy.h"
+#include "core/gimpimage.h"
+#include "core/gimpitem.h"
+#include <string.h>
+
+typedef enum { POLICY_DIRECT, POLICY_GLOBAL, POLICY_CLEANUP, POLICY_ORDINARY } Policy;
+typedef struct { const char *name; GlimsFacadeTargetKind kind; Policy policy; } Descriptor;
+static const Descriptor descriptors[GLIMS_FACADE_OPERATION_COUNT] = {
+#define GLIMS_FACADE(name, wrapper, target, policy) \
+  [GLIMS_FACADE_OP_##name] = { #name, GLIMS_FACADE_TARGET_##target, POLICY_##policy },
+#include "facade-operations.def"
+#undef GLIMS_FACADE
+};
+
+typedef struct {
+  GlimsFacadeOperation operation;
+  GlimsFacadeTarget target;
+  GlimsEngineFunc func;
+  gpointer data;
+  char **error;
+  gboolean *invoked;
+} FacadeCall;
+
+static gboolean
+component_image (GlimsEngine *engine, GimpImage *image)
+{
+  GlimsOpenImage *open = image ? glims_lookup_image (engine, gimp_image_get_id (image)) : NULL;
+  return open && open->component_document;
+}
+
+static gboolean
+target_is_component (GlimsEngine *engine, GlimsFacadeTarget target)
+{
+  switch (target.kind)
+    {
+    case GLIMS_FACADE_TARGET_IMAGE:
+      {
+        GlimsOpenImage *open = glims_lookup_image (engine, target.id);
+        if (open && open->component_document) return TRUE;
+        break;
+      }
+    case GLIMS_FACADE_TARGET_FILTER:
+      {
+        GlimsFilter *filter = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (target.id));
+        if (filter && component_image (engine, filter->image)) return TRUE;
+        break;
+      }
+    case GLIMS_FACADE_TARGET_STROKE:
+      {
+        GHashTableIter iter;
+        gpointer value;
+        g_hash_table_iter_init (&iter, engine->images);
+        while (g_hash_table_iter_next (&iter, NULL, &value))
+          {
+            GlimsOpenImage *open = value;
+            if (open->component_document && glims_stroke_references_image (engine, target.id, open->image))
+              return TRUE;
+          }
+        break;
+      }
+    case GLIMS_FACADE_TARGET_ALL_IMAGES:
+      {
+        GHashTableIter iter;
+        gpointer value;
+        g_hash_table_iter_init (&iter, engine->images);
+        while (g_hash_table_iter_next (&iter, NULL, &value))
+          if (((GlimsOpenImage *) value)->component_document) return TRUE;
+        break;
+      }
+    case GLIMS_FACADE_TARGET_NONE:
+      break;
+    default:
+      return TRUE;
+    }
+  for (unsigned i = 0; i < G_N_ELEMENTS (target.sources); i++)
+    if (target.sources[i])
+      {
+        GimpItem *item = gimp_item_get_by_id (engine->gimp, target.sources[i]);
+        if (item && component_image (engine, gimp_item_get_image (item))) return TRUE;
+      }
+  return FALSE;
+}
+
+static GlimsStatus
+dispatch (GlimsEngine *engine, gpointer data)
+{
+  FacadeCall *call = data;
+  const Descriptor *descriptor = &descriptors[call->operation];
+  /* No new operation can inherit permission merely because its arguments
+   * look image-free. The manifest binds its expected resolver and policy. */
+  if (call->target.kind != descriptor->kind || descriptor->policy == POLICY_DIRECT)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (descriptor->policy == POLICY_ORDINARY && target_is_component (engine, call->target))
+    {
+      if (call->error) *call->error = strdup ("This command is not available for component documents.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+  if (call->invoked) *call->invoked = TRUE;
+  return call->func (engine, call->data);
+}
+
+GlimsStatus
+glims_facade_call (GlimsEngine *engine, GlimsFacadeOperation operation,
+                   GlimsFacadeTarget target, GlimsEngineFunc func, gpointer data, char **error)
+{
+  return glims_facade_call_reporting_admission (engine, operation, target, func, data, error, NULL);
+}
+
+GlimsStatus
+glims_facade_call_reporting_admission (GlimsEngine *engine, GlimsFacadeOperation operation,
+                                      GlimsFacadeTarget target, GlimsEngineFunc func, gpointer data,
+                                      char **error, gboolean *invoked)
+{
+  if (invoked) *invoked = FALSE;
+  if ((unsigned) operation >= GLIMS_FACADE_OPERATION_COUNT || !func)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  FacadeCall call = { operation, target, func, data, error, invoked };
+  return glims_engine_call (engine, dispatch, &call);
+}
+
+GlimsItemID
+glims_facade_brush_source (const GlimsBrushSettings *settings)
+{
+  if (!settings || settings->struct_size < sizeof *settings ||
+      (settings->tool != GLIMS_PAINT_CLONE && settings->tool != GLIMS_PAINT_HEAL)) return 0;
+  return settings->source_drawable;
+}
+
+GlimsFacadeTargetKind
+glims_facade_target_kind (GlimsFacadeOperation operation)
+{
+  return (unsigned) operation < GLIMS_FACADE_OPERATION_COUNT ? descriptors[operation].kind : -1;
+}
+
+const char *
+glims_facade_operation_name (GlimsFacadeOperation operation)
+{
+  return (unsigned) operation < GLIMS_FACADE_OPERATION_COUNT ? descriptors[operation].name : NULL;
+}
