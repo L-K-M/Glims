@@ -123,6 +123,7 @@ final class ExportNumberRow: NSView {
     /// AppKit's modal format error.
     let formatter = NumberFormatter()
     private(set) var value: Double = 0
+    private var hasEditedText = false
     /// An accepted commit that moved the value (slider drag or field).
     var onChange: ((Double) -> Void)?
     /// An accepted field commit that restated the current value.
@@ -178,6 +179,7 @@ final class ExportNumberRow: NSView {
     /// Shows `newValue` without reporting a change — the initial read
     /// from settings.
     func show(_ newValue: Double) {
+        hasEditedText = false
         value = newValue
         field.stringValue = display(newValue)
         slider.doubleValue = newValue
@@ -201,6 +203,7 @@ final class ExportNumberRow: NSView {
     }
 
     @objc private func sliderChanged() {
+        hasEditedText = false
         let dragged = min(max(slider.doubleValue.rounded(), range.lowerBound), range.upperBound)
         guard dragged != value else { return }
         value = dragged
@@ -219,12 +222,19 @@ final class ExportNumberRow: NSView {
     /// default and no truncation of the stored value.
     @discardableResult
     func commitField() -> Bool {
+        // Display rounding must not rewrite an untouched stored value. An
+        // explicit edit to the same displayed text still applies that text.
+        if !hasEditedText && field.stringValue == display(value) {
+            onAccepted?()
+            return true
+        }
         guard let typed = parse(field.stringValue), range.contains(typed) else {
             onRejected?(rejection)
             NSSound.beep()
             return false
         }
         field.stringValue = display(typed)
+        hasEditedText = false
         slider.doubleValue = typed
         if typed != value {
             value = typed
@@ -237,6 +247,14 @@ final class ExportNumberRow: NSView {
 }
 
 extension ExportNumberRow: NSTextFieldDelegate {
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        hasEditedText = false
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        hasEditedText = true
+    }
+
     /// Committing happens on Return or when the field loses focus, the
     /// same two moments a value field applies elsewhere in the app.
     func controlTextDidEndEditing(_ notification: Notification) {

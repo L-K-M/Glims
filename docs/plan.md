@@ -4565,7 +4565,7 @@ the last successful request. Save remains XCF-only.
 
 Additive facade slot 178 validates an owned immutable settings prefix and binds
 the native file procedure by argument name and type before noninteractive
-execution. All four native conformance suites and 52 focused checks pass,
+execution. All four native conformance suites and 60 focused checks per engine pass,
 including independent PNG/JPEG/TIFF header checks, exact PNG/TIFF reopen
 pixels, invalid-input refusal and preservation of source pixels, document
 dirty state and Undo/Redo. Small TIFF round trips reproduced an upstream
@@ -4573,6 +4573,16 @@ loader issue: its embedded thumbnail became an extra 256-pixel layer. This
 export path omits that redundant thumbnail. Existing external TIFF files with
 thumbnail IFDs still require separate import qualification.
 
-The native save-sheet workflow, Repeat Export and transparent-color fixtures
-are in verification. This does not establish native CMYK/Lab editing, complete
-Photoshop 4 parity or complete Recorder/batch coverage.
+The focused hosted `GLIMS_SMOKE_CASE=export-options` workflow passes on all
+four engines through actual native Export button input, including Repeat
+Export, a refused write, Cancel, and unchanged source pixels/history/dirty
+state. It prints the fixture-only destination and requires an external UI
+driver within 90 seconds; it is separate from the headless default suite.
+Transparent-color fixtures verify exact hidden RGB and partial alpha in PNG
+and TIFF. A regression reproduced JPEG quality losing precision when an
+untouched rounded display was accepted. The fix preserves that exact stored
+value while applying explicitly typed rounded text; 1,418 Swift tests pass.
+The sheet starts in the last successful export folder; isolated UI fixtures
+supply their own initial folder before presentation. The final full editor
+and packaged export checks remain in progress. This does not establish native
+CMYK/Lab editing, complete Photoshop 4 parity or complete Recorder/batch coverage.

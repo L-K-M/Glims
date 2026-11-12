@@ -4,14 +4,14 @@ import AppKit
 extension EngineSmokeTest {
     static func exerciseExportOptions(_ session: EngineSession, work: URL,
                                        documents: DocumentList) throws {
-        func wait(_ condition: () -> Bool) {
-            let deadline = Date().addingTimeInterval(20)
-            while !condition() && Date() < deadline { spin(0.01) }
+        func wait(seconds: TimeInterval = 20, _ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(seconds)
+            while !condition() && Date() < deadline { EngineSmokeTestHost.pumpEvents() }
         }
         let image = try session.newImage(width: 32, height: 24)
         let document = try ImageDocument(session: session, image: image, name: "Export controls")
         documents.items.append(document)
-        let controller = DocumentWindowController(document: document)
+        let controller = DocumentWindowController(document: document, exportDirectory: work)
         controller.showWindow(nil)
         var exportError: String?
         document.onError = { exportError = $0 }
@@ -51,13 +51,19 @@ extension EngineSmokeTest {
         check(form.commitEditing() && form.settings.jpegQuality == 0.37 && !form.settings.jpegProgressive,
               "the visible export fields commit the requested values")
         let file = work.appendingPathComponent("native-export-options.jpg")
-        panel.directoryURL = work
-        panel.nameFieldStringValue = file.lastPathComponent
-        panel.ok(nil)
-        wait { controller.window?.attachedSheet == nil && document.pendingWork == 0
-            && (document.fileState.lastExportURL == file || exportError != nil) }
+        // The native picker resolves /var to /private/var on this Mac.
+        func remembersDestination() -> Bool {
+            document.fileState.lastExportURL?.resolvingSymlinksInPath() == file.resolvingSymlinksInPath()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        // Like the Recorder picker fixture, the external UI driver operates
+        // the native remote file panel. AppKit has no programmatic OK action.
+        FileHandle.standardError.write(Data("Export picker: save only to \(file.path)\n".utf8))
+        wait(seconds: 90) { controller.window?.attachedSheet == nil && document.pendingWork == 0
+            && (remembersDestination() || exportError != nil) }
         check(exportError == nil && FileManager.default.fileExists(atPath: file.path)
-              && document.fileState.lastExportURL == file && document.lastExportSettings == form.settings,
+              && remembersDestination() && document.lastExportSettings == form.settings,
               "accepting Export writes the image and remembers its exact settings: \(exportError ?? "ok")")
         guard FileManager.default.fileExists(atPath: file.path) else { return }
         let first = try Data(contentsOf: file)
@@ -71,6 +77,17 @@ extension EngineSmokeTest {
         wait { document.pendingWork == 0 && FileManager.default.fileExists(atPath: file.path) }
         check(controller.window?.attachedSheet == nil && (try? Data(contentsOf: file)) == first,
               "Repeat Export reuses the saved format and encoder settings")
+
+        var failureReturned = false, refusedWrite = false
+        let mismatched = work.appendingPathComponent("mismatched.png")
+        document.export(to: mismatched, settings: form.settings) { error in
+            refusedWrite = error != nil
+            failureReturned = true
+        }
+        wait { failureReturned && document.pendingWork == 0 }
+        check(refusedWrite && !FileManager.default.fileExists(atPath: mismatched.path)
+              && remembersDestination() && document.lastExportSettings == form.settings,
+              "a failed export preserves the previous destination and settings")
 
         controller.exportDocument(nil)
         wait { controller.window?.attachedSheet != nil }

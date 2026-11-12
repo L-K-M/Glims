@@ -27,6 +27,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     let scrollView = CanvasScrollView()
     private lazy var engineUndoManager = EngineUndoManager(document: imageDocument)
     private let recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults?
+    private let exportDirectory: URL?
     private lazy var recorderFiles = RecorderFileCoordinator(owner: self, pickerDefaults: recorderPickerDefaults)
 
     var canPresentRecorderFileSheet: Bool { recorderFiles.canPresent }
@@ -155,8 +156,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     var revertHandler: ((URL, @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) -> Void)?
 
     init(document imageDocument: ImageDocument, preferences: EditorPreferences? = nil,
-         recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults? = nil) {
+         recorderPickerDefaults: RecorderFileCoordinator.PickerDefaults? = nil,
+         exportDirectory: URL? = nil) {
         self.recorderPickerDefaults = recorderPickerDefaults
+        self.exportDirectory = exportDirectory
         self.imageDocument = imageDocument
         self.preferences = preferences ?? .shared
         let canvas = EngineCanvasView(document: imageDocument)
@@ -2879,6 +2882,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
            let format = ExportFormat.forFileExtension(url.pathExtension) { settings.format = format }
         let export = ExportSavePanel(baseName: DocumentFileState.suggestedBaseName(imageDocument.name),
                                      settings: settings)
+        export.panel.directoryURL = imageDocument.fileState.lastExportURL?.deletingLastPathComponent() ?? exportDirectory
         export.panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = export.panel.url, let self,
                   export.form.commitEditing() else { return }

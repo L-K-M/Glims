@@ -939,7 +939,6 @@ enum EngineSmokeTest {
             try exerciseHueSaturation(session, work: work, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
-            try exerciseExportOptions(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
