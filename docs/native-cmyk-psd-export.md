@@ -43,7 +43,7 @@ progress cancel signal and the lock-protected shutdown flag both abort before
 publication. Polling does not bound an individual blocking disk or native call.
 The activity records its source document so progress and Cancel reach its window.
 
-## Qualification in progress
+## Qualification
 
 The private transaction passes 251 independent checks in optimized and ASan/
 UBSan builds: new/replacement files, permissions, exact codec output, symlinks,
@@ -62,8 +62,18 @@ using a test-only nested checkpoint. The actual CMYK workflow, native Export
 sheet, Repeat Export, incompatible-setting preservation and float refusal pass.
 All 1,523 Swift tests and rebuilt native adapter conformance pass. Three
 independent reviews of the bridge, file transaction and UI found no important
-findings. The full app matrix, PSD reader appearance,
-standalone packaging, startup and latest CI remain pending.
+findings. An independent reader fixture passes 38 checks on each engine:
+the unmodified PSD loader imports U8/U16 files as RGB, with appearance within
+one 8-bit level of a double-precision LittleCMS oracle using the actual effective
+imported profile. This is appearance interoperability, not native CMYK reimport.
+The focused CMYK and full editor workflows pass on all four engines. The
+standalone pinned-engine bundle passes native, full editor, CMYK and Multichannel
+checks with development libraries and build trees inaccessible. Fresh, cached
+and relocated fresh launch measure 1.73, 1.45 and 3.25 seconds on this Mac.
+All 6,708 payload files/symlinks and the unsigned executable match the tested
+copy; only the validation bundle identity/signature differs. Qualified source
+is `40c3b74`. Latest CI and merge remain pending, and the installed app has not
+yet been replaced. No notarization.
 
 Reproduce with a matching isolated adapter producer and an external CMYK ICC:
 
@@ -73,6 +83,8 @@ bash scripts/test-cmyk-psd-file-faults.sh
 python3 scripts/test-native-cmyk-export.py --producer /absolute/adapters/GIMP_3_2_8 \
   --cmyk-profile /absolute/source.icc
 python3 scripts/test-native-cmyk-export-control.py --producer /absolute/adapters/GIMP_3_2_8 \
+  --cmyk-profile /absolute/source.icc
+python3 scripts/test-native-cmyk-psd-import.py --producer /absolute/adapters/GIMP_3_2_8 \
   --cmyk-profile /absolute/source.icc
 ```
 

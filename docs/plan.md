@@ -5103,5 +5103,10 @@ profile and include hidden inks; float and incompatible settings refuse. A
 private sibling transaction commits only after complete write/sync/close and
 cancellation checks. Busy/read/cancel/shutdown ownership is explicit, and
 progress routes to the activity's document. Pinned numeric/control tests,
-portable transaction checks and actual Export UI pass; full integration remains
-in progress. See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
+portable transaction checks and actual Export UI pass. All four engines pass
+the numeric, cancellation, independent reader-appearance and full editor suites.
+The standalone package passes native/full/CMYK/Multichannel checks with development
+trees blocked; fresh/cached/relocated launch measures 1.73/1.45/3.25 seconds.
+Three independent source reviews found no important findings. Qualified source
+`40c3b74` is awaiting latest CI and merge before replacing the installed app.
+See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
