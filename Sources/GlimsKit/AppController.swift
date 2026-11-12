@@ -626,13 +626,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                     self.pendingFileOperations -= 1
                     defer { self.advanceDocumentClosing() }
                     do {
-                        self.open(try ImageDocument(session: session, image: result.get(), name: url.lastPathComponent, openedFrom: url))
+                        try Self.adoptOpenedImage(result, adopt: { image in
+                            self.open(try ImageDocument(session: session, image: image,
+                                                       name: url.lastPathComponent, openedFrom: url))
+                        }, close: { try session.closeImage($0) })
                         NSDocumentController.shared.noteNewRecentDocumentURL(url)
                     } catch {
                         NSAlert(error: error).runModal()
                     }
                 }
             })
+        }
+    }
+
+    /// A successful load transfers its native image only once adoption succeeds.
+    /// On failed construction, attempt cleanup before reporting the original
+    /// error; a cleanup failure must not replace that construction error.
+    static func adoptOpenedImage(_ result: Result<Int32, Error>,
+                                 adopt: (Int32) throws -> Void,
+                                 close: (Int32) throws -> Void) throws {
+        let image = try result.get()
+        do { try adopt(image) }
+        catch {
+            try? close(image)
+            throw error
         }
     }
 

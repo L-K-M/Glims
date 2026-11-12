@@ -23,8 +23,8 @@ typedef struct {
   /* Optional persistent one-byte plane attribute, absent means visible.
    * Kept separate from GIMP's channel overlay visibility. */
   gboolean visible[GLIMS_PLATE_LIMIT];
-  /* Borrowed immutable CMYK source ICC. NULL for Multichannel. Structural
-   * validation here is supplemented by full transform construction at
+  /* Borrowed immutable CMYK source ICC. NULL for Multichannel and fixed-D50 Lab.
+   * Structural validation here is supplemented by full transform construction at
    * creation/adoption. An adopted source profile cannot change in place. */
   const guint8 *profile;
   gsize profile_size;
@@ -36,8 +36,9 @@ GlimsPlateStorageState glims_plate_storage_read (GimpImage *image, GlimsPlateSto
 /* Also binds the live mode/profile to the exact fully validated source bytes
  * captured at adoption. Profile replacement is not an admitted edit yet. */
 gboolean glims_plate_storage_read_open (GlimsOpenImage *open, GlimsPlateStorage *out);
-/* Creates an unadopted, flat, all-paper component image. Caller owns its
- * reference. The map supplies stable UUIDs; names are display-only. */
+/* Creates an unadopted, flat component image: paper for ink modes, neutral
+ * white for Lab. Caller owns its reference. The map supplies stable UUIDs;
+ * names are display-only. */
 GimpImage *glims_plate_storage_create (GlimsEngine *engine, const GlimsPlateMap *map,
                                       char **error);
 GimpImage *glims_plate_storage_create_profiled (GlimsEngine *engine,

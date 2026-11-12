@@ -28,4 +28,11 @@ GlimsStatus glims_image_new_cmyk (GlimsEngine *engine, int32_t width, int32_t he
                                   uint32_t component, const guint8 *icc, gsize size,
                                   GlimsImageID *result, char **error);
 
+/* Three physical D50 L/a/b planes, initially neutral white. Integer storage
+ * uses the private Lab encoding; float storage contains physical Lab values.
+ * No externally supplied profile or ink interpretation is involved. */
+GlimsStatus glims_image_new_lab (GlimsEngine *engine, int32_t width, int32_t height,
+                                 uint32_t component, GlimsImageID *result,
+                                 char **error);
+
 #endif

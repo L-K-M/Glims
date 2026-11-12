@@ -9,6 +9,7 @@
  * nothing. Runs on the engine thread.
  */
 #include "engine-private.h"
+#include "plate-map.h"
 
 #include <math.h>
 #include <string.h>
@@ -147,7 +148,13 @@ glims_image_color_info (GlimsEngine   *engine,
 
   if (open->component_document)
     {
-      info->mode = open->component_cmyk_profile ? GLIMS_COLOR_MODE_CMYK : GLIMS_COLOR_MODE_MULTICHANNEL;
+      switch (open->component_mode)
+        {
+        case GLIMS_PLATE_MODE_CMYK: info->mode = GLIMS_COLOR_MODE_CMYK; break;
+        case GLIMS_PLATE_MODE_MULTICHANNEL: info->mode = GLIMS_COLOR_MODE_MULTICHANNEL; break;
+        case GLIMS_PLATE_MODE_LAB: info->mode = GLIMS_COLOR_MODE_LAB; break;
+        default: return GLIMS_STATUS_UNSUPPORTED;
+        }
       info->profile_embedded = open->component_cmyk_profile != NULL;
       g_strlcpy (info->profile_label, open->component_profile_label ? open->component_profile_label : "Ink preview (sRGB)",
                   sizeof info->profile_label);

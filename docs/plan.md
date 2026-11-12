@@ -5192,3 +5192,26 @@ public Lab mode, document admission, Lab editing, layers and interchange are
 still unavailable. See [lab-samples.md](lab-samples.md) and
 [lab-transform.md](lab-transform.md). Hosted CI and native integration of the
 new private modules remain qualification gates for this foundation.
+
+### Native Lab document foundation (2026-11-12)
+
+Slot 190 creates fixed-D50 L/a/b documents with exact U8/U16/physical-float
+storage, explicit mode adoption, bounded derived previews, and native XCF
+persistence. Unsupported ink/RGB commands fail before execution; replacing
+the persisted mode cannot bypass the adopted-mode boundary. The app does not
+yet expose Lab creation or editing. Its failed-Open path now closes a native
+image when document construction refuses it.
+
+All four engine sets pass general conformance and 855 dedicated Lab checks
+each: 294 storage, 302 admission, 220 render/history/failure-recovery and 39
+mapped XCF roundtrip checks. The map's 1,246 optimized and sanitized checks
+pass, as do all 1,554 unit tests. Independent storage and production-seam
+reviews found no important issue. Initial render-test stack exhaustion was
+resolved by moving fixture snapshots to the heap; the render assertions and
+production implementation were unchanged. See [lab-documents.md](lab-documents.md).
+
+Native Lab remains a prerequisite for the interface, editing, recovery,
+layers, conversion and interchange work. It is not installed or a claim of
+Photoshop 4 parity. Existing Multichannel/CMYK editor and scalar-edit fixtures
+also pass on every engine (4,060 / 181 / 1,314 checks each). Hosted CI remains
+an integration gate for this candidate.

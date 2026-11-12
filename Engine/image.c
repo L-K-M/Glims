@@ -8,6 +8,7 @@
 #include "tiff-import.h"
 #include "plate-preview.h"
 #include "cmyk-transform.h"
+#include "lab-transform.h"
 
 #include <math.h>
 #include <string.h>
@@ -264,6 +265,12 @@ glims_adopt_image (GlimsEngine  *engine,
       cmyk_profile = gimp_color_profile_new_from_icc_profile (storage.profile, storage.profile_size, NULL);
       if (!cmyk_profile) return GLIMS_STATUS_UNSUPPORTED;
     }
+  if (state == GLIMS_PLATE_STORAGE_VALID && storage.map.mode == GLIMS_PLATE_MODE_LAB)
+    {
+      GlimsLabTransform *transform = glims_lab_transform_new ();
+      if (! transform) return GLIMS_STATUS_UNSUPPORTED;
+      glims_lab_transform_free (transform);
+    }
   GlimsOpenImage *open = g_new0 (GlimsOpenImage, 1);
   if (cmyk_profile)
     {
@@ -273,6 +280,9 @@ glims_adopt_image (GlimsEngine  *engine,
       g_object_unref (cmyk_profile);
     }
   open->component_document = state == GLIMS_PLATE_STORAGE_VALID;
+  open->component_mode = open->component_document ? storage.map.mode : 0;
+  if (open->component_mode == GLIMS_PLATE_MODE_LAB)
+    open->component_profile_label = g_strdup ("D50 Lab");
   if (open->component_document)
     for (guint i = 0; i < storage.map.count; i++)
       {
