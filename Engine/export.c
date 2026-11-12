@@ -9,8 +9,11 @@
 #include "core/gimp.h"
 #include "core/gimpcontext.h"
 #include "libgimpcolor/gimpcolor.h"
+#include "gegl/gimp-babl.h"
 #include "core/gimpdocumentlist.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-color-profile.h"
+#include "core/gimpimage-convert-precision.h"
 #include "core/gimpimage-duplicate.h"
 #include "core/gimpimage-undo.h"
 #include "core/gimplayer.h"
@@ -66,7 +69,7 @@ set_choice (GimpProcedure *p, GimpValueArray *a, const char *name, const char *v
 }
 
 static gboolean
-configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s)
+configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gboolean cmyk)
 {
   static const char *jpeg_sampling[] = { "sub-sampling-1x1", "sub-sampling-2x1",
                                         "sub-sampling-1x2", "sub-sampling-2x2" };
@@ -95,7 +98,7 @@ configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s)
               * the exported dimensions and composite. */
              set_bool (p, a, "include-thumbnail", FALSE);
     case GLIMS_EXPORT_PSD:
-      return set_bool (p, a, "cmyk", FALSE) &&
+      return set_bool (p, a, "cmyk", cmyk) &&
              set_bool (p, a, "duotone", FALSE) &&
              set_bool (p, a, "clippingpath", FALSE);
     default:
@@ -137,10 +140,11 @@ merged_export_image (GimpImage *source)
   return copy;
 }
 
-GlimsStatus
-glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
-                               const char *path, const GlimsExportSettings *settings,
-                               char **error)
+static GlimsStatus
+export_configured (GlimsEngine *engine, GlimsImageID id,
+                   const char *path, const GlimsExportSettings *settings,
+                   GimpColorProfile *cmyk_profile, GimpColorRenderingIntent intent,
+                   char **error)
 {
   static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export" };
   GlimsOpenImage *open = glims_lookup_image (engine, id);
@@ -160,6 +164,17 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   if (engine->busy || g_hash_table_size (engine->strokes) ||
       g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 3
+  if (cmyk_profile)
+    {
+      /* The qualified development writer requests float RGBA for CMYK in
+       * get_pixel_format(), then create_merged_image() blends its bytes as
+       * u8 RGBA. Its PSD composite fails an independent CMYK plane oracle.
+       * Do not publish that corrupt preview; no upstream source is patched. */
+      if (error) *error = g_strdup ("CMYK PSD output is unavailable with this development image engine. Use the bundled stable engine.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+#endif
   if (settings->format == GLIMS_EXPORT_PSD)
     {
       const char *extension = strrchr (path, '.');
@@ -168,6 +183,11 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
           if (error) *error = g_strdup ("PSD export requires a .psd filename.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
+    }
+  if (cmyk_profile && gimp_image_get_base_type (open->image) != GIMP_RGB)
+    {
+      if (error) *error = g_strdup ("CMYK PSD output requires an RGB document. Convert its mode before exporting.");
+      return GLIMS_STATUS_UNSUPPORTED;
     }
   if (settings->format == GLIMS_EXPORT_PSD && gimp_image_get_base_type (open->image) == GIMP_INDEXED)
     {
@@ -214,7 +234,7 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
   image_arg = argument (proc, args, "image", GIMP_TYPE_IMAGE);
   file_arg = argument (proc, args, "file", G_TYPE_FILE);
   options_arg = argument (proc, args, "options", GIMP_TYPE_EXPORT_OPTIONS);
-  if (!run || !image_arg || !file_arg || !options_arg || !configure (proc, args, settings))
+  if (!run || !image_arg || !file_arg || !options_arg || !configure (proc, args, settings, cmyk_profile != NULL))
     {
       gimp_value_array_unref (args);
       g_object_unref (file);
@@ -257,15 +277,36 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
 
   /* Plug-ins nest a main loop: retain the image, never use `open` afterward. */
   image = g_object_ref (open->image);
-  if (settings->format == GLIMS_EXPORT_PSD && settings->psd_layout == GLIMS_PSD_MERGED)
+  if (settings->format == GLIMS_EXPORT_PSD && (settings->psd_layout == GLIMS_PSD_MERGED || cmyk_profile))
     {
-      private_image = merged_export_image (image);
+      private_image = settings->psd_layout == GLIMS_PSD_MERGED
+        ? merged_export_image (image) : gimp_image_duplicate (image);
       if (!private_image)
         {
           gimp_value_array_unref (args);
           g_object_unref (file);
           g_object_unref (image);
           return glims_fail (error, NULL, "The visible image could not be prepared for PSD export.");
+        }
+      if (cmyk_profile)
+        {
+          gimp_image_undo_disable (private_image);
+          GimpComponentType component = gimp_babl_component_type (gimp_image_get_precision (private_image));
+          /* CMYK PSD supports 8/16-bit channels. Do not let development
+           * writers emit a 32-bit CMYK file that their loader rejects. */
+          if (component != GIMP_COMPONENT_TYPE_U8 && component != GIMP_COMPONENT_TYPE_U16)
+            gimp_image_convert_precision (private_image, GIMP_PRECISION_U16_NON_LINEAR,
+                                           GEGL_DITHER_NONE, GEGL_DITHER_NONE, GEGL_DITHER_NONE, NULL);
+          if (!gimp_image_set_simulation_profile (private_image, cmyk_profile))
+            {
+              gimp_value_array_unref (args);
+              g_object_unref (file);
+              g_object_unref (image);
+              g_object_unref (private_image);
+              return glims_fail (error, NULL, "The CMYK output profile could not be installed on the export copy.");
+            }
+          gimp_image_set_simulation_intent (private_image, intent);
+          gimp_image_flush (private_image);
         }
       g_value_set_object (image_arg, private_image);
     }
@@ -306,4 +347,40 @@ glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
     return glims_fail (error, gerror, "The image could not be exported.");
   g_clear_error (&gerror);
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_export_configured (GlimsEngine *engine, GlimsImageID id,
+                               const char *path, const GlimsExportSettings *settings,
+                               char **error)
+{
+  return export_configured (engine, id, path, settings, NULL,
+                             GIMP_COLOR_RENDERING_INTENT_RELATIVE_COLORIMETRIC, error);
+}
+
+GlimsStatus
+glims_image_export_psd_cmyk (GlimsEngine *engine, GlimsImageID id,
+                             const char *path, const GlimsExportSettings *settings,
+                             const uint8_t *icc, size_t length,
+                             char **error)
+{
+  const GimpColorRenderingIntent native_intent = GIMP_COLOR_RENDERING_INTENT_RELATIVE_COLORIMETRIC;
+  GError *gerror = NULL;
+  GimpColorProfile *profile;
+  GlimsStatus status;
+  if (!icc || !length || length > 4 * 1024 * 1024 || settings->format != GLIMS_EXPORT_PSD)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  /* The supported babl CMYK path uses relative colorimetric + BPC
+   * (babl/babl-icc.c's lcms_from_rgba). Do not expose ignored intent choices. */
+  profile = gimp_color_profile_new_from_icc_profile (icc, length, &gerror);
+  if (!profile) return glims_fail (error, gerror, "The CMYK output ICC profile could not be read.");
+  if (!gimp_color_profile_is_cmyk (profile) ||
+      !gimp_color_profile_get_space (profile, native_intent, &gerror))
+    {
+      g_object_unref (profile);
+      return glims_fail (error, gerror, "Choose a usable CMYK output ICC profile.");
+    }
+  status = export_configured (engine, id, path, settings, profile, native_intent, error);
+  g_object_unref (profile);
+  return status;
 }

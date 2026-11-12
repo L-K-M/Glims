@@ -3403,29 +3403,52 @@ typedef struct {
   GlimsImageID image;
   const char *path;
   GlimsExportSettings settings;
+  const uint8_t *icc;
+  size_t icc_length;
   char **error;
 } GlimsExportArgs;
 static GlimsStatus image_export_configured_on_engine (GlimsEngine *e, gpointer data)
 {
   GlimsExportArgs *a = data;
+  if (a->icc)
+    return glims_image_export_psd_cmyk (e, a->image, a->path, &a->settings,
+                                        a->icc, a->icc_length, a->error);
   return glims_image_export_configured (e, a->image, a->path, &a->settings, a->error);
+}
+static gboolean copy_export_settings (GlimsExportSettings *copy,
+                                        const GlimsExportSettings *settings)
+{
+  uint32_t size;
+  const size_t prefix = offsetof (GlimsExportSettings, psd_layout);
+  const size_t tail_end = prefix + sizeof copy->psd_layout;
+  if (!settings) return FALSE;
+  memcpy (&size, settings, sizeof size);
+  if (size < prefix || (size > prefix && size < tail_end)) return FALSE;
+  memset (copy, 0, sizeof *copy);
+  memcpy (copy, settings, MIN (size, sizeof *copy));
+  return copy->format != GLIMS_EXPORT_PSD || size >= tail_end;
 }
 static GlimsStatus api_image_export_configured (GlimsEngine *e, GlimsImageID image,
                                                 const char *path,
                                                 const GlimsExportSettings *settings,
                                                 char **error)
 {
-  uint32_t size;
   GlimsExportArgs a = { .image = image, .path = path, .error = error };
   if (error) *error = NULL;
-  if (!settings || !path || !*path) return GLIMS_STATUS_INVALID_ARGUMENT;
-  memcpy (&size, settings, sizeof size);
-  const size_t prefix = offsetof (GlimsExportSettings, psd_layout);
-  const size_t tail_end = prefix + sizeof a.settings.psd_layout;
-  if (size < prefix || (size > prefix && size < tail_end))
+  if (!path || !*path || !copy_export_settings (&a.settings, settings))
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  memcpy (&a.settings, settings, MIN (size, sizeof a.settings));
-  if (a.settings.format == GLIMS_EXPORT_PSD && size < tail_end)
+  return glims_engine_call (e, image_export_configured_on_engine, &a);
+}
+static GlimsStatus api_image_export_psd_cmyk (GlimsEngine *e, GlimsImageID image,
+                                             const char *path,
+                                             const GlimsExportSettings *settings,
+                                             const uint8_t *icc, size_t length, char **error)
+{
+  GlimsExportArgs a = { .image = image, .path = path, .icc = icc,
+                       .icc_length = length, .error = error };
+  if (error) *error = NULL;
+  if (!path || !*path || !copy_export_settings (&a.settings, settings) ||
+      a.settings.format != GLIMS_EXPORT_PSD || !icc || !length || length > 4 * 1024 * 1024)
     return GLIMS_STATUS_INVALID_ARGUMENT;
   return glims_engine_call (e, image_export_configured_on_engine, &a);
 }
@@ -3750,6 +3773,7 @@ static const GlimsEngineAPI api_v1 = {
   .image_transform_preview = api_image_transform_preview,
   .filter_curves_set = api_filter_curves_set,
   .image_export_configured = api_image_export_configured,
+  .image_export_psd_cmyk = api_image_export_psd_cmyk,
 };
 
 __attribute__ ((visibility ("default")))

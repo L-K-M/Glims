@@ -60,6 +60,13 @@ struct ExportSettings: Equatable {
     var pngPreserveTransparentColor = false
 
     var psdLayout = PsdLayout.layers
+    /// PSD output color: the document's RGB/grayscale pixels, or a CMYK output
+    /// conversion that keeps RGB editing unchanged.
+    var psdColor: PsdOutputColor = .document
+    /// The captured CMYK destination profile for PSD CMYK export. Retained as
+    /// exact bytes (including repeat/batch/export reuse) even if the installed
+    /// profile later changes or leaves the catalog.
+    var psdCmykProfile: PsdCmykProfile?
 
     enum PsdLayout: String, CaseIterable {
         case layers, merged
@@ -117,12 +124,24 @@ struct ExportSettings: Equatable {
         }
     }
 
-    /// The typed range gate: quality is a finite 0 ... 1 and compression
-    /// a whole 0 ... 9. Enum and Boolean members are in range by
-    /// construction.
+    /// The typed range gate: quality is a finite 0 ... 1, compression a whole
+    /// 0 ... 9, and any captured PSD CMYK profile is a valid CMYK ICC payload.
+    /// A missing CMYK profile is only required at commit for an active PSD+CMYK
+    /// export; other formats keep their stored choice.
     static func validate(_ settings: ExportSettings) -> Bool {
-        settings.jpegQuality.isFinite && (0...1).contains(settings.jpegQuality)
-            && (0...9).contains(settings.pngCompression)
+        guard settings.jpegQuality.isFinite && (0...1).contains(settings.jpegQuality)
+                && (0...9).contains(settings.pngCompression) else { return false }
+        // PsdCmykProfile validates its immutable bytes at construction.
+        return true
+    }
+
+    /// Whether this settings value can run as the active export choice.
+    var isReadyToExport: Bool {
+        guard Self.validate(self) else { return false }
+        if format == .psd, psdColor == .cmyk {
+            return psdCmykProfile != nil
+        }
+        return true
     }
 }
 
@@ -288,9 +307,10 @@ extension ExportNumberRow: NSTextFieldDelegate {
 /// The File ▸ Export… options view: the Format popup and the per-format
 /// option rows it swaps below (JPEG quality/optimize/progressive/
 /// subsampling, PNG compression/interlace/transparent color, TIFF
-/// compression/transparent color), plus an inline message line. The view
-/// owns no panel, filename or engine call — the controller embeds it and
-/// reads `settings` after a successful `commitEditing`.
+/// compression/transparent color, PSD content/color/profile), plus an inline
+/// message line. The view owns no panel, filename or engine call — the
+/// controller embeds it and reads `settings` after a successful
+/// `commitEditing`.
 ///
 /// Switching the format preserves every format's own settings: the
 /// struct always carries all of them, and a hidden section's controls
@@ -326,6 +346,8 @@ final class ExportOptionsForm: NSView {
     let tiffTransparentBox = NSButton(checkboxWithTitle: "Preserve transparent pixel colors",
         target: nil, action: nil)
     let psdLayoutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let psdColorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let psdCmykProfilePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let psdExplanation = NSTextField(wrappingLabelWithString: "")
     let messageLabel = NSTextField(labelWithString: "")
     /// The last readable refusal shown inline; nil while clean.
@@ -333,9 +355,16 @@ final class ExportOptionsForm: NSView {
     /// The grid's per-format option rows; a format switch hides the
     /// others'.
     private var optionRows: [ExportFormat: [NSGridRow]] = [:]
+    private var psdCmykProfileRow: NSGridRow?
+    private var psdCmykCatalog = PsdCmykProfileCatalog()
+    private var psdCmykLoadGeneration = 0
+    private var psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading
+    private let psdCmykPlaceholderTitle = "Choose a profile"
 
-    init(settings: ExportSettings = ExportSettings()) {
+    init(settings: ExportSettings = ExportSettings(),
+         psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
         self.settings = settings
+        self.psdCmykCatalogLoader = psdCmykCatalogLoader
         super.init(frame: .zero)
         buildContent()
         show(settings)
@@ -365,6 +394,21 @@ final class ExportOptionsForm: NSView {
         psdLayoutPopup.setAccessibilityLabel("PSD content")
         psdLayoutPopup.target = self
         psdLayoutPopup.action = #selector(psdLayoutChanged(_:))
+
+        psdColorPopup.addItems(withTitles: PsdOutputColor.allCases.map(\.title))
+        psdColorPopup.setAccessibilityLabel("PSD color")
+        psdColorPopup.target = self
+        psdColorPopup.action = #selector(psdColorChanged(_:))
+
+        rebuildPsdCmykProfilePopup(entries: [])
+        psdCmykProfilePopup.setAccessibilityLabel("CMYK profile")
+        psdCmykProfilePopup.target = self
+        psdCmykProfilePopup.action = #selector(psdCmykProfileChanged(_:))
+        psdCmykProfilePopup.widthAnchor.constraint(lessThanOrEqualToConstant: 270).isActive = true
+        if let cell = psdCmykProfilePopup.cell as? NSPopUpButtonCell {
+            cell.lineBreakMode = .byTruncatingTail
+        }
+
         psdExplanation.font = .systemFont(ofSize: 11)
         psdExplanation.textColor = .secondaryLabelColor
         psdExplanation.preferredMaxLayoutWidth = 270
@@ -394,7 +438,7 @@ final class ExportOptionsForm: NSView {
 
         messageLabel.setAccessibilityLabel("Export options message")
         messageLabel.lineBreakMode = .byWordWrapping
-        messageLabel.maximumNumberOfLines = 2
+        messageLabel.maximumNumberOfLines = 3
 
         let jpegRows: [[NSView]] = [
             [NSTextField(labelWithString: "Quality:"), qualityRow],
@@ -413,6 +457,8 @@ final class ExportOptionsForm: NSView {
         ]
         let psdRows: [[NSView]] = [
             [NSTextField(labelWithString: "Content:"), psdLayoutPopup],
+            [NSTextField(labelWithString: "Color:"), psdColorPopup],
+            [NSTextField(labelWithString: "CMYK profile:"), psdCmykProfilePopup],
             [NSGridCell.emptyContentView, psdExplanation],
         ]
         let grid = NSGridView(views:
@@ -420,15 +466,15 @@ final class ExportOptionsForm: NSView {
         grid.column(at: 0).xPlacement = .trailing
         grid.rowSpacing = 8
         grid.columnSpacing = 12
+        let psdStart = 10
+        let psdAllRows = (psdStart..<(psdStart + psdRows.count)).map { grid.row(at: $0) }
+        psdCmykProfileRow = psdAllRows[2]
         optionRows = [
             .jpeg: (1...4).map { grid.row(at: $0) },
             .png: (5...7).map { grid.row(at: $0) },
             .tiff: (8...9).map { grid.row(at: $0) },
-            .psd: (10...11).map { grid.row(at: $0) },
+            .psd: psdAllRows,
         ]
-        // Measured with every option row visible, the widest the grid
-        // ever lays out; pinning it keeps the form's width stable while
-        // format swaps hide and show rows.
         let fullWidth = ceil(grid.fittingSize.width)
 
         grid.translatesAutoresizingMaskIntoConstraints = false
@@ -466,16 +512,37 @@ final class ExportOptionsForm: NSView {
             in: ExportSettings.TiffCompression.allCases))
         tiffTransparentBox.state = settings.tiffPreserveTransparentColor ? .on : .off
         psdLayoutPopup.selectItem(at: popupIndex(of: settings.psdLayout, in: ExportSettings.PsdLayout.allCases))
-        psdExplanation.stringValue = settings.psdLayout.explanation
+        psdColorPopup.selectItem(at: popupIndex(of: settings.psdColor, in: PsdOutputColor.allCases))
+        rebuildPsdCmykProfilePopup(entries: currentCatalogEntries())
+        syncPsdCmykProfileSelection()
+        updatePsdExplanation()
+        loadPsdCmykCatalogIfNeeded()
     }
 
     private func popupIndex<T: Equatable>(of value: T, in choices: [T]) -> Int {
         choices.firstIndex(of: value) ?? 0
     }
 
+    private func currentCatalogEntries() -> [PsdCmykProfileCatalogEntry] {
+        if case .loaded(let entries) = psdCmykCatalog.state { return entries }
+        return []
+    }
+
     private func applyFormatVisibility() {
         for (format, rows) in optionRows {
             rows.forEach { $0.isHidden = format != settings.format }
+        }
+        let showCmyk = settings.format == .psd && settings.psdColor == .cmyk
+        psdCmykProfileRow?.isHidden = !showCmyk
+        if showCmyk { loadPsdCmykCatalogIfNeeded() }
+    }
+
+    private func updatePsdExplanation() {
+        switch settings.psdColor {
+        case .document:
+            psdExplanation.stringValue = settings.psdLayout.explanation
+        case .cmyk:
+            psdExplanation.stringValue = "\(settings.psdLayout.explanation) \(PsdOutputColor.cmyk.explanation)"
         }
     }
 
@@ -488,6 +555,86 @@ final class ExportOptionsForm: NSView {
     private func clearMessage() {
         lastError = nil
         messageLabel.stringValue = ""
+    }
+
+    private func showInfoMessage(_ message: String) {
+        lastError = nil
+        messageLabel.textColor = .secondaryLabelColor
+        messageLabel.stringValue = message
+    }
+
+    // MARK: PSD CMYK profile catalog
+
+    private func rebuildPsdCmykProfilePopup(entries: [PsdCmykProfileCatalogEntry]) {
+        psdCmykProfilePopup.removeAllItems()
+        psdCmykProfilePopup.addItem(withTitle: psdCmykPlaceholderTitle)
+        psdCmykProfilePopup.lastItem?.representedObject = nil
+        func append(_ profile: PsdCmykProfile) {
+            // NSPopUpButton.addItem(withTitle:) coalesces duplicate titles.
+            // Different profiles may share a name; retain each byte identity.
+            let item = NSMenuItem(title: profile.displayName, action: nil, keyEquivalent: "")
+            item.representedObject = profile.iccData
+            item.toolTip = profile.displayName
+            item.setAccessibilityLabel(profile.displayName)
+            psdCmykProfilePopup.menu?.addItem(item)
+        }
+        for entry in entries { append(entry.profile) }
+        if let profile = settings.psdCmykProfile,
+           !entries.contains(where: { $0.profile.iccData == profile.iccData }) {
+            append(profile)
+        }
+        syncPsdCmykProfileSelection()
+    }
+
+    private func syncPsdCmykProfileSelection() {
+        guard let profile = settings.psdCmykProfile else {
+            psdCmykProfilePopup.selectItem(at: 0)
+            return
+        }
+        if let index = (0..<psdCmykProfilePopup.numberOfItems).first(where: { index in
+            (psdCmykProfilePopup.item(at: index)?.representedObject as? Data) == profile.iccData
+        }) {
+            psdCmykProfilePopup.selectItem(at: index)
+        } else {
+            psdCmykProfilePopup.selectItem(at: 0)
+        }
+    }
+
+    private func loadPsdCmykCatalogIfNeeded() {
+        guard settings.format == .psd, settings.psdColor == .cmyk else { return }
+        if case .loading = psdCmykCatalog.state { return }
+        if case .loaded = psdCmykCatalog.state { return }
+        if case .failed = psdCmykCatalog.state { return }
+        psdCmykCatalog.state = .loading
+        psdCmykLoadGeneration += 1
+        let generation = psdCmykLoadGeneration
+        let loader = psdCmykCatalogLoader
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try loader.loadCatalog() }
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPsdCmykCatalogResult(result, generation: generation)
+            }
+        }
+    }
+
+    private func applyPsdCmykCatalogResult(_ result: Result<[PsdCmykProfileCatalogEntry], Error>, generation: Int) {
+        guard generation == psdCmykLoadGeneration else { return }
+        // Catalog results must not clear/replace the captured profile bytes or
+        // retarget another form; they only refresh the available choices.
+        switch result {
+        case .success(let entries):
+            psdCmykCatalog.state = .loaded(entries)
+            rebuildPsdCmykProfilePopup(entries: entries)
+            if entries.isEmpty, settings.format == .psd, settings.psdColor == .cmyk, settings.psdCmykProfile == nil {
+                showInfoMessage(PsdCmykProfileCatalog.emptyMessage)
+            }
+        case .failure:
+            psdCmykCatalog.state = .failed(PsdCmykProfileCatalog.failedPrefix)
+            rebuildPsdCmykProfilePopup(entries: [])
+            if settings.format == .psd, settings.psdColor == .cmyk, settings.psdCmykProfile == nil {
+                refuse("\(PsdCmykProfileCatalog.failedPrefix) \(PsdCmykProfileCatalog.installMessage)")
+            }
+        }
     }
 
     // MARK: Actions
@@ -530,8 +677,40 @@ final class ExportOptionsForm: NSView {
         let choices = ExportSettings.PsdLayout.allCases
         guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
         settings.psdLayout = choices[sender.indexOfSelectedItem]
-        psdExplanation.stringValue = settings.psdLayout.explanation
+        updatePsdExplanation()
         clearMessage()
+    }
+
+    @objc private func psdColorChanged(_ sender: NSPopUpButton) {
+        let choices = PsdOutputColor.allCases
+        guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
+        settings.psdColor = choices[sender.indexOfSelectedItem]
+        updatePsdExplanation()
+        clearMessage()
+        applyFormatVisibility()
+    }
+
+    @objc private func psdCmykProfileChanged(_ sender: NSPopUpButton) {
+        guard let data = sender.selectedItem?.representedObject as? Data,
+              PsdCmykProfile.isValidICCData(data) else {
+            settings.psdCmykProfile = nil
+            if settings.format == .psd, settings.psdColor == .cmyk {
+                showInfoMessage("Choose a CMYK profile before exporting. \(PsdCmykProfileCatalog.installMessage)")
+            } else {
+                clearMessage()
+            }
+            syncPsdCmykProfileSelection()
+            return
+        }
+        let name = sender.selectedItem?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.psdCmykProfile = try? PsdCmykProfile(displayName: name?.isEmpty == false ? name! : "CMYK Profile",
+                                                      iccData: data)
+        if settings.psdCmykProfile == nil {
+            refuse("Choose a valid installed CMYK profile no larger than 4 MB.")
+        } else {
+            clearMessage()
+        }
+        syncPsdCmykProfileSelection()
     }
 
     @objc private func toggleChanged(_ sender: NSButton) {
@@ -578,7 +757,26 @@ final class ExportOptionsForm: NSView {
             refuse("The export settings are invalid.")
             return false
         }
+        if settings.format == .psd, settings.psdColor == .cmyk {
+            guard let profile = settings.psdCmykProfile, PsdCmykProfile.isValidICCData(profile.iccData) else {
+                if case .failed = psdCmykCatalog.state {
+                    refuse("\(PsdCmykProfileCatalog.failedPrefix) \(PsdCmykProfileCatalog.installMessage)")
+                } else if case .loaded(let entries) = psdCmykCatalog.state, entries.isEmpty {
+                    refuse(PsdCmykProfileCatalog.emptyMessage)
+                } else {
+                    refuse("Choose a CMYK profile before exporting. \(PsdCmykProfileCatalog.installMessage)")
+                }
+                window?.makeFirstResponder(psdCmykProfilePopup)
+                return false
+            }
+        }
         clearMessage()
         return true
+    }
+
+    /// Test/support hook: installs a catalog result as if discovery finished.
+    func applyPsdCmykCatalogForTesting(_ result: Result<[PsdCmykProfileCatalogEntry], Error>) {
+        psdCmykLoadGeneration += 1
+        applyPsdCmykCatalogResult(result, generation: psdCmykLoadGeneration)
     }
 }

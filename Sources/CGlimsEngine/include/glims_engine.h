@@ -3583,6 +3583,27 @@ typedef struct GlimsEngineAPI {
                                          const char *path,
                                          const GlimsExportSettings *settings,
                                          char **error);
+
+  /* Slot179: explicitly encode an RGB image as a CMYK PSD using a supplied
+   * output ICC profile. Conversion uses relative colorimetric intent with
+   * black-point compensation, as the supported native CMYK writers do.
+   * Settings must select PSD;
+   * its Layers/Merged choice and slot178 admission rules apply. ICC bytes
+   * (1..4 MiB) must describe a usable CMYK profile. No default profile or
+   * RGB fallback is used. The qualified 3.3 development writer is refused
+   * before output because its CMYK composite is corrupt.
+   * The private export image receives the profile;
+   * the source's working/proof profiles, pixels and Undo stay unchanged.
+   * Output is 8-bit for u8 sources and 16-bit otherwise; higher precision
+   * and HDR range are reduced on the private copy. This is color conversion
+   * for output, not native CMYK document editing or channel preservation.
+   * The settings prefix is copied. Path and ICC bytes are borrowed, remain
+   * immutable/alive until return and are not retained. Clears *error. */
+  GlimsStatus (*image_export_psd_cmyk) (GlimsEngine *engine, GlimsImageID image,
+                                      const char *path,
+                                      const GlimsExportSettings *settings,
+                                      const uint8_t *profile_icc, size_t profile_length,
+                                      char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

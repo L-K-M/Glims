@@ -75,6 +75,16 @@ which cannot retain out-of-range HDR values. The supported development engine
 also writes 32-bit PSD for float/u32 sources. Keep XCF for full editing and
 the original precision.
 
+For a CMYK PSD, choose Color: CMYK and explicitly select an installed printer
+profile. The selected ICC profile is embedded in the output and retained by
+Export Again and Batch. Install additional profiles with ColorSync. CMYK
+output converts an RGB document using relative colorimetric rendering with
+black-point compensation; editing remains RGB. Output uses 8-bit channels
+for 8-bit documents and 16-bit otherwise. The supported development engine
+currently refuses CMYK output because of a defect in its PSD writer; use the
+bundled stable engine. Native CMYK editing and CMYK-preserving import are
+not available.
+
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.
 

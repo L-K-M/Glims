@@ -618,6 +618,14 @@ final class EngineSession: @unchecked Sendable {
     func export(_ image: Int32, to path: String, settings: ExportSettings) throws {
         var value = try settings.nativeValue()
         var error: UnsafeMutablePointer<CChar>?
+        if settings.format == .psd, settings.psdColor == .cmyk {
+            let profileData = try settings.validatedPsdCmykProfileData()
+            try profileData.withUnsafeBytes { bytes in
+                let pointer = bytes.bindMemory(to: UInt8.self).baseAddress
+                try check(api.image_export_psd_cmyk(engine, image, path, &value, pointer, profileData.count, &error), error)
+            }
+            return
+        }
         try check(api.image_export_configured(engine, image, path, &value, &error), error)
     }
 
