@@ -27,7 +27,7 @@
 static gboolean
 settings_valid (const GlimsExportSettings *s)
 {
-  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_PSD &&
+  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_GIF &&
          isfinite (s->jpeg_quality) && s->jpeg_quality >= 0 && s->jpeg_quality <= 1 &&
          s->jpeg_progressive <= 1 && s->jpeg_optimize <= 1 &&
          s->jpeg_subsampling <= GLIMS_JPEG_BOTH &&
@@ -101,6 +101,9 @@ configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gb
       return set_bool (p, a, "cmyk", cmyk) &&
              set_bool (p, a, "duotone", FALSE) &&
              set_bool (p, a, "clippingpath", FALSE);
+    case GLIMS_EXPORT_GIF:
+      return set_bool (p, a, "interlace", FALSE) &&
+             set_bool (p, a, "as-animation", FALSE);
     default:
       return FALSE;
     }
@@ -146,7 +149,7 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
                    GimpColorProfile *cmyk_profile, GimpColorRenderingIntent intent,
                    char **error)
 {
-  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export" };
+  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export", "file-gif-export" };
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpPlugInProcedure *file_proc;
   GimpProcedure *proc;
@@ -181,6 +184,15 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
       if (!extension || g_ascii_strcasecmp (extension, ".psd") != 0)
         {
           if (error) *error = g_strdup ("PSD export requires a .psd filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_GIF)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || g_ascii_strcasecmp (extension, ".gif") != 0)
+        {
+          if (error) *error = g_strdup ("GIF export requires a .gif filename.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
     }
@@ -277,17 +289,22 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
 
   /* Plug-ins nest a main loop: retain the image, never use `open` afterward. */
   image = g_object_ref (open->image);
-  if (settings->format == GLIMS_EXPORT_PSD && (settings->psd_layout == GLIMS_PSD_MERGED || cmyk_profile))
+  if ((settings->format == GLIMS_EXPORT_PSD && (settings->psd_layout == GLIMS_PSD_MERGED || cmyk_profile)) ||
+      settings->format == GLIMS_EXPORT_GIF)
     {
-      private_image = settings->psd_layout == GLIMS_PSD_MERGED
+      private_image = settings->format == GLIMS_EXPORT_GIF || settings->psd_layout == GLIMS_PSD_MERGED
         ? merged_export_image (image) : gimp_image_duplicate (image);
       if (!private_image)
         {
           gimp_value_array_unref (args);
           g_object_unref (file);
           g_object_unref (image);
-          return glims_fail (error, NULL, "The visible image could not be prepared for PSD export.");
+          return glims_fail (error, NULL, settings->format == GLIMS_EXPORT_GIF
+                               ? "The visible image could not be prepared for GIF export."
+                               : "The visible image could not be prepared for PSD export.");
         }
+      if (settings->format == GLIMS_EXPORT_GIF)
+        gimp_image_parasite_detach (private_image, "gif/animated", FALSE);
       if (cmyk_profile)
         {
           gimp_image_undo_disable (private_image);

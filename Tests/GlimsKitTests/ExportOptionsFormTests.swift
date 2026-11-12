@@ -36,7 +36,7 @@ final class ExportOptionsFormTests: XCTestCase {
     }
 
     func testEveryFormatHasATitleAndAnExtensionThatParsesBack() {
-        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd])
+        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd, .gif])
         for format in ExportFormat.allCases {
             XCTAssertFalse(format.title.isEmpty)
             XCTAssertFalse(format.preferredExtension.isEmpty)
@@ -57,9 +57,28 @@ final class ExportOptionsFormTests: XCTestCase {
     }
 
     func testUnknownAndEmptyExtensionsGetNoFormat() {
-        for ext in ["", "gif", "webp", "pngg", "jpe", "tiff2", " png", "png "] {
+        for ext in ["", "webp", "pngg", "jpe", "tiff2", " png", "png "] {
             XCTAssertNil(ExportFormat.forFileExtension(ext), ext)
         }
+    }
+
+    func testGifShowsItsConversionPolicyAndIgnoresHiddenDrafts() {
+        let form = ExportOptionsForm()
+        XCTAssertTrue(form.gifExplanation.isHidden)
+        form.compressionRow.field.stringValue = "bad draft"
+        XCTAssertFalse(form.commitEditing())
+        for ext in ["gif", "GIF", ".GiF"] { XCTAssertEqual(ExportFormat.forFileExtension(ext), .gif) }
+        form.selectFormat(.gif)
+        XCTAssertFalse(form.gifExplanation.isHidden)
+        XCTAssertTrue(form.psdLayoutPopup.isHidden)
+        XCTAssertTrue(form.gifExplanation.stringValue.contains("256 colors"))
+        XCTAssertTrue(form.gifExplanation.stringValue.contains("50% opacity"))
+        XCTAssertTrue(form.commitEditing())
+        form.selectFormat(.psd)
+        XCTAssertTrue(form.gifExplanation.isHidden)
+        XCTAssertFalse(form.psdLayoutPopup.isHidden)
+        form.selectFormat(.gif)
+        XCTAssertTrue(form.commitEditing())
     }
 
     func testPsdContentChoiceSurvivesOtherFormatEdits() {

@@ -3,13 +3,13 @@ import AppKit
 @MainActor
 extension EngineSmokeTest {
     static func exerciseExportOptions(_ session: EngineSession, work: URL,
-                                       documents: DocumentList, psd: Bool = false, cmyk: Bool = false) throws {
+                                       documents: DocumentList, psd: Bool = false, cmyk: Bool = false, gif: Bool = false) throws {
         func wait(seconds: TimeInterval = 20, _ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(seconds)
             while !condition() && Date() < deadline { EngineSmokeTestHost.pumpEvents() }
         }
         let image: Int32
-        if psd {
+        if psd || gif {
             let base = ClipboardImage(width: 32, height: 24,
                 pixels: Data((0..<(32 * 24)).flatMap { _ in [UInt8(20), 180, 70, 64] }), origin: .zero)
             image = try session.newImage(pixels: base)
@@ -66,6 +66,12 @@ extension EngineSmokeTest {
                   && panel.nameFieldStringValue.hasSuffix(".psd"),
                   "the actual Export sheet captures Merged appearance and its PSD extension")
         }
+        if gif {
+            form.selectFormat(.gif)
+            check(form.commitEditing() && panel.allowedContentTypes == [.gif]
+                  && panel.nameFieldStringValue.hasSuffix(".gif") && !form.gifExplanation.isHidden,
+                  "the actual Export sheet selects GIF and shows its color/transparency policy")
+        }
         if cmyk {
             form.psdColorPopup.selectItem(at: PsdOutputColor.allCases.firstIndex(of: .cmyk)!)
             form.psdColorPopup.sendAction(form.psdColorPopup.action, to: form.psdColorPopup.target)
@@ -80,7 +86,7 @@ extension EngineSmokeTest {
             check(form.commitEditing() && form.settings.psdCmykProfile != nil,
                   "the actual Export sheet captures the explicitly chosen ICC bytes")
         }
-        let file = work.appendingPathComponent(psd ? "native-export-options.psd" : "native-export-options.jpg")
+        let file = work.appendingPathComponent("native-export-options." + (psd ? "psd" : gif ? "gif" : "jpg"))
         // The native picker resolves /var to /private/var on this Mac.
         func remembersDestination() -> Bool {
             document.fileState.lastExportURL?.resolvingSymlinksInPath() == file.resolvingSymlinksInPath()
@@ -107,7 +113,7 @@ extension EngineSmokeTest {
               "accepting Export writes the image and remembers its exact settings: \(exportError ?? "ok")")
         guard FileManager.default.fileExists(atPath: file.path) else { return }
         let first = try Data(contentsOf: file)
-        check(psd ? first.starts(with: Data("8BPS".utf8)) :
+        check(gif ? first.starts(with: Data("GIF8".utf8)) : psd ? first.starts(with: Data("8BPS".utf8)) :
               (first.starts(with: [0xff, 0xd8]) && first.range(of: Data([0xff, 0xc0])) != nil),
               "the actual sheet produces the requested file format")
         func checkCmykEncoding(_ bytes: Data) {
@@ -122,7 +128,7 @@ extension EngineSmokeTest {
         checkCmykEncoding(first)
         var firstReopened: Data?
         func checkMergedAppearance() throws {
-            guard psd else { return }
+            guard psd || gif else { return }
             var captured: Result<(Int, Data), Error>?
             EngineActivity.shared.performWhenReady(label: "Checking exported PSD", work: {
                 let result = Result { () throws -> (Int, Data) in
@@ -135,8 +141,15 @@ extension EngineSmokeTest {
             wait { captured != nil && !EngineActivity.shared.isBusy }
             guard let captured else { throw NSError(domain: "PSD export fixture", code: 1) }
             let (layers, pixels) = try captured.get()
-            check(layers == 1, "Merged appearance exports the two source layers as one PSD layer")
-            if cmyk {
+            check(layers == 1, "visible-image export combines the two source layers into one output layer")
+            if gif {
+                check(pixels.count == original.count && stride(from: 0, to: original.count, by: 4).allSatisfy { offset in
+                    let alpha: UInt8 = original[offset + 3] < 128 ? 0 : 255
+                    return pixels[offset + 3] == alpha && (alpha == 0 || (0..<3).allSatisfy {
+                        abs(Int(pixels[offset + $0]) - Int(original[offset + $0])) <= 2
+                    })
+                }, "reopened GIF retains the visible palette colors and the promised binary transparency")
+            } else if cmyk {
                 check(pixels.count == original.count && stride(from: 3, to: original.count, by: 4).allSatisfy {
                     abs(Int(pixels[$0]) - Int(original[$0])) <= 1
                 }, "CMYK PSD retains partial alpha while converting the colors")

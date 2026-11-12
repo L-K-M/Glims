@@ -4861,3 +4861,21 @@ unit tests, actual Export/Repeat Export, full app and Batch checks passed on
 four engines. The standalone bundle passed with development trees blocked.
 Launch measured 1.634 seconds fresh, 1.379 cached and 3.386 after relocation.
 PR #221 passed hosted CI, merged as 4e93a3f, and its qualified bundle is installed.
+
+### Still-image GIF export candidate (2026-11-12)
+
+The explicit Export form now offers GIF with its reduced-color and binary-alpha
+policy visible beside the format. Repeat Export and Batch carry the same format.
+The native writer receives one canvas-clipped visible layer in a private copy,
+with animation metadata removed only from that copy. It writes a still,
+non-interlaced GIF with up to 256 colors. This does not provide GIF animation
+editing/export; the working source retains layers, profile and precision.
+
+The owned format enum is extended without changing the export-settings layout
+or facade ABI. Pinned native checks pass for independent palette pixels and
+alpha, RGB/grayscale/indexed/float/profiled input, two-layer composition,
+imported looping animation converted to a still, exact source preservation,
+and wrong-extension refusal preserving existing destination bytes. The bounded
+GIF parser independently checks little-endian dimensions, frame count, loop
+extensions and interlace. Native matrix, UI, review and bundle qualification
+remain pending.
