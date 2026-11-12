@@ -77,7 +77,7 @@ progress; the parser checks above do not establish those behaviors.
 The independent native acceptance fixture can be run against a built adapter:
 
 ```sh
-python3 scripts/test-native-cmyk-psd-import.py \
+python3 scripts/test-native-cmyk-psd-preserve.py \
   --producer /absolute/path/to/adapter/GIMP_3_2_8 \
   --work /absolute/path/to/new-test-output
 ```
