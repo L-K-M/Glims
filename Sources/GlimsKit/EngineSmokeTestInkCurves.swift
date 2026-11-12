@@ -80,7 +80,7 @@ extension EngineSmokeTest {
             expect(graph.state.kind == .free && graph.state.samples.allSatisfy { $0 == 0.5 },
                    "a real freehand drag edits all 256 actual samples")
         }
-        func capturePanel(_ panel: InkCurvesPanel) throws {
+        func capturePanel(_ panel: InkCurvesPanel, name: String = "ink-curves-cmyk-u8.png") throws {
             guard let folder = ProcessInfo.processInfo.environment["GLIMS_SMOKE_ARTIFACT_DIR"],
                   let content = panel.window?.contentView?.superview else { return }
             content.layoutSubtreeIfNeeded(); content.displayIfNeeded()
@@ -91,7 +91,7 @@ extension EngineSmokeTest {
             guard let data = bitmap.representation(using: .png, properties: [:]) else {
                 return try require(false, "No PNG panel capture")
             }
-            try data.write(to: URL(fileURLWithPath: folder).appendingPathComponent("ink-curves-cmyk-u8.png"))
+            try data.write(to: URL(fileURLWithPath: folder).appendingPathComponent(name))
         }
         func draft(_ panel: InkCurvesPanel, field: NSTextField, text: String,
                    publish: Bool = true) throws -> NSTextView {
@@ -114,12 +114,48 @@ extension EngineSmokeTest {
             content.layoutSubtreeIfNeeded()
             expect(window.isVisible, "actual Curves panel is visible")
             for control in [panel.graph, panel.sampleIndexField, panel.outputField,
+                            panel.inputField, panel.modePopup, panel.pointTypePopup,
                             panel.resetButton, panel.applyButton, panel.cancelButton] as [NSView] {
                 let rect = control.convert(control.bounds, to: content)
                 expect(!control.isHiddenOrHasHiddenAncestor && rect.width > 0 && rect.height > 0 &&
                        rect.minX >= -1 && rect.minY >= -1 && rect.maxX <= content.bounds.maxX + 1 &&
                        rect.maxY <= content.bounds.maxY + 1, "\(control.accessibilityLabel() ?? "control") fits the panel")
             }
+        }
+
+        func choose(_ popup: NSPopUpButton, _ index: Int) {
+            popup.selectItem(at: index)
+            NSApp.sendAction(popup.action!, to: popup.target, from: popup)
+        }
+        func press(_ panel: InkCurvesPanel, _ code: UInt16) throws {
+            guard let window = panel.window else { return try require(false, "Missing Smooth window") }
+            window.makeFirstResponder(panel.graph)
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code) else {
+                return try require(false, "Missing Smooth key event")
+            }
+            panel.graph.keyDown(with: event)
+        }
+        func smoothHalf(_ panel: InkCurvesPanel, _ controller: DocumentWindowController) throws {
+            choose(panel.modePopup, 0)
+            try ready(controller)
+            expect(panel.graph.state.kind == .smooth && panel.graph.state.points.count == 9,
+                   "Smooth converts Freehand into nine sampled control points")
+            panel.resetButton.performClick(nil); try ready(controller)
+            expect(panel.graph.state.points == [.init(x: 0, y: 0), .init(x: 1, y: 1)] &&
+                   panel.graph.state.samples == EngineSession.InkCurvesSettings().samples,
+                   "Smooth Reset restores exact two-point identity")
+            try press(panel, 51); try ready(controller)
+            expect(panel.graph.state.points.count == 1, "actual Delete removes selected Smooth point")
+            _ = try draft(panel, field: panel.outputField, text: "0.5")
+            try ready(controller)
+            choose(panel.pointTypePopup, 1)
+            try ready(controller)
+            expect(panel.graph.state.points.first?.kind == .corner && panel.applyButton.isEnabled,
+                   "Corner point action keeps current identical preview usable")
+            expect(panel.graph.state.samples == Array(repeating: 0.5, count: 256),
+                   "one Smooth point yields the exact independent constant-half table")
         }
 
         var controllers: [DocumentWindowController] = []
@@ -241,14 +277,51 @@ extension EngineSmokeTest {
                 expect(controller.inkCurvesPanel == nil && controller.canvas.inkCurvesPreviewImage == nil,
                        "Cancel removes panel and preview")
                 expect(try render(image) == original && document.undoInfo.undoCount == undo, "Cancel changes no source pixels or history")
+                try document.startRecording()
                 controller.openNativeFilter(operation); try ready(controller)
                 let applying = controller.inkCurvesPanel!
                 try drawHalf(applying); try ready(controller)
+                try smoothHalf(applying, controller)
+                if let preview = controller.canvas.inkCurvesPreviewImage {
+                    expect(try centerPixel(preview) == expectedPixel, "Smooth canvas preview matches independent Fill oracle")
+                } else { expect(false, "Smooth has an actual canvas preview") }
+                if mode == .cmyk && component == .u8 {
+                    try capturePanel(applying, name: "ink-curves-smooth-cmyk-u8.png")
+                    let accepted = applying.graph.state
+                    _ = try draft(applying, field: applying.inputField, text: "invalid", publish: false)
+                    choose(applying.modePopup, 1)
+                    expect(applying.modePopup.indexOfSelectedItem == 0 && applying.graph.state == accepted &&
+                           !applying.applyButton.isEnabled, "mode action refuses a real unreported invalid point draft")
+                    choose(applying.pointTypePopup, 0)
+                    expect(applying.graph.state == accepted && !applying.applyButton.isEnabled,
+                           "type action preserves the invalid point draft")
+                    applying.resetButton.performClick(nil); try ready(controller)
+                    choose(applying.modePopup, 1); try ready(controller)
+                    try smoothHalf(applying, controller)
+                    try press(applying, 126); try ready(controller)
+                    expect(applying.graph.state.points.first?.y == 0.5 + 1.0 / 255 && applying.modePopup.isEnabled,
+                           "actual arrow key edits and releases Smooth ownership")
+                    _ = try draft(applying, field: applying.outputField, text: "0.5"); try ready(controller)
+                    try press(applying, 51); try ready(controller)
+                    expect(applying.graph.state.points.isEmpty && applying.graph.state.samples == Array(repeating: 0.5, count: 256),
+                           "deleting the final point preserves the last valid curve")
+                }
+                expect(try render(image) == original && document.undoInfo.undoCount == undo,
+                       "Smooth editing leaves source pixels and history unchanged")
                 applying.applyButton.performClick(nil)
                 try wait({ controller.inkCurvesPanel == nil }, "Apply completes and closes its panel"); try drain(document)
                 expect(try render(image) == expected, "committed pixels match independent Fill oracle")
                 expect(document.undoInfo.undoCount == undo + 1, "Apply is exactly one Undo")
                 expect(controller.canvas.inkCurvesPreviewImage == nil, "Apply discards preview overlay")
+                expect(document.recorder.pendingCount == 0 && document.recorder.records.count == 1,
+                       "actual panel Apply settles one Recorder row")
+                if document.recorder.records.count == 1,
+                   case .success(.applyInkCurves(let captured)) = document.recorder.records[0].resolution,
+                   case .ink(_, let capturedIdentity)? = document.recorderBindingDescriptions[0] {
+                    expect(captured.samples == Array(repeating: 0.5, count: 256) && capturedIdentity.uuid == identity.uuid,
+                           "actual panel records the full accepted curve and original ink identity")
+                } else { expect(false, "actual panel records a successful ink Curves command") }
+                try document.stopRecording()
                 document.undo(); try drain(document); expect(try render(image) == original, "Undo restores source")
                 document.redo(); try drain(document); expect(try render(image) == expected, "Redo restores Curves result")
                 // Close while a fresh capture is queued; no late panel may
