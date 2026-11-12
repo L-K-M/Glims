@@ -290,6 +290,7 @@ run_prepare (const char *path, gboolean expect_staged, const char *label)
   g_string_printf (text, "%s: staged %d", label, prepared != NULL);
   result = result && (prepared != NULL) == expect_staged;
   CHECK (result, text->str);
+  glims_tiff_import_prepared_cleanup (prepared);
   g_clear_object (&prepared);
   return result;
 }

@@ -22,9 +22,14 @@ Place keeps its original pathname for future monitored reloads and does not
 use this temporary-copy path.
 
 The scan refuses malformed or cyclic chains and chains exceeding 4,096 main
-directories. libtiff has a 256 MiB single-allocation limit for these scans;
+directories. This deliberately refuses a damaged file that the native loader
+might otherwise open partially: import does not silently discard unreadable
+pages. libtiff has a 256 MiB single-allocation and 512 MiB cumulative limit for these scans;
 diagnostics stay local to each open handle. Non-TIFF input follows the
-existing native loader path.
+existing native loader path. Preparation runs only for the registered TIFF
+loader, preserving preview directories used by TIFF-based camera-raw loaders.
+Externally compressed TIFF files (for example `.tif.gz`) still follow the
+compressor's native path and do not receive this thumbnail filtering.
 
 ## Verification
 
