@@ -13,6 +13,7 @@
  * network, and no change to the process locale.
  */
 #include "engine-private.h"
+#include "facade-policy.h"
 #include "operation-posterize.h"
 #include "operation-selective-color.h"
 #include "resource-mutation.h"
@@ -1607,28 +1608,36 @@ static GlimsStatus
 api_image_new (GlimsEngine *e, int32_t width, int32_t height, GlimsImageID *image, char **error)
 {
   GlimsArgs a = { .width = width, .height = height, .out = image, .error = error };
-  return glims_engine_call (e, image_new_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_new,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_new_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_open (GlimsEngine *e, const char *path, GlimsImageID *image, char **error)
 {
   GlimsArgs a = { .string = path, .out = image, .error = error };
-  return glims_engine_call (e, image_open_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_open,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_open_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_close (GlimsEngine *e, GlimsImageID image)
 {
   GlimsArgs a = { .image = image };
-  return glims_engine_call (e, image_close_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_close,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_close_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_info (GlimsEngine *e, GlimsImageID image, GlimsImageInfo *info)
 {
   GlimsArgs a = { .image = image, .out = info };
-  return glims_engine_call (e, image_info_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_info,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_info_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1636,7 +1645,9 @@ api_image_render (GlimsEngine *e, GlimsImageID image, double scale, GlimsRect ar
                   uint8_t *pixels, size_t stride)
 {
   GlimsArgs a = { .image = image, .number = scale, .area = area, .pixels = pixels, .stride = stride };
-  return glims_engine_call (e, image_render_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_render,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_render_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1647,7 +1658,9 @@ api_image_render_to_profile (GlimsEngine *e, GlimsImageID image, double scale, G
   GlimsArgs a = { .image = image, .number = scale, .area = area,
                   .in = destination_icc, .n = destination_icc_length,
                   .pixels = pixels, .stride = stride, .error = error };
-  return glims_engine_call (e, image_render_to_profile_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_render_to_profile,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_render_to_profile_on_engine, &a, error);
 }
 
 /* Read slots: zero the count in the bridge too, so a dispatch without a
@@ -1658,7 +1671,9 @@ api_image_item_sets (GlimsEngine *e, GlimsImageID image, GlimsItemSetInfo *rows,
 {
   GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
   if (count) *count = 0;
-  return glims_engine_call (e, image_item_sets_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_item_sets,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_item_sets_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1667,7 +1682,9 @@ api_image_item_set_members (GlimsEngine *e, GlimsImageID image, uint64_t token,
 {
   GlimsArgs a = { .image = image, .token = token, .out = members, .capacity = capacity, .count = count };
   if (count) *count = 0;
-  return glims_engine_call (e, image_item_set_members_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_item_set_members,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_item_set_members_on_engine, &a, NULL);
 }
 
 /* Zero the out token in the bridge too, so a dispatch without a running
@@ -1681,28 +1698,36 @@ api_image_item_set_edit (GlimsEngine *e, GlimsImageID image, uint32_t operation,
                   .token = token, .string = name, .in = members, .capacity = count,
                   .out = outToken, .error = error };
   if (outToken) *outToken = 0;
-  return glims_engine_call (e, image_item_set_edit_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_item_set_edit,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_item_set_edit_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_save (GlimsEngine *e, GlimsImageID image, const char *path, char **error)
 {
   GlimsArgs a = { .image = image, .string = path, .error = error };
-  return glims_engine_call (e, image_save_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_save,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_save_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_save_copy (GlimsEngine *e, GlimsImageID image, const char *path, char **error)
 {
   GlimsArgs a = { .image = image, .string = path, .error = error };
-  return glims_engine_call (e, image_save_copy_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_save_copy,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_save_copy_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_export (GlimsEngine *e, GlimsImageID image, const char *path, char **error)
 {
   GlimsArgs a = { .image = image, .string = path, .error = error };
-  return glims_engine_call (e, image_export_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_export,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_export_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -1710,28 +1735,36 @@ api_image_layers (GlimsEngine *e, GlimsImageID image, GlimsLayerInfo *layers,
                   int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = layers, .capacity = capacity, .count = count };
-  return glims_engine_call (e, image_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_layers_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_undo_info (GlimsEngine *e, GlimsImageID image, GlimsUndoInfo *info)
 {
   GlimsArgs a = { .image = image, .out = info };
-  return glims_engine_call (e, image_undo_info_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_undo_info,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_undo_info_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_undo (GlimsEngine *e, GlimsImageID image)
 {
   GlimsArgs a = { .image = image };
-  return glims_engine_call (e, image_undo_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_undo,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_undo_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_redo (GlimsEngine *e, GlimsImageID image)
 {
   GlimsArgs a = { .image = image };
-  return glims_engine_call (e, image_redo_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_redo,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_redo_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1741,21 +1774,27 @@ api_stroke_begin (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
 {
   GlimsArgs a = { .image = image, .item = layer, .in = brush, .in2 = first,
                   .out = stroke, .error = error };
-  return glims_engine_call (e, stroke_begin_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_stroke_begin,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (brush), 0 } },
+                            stroke_begin_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_stroke_continue (GlimsEngine *e, GlimsStrokeID stroke, const GlimsStrokePoint *points, size_t count)
 {
   GlimsArgs a = { .item = stroke, .in = points, .n = count };
-  return glims_engine_call (e, stroke_continue_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_stroke_continue,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
+                            stroke_continue_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_stroke_end (GlimsEngine *e, GlimsStrokeID stroke)
 {
   GlimsArgs a = { .item = stroke };
-  return glims_engine_call (e, stroke_end_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_stroke_end,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
+                            stroke_end_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1768,7 +1807,9 @@ api_stroke_begin_v2 (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
   if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
   GlimsStrokeV2Args a = {.image = image, .drawable = drawable, .brush_resource = brush_resource,
                         .brush = brush, .packet = packet, .error = error};
-  GlimsStatus status = glims_engine_call (e, stroke_begin_v2_on_engine, &a);
+  GlimsStatus status = glims_facade_call (e, GLIMS_FACADE_OP_stroke_begin_v2,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (brush), 0 } },
+                            stroke_begin_v2_on_engine, &a, error);
   if (status == GLIMS_STATUS_OK) *out = a.stroke;
   return status;
 }
@@ -1779,7 +1820,9 @@ api_stroke_continue_v2 (GlimsEngine *e, GlimsStrokeID stroke,
 {
   if (error) *error = NULL;
   GlimsStrokeV2Args a = {.stroke = stroke, .packet = packet, .error = error};
-  return glims_engine_call (e, stroke_continue_v2_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_stroke_continue_v2,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
+                            stroke_continue_v2_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -1791,7 +1834,9 @@ api_stroke_begin_with_brush_resource (GlimsEngine *e, GlimsImageID image, GlimsI
   GlimsStrokeResourceArgs a = { .image = image, .item = layer, .brush = brush,
                                 .brush_settings = settings, .first = first,
                                 .out = stroke, .error = error };
-  return glims_engine_call (e, stroke_begin_with_brush_resource_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_stroke_begin_with_brush_resource,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (settings), 0 } },
+                            stroke_begin_with_brush_resource_on_engine, &a, error);
 }
 
 /* Clear only complete known fields within the caller's declared prefix. */
@@ -1836,7 +1881,9 @@ api_stroke_begin_with_capture_facts (GlimsEngine *e, GlimsImageID image,
                                .expected_fingerprint = expected_fingerprint,
                                .facts = { .struct_size = sizeof (GlimsStrokeCaptureFacts) },
                                .error = error };
-  GlimsStatus status = glims_engine_call (e, stroke_begin_with_capture_facts_on_engine, &a);
+  GlimsStatus status = glims_facade_call (e, GLIMS_FACADE_OP_stroke_begin_with_capture_facts,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (brush), 0 } },
+                            stroke_begin_with_capture_facts_on_engine, &a, error);
   if (status == GLIMS_STATUS_OK)
     {
       *out = a.stroke;
@@ -1859,28 +1906,36 @@ api_filter_begin (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
                   const char *operation, GlimsFilterID *filter, char **error)
 {
   GlimsArgs a = { .image = image, .item = drawable, .string = operation, .out = filter, .error = error };
-  return glims_engine_call (e, filter_begin_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_begin,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            filter_begin_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_filter_set_double (GlimsEngine *e, GlimsFilterID filter, const char *property, double value)
 {
   GlimsArgs a = { .item = filter, .string = property, .number = value };
-  return glims_engine_call (e, filter_set_double_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_set_double,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_set_double_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_filter_commit (GlimsEngine *e, GlimsFilterID filter, char **error)
 {
   GlimsArgs a = { .item = filter, .error = error };
-  return glims_engine_call (e, filter_commit_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_commit,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_commit_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_filter_abort (GlimsEngine *e, GlimsFilterID filter)
 {
   GlimsArgs a = { .item = filter };
-  return glims_engine_call (e, filter_abort_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_abort,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_abort_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1888,7 +1943,9 @@ api_procedures (GlimsEngine *e, GlimsImageID image, GlimsProcedureInfo *procedur
                 int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = procedures, .capacity = capacity, .count = count };
-  return glims_engine_call (e, procedures_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_procedures,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            procedures_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1896,13 +1953,17 @@ api_procedure_run (GlimsEngine *e, GlimsImageID image, const char *name, uint32_
                    char **error)
 {
   GlimsArgs a = { .image = image, .string = name, .width = (int32_t) run_mode, .error = error };
-  return glims_engine_call (e, procedure_run_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_procedure_run,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_ALL_IMAGES, image, { 0, 0 } },
+                            procedure_run_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_procedure_cancel (GlimsEngine *e)
 {
-  return glims_engine_call (e, procedure_cancel_on_engine, NULL);
+  return glims_facade_call (e, GLIMS_FACADE_OP_procedure_cancel,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            procedure_cancel_on_engine, NULL, NULL);
 }
 
 static GlimsStatus
@@ -1910,7 +1971,9 @@ api_select_shape (GlimsEngine *e, GlimsImageID image, uint32_t shape, const Glim
                   size_t count, const GlimsSelectOptions *options)
 {
   GlimsArgs a = { .image = image, .width = (int32_t) shape, .in = points, .n = count, .in2 = options };
-  return glims_engine_call (e, select_shape_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_select_shape,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            select_shape_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1918,21 +1981,27 @@ api_select_color (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
                   const GlimsSelectOptions *options, char **error)
 {
   GlimsArgs a = { .image = image, .in = &point, .in2 = options, .error = error };
-  return glims_engine_call (e, select_color_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_select_color,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            select_color_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_select_command (GlimsEngine *e, GlimsImageID image, uint32_t command, double radius, char **error)
 {
   GlimsArgs a = { .image = image, .width = (int32_t) command, .number = radius, .error = error };
-  return glims_engine_call (e, select_command_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_select_command,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            select_command_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds)
 {
   GlimsArgs a = { .image = image, .out = empty, .in_out = bounds };
-  return glims_engine_call (e, selection_bounds_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_bounds,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            selection_bounds_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1940,7 +2009,9 @@ api_selection_outline (GlimsEngine *e, GlimsImageID image, GlimsSegment *segment
                        int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = segments, .capacity = capacity, .count = count };
-  return glims_engine_call (e, selection_outline_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_outline,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            selection_outline_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1948,7 +2019,9 @@ api_fill (GlimsEngine *e, GlimsImageID image, GlimsPoint point, const GlimsFillS
           char **error)
 {
   GlimsArgs a = { .image = image, .in = &point, .in2 = settings, .error = error };
-  return glims_engine_call (e, fill_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_fill,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            fill_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -1956,7 +2029,9 @@ api_fill_pattern (GlimsEngine *e, GlimsImageID image, GlimsResourceID pattern, G
                   const GlimsPatternFillSettings *settings, char **error)
 {
   GlimsArgs a = { .image = image, .resource = pattern, .in = &seed, .in2 = settings, .error = error };
-  return glims_engine_call (e, fill_pattern_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_fill_pattern,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            fill_pattern_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -1965,14 +2040,18 @@ api_gradient (GlimsEngine *e, GlimsImageID image, GlimsPoint from, GlimsPoint to
 {
   GlimsPoint points[2] = { from, to };
   GlimsArgs  a = { .image = image, .in = points, .in2 = settings, .error = error };
-  return glims_engine_call (e, gradient_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_gradient,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            gradient_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_layer_select (GlimsEngine *e, GlimsImageID image, GlimsItemID layer)
 {
   GlimsArgs a = { .image = image, .item = layer };
-  return glims_engine_call (e, layer_select_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_select,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_select_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -1980,7 +2059,9 @@ api_layer_command (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32
                    GlimsItemID *result, char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) command, .out = result, .error = error };
-  return glims_engine_call (e, layer_command_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_command,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_command_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -1988,42 +2069,54 @@ api_layer_change (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, const G
                   char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .in = change, .error = error };
-  return glims_engine_call (e, layer_change_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_change,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_change_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_layer_move (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, double dx, double dy)
 {
   GlimsArgs a = { .image = image, .item = layer, .number = dx, .number2 = dy };
-  return glims_engine_call (e, layer_move_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_move,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_move_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_crop (GlimsEngine *e, GlimsImageID image, GlimsRect rect, char **error)
 {
   GlimsArgs a = { .image = image, .area = rect, .error = error };
-  return glims_engine_call (e, image_crop_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_crop,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_crop_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_transform (GlimsEngine *e, GlimsImageID image, uint32_t transform)
 {
   GlimsArgs a = { .image = image, .width = (int32_t) transform };
-  return glims_engine_call (e, image_transform_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_transform,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_transform_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_layer_transform (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t transform)
 {
   GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) transform };
-  return glims_engine_call (e, layer_transform_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_transform,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_transform_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_scale (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height, char **error)
 {
   GlimsArgs a = { .image = image, .width = width, .height = height, .error = error };
-  return glims_engine_call (e, image_scale_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_scale,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_scale_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2031,7 +2124,9 @@ api_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int3
                          int32_t offset_x, int32_t offset_y, const GlimsColor *fill, char **error)
 {
   GlimsArgs a = { .image = image, .area = { offset_x, offset_y, width, height }, .in = fill, .error = error };
-  return glims_engine_call (e, image_resize_canvas_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_resize_canvas,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_resize_canvas_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2040,14 +2135,18 @@ api_layer_transform_matrix (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
 {
   GlimsArgs a = { .image = image, .item = layer, .in = matrix, .width = (int32_t) interpolation,
                   .error = error };
-  return glims_engine_call (e, layer_transform_matrix_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_transform_matrix,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_transform_matrix_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_fonts (GlimsEngine *e, char **names)
 {
   GlimsArgs a = { .out = names };
-  return glims_engine_call (e, fonts_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_fonts,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            fonts_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2062,7 +2161,9 @@ api_layer_transform_matrix_captured (GlimsEngine *e, GlimsImageID image, GlimsIt
   memcpy (&size, request, sizeof size);
   if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&copy, request, sizeof copy);
-  return glims_engine_call (e, layer_transform_matrix_captured_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_transform_matrix_captured,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_transform_matrix_captured_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2079,7 +2180,9 @@ api_image_transform_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID lay
   memcpy (&size, request, sizeof size);
   if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&copy, request, sizeof copy);
-  return glims_engine_call (e, image_transform_preview_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_transform_preview,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_transform_preview_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2089,7 +2192,9 @@ api_text_layer_new (GlimsEngine *e, GlimsImageID image, const char *text,
 {
   GlimsArgs a = { .image = image, .string = text, .in = settings, .number = position.x,
                   .number2 = position.y, .out = layer, .error = error };
-  return glims_engine_call (e, text_layer_new_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_text_layer_new,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            text_layer_new_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2113,7 +2218,9 @@ api_text_layer_new_captured (GlimsEngine *e, GlimsImageID image,
     }
   if (! e)
     return GLIMS_STATUS_NOT_RUNNING;
-  return glims_engine_call (e, text_layer_new_captured_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_text_layer_new_captured,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            text_layer_new_captured_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2121,7 +2228,9 @@ api_text_layer_get (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, char 
                     GlimsTextSettings *settings)
 {
   GlimsArgs a = { .image = image, .item = layer, .out = text, .in_out = settings };
-  return glims_engine_call (e, text_layer_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_text_layer_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            text_layer_get_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2129,14 +2238,18 @@ api_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, const
                     const GlimsTextSettings *settings, char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .string = text, .in = settings, .error = error };
-  return glims_engine_call (e, text_layer_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_text_layer_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            text_layer_set_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_paths (GlimsEngine *e, GlimsImageID image, GlimsPathInfo *rows, int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
-  return glims_engine_call (e, paths_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_paths,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            paths_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2148,7 +2261,9 @@ api_path_get (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                       .subpath_capacity = subpath_capacity, .subpath_count = subpath_count,
                       .points = points, .point_capacity = point_capacity,
                       .point_count = point_count };
-  return glims_engine_call (e, path_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_get_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2160,7 +2275,9 @@ api_path_set (GlimsEngine *e, GlimsImageID image, GlimsItemID path, const char *
   GlimsPathArgs a = { .image = image, .path = path, .name = name, .subpaths_in = subpaths,
                       .subpath_capacity = subpath_count, .points_in = points,
                       .point_capacity = point_count, .result = result, .error = error };
-  return glims_engine_call (e, path_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_set_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2168,14 +2285,18 @@ api_path_change (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                  const GlimsPathChange *change, char **error)
 {
   GlimsArgs a = { .image = image, .item = path, .in = change, .error = error };
-  return glims_engine_call (e, path_change_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_change,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_change_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_path_delete (GlimsEngine *e, GlimsImageID image, GlimsItemID path)
 {
   GlimsArgs a = { .image = image, .item = path };
-  return glims_engine_call (e, path_delete_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_delete,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_delete_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2183,7 +2304,9 @@ api_path_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                        const GlimsSelectOptions *options)
 {
   GlimsArgs a = { .image = image, .item = path, .in = options };
-  return glims_engine_call (e, path_to_selection_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_to_selection,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_to_selection_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2191,7 +2314,9 @@ api_path_stroke (GlimsEngine *e, GlimsImageID image, GlimsItemID path, GlimsItem
                  const GlimsLineSettings *settings, char **error)
 {
   GlimsArgs a = { .image = image, .item = path, .width = layer, .in = settings, .error = error };
-  return glims_engine_call (e, path_stroke_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_stroke,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_stroke_on_engine, &a, error);
 }
 
 MARSHAL (image_copy_pixels, return glims_image_copy_pixels (e, a->image, a->width, a->out, a->error);)
@@ -2203,14 +2328,18 @@ static GlimsStatus
 api_image_copy_pixels (GlimsEngine *e, GlimsImageID image, bool merged, GlimsPixelBuffer *out, char **error)
 {
   GlimsArgs a = { .image = image, .width = merged, .out = out, .error = error };
-  return glims_engine_call (e, image_copy_pixels_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_copy_pixels,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_copy_pixels_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_clear (GlimsEngine *e, GlimsImageID image, const GlimsColor *background, char **error)
 {
   GlimsArgs a = { .image = image, .in = background, .error = error };
-  return glims_engine_call (e, image_clear_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_clear,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_clear_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2218,7 +2347,9 @@ api_image_paste_pixels (GlimsEngine *e, GlimsImageID image, GlimsRect bounds, co
                         size_t count, GlimsItemID *result, char **error)
 {
   GlimsArgs a = { .image = image, .area = bounds, .in = pixels, .n = count, .out = result, .error = error };
-  return glims_engine_call (e, image_paste_pixels_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_paste_pixels,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_paste_pixels_on_engine, &a, error);
 }
 
 static void api_free_pixels (uint8_t *pixels) { g_free (pixels); }
@@ -2228,14 +2359,18 @@ api_image_from_pixels (GlimsEngine *e, int32_t width, int32_t height, const uint
                        size_t count, GlimsImageID *result, char **error)
 {
   GlimsArgs a = { .width = width, .height = height, .in = pixels, .n = count, .out = result, .error = error };
-  return glims_engine_call (e, image_from_pixels_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_from_pixels,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_from_pixels_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_layer_state (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, GlimsLayerState *state)
 {
   GlimsArgs a = { .image = image, .item = layer, .out = state };
-  return glims_engine_call (e, layer_state_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_state,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_state_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2244,7 +2379,9 @@ api_create_group (GlimsEngine *e, GlimsImageID image, GlimsItemID parent, int32_
 {
   GlimsArgs a = { .image = image, .item = parent, .width = index, .string = name, .out = result,
                   .error = error };
-  return glims_engine_call (e, create_group_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_create_group,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            create_group_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2252,7 +2389,9 @@ api_reparent_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID item, GlimsI
                     int32_t index, char **error)
 {
   GlimsArgs a = { .image = image, .item = item, .width = new_parent, .height = index, .error = error };
-  return glims_engine_call (e, reparent_layer_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_reparent_layer,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            reparent_layer_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2261,14 +2400,18 @@ api_set_layer_locks (GlimsEngine *e, GlimsImageID image, GlimsItemID item, uint3
 {
   GlimsArgs a = { .image = image, .item = item, .width = (int32_t) mask, .height = (int32_t) values,
                   .error = error };
-  return glims_engine_call (e, set_layer_locks_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_set_layer_locks,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            set_layer_locks_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_filter_operations (GlimsEngine *e, GlimsOperationInfo *rows, int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .out = rows, .capacity = capacity, .count = count };
-  return glims_engine_call (e, filter_operations_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_operations,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            filter_operations_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2276,7 +2419,9 @@ api_filter_operation_properties (GlimsEngine *e, const char *operation, GlimsFil
                                  int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .string = operation, .out = rows, .capacity = capacity, .count = count };
-  return glims_engine_call (e, filter_operation_properties_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_operation_properties,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            filter_operation_properties_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2285,7 +2430,9 @@ api_filter_enum_choices (GlimsEngine *e, const char *operation, const char *prop
 {
   GlimsArgs a = { .string = operation, .in = property, .out = rows, .capacity = capacity,
                   .count = count };
-  return glims_engine_call (e, filter_enum_choices_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_enum_choices,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            filter_enum_choices_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2293,7 +2440,9 @@ api_filter_get_property (GlimsEngine *e, GlimsFilterID filter, const char *prope
                          GlimsFilterValue *value)
 {
   GlimsArgs a = { .item = filter, .string = property, .out = value };
-  return glims_engine_call (e, filter_get_property_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_get_property,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_get_property_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2301,7 +2450,9 @@ api_filter_set_property (GlimsEngine *e, GlimsFilterID filter, const char *prope
                          const GlimsFilterValue *value)
 {
   GlimsArgs a = { .item = filter, .string = property, .in = value };
-  return glims_engine_call (e, filter_set_property_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_set_property,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_set_property_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2309,7 +2460,9 @@ api_image_history (GlimsEngine *e, GlimsImageID image, GlimsHistoryRow *rows,
                     int32_t capacity, GlimsHistoryInfo *info)
 {
   GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .in_out = info };
-  return glims_engine_call (e, image_history_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_history,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_history_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2317,21 +2470,27 @@ api_image_history_move (GlimsEngine *e, GlimsImageID image, uint64_t revision,
                          int32_t position, char **error)
 {
   GlimsArgs a = { .image = image, .revision = revision, .width = position, .error = error };
-  return glims_engine_call (e, image_history_move_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_history_move,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_history_move_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_duplicate (GlimsEngine *e, GlimsImageID image, GlimsImageID *result, char **error)
 {
   GlimsArgs a = { .image = image, .out = result, .error = error };
-  return glims_engine_call (e, image_duplicate_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_duplicate,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_duplicate_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_layer_mask (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, GlimsMaskState *state)
 {
   GlimsArgs a = { .image = image, .item = layer, .out = state };
-  return glims_engine_call (e, layer_mask_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_mask,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_mask_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2340,7 +2499,9 @@ api_layer_mask_add (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint3
 {
   GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) source, .height = edit,
                   .out = mask, .error = error };
-  return glims_engine_call (e, layer_mask_add_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_mask_add,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_mask_add_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2349,7 +2510,9 @@ api_layer_mask_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint3
 {
   GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) flags, .height = (int32_t) values,
                   .error = error };
-  return glims_engine_call (e, layer_mask_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_mask_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_mask_set_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2357,7 +2520,9 @@ api_layer_mask_apply (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uin
                       char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) mode, .error = error };
-  return glims_engine_call (e, layer_mask_apply_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_mask_apply,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_mask_apply_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2365,7 +2530,9 @@ api_layer_mask_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID lay
                              uint32_t operation, char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) operation, .error = error };
-  return glims_engine_call (e, layer_mask_to_selection_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_mask_to_selection,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_mask_to_selection_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2374,14 +2541,18 @@ api_drawable_thumbnail (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable
 {
   GlimsArgs a = { .image = image, .item = drawable, .width = max_size, .pixels = pixels,
                   .n = byte_count, .count = width, .in_out = height };
-  return glims_engine_call (e, drawable_thumbnail_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_drawable_thumbnail,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            drawable_thumbnail_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_components (GlimsEngine *e, GlimsImageID image, GlimsComponentState *state)
 {
   GlimsArgs a = { .image = image, .out = state };
-  return glims_engine_call (e, image_components_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_components,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_components_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2391,7 +2562,9 @@ api_image_set_components (GlimsEngine *e, GlimsImageID image, uint32_t active_ma
 {
   const uint32_t masks[4] = { active_mask, active_values, visible_mask, visible_values };
   GlimsArgs a = { .image = image, .in = masks, .error = error };
-  return glims_engine_call (e, image_set_components_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_set_components,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_set_components_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2399,7 +2572,9 @@ api_image_channels (GlimsEngine *e, GlimsImageID image, GlimsChannelInfo *channe
                     int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = channels, .capacity = capacity, .count = count };
-  return glims_engine_call (e, image_channels_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_channels,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_channels_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2407,7 +2582,9 @@ api_channel_from_selection (GlimsEngine *e, GlimsImageID image, const char *name
                             GlimsItemID *result, char **error)
 {
   GlimsArgs a = { .image = image, .string = name, .out = result, .error = error };
-  return glims_engine_call (e, channel_from_selection_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_channel_from_selection,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            channel_from_selection_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2415,7 +2592,9 @@ api_channel_change (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
                     const GlimsChannelChange *change, char **error)
 {
   GlimsArgs a = { .image = image, .item = channel, .in = change, .error = error };
-  return glims_engine_call (e, channel_change_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_channel_change,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            channel_change_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2424,7 +2603,9 @@ api_channel_command (GlimsEngine *e, GlimsImageID image, GlimsItemID channel, ui
 {
   GlimsArgs a = { .image = image, .item = channel, .width = (int32_t) command, .out = result,
                   .error = error };
-  return glims_engine_call (e, channel_command_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_channel_command,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            channel_command_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2432,21 +2613,27 @@ api_channel_to_selection (GlimsEngine *e, GlimsImageID image, GlimsItemID channe
                           uint32_t operation, char **error)
 {
   GlimsArgs a = { .image = image, .item = channel, .width = (int32_t) operation, .error = error };
-  return glims_engine_call (e, channel_to_selection_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_channel_to_selection,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            channel_to_selection_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_quick_mask (GlimsEngine *e, GlimsImageID image, GlimsQuickMaskState *state)
 {
   GlimsArgs a = { .image = image, .out = state };
-  return glims_engine_call (e, image_quick_mask_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_quick_mask,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_quick_mask_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_set_quick_mask (GlimsEngine *e, GlimsImageID image, bool enabled, char **error)
 {
   GlimsArgs a = { .image = image, .width = enabled, .error = error };
-  return glims_engine_call (e, image_set_quick_mask_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_set_quick_mask,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_set_quick_mask_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2455,7 +2642,9 @@ api_drawable_effects (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
 {
   GlimsArgs a = { .image = image, .item = drawable, .out = rows,
                   .capacity = capacity, .count = count };
-  return glims_engine_call (e, drawable_effects_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_drawable_effects,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            drawable_effects_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2464,7 +2653,9 @@ api_effect_change (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
 {
   GlimsArgs a = { .image = image, .item = drawable, .effect = effect,
                   .in = change, .error = error };
-  return glims_engine_call (e, effect_change_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_effect_change,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            effect_change_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2473,7 +2664,9 @@ api_effect_command (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
 {
   GlimsArgs a = { .image = image, .item = drawable, .effect = effect,
                   .width = (int32_t) command, .error = error };
-  return glims_engine_call (e, effect_command_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_effect_command,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            effect_command_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2482,7 +2675,9 @@ api_image_open_layers (GlimsEngine *e, GlimsImageID image, const char *path,
 {
   GlimsArgs a = { .image = image, .string = path, .out = layers,
                   .capacity = capacity, .count = count, .error = error };
-  return glims_engine_call (e, image_open_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_open_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_open_layers_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2490,7 +2685,9 @@ api_image_place_link (GlimsEngine *e, GlimsImageID image, const char *path,
                       GlimsItemID *layer, char **error)
 {
   GlimsArgs a = { .image = image, .string = path, .out = layer, .error = error };
-  return glims_engine_call (e, image_place_link_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_place_link,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_place_link_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2499,21 +2696,27 @@ api_filter_edit_begin (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
 {
   GlimsArgs a = { .image = image, .item = drawable, .effect = effect,
                   .out = filter, .error = error };
-  return glims_engine_call (e, filter_edit_begin_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_edit_begin,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            filter_edit_begin_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_color_info (GlimsEngine *e, GlimsImageID image, GlimsColorInfo *info)
 {
   GlimsArgs a = { .image = image, .out = info };
-  return glims_engine_call (e, image_color_info_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_color_info,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_color_info_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_convert_mode (GlimsEngine *e, GlimsImageID image, uint32_t mode, char **error)
 {
   GlimsArgs a = { .image = image, .width = (int32_t) mode, .error = error };
-  return glims_engine_call (e, image_convert_mode_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_convert_mode,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_convert_mode_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2522,7 +2725,9 @@ api_image_convert_precision (GlimsEngine *e, GlimsImageID image, uint32_t compon
 {
   GlimsArgs a = { .image = image, .width = (int32_t) component, .height = (int32_t) trc,
                   .error = error };
-  return glims_engine_call (e, image_convert_precision_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_convert_precision,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_convert_precision_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2530,7 +2735,9 @@ api_path_fill (GlimsEngine *e, GlimsImageID image, GlimsItemID path, GlimsItemID
                const GlimsPathFillSettings *settings, char **error)
 {
   GlimsArgs a = { .image = image, .item = path, .width = drawable, .in = settings, .error = error };
-  return glims_engine_call (e, path_fill_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_fill,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_fill_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2538,14 +2745,18 @@ api_path_to_vector_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID path, 
                           GlimsItemID *layer, char **error)
 {
   GlimsArgs a = { .image = image, .item = path, .string = name, .out = layer, .error = error };
-  return glims_engine_call (e, path_to_vector_layer_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_path_to_vector_layer,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            path_to_vector_layer_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_assign_profile (GlimsEngine *e, GlimsImageID image, const char *path, char **error)
 {
   GlimsArgs a = { .image = image, .string = path, .error = error };
-  return glims_engine_call (e, image_assign_profile_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_assign_profile,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_assign_profile_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2554,7 +2765,9 @@ api_image_convert_profile (GlimsEngine *e, GlimsImageID image, const char *path,
 {
   GlimsArgs a = { .image = image, .string = path, .width = (int32_t) intent,
                   .height = black_point_compensation, .error = error };
-  return glims_engine_call (e, image_convert_profile_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_convert_profile,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_convert_profile_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2563,7 +2776,9 @@ api_image_convert_profile_rasterizing (GlimsEngine *e, GlimsImageID image, const
 {
   GlimsArgs a = { .image = image, .string = path, .width = (int32_t) intent,
                   .height = black_point_compensation, .error = error };
-  return glims_engine_call (e, image_convert_profile_rasterizing_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_convert_profile_rasterizing,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_convert_profile_rasterizing_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2571,7 +2786,9 @@ api_resources (GlimsEngine *e, uint32_t kind, GlimsResourceInfo *rows, int32_t c
                int32_t *count)
 {
   GlimsArgs a = { .width = (int32_t) kind, .out = rows, .capacity = capacity, .count = count };
-  return glims_engine_call (e, resources_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resources,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resources_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2580,7 +2797,9 @@ api_resource_identifiers (GlimsEngine *e, GlimsResourceID id, char **name, char 
 {
   GlimsResourceArgs a = { .id = id, .out_name = name, .out_collection = collection,
                           .out_internal = internal, .error = error };
-  return glims_engine_call (e, resource_identifiers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_identifiers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_identifiers_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2589,7 +2808,9 @@ api_resource_resolve (GlimsEngine *e, uint32_t kind, const char *name, const cha
 {
   GlimsResourceArgs a = { .kind = kind, .name = name, .collection = collection,
                           .internal = internal, .out_id = outID, .error = error };
-  return glims_engine_call (e, resource_resolve_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_resolve,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_resolve_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2599,7 +2820,9 @@ api_resource_thumbnail (GlimsEngine *e, GlimsResourceID id, int32_t max_size,
 {
   GlimsResourceArgs a = { .id = id, .max_size = max_size, .foreground = foreground,
                           .background = background, .pixels = out, .error = error };
-  return glims_engine_call (e, resource_thumbnail_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_thumbnail,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_thumbnail_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2607,7 +2830,9 @@ api_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
                             GlimsVectorStyle *style, char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .in_out = style, .error = error };
-  return glims_engine_call (e, vector_layer_style_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_vector_layer_style_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            vector_layer_style_get_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2615,7 +2840,9 @@ api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
                             const GlimsVectorStyleChange *change, char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .in = change, .error = error };
-  return glims_engine_call (e, vector_layer_style_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_vector_layer_style_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            vector_layer_style_set_on_engine, &a, error);
 }
 
 MARSHAL (image_guides, return glims_image_guides (e, a->image, a->out, a->capacity, a->count);)
@@ -2666,7 +2893,9 @@ api_image_guides (GlimsEngine *e, GlimsImageID image, GlimsGuideInfo *rows,
                   int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
-  return glims_engine_call (e, image_guides_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_guides,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_guides_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2674,14 +2903,18 @@ api_guide_put (GlimsEngine *e, GlimsImageID image, const GlimsGuideInfo *guide,
                GlimsGuideID *result, char **error)
 {
   GlimsArgs a = { .image = image, .in = guide, .out = result, .error = error };
-  return glims_engine_call (e, guide_put_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_guide_put,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            guide_put_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_guide_remove (GlimsEngine *e, GlimsImageID image, GlimsGuideID guide, char **error)
 {
   GlimsArgs a = { .image = image, .width = guide, .error = error };
-  return glims_engine_call (e, guide_remove_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_guide_remove,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            guide_remove_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2689,7 +2922,9 @@ api_layer_source_info (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                        GlimsLayerSourceInfo *out, char **error)
 {
   GlimsArgs a = { .image = image, .item = layer, .out = out, .error = error };
-  return glims_engine_call (e, layer_source_info_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_source_info,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_source_info_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2699,7 +2934,9 @@ api_image_pick_layer (GlimsEngine *e, GlimsImageID image, GlimsPoint point, Glim
   if (out)
     *out = 0;
   if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
-  return glims_engine_call (e, image_pick_layer_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_pick_layer,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_pick_layer_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2709,21 +2946,27 @@ api_image_convert_indexed (GlimsEngine *e, GlimsImageID image,
 {
   GlimsArgs a = { .image = image, .in = settings, .in2 = colors,
                   .capacity = color_count, .error = error };
-  return glims_engine_call (e, image_convert_indexed_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_convert_indexed,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_convert_indexed_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_grid (GlimsEngine *e, GlimsImageID image, GlimsGrid *out, char **error)
 {
   GlimsArgs a = { .image = image, .out = out, .error = error };
-  return glims_engine_call (e, image_grid_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_grid,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_grid_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_set_grid (GlimsEngine *e, GlimsImageID image, const GlimsGrid *grid, char **error)
 {
   GlimsArgs a = { .image = image, .in = grid, .error = error };
-  return glims_engine_call (e, image_set_grid_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_set_grid,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_set_grid_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2732,7 +2975,9 @@ api_selection_stroke (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
 {
   GlimsSelectionStrokeArgs a = { .image = image, .drawable = drawable, .brush = brush,
                                  .settings = settings, .error = error };
-  return glims_engine_call (e, selection_stroke_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_stroke,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (settings), 0 } },
+                            selection_stroke_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2742,14 +2987,18 @@ api_gradient_resource (GlimsEngine *e, GlimsImageID image, GlimsResourceID gradi
 {
   GlimsGradientResourceArgs a = { .image = image, .gradient = gradient, .from = from, .to = to,
                                   .settings = settings, .error = error };
-  return glims_engine_call (e, gradient_resource_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_gradient_resource,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            gradient_resource_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_floating_selection (GlimsEngine *e, GlimsImageID image, GlimsFloatingState *out)
 {
   GlimsArgs a = { .image = image, .out = out };
-  return glims_engine_call (e, image_floating_selection_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_floating_selection,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_floating_selection_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2758,7 +3007,9 @@ api_image_paste_into (GlimsEngine *e, GlimsImageID image, GlimsItemID target, Gl
 {
   GlimsArgs a = { .image = image, .item = target, .area = bounds, .pixels = pixels,
                   .n = byte_count, .out = result, .error = error };
-  return glims_engine_call (e, image_paste_into_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_paste_into,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_paste_into_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2766,7 +3017,9 @@ api_floating_command (GlimsEngine *e, GlimsImageID image, GlimsItemID expected, 
                       GlimsItemID *result, char **error)
 {
   GlimsArgs a = { .image = image, .item = expected, .width = command, .out = result, .error = error };
-  return glims_engine_call (e, floating_command_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_floating_command,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            floating_command_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2774,7 +3027,9 @@ api_selection_float (GlimsEngine *e, GlimsImageID image, GlimsItemID target, uin
                      GlimsItemID *result, char **error)
 {
   GlimsArgs a = { .image = image, .item = target, .width = (int32_t) mode, .out = result, .error = error };
-  return glims_engine_call (e, selection_float_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_float,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            selection_float_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2782,7 +3037,9 @@ api_image_select_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *
                          size_t count, char **error)
 {
   GlimsArgs a = { .image = image, .in = layers, .n = count, .error = error };
-  return glims_engine_call (e, image_select_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_select_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_select_layers_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2790,7 +3047,9 @@ api_image_selected_layers (GlimsEngine *e, GlimsImageID image, GlimsItemID *ids,
                            int32_t capacity, int32_t *count)
 {
   GlimsArgs a = { .image = image, .out = ids, .capacity = capacity, .count = count };
-  return glims_engine_call (e, image_selected_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_selected_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_selected_layers_on_engine, &a, NULL);
 }
 
 static GlimsStatus
@@ -2799,7 +3058,9 @@ api_image_select_items (GlimsEngine *e, GlimsImageID image, uint32_t kind,
 {
   GlimsArgs a = { .image = image, .width = (int32_t) kind, .in = items,
                   .capacity = count, .error = error };
-  return glims_engine_call (e, image_select_items_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_select_items,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_select_items_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2812,25 +3073,35 @@ api_image_selected_items (GlimsEngine *e, GlimsImageID image, uint32_t kind,
     *count = 0;
   GlimsArgs a = { .image = image, .width = (int32_t) kind, .out = out,
                   .capacity = capacity, .count = count };
-  return glims_engine_call (e, image_selected_items_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_selected_items,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_selected_items_on_engine, &a, NULL);
 }
 
 static GlimsStatus
 api_image_metadata_tags (GlimsEngine *e, GlimsImageID image, uint32_t domain,
                          char ***result, int32_t *count, char **error)
 {
+  if (result) *result = NULL;
+  if (count) *count = 0;
   GlimsArgs a = { .image = image, .width = (int32_t) domain, .out = result,
                   .count = count, .error = error };
-  return glims_engine_call (e, image_metadata_tags_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_metadata_tags,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_metadata_tags_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_metadata_values (GlimsEngine *e, GlimsImageID image, const char *tag,
                            char ***result, int32_t *count, char **error)
 {
+  if (result) *result = NULL;
+  if (count) *count = 0;
   GlimsArgs a = { .image = image, .string = tag, .out = result,
                   .count = count, .error = error };
-  return glims_engine_call (e, image_metadata_values_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_metadata_values,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_metadata_values_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2840,15 +3111,24 @@ api_image_metadata_edit (GlimsEngine *e, GlimsImageID image, const char *tag,
 {
   GlimsArgs a = { .image = image, .string = tag, .width = (int32_t) operation,
                   .in = values, .capacity = count, .error = error };
-  return glims_engine_call (e, image_metadata_edit_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_metadata_edit,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_metadata_edit_on_engine, &a, error);
 }
 
 static GlimsStatus
 api_image_metadata_tag_info (GlimsEngine *e, GlimsImageID image, const char *tag,
                              GlimsMetadataTagInfo *outInfo, char **error)
 {
+  if (outInfo && outInfo->struct_size >= sizeof *outInfo)
+    {
+      memset (outInfo, 0, sizeof *outInfo);
+      outInfo->struct_size = sizeof *outInfo;
+    }
   GlimsArgs a = { .image = image, .string = tag, .in_out = outInfo, .error = error };
-  return glims_engine_call (e, image_metadata_tag_info_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_metadata_tag_info,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_metadata_tag_info_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2864,7 +3144,9 @@ api_image_metadata_languages (GlimsEngine *e, GlimsImageID image, const char *ro
     *out_count = 0;
   GlimsArgs a = { .image = image, .string = root, .out = out,
                   .count = out_count, .error = error };
-  return glims_engine_call (e, image_metadata_languages_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_metadata_languages,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_metadata_languages_on_engine, &a, error);
 }
 
 static void
@@ -2902,7 +3184,9 @@ api_image_metadata_edit_language (GlimsEngine *e, GlimsImageID image, const char
   GlimsMetadataLanguageEditArgs a = { .image = image, .root = root,
                                       .language = language, .text = text,
                                       .error = error };
-  return glims_engine_call (e, image_metadata_edit_language_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_metadata_edit_language,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_metadata_edit_language_on_engine, &a, error);
 }
 
 static GlimsStatus
@@ -2915,7 +3199,9 @@ api_resource_create_pixels (GlimsEngine *e, uint32_t kind, const char *name,
   GlimsResourceCreateArgs a = { .kind = kind, .name = name, .width = width, .height = height,
                                 .pixels = pixels, .byte_count = byte_count,
                                 .brush_spacing = brush_spacing, .out_id = outID, .error = error };
-  return glims_engine_call (e, resource_create_pixels_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_create_pixels,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_create_pixels_on_engine, &a, error);
 }
 
 /* No engine state is involved: free directly, like free_string. */
@@ -2951,7 +3237,9 @@ api_adjustment_layer_new (GlimsEngine *e, GlimsImageID image, GlimsItemID parent
   if (layer) *layer = 0;
   if (effect) *effect = 0;
   GlimsAdjustmentArgs a = { image, parent, index, operation, name, layer, effect, error };
-  return glims_engine_call (e, adjustment_layer_new_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_adjustment_layer_new,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            adjustment_layer_new_on_engine, &a, error);
 }
 
 /* resource_duplicate carries the full 64-bit source handle besides the
@@ -2982,7 +3270,9 @@ api_resource_duplicate (GlimsEngine *e, GlimsResourceID sourceID, const char *na
   if (outID) *outID = 0;
   GlimsResourceDuplicateArgs a = { .source = sourceID, .name = name,
                                    .out_id = outID, .error = error };
-  return glims_engine_call (e, resource_duplicate_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_duplicate,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_duplicate_on_engine, &a, error);
 }
 
 /* resource_create_gradient carries the two endpoint colors besides the
@@ -3016,7 +3306,9 @@ api_resource_create_gradient (GlimsEngine *e, const char *name,
   if (out) *out = 0;
   GlimsResourceCreateGradientArgs a = { .name = name, .left = left, .right = right,
                                         .out = out, .error = error };
-  return glims_engine_call (e, resource_create_gradient_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_create_gradient,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_create_gradient_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3040,7 +3332,15 @@ api_image_duplicate_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemI
 {
   GlimsDuplicateLayersArgs a = { .image = image, .sources = sources, .count = count,
                                   .copies = copies, .error = error };
-  return glims_engine_call (e, image_duplicate_layers_on_engine, &a);
+  gboolean invoked = FALSE;
+  GlimsStatus status = glims_facade_call_reporting_admission (e, GLIMS_FACADE_OP_image_duplicate_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_duplicate_layers_on_engine, &a, error, &invoked);
+  /* The backend captures overlapping sources before clearing copies, and
+   * may return a useful partial prefix after a late Core failure. */
+  if (!invoked && copies && count >= 1 && count <= 256)
+    memset (copies, 0, (size_t) count * sizeof *copies);
+  return status;
 }
 
 typedef struct {
@@ -3071,17 +3371,23 @@ static GlimsStatus api_resource_mutation_info (GlimsEngine *e, GlimsResourceID i
   if (guard) *guard = NULL;
   if (reason) *reason = NULL;
   GlimsResourceMutationArgs a = { .id = id, .flags = flags, .guard = guard, .reason = reason, .error = error };
-  return glims_engine_call (e, resource_mutation_info_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_mutation_info,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_mutation_info_on_engine, &a, error);
 }
 static GlimsStatus api_resource_rename (GlimsEngine *e, GlimsResourceID id, const char *guard, const char *name, char **error)
 {
   GlimsResourceMutationArgs a = { .id = id, .expected_guard = guard, .name = name, .error = error };
-  return glims_engine_call (e, resource_rename_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_rename,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_rename_on_engine, &a, error);
 }
 static GlimsStatus api_resource_delete (GlimsEngine *e, GlimsResourceID id, const char *guard, char **error)
 {
   GlimsResourceMutationArgs a = { .id = id, .expected_guard = guard, .error = error };
-  return glims_engine_call (e, resource_delete_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_resource_delete,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            resource_delete_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3099,7 +3405,9 @@ static GlimsStatus api_image_delete_layers (GlimsEngine *e, GlimsImageID image,
                                            const GlimsItemID *layers, int32_t count, char **error)
 {
   GlimsDeleteLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
-  return glims_engine_call (e, image_delete_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_delete_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_delete_layers_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3121,7 +3429,9 @@ static GlimsStatus api_filter_begin_with_source (GlimsEngine *e, GlimsImageID im
   if (out) *out = 0;
   GlimsFilterSourceArgs a = { .image = image, .target = target, .source = source,
                               .operation = operation, .out = out, .error = error };
-  return glims_engine_call (e, filter_begin_with_source_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_begin_with_source,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { source, 0 } },
+                            filter_begin_with_source_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3151,7 +3461,9 @@ static GlimsStatus api_filter_begin_displace_with_sources (GlimsEngine *e,
   GlimsDisplaceSourcesArgs args = { .image = image, .target = target,
                                    .x_source = x_source, .y_source = y_source,
                                    .out = out, .error = error };
-  return glims_engine_call (e, displace_sources_on_engine, &args);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_begin_displace_with_sources,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { x_source, y_source } },
+                            displace_sources_on_engine, &args, error);
 }
 
 typedef struct {
@@ -3181,7 +3493,9 @@ static GlimsStatus api_filter_begin_oilify_with_sources (GlimsEngine *e,
   GlimsOilifySourcesArgs args = { .image = image, .target = target,
                                  .radius_source = radius_source, .exponent_source = exponent_source,
                                  .out = out, .error = error };
-  return glims_engine_call (e, oilify_sources_on_engine, &args);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_begin_oilify_with_sources,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { radius_source, exponent_source } },
+                            oilify_sources_on_engine, &args, error);
 }
 
 typedef struct {
@@ -3205,13 +3519,17 @@ static GlimsStatus api_filter_brightness_contrast_get (GlimsEngine *e, GlimsFilt
 {
   if (out && out->struct_size >= sizeof *out) out->brightness = out->contrast = 0;
   GlimsBrightnessContrastArgs a = { .filter = filter, .out = out, .error = error };
-  return glims_engine_call (e, filter_brightness_contrast_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_brightness_contrast_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_brightness_contrast_get_on_engine, &a, error);
 }
 static GlimsStatus api_filter_brightness_contrast_set (GlimsEngine *e, GlimsFilterID filter,
                                                            const GlimsBrightnessContrastSettings *settings, char **error)
 {
   GlimsBrightnessContrastArgs a = { .filter = filter, .settings = settings, .error = error };
-  return glims_engine_call (e, filter_brightness_contrast_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_brightness_contrast_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_brightness_contrast_set_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3238,13 +3556,17 @@ static GlimsStatus api_filter_color_balance_get (GlimsEngine *e, GlimsFilterID f
     out->shadows = out->midtones = out->highlights = (GlimsColorBalanceRange) {0};
   }
   GlimsColorBalanceArgs a = { .filter = filter, .out = out, .error = error };
-  return glims_engine_call (e, filter_color_balance_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_color_balance_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_color_balance_get_on_engine, &a, error);
 }
 static GlimsStatus api_filter_color_balance_set (GlimsEngine *e, GlimsFilterID filter,
                                                 const GlimsColorBalanceSettings *settings, char **error)
 {
   GlimsColorBalanceArgs a = { .filter = filter, .settings = settings, .error = error };
-  return glims_engine_call (e, filter_color_balance_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_color_balance_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_color_balance_set_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3272,13 +3594,17 @@ static GlimsStatus api_filter_hue_saturation_get (GlimsEngine *e, GlimsFilterID 
       (GlimsHueSaturationRange) {0};
   }
   GlimsHueSaturationArgs a = { .filter = filter, .out = out, .error = error };
-  return glims_engine_call (e, filter_hue_saturation_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_hue_saturation_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_hue_saturation_get_on_engine, &a, error);
 }
 static GlimsStatus api_filter_hue_saturation_set (GlimsEngine *e, GlimsFilterID filter,
                                                 const GlimsHueSaturationSettings *settings, char **error)
 {
   GlimsHueSaturationArgs a = { .filter = filter, .settings = settings, .error = error };
-  return glims_engine_call (e, filter_hue_saturation_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_hue_saturation_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_hue_saturation_set_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3305,13 +3631,17 @@ static GlimsStatus api_filter_levels_get (GlimsEngine *e, GlimsFilterID filter,
     out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
   }
   GlimsLevelsArgs a = { .filter = filter, .out = out, .error = error };
-  return glims_engine_call (e, filter_levels_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_levels_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_levels_get_on_engine, &a, error);
 }
 static GlimsStatus api_filter_levels_set (GlimsEngine *e, GlimsFilterID filter,
                                                 const GlimsLevelsSettings *settings, char **error)
 {
   GlimsLevelsArgs a = { .filter = filter, .settings = settings, .error = error };
-  return glims_engine_call (e, filter_levels_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_levels_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_levels_set_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3329,7 +3659,9 @@ static GlimsStatus api_image_fit_layers_to_image (GlimsEngine *e, GlimsImageID i
                                                  const GlimsItemID *layers, int32_t count, char **error)
 {
   GlimsFitLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
-  return glims_engine_call (e, image_fit_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_fit_layers_to_image,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_fit_layers_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3347,7 +3679,9 @@ static GlimsStatus api_image_rasterize_layers (GlimsEngine *e, GlimsImageID imag
                                              const GlimsItemID *layers, int32_t count, char **error)
 {
   GlimsRasterizeLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
-  return glims_engine_call (e, image_rasterize_layers_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_rasterize_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_rasterize_layers_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3368,7 +3702,9 @@ static GlimsStatus api_image_restore_layer_sources (GlimsEngine *e, GlimsImageID
   /* Reject signed negative/oversized counts before conversion or vector access. */
   if (!layers || count < 1 || count > 256) return GLIMS_STATUS_INVALID_ARGUMENT;
   GlimsRestoreLayersArgs a = { .image = image, .layers = layers, .count = count, .error = error };
-  return glims_engine_call (e, image_restore_layer_sources_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_restore_layer_sources,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_restore_layer_sources_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3437,7 +3773,9 @@ static GlimsStatus api_image_export_configured (GlimsEngine *e, GlimsImageID ima
   if (error) *error = NULL;
   if (!path || !*path || !copy_export_settings (&a.settings, settings))
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  return glims_engine_call (e, image_export_configured_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_export_configured,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_export_configured_on_engine, &a, error);
 }
 static GlimsStatus api_image_export_psd_cmyk (GlimsEngine *e, GlimsImageID image,
                                              const char *path,
@@ -3450,7 +3788,9 @@ static GlimsStatus api_image_export_psd_cmyk (GlimsEngine *e, GlimsImageID image
   if (!path || !*path || !copy_export_settings (&a.settings, settings) ||
       a.settings.format != GLIMS_EXPORT_PSD || !icc || !length || length > 4 * 1024 * 1024)
     return GLIMS_STATUS_INVALID_ARGUMENT;
-  return glims_engine_call (e, image_export_configured_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_export_psd_cmyk,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_export_configured_on_engine, &a, error);
 }
 
 static GlimsStatus api_filter_curves_set (GlimsEngine *e, GlimsFilterID filter,
@@ -3464,14 +3804,18 @@ static GlimsStatus api_filter_curves_set (GlimsEngine *e, GlimsFilterID filter,
   if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&copy, settings, sizeof copy);
   GlimsCurvesArgs a = { .filter = filter, .settings = &copy, .error = error };
-  return glims_engine_call (e, filter_curves_set_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_curves_set,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_curves_set_on_engine, &a, error);
 }
 static GlimsStatus api_filter_curves_get (GlimsEngine *e, GlimsFilterID filter,
                                          GlimsCurvesSnapshot *out, char **error)
 {
   glims_curves_snapshot_clear (out);
   GlimsCurvesArgs a = { .filter = filter, .out = out, .error = error };
-  return glims_engine_call (e, filter_curves_get_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_curves_get,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_curves_get_on_engine, &a, error);
 }
 static GlimsStatus api_filter_curves_edit (GlimsEngine *e, GlimsFilterID filter,
                                           const GlimsCurveEdit *edit,
@@ -3479,7 +3823,9 @@ static GlimsStatus api_filter_curves_edit (GlimsEngine *e, GlimsFilterID filter,
 {
   glims_curves_snapshot_clear (out);
   GlimsCurvesArgs a = { .filter = filter, .edit = edit, .out = out, .error = error };
-  return glims_engine_call (e, filter_curves_edit_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_curves_edit,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_curves_edit_on_engine, &a, error);
 }
 static GlimsStatus api_filter_curves_set_trc (GlimsEngine *e, GlimsFilterID filter,
                                              uint32_t trc, GlimsCurvesSnapshot *out,
@@ -3487,7 +3833,9 @@ static GlimsStatus api_filter_curves_set_trc (GlimsEngine *e, GlimsFilterID filt
 {
   glims_curves_snapshot_clear (out);
   GlimsCurvesArgs a = { .filter = filter, .trc = trc, .out = out, .error = error };
-  return glims_engine_call (e, filter_curves_set_trc_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_curves_set_trc,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_curves_set_trc_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3511,7 +3859,9 @@ static GlimsStatus api_filter_input_histogram (GlimsEngine *e, GlimsFilterID fil
 {
   glims_histogram_snapshot_clear (out);
   GlimsHistogramArgs a = { .filter = filter, .histogram = out, .error = error };
-  return glims_engine_call (e, filter_histogram_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_input_histogram,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_histogram_on_engine, &a, error);
 }
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
@@ -3521,7 +3871,9 @@ static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
     out->value = out->red = out->green = out->blue = out->alpha = (GlimsLevelsChannel) {0};
   }
   GlimsHistogramArgs a = { .filter = filter, .levels = out, .error = error };
-  return glims_engine_call (e, filter_levels_auto_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_filter_levels_auto,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
+                            filter_levels_auto_on_engine, &a, error);
 }
 
 /* Two ICC blobs keep their full size_t lengths across synchronous dispatch;
@@ -3561,7 +3913,9 @@ api_image_render_proofed (GlimsEngine *e, GlimsImageID image, double scale, Glim
                             proof_icc, proof_icc_length, settings, pixels, stride, error };
   if (error)
     *error = NULL;
-  return glims_engine_call (e, image_render_proofed_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_render_proofed,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_render_proofed_on_engine, &a, error);
 }
 
 typedef struct {
@@ -3586,194 +3940,17 @@ api_image_sample_color (GlimsEngine *e, GlimsImageID image, int32_t x, int32_t y
   if (! out) return GLIMS_STATUS_INVALID_ARGUMENT;
   *out = (GlimsSampledColor) {0};
   GlimsSampleColorArgs a = {image, x, y, out, error};
-  return glims_engine_call (e, image_sample_color_on_engine, &a);
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_sample_color,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_sample_color_on_engine, &a, error);
 }
 
 static const GlimsEngineAPI api_v1 = {
-  .api_version       = GLIMS_ENGINE_API_VERSION,
-  .struct_size       = sizeof (GlimsEngineAPI),
-  .start             = api_start,
-  .stop              = api_stop,
-  .free_string       = api_free_string,
-  .engine_version    = api_engine_version,
-  .image_new         = api_image_new,
-  .image_open        = api_image_open,
-  .image_close       = api_image_close,
-  .image_info        = api_image_info,
-  .image_render      = api_image_render,
-  .image_save        = api_image_save,
-  .image_export      = api_image_export,
-  .image_layers      = api_image_layers,
-  .image_undo_info   = api_image_undo_info,
-  .image_undo        = api_image_undo,
-  .image_redo        = api_image_redo,
-  .stroke_begin      = api_stroke_begin,
-  .stroke_continue   = api_stroke_continue,
-  .stroke_end        = api_stroke_end,
-  .filter_begin      = api_filter_begin,
-  .filter_set_double = api_filter_set_double,
-  .filter_commit     = api_filter_commit,
-  .filter_abort      = api_filter_abort,
-  .procedures        = api_procedures,
-  .procedure_run     = api_procedure_run,
-  .procedure_cancel  = api_procedure_cancel,
-  .select_shape      = api_select_shape,
-  .select_color      = api_select_color,
-  .select_command    = api_select_command,
-  .selection_bounds  = api_selection_bounds,
-  .selection_outline = api_selection_outline,
-  .fill              = api_fill,
-  .gradient          = api_gradient,
-  .layer_select      = api_layer_select,
-  .layer_command     = api_layer_command,
-  .layer_change      = api_layer_change,
-  .layer_move        = api_layer_move,
-  .image_crop        = api_image_crop,
-  .image_transform   = api_image_transform,
-  .layer_transform   = api_layer_transform,
-  .image_scale       = api_image_scale,
-  .image_resize_canvas = api_image_resize_canvas,
-  .layer_transform_matrix = api_layer_transform_matrix,
-  .fonts             = api_fonts,
-  .text_layer_new    = api_text_layer_new,
-  .text_layer_get    = api_text_layer_get,
-  .text_layer_set    = api_text_layer_set,
-  .paths             = api_paths,
-  .path_get          = api_path_get,
-  .path_set          = api_path_set,
-  .path_change       = api_path_change,
-  .path_delete       = api_path_delete,
-  .path_to_selection = api_path_to_selection,
-  .path_stroke       = api_path_stroke,
-  .image_copy_pixels = api_image_copy_pixels,
-  .free_pixels       = api_free_pixels,
-  .image_clear       = api_image_clear,
-  .image_paste_pixels = api_image_paste_pixels,
-  .image_save_copy    = api_image_save_copy,
-  .image_from_pixels  = api_image_from_pixels,
-  .layer_state       = api_layer_state,
-  .create_group      = api_create_group,
-  .reparent_layer    = api_reparent_layer,
-  .set_layer_locks   = api_set_layer_locks,
-  .filter_operations = api_filter_operations,
-  .filter_operation_properties = api_filter_operation_properties,
-  .filter_enum_choices = api_filter_enum_choices,
-  .filter_get_property = api_filter_get_property,
-  .filter_set_property = api_filter_set_property,
-  .image_history = api_image_history,
-  .image_history_move = api_image_history_move,
-  .image_duplicate = api_image_duplicate,
-  .layer_mask = api_layer_mask,
-  .layer_mask_add = api_layer_mask_add,
-  .layer_mask_set = api_layer_mask_set,
-  .layer_mask_apply = api_layer_mask_apply,
-  .layer_mask_to_selection = api_layer_mask_to_selection,
-  .drawable_thumbnail = api_drawable_thumbnail,
-  .image_components = api_image_components,
-  .image_set_components = api_image_set_components,
-  .image_channels = api_image_channels,
-  .channel_from_selection = api_channel_from_selection,
-  .channel_change = api_channel_change,
-  .channel_command = api_channel_command,
-  .channel_to_selection = api_channel_to_selection,
-  .image_quick_mask = api_image_quick_mask,
-  .image_set_quick_mask = api_image_set_quick_mask,
-  .drawable_effects = api_drawable_effects,
-  .effect_change = api_effect_change,
-  .effect_command = api_effect_command,
-  .image_open_layers = api_image_open_layers,
-  .image_place_link = api_image_place_link,
-  .filter_edit_begin = api_filter_edit_begin,
-  .image_color_info = api_image_color_info,
-  .image_convert_mode = api_image_convert_mode,
-  .image_convert_precision = api_image_convert_precision,
-  .path_fill = api_path_fill,
-  .path_to_vector_layer = api_path_to_vector_layer,
-  .resources = api_resources,
-  .resource_identifiers = api_resource_identifiers,
-  .resource_resolve = api_resource_resolve,
-  .image_assign_profile = api_image_assign_profile,
-  .image_convert_profile = api_image_convert_profile,
-  .image_convert_profile_rasterizing = api_image_convert_profile_rasterizing,
-  .resource_thumbnail = api_resource_thumbnail,
-  .vector_layer_style_get = api_vector_layer_style_get,
-  .vector_layer_style_set = api_vector_layer_style_set,
-  .stroke_begin_with_brush_resource = api_stroke_begin_with_brush_resource,
-
-  .fill_pattern = api_fill_pattern,
-
-
-  .gradient_resource = api_gradient_resource,
-  .image_guides    = api_image_guides,
-  .guide_put       = api_guide_put,
-  .guide_remove    = api_guide_remove,
-  .layer_source_info = api_layer_source_info,
-  .image_convert_indexed = api_image_convert_indexed,
-  .image_grid        = api_image_grid,
-  .image_set_grid    = api_image_set_grid,
-  .selection_stroke  = api_selection_stroke,
-  .image_floating_selection = api_image_floating_selection,
-  .image_paste_into  = api_image_paste_into,
-  .floating_command  = api_floating_command,
-  .selection_float   = api_selection_float,
-  .image_select_layers = api_image_select_layers,
-  .image_selected_layers = api_image_selected_layers,
-  .image_metadata_tags = api_image_metadata_tags,
-  .image_metadata_values = api_image_metadata_values,
-  .image_metadata_edit = api_image_metadata_edit,
-  .free_metadata_strings = api_free_metadata_strings,
-  .image_metadata_tag_info = api_image_metadata_tag_info,
-  .resource_create_pixels = api_resource_create_pixels,
-  .adjustment_layer_new = api_adjustment_layer_new,
-  .resource_duplicate = api_resource_duplicate,
-  .image_render_to_profile = api_image_render_to_profile,
-  .image_item_sets = api_image_item_sets,
-  .image_item_set_members = api_image_item_set_members,
-  .image_item_set_edit = api_image_item_set_edit,
-  .image_select_items = api_image_select_items,
-  .image_selected_items = api_image_selected_items,
-  .resource_create_gradient = api_resource_create_gradient,
-  .image_metadata_languages = api_image_metadata_languages,
-  .metadata_languages_free = api_metadata_languages_free,
-  .image_metadata_edit_language = api_image_metadata_edit_language,
-  .image_duplicate_layers = api_image_duplicate_layers,
-  .resource_mutation_info = api_resource_mutation_info,
-  .resource_rename = api_resource_rename,
-  .resource_delete = api_resource_delete,
-  .image_delete_layers = api_image_delete_layers,
-  .filter_begin_with_source = api_filter_begin_with_source,
-  .filter_brightness_contrast_get = api_filter_brightness_contrast_get,
-  .filter_brightness_contrast_set = api_filter_brightness_contrast_set,
-  .filter_color_balance_get = api_filter_color_balance_get,
-  .filter_color_balance_set = api_filter_color_balance_set,
-  .filter_hue_saturation_get = api_filter_hue_saturation_get,
-  .filter_hue_saturation_set = api_filter_hue_saturation_set,
-  .filter_levels_get = api_filter_levels_get,
-  .filter_levels_set = api_filter_levels_set,
-  .image_fit_layers_to_image = api_image_fit_layers_to_image,
-  .filter_curves_get = api_filter_curves_get,
-  .free_curves_snapshot = glims_curves_snapshot_free,
-  .filter_curves_edit = api_filter_curves_edit,
-  .filter_curves_set_trc = api_filter_curves_set_trc,
-  .filter_input_histogram = api_filter_input_histogram,
-  .free_histogram_snapshot = glims_histogram_snapshot_free,
-  .filter_levels_auto = api_filter_levels_auto,
-  .image_render_proofed = api_image_render_proofed,
-  .image_rasterize_layers = api_image_rasterize_layers,
-  .image_restore_layer_sources = api_image_restore_layer_sources,
-  .image_pick_layer = api_image_pick_layer,
-  .text_layer_new_captured = api_text_layer_new_captured,
-  .filter_begin_displace_with_sources = api_filter_begin_displace_with_sources,
-  .filter_begin_oilify_with_sources = api_filter_begin_oilify_with_sources,
-  .stroke_begin_with_capture_facts = api_stroke_begin_with_capture_facts,
-  .stroke_begin_v2 = api_stroke_begin_v2,
-  .stroke_continue_v2 = api_stroke_continue_v2,
-  .image_sample_color = api_image_sample_color,
-  .layer_transform_matrix_captured = api_layer_transform_matrix_captured,
-  .image_transform_preview = api_image_transform_preview,
-  .filter_curves_set = api_filter_curves_set,
-  .image_export_configured = api_image_export_configured,
-  .image_export_psd_cmyk = api_image_export_psd_cmyk,
+  .api_version = GLIMS_ENGINE_API_VERSION,
+  .struct_size = sizeof (GlimsEngineAPI),
+#define GLIMS_FACADE(name, wrapper, target, policy) .name = wrapper,
+#include "facade-operations.def"
+#undef GLIMS_FACADE
 };
 
 __attribute__ ((visibility ("default")))

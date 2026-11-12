@@ -146,6 +146,9 @@ typedef struct
   gulong     guide_removed_handler;
   gulong     guide_moved_handler;
   guint64    history_revision;
+  /* Internal admission state. No public mode is activated by this flag.
+   * Future component adoption must validate native storage before setting it. */
+  gboolean   component_document;
 } GlimsOpenImage;
 
 /* A live filter session, owned by `filters` until commit or abort.
@@ -190,6 +193,7 @@ GimpDrawable   * glims_lookup_drawable   (GlimsOpenImage *open, GlimsItemID id);
 GlimsStatus      glims_check_item_locks  (GimpItem *item, uint32_t locks, char **error);
 gint             glims_next_session_id   (GlimsEngine *engine);
 GlimsStatus      glims_edit_ready        (GlimsEngine *engine, GlimsOpenImage *open, char **error);
+gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID stroke, GimpImage *image);
 
 /* The largest pixel buffer the facade accepts, and its overflow-safe
  * width*height*4 computation (clipboard.c, floating.c). */
