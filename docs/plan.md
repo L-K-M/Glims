@@ -5387,3 +5387,15 @@ four engines pass 720 independent preservation checks and 62 hosted app
 workflow checks each; all 1,623 Swift tests pass. Native and Swift source
 reviews are clear. Final packaging/startup and hosted CI remain pending. See [cmyk-psd-import.md](cmyk-psd-import.md) for the exact
 subset and qualification limits. This does not establish Photoshop 4 parity.
+
+### Native scalar ink Curves candidate (2026-11-12)
+
+Slots 199–201 add direct selected-ink Curves and snapshot preview/Apply for
+CMYK and Multichannel. Owned sample tables preserve native precision and
+selection coverage; a calculation-kind tag separates Levels and Curves caches.
+The shared lifecycle retains source ownership, stale-state refusal and exact
+Undo behavior. Existing conformance and ink Levels/snapshot checks pass on all
+four engines. Every producer also passes 741 new literal/public-facade
+checks. Independent native source review is clear. Swift transport, hosted CI
+and the application panel are in progress. See
+[ink-curves.md](ink-curves.md); this does not claim Photoshop parity.

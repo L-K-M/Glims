@@ -104,6 +104,22 @@ final class EngineSession: @unchecked Sendable {
         var isValid: Bool { value.isValid }
     }
 
+    /// Scalar ink Curves settings: exactly 256 output samples at inputs
+    /// i/255. 0 is full ink, 1 is paper, with no RGB/TRC conversion. Samples
+    /// may rise or fall; a nonmonotone table is valid. The value owns its
+    /// samples, so constructing it copies the caller's array.
+    struct InkCurvesSettings: Equatable {
+        static let sampleCount = Int(GLIMS_CURVE_SAMPLE_COUNT)
+        static let identitySamples: [Double] = (0..<InkCurvesSettings.sampleCount).map { Double($0) / 255 }
+
+        var samples: [Double] = InkCurvesSettings.identitySamples
+
+        var isValid: Bool {
+            samples.count == Self.sampleCount
+                && samples.allSatisfy { $0.isFinite && (0...1).contains($0) }
+        }
+    }
+
     /// Facade-owned ink roles; unrelated to native engine enum values.
     enum InkRole: UInt32 {
         case unspecified = 0
@@ -128,6 +144,13 @@ final class EngineSession: @unchecked Sendable {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_levels_ink),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_levels_ink) else { return false }
         return api.image_levels_ink != nil
+    }
+
+    /// Direct committed Curves requires only slot 199, independently of preview slots 200–201.
+    var supportsInkCurves: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_curves_ink),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_curves_ink) else { return false }
+        return api.image_curves_ink != nil
     }
 
     /// Commits one scalar ink Levels edit without creating a snapshot or preview image.
@@ -503,6 +526,131 @@ final class EngineSession: @unchecked Sendable {
         }
         let status = end(engine, image, token)
         try check(status, nil)
+    }
+
+    /// Commits one scalar ink Curves edit without creating a snapshot or preview image.
+    /// Only slot 199 is used: never an ordinary RGB Curves or Levels operation.
+    func applyInkCurves(_ image: Int32, channel: Int32, settings: InkCurvesSettings) throws {
+        guard supportsInkCurves, let curves = api.image_curves_ink else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink-channel Curves.")
+        }
+        guard image > 0, channel > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose one ink channel to apply Curves.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Ink Curves needs 256 samples between 0 and 1.")
+        }
+        var nativeSettings = inkCurves(settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(curves(engine, image, channel, &nativeSettings, &error), error)
+    }
+
+    /// Ink Curves snapshots share the native begin/end baseline slots with
+    /// Levels previews, but need only the Curves render/apply slots: no ink
+    /// Levels or ordinary RGB Curves slot is required, and direct Curves does
+    /// not require these.
+    var supportsInkCurveSnapshots: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_ink_snapshot_apply_curves),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_ink_snapshot_apply_curves) else { return false }
+        return api.image_ink_snapshot_begin != nil && api.image_ink_snapshot_curves != nil
+            && api.image_ink_snapshot_apply_curves != nil && api.image_ink_snapshot_end != nil
+    }
+
+    func beginInkCurvesSnapshot(_ image: Int32, channel: Int32) throws -> UInt64 {
+        guard supportsInkCurveSnapshots, let begin = api.image_ink_snapshot_begin else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Curves previews.")
+        }
+        guard image > 0, channel > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose one ink channel to preview Curves.")
+        }
+        var token: UInt64 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = begin(engine, image, channel, &token, &error)
+        try check(status, error)
+        guard token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no ink Curves snapshot token.")
+        }
+        return token
+    }
+
+    /// Renders a preview from the frozen snapshot baseline. The returned copy is a separate
+    /// owned image the caller must close with `closeImage` when finished with it.
+    func renderInkCurvesSnapshot(_ image: Int32, token: UInt64, settings: InkCurvesSettings) throws -> Int32 {
+        guard supportsInkCurveSnapshots, let render = api.image_ink_snapshot_curves else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Curves previews.")
+        }
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid ink Curves snapshot is required.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Ink Curves needs 256 samples between 0 and 1.")
+        }
+        var nativeSettings = inkCurves(settings)
+        var copy: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = render(engine, image, token, &nativeSettings, &copy, &error)
+        try check(status, error)
+        guard copy > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no ink Curves preview image.")
+        }
+        return copy
+    }
+
+    /// Applies the snapshot Curves edit. The engine consumes the token on success; do not end it after a successful apply.
+    func applyInkCurvesSnapshot(_ image: Int32, token: UInt64, settings: InkCurvesSettings) throws {
+        guard supportsInkCurveSnapshots, let apply = api.image_ink_snapshot_apply_curves else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Curves previews.")
+        }
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid ink Curves snapshot is required.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Ink Curves needs 256 samples between 0 and 1.")
+        }
+        var nativeSettings = inkCurves(settings)
+        var error: UnsafeMutablePointer<CChar>?
+        let status = apply(engine, image, token, &nativeSettings, &error)
+        try check(status, error)
+    }
+
+    /// Discards the snapshot baseline without changing source pixels/history. Not needed after a successful apply, which consumes the token.
+    func endInkCurvesSnapshot(_ image: Int32, token: UInt64) throws {
+        guard supportsInkCurveSnapshots, let end = api.image_ink_snapshot_end else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support ink Curves previews.")
+        }
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid ink Curves snapshot is required.")
+        }
+        let status = end(engine, image, token)
+        try check(status, nil)
+    }
+
+    /// Copies the owned samples into the facade's fixed 256-Double tuple.
+    /// Validation has already guaranteed the count; copy every value whole.
+    private func inkCurves(_ settings: InkCurvesSettings) -> GlimsInkCurvesSettings {
+        var native = GlimsInkCurvesSettings()
+        native.struct_size = UInt32(MemoryLayout<GlimsInkCurvesSettings>.size)
+        settings.samples.withUnsafeBytes { source in
+            withUnsafeMutableBytes(of: &native.samples) { destination in
+                destination.copyMemory(from: source)
+            }
+        }
+        return native
     }
 
     /// How a pattern fill paints (GlimsPatternFillSettings): the pattern
