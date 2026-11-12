@@ -4686,3 +4686,12 @@ The scan now also has a 512 MiB cumulative allocation cap. Strict refusal
 of malformed/over-limit chains is deliberate; externally compressed TIFFs
 remain on the native compressor path. The pinned native and staging tests
 pass after these changes; the combined four-engine check is next.
+
+Export qualification follow-up: the full editor suite passes on all four
+engines, and the standalone bundle passes native conformance, the 60-check
+export fixture, the full editor suite and the externally driven native
+Export/Repeat Export workflow with development trees inaccessible. Real
+PNG/TIFF/JPEG screenshots exposed tight accessory margins; the form now has
+insets and shorter transparent-pixel labels. All 1,418 units and the actual
+native picker workflow pass after that layout-only change. The final
+combined package will include it.
