@@ -4971,3 +4971,42 @@ No new document mode is exposed. See [component-admission.md](component-admissio
 for boundaries and reproduced review findings. PR #228 merged at `3965d22`
 after 214 admission checks and full app checks passed on all four engines,
 with latest native CI passing and both direct-review findings closed.
+
+### Multichannel editor in progress (2026-11-12)
+
+New Image now offers Multichannel documents with 1–32 authoritative native ink
+channels at 8-bit integer, 16-bit integer or 32-bit float precision. These
+documents contain no editable RGB proxy layer. The derived preview combines
+linear RGB ink attenuation over paper and passes through the normal display ICC
+transform. It is an ink preview, not an ICC press proof. Native CMYK, Lab and
+duotone editing remain separate work.
+
+All three scalar formats now use linear native storage: intensity zero means
+full ink, one means paper. The earlier private non-linear integer prototype is
+refused rather than reinterpreted. A brush foreground maps to numeric intensity
+by `0.2126*R + 0.7152*G + 0.0722*B` over its normalized RGB values; equal RGB
+values therefore paint that exact intensity. Native Brush/Pencil/Airbrush cores
+retain mask geometry, pressure, opacity and Undo, while fixed scalar parameters
+exclude inherited blend modes, gradients and brush pixmaps. Other edits remain
+behind the explicit component operation policy until separately qualified.
+
+Channels show the persisted ink order and permit single-channel targeting,
+preview visibility, naming and ink-color edits. Combined attributes form one
+native Undo step and survive XCF reopening. Optional `glims/plate-visible`
+metadata contains one persistent byte, zero or one; absence means visible.
+Invalid metadata refuses before editing. Channel opacity is not a second ink
+coverage control. The preview cache follows both pixels and attributes and is
+discarded when native buffer identity changes or validation fails.
+
+Pinned-engine validation currently passes 3,675 public editor/native assertions,
+including 108 numeric paint cases, raw-plane preservation, exact Undo/Redo,
+derived full/half-scale display, XCF reopening, malformed-layout refusal and ink
+attributes. The actual window fixture passes at all three precisions: canvas
+painting, palette target changes, one-step Undo, Save/reopen and unsupported
+action refusal. Seven New Image settings tests pass. The first window integration
+exposed a missing component-model enum; a regression reproduced it and now passes.
+
+Work remains before this slice is qualified: four-engine rebuild/conformance and
+editor matrices, full app/unit regression, independent review, CI, stable disabled
+tool presentation, visual/performance checks and a qualified bundle. The installed
+app remains the previously qualified revision. This is not Photoshop 4 parity.

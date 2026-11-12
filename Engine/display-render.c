@@ -75,6 +75,7 @@ display_render (GlimsEngine   *engine,
   GimpImage          *image;
   GimpImageBaseType   base_type;
   GimpColorProfile   *src_profile;
+  g_autoptr(GimpColorProfile) component_profile = NULL;
   GimpColorProfile   *dest_profile = NULL;
   GimpColorProfile   *proof_profile = NULL;
   GimpColorTransform *transform = NULL;
@@ -129,7 +130,7 @@ display_render (GlimsEngine   *engine,
     return status;
 
   image     = open->image;
-  base_type = gimp_image_get_base_type (image);
+  base_type = open->component_document ? GIMP_RGB : gimp_image_get_base_type (image);
   switch (base_type)
     {
     case GIMP_RGB:
@@ -150,7 +151,8 @@ display_render (GlimsEngine   *engine,
   /* Honest source-format validation: the projection must really be an
    * alpha-carrying 4-component format for RGB/indexed or 2-component for
    * grayscale; anything else is refused rather than coerced. */
-  proj_format = gimp_projectable_get_format (GIMP_PROJECTABLE (image));
+  proj_format = open->component_document ? gegl_buffer_get_format (buffer)
+                                        : gimp_projectable_get_format (GIMP_PROJECTABLE (image));
   if (! proj_format ||
       babl_format_get_n_components (proj_format) != (gray ? 2 : 4) ||
       ! babl_format_has_alpha (proj_format))
@@ -170,9 +172,16 @@ display_render (GlimsEngine   *engine,
 
   /* Effective source profile: the image's own when it has one, the
    * builtin fallback for its model otherwise. Borrowed; not released. */
-  src_profile = gimp_image_get_color_profile (image);
-  if (! src_profile)
-    src_profile = gimp_image_get_builtin_color_profile (image);
+  if (open->component_document)
+    {
+      component_profile = gimp_color_profile_new_rgb_srgb ();
+      src_profile = component_profile;
+    }
+  else
+    {
+      src_profile = gimp_image_get_color_profile (image);
+      if (!src_profile) src_profile = gimp_image_get_builtin_color_profile (image);
+    }
   if (! src_profile)
     return glims_fail (error, NULL, "The image has no usable color profile.");
 

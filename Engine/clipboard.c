@@ -72,7 +72,9 @@ glims_image_from_pixels (GlimsEngine *engine, int32_t width, int32_t height,
   gimp_image_undo_enable (image);
   gimp_image_dirty (image, GIMP_DIRTY_IMAGE);
   gimp_image_flush (image);
-  return glims_adopt_image (engine, image, out);
+  GlimsStatus adopted = glims_adopt_image (engine, image, out);
+  if (adopted != GLIMS_STATUS_OK) g_object_unref (image);
+  return adopted;
 }
 
 GlimsStatus

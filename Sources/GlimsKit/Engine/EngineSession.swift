@@ -435,6 +435,20 @@ final class EngineSession: @unchecked Sendable {
         return image
     }
 
+    func newMultichannelImage(width: Int, height: Int, component: ColorComponent,
+                              channelCount: Int) throws -> Int32 {
+        guard (1...524_288).contains(width), (1...524_288).contains(height),
+              (1...32).contains(channelCount), [.u8, .u16, .float].contains(component) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose valid dimensions, precision and ink channel count.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_new_multichannel(engine, Int32(width), Int32(height), component.rawValue,
+                                              UInt32(channelCount), &image, &error), error)
+        return image
+    }
+
     func openImage(path: String) throws -> Int32 {
         var image: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -2462,7 +2476,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     enum ComponentMode: UInt32 {
-        case rgb = 1, grayscale, indexed
+        case rgb = 1, grayscale, indexed, multichannel
     }
 
     struct ComponentState: Equatable {
@@ -2609,7 +2623,7 @@ final class EngineSession: @unchecked Sendable {
     /// goes through `convertToIndexed`, which takes palette and dither
     /// settings; an indexed image's info still reports `.indexed`.
     enum ColorMode: UInt32 {
-        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3
+        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4
 
         /// The model's name in the window title and menus.
         var title: String {
@@ -2617,6 +2631,7 @@ final class EngineSession: @unchecked Sendable {
             case .rgb: return "RGB"
             case .grayscale: return "Grayscale"
             case .indexed: return "Indexed"
+            case .multichannel: return "Multichannel"
             case .unknown: return "Unknown"
             }
         }

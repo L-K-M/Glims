@@ -14,8 +14,8 @@ storage_precision (uint32_t storage)
 {
   switch (storage)
     {
-    case GLIMS_PLATE_STORAGE_U8: return GIMP_PRECISION_U8_NON_LINEAR;
-    case GLIMS_PLATE_STORAGE_U16: return GIMP_PRECISION_U16_NON_LINEAR;
+    case GLIMS_PLATE_STORAGE_U8: return GIMP_PRECISION_U8_LINEAR;
+    case GLIMS_PLATE_STORAGE_U16: return GIMP_PRECISION_U16_LINEAR;
     case GLIMS_PLATE_STORAGE_FLOAT: return GIMP_PRECISION_FLOAT_LINEAR;
     default: g_assert_not_reached ();
     }
@@ -50,7 +50,8 @@ glims_plate_storage_read (GimpImage *image, GlimsPlateStorage *out)
       /* Stripped image metadata must not silently turn ink planes into
        * ordinary alpha channels on the next open. */
       for (GList *iter = channels; iter; iter = iter->next)
-        if (gimp_item_parasite_find (GIMP_ITEM (iter->data), GLIMS_PLATE_UUID_PARASITE))
+        if (gimp_item_parasite_find (GIMP_ITEM (iter->data), GLIMS_PLATE_UUID_PARASITE) ||
+            gimp_item_parasite_find (GIMP_ITEM (iter->data), GLIMS_PLATE_VISIBLE_PARASITE))
           { state = GLIMS_PLATE_STORAGE_INVALID; break; }
       goto done;
     }
@@ -83,6 +84,14 @@ glims_plate_storage_read (GimpImage *image, GlimsPlateStorage *out)
         if (!memcmp (bytes, result.map.entries[index].uuid, 16)) break;
       if (index == result.map.count || result.planes[index]) goto done;
       result.planes[index] = channel;
+      result.visible[index] = TRUE;
+      parasite = gimp_item_parasite_find (item, GLIMS_PLATE_VISIBLE_PARASITE);
+      if (parasite)
+        {
+          if (!persistent_data (parasite, &bytes, &size) || size != 1 ||
+              *(const guint8 *) bytes > 1) goto done;
+          result.visible[index] = *(const guint8 *) bytes != 0;
+        }
     }
   for (guint i = 0; i < result.map.count; i++)
     if (!result.planes[i]) goto done;

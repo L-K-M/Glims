@@ -412,6 +412,11 @@ final class CanvasToolController {
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
+        guard tool.isAvailable(in: document.colorInfo.mode),
+              !(document.colorInfo.mode == .multichannel && optionDown && tool.paintTool != nil) else {
+            onStatus?("Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
+            return
+        }
         guard document.acceptsEdits || [.hand, .zoom, .eyedropper].contains(tool) else {
             onStatus?("Finish the current operation before editing the image.")
             return
@@ -1352,6 +1357,7 @@ final class CanvasToolController {
             }
             return true
         case "q":
+            guard document.colorInfo.mode != .multichannel else { return true }
             if !event.isARepeat {
                 document.setQuickMask(!(document.quickMaskState?.enabled ?? false))
             }
@@ -1373,6 +1379,9 @@ final class CanvasToolController {
             return true
         }
         if ToolID.group(forShortcut: key) != nil {
+            guard ToolID.group(forShortcut: key)?.contains(where: {
+                $0.isAvailable(in: document.colorInfo.mode)
+            }) == true else { return true }
             guard springLetters.canPress(keyCode: keyCode, isRepeat: event.isARepeat) else { return true }
             let state = ToolState.shared
             let previous = state.current, revision = state.selectionRevision

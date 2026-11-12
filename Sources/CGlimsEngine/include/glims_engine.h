@@ -961,7 +961,8 @@ typedef enum GlimsComponent {
 typedef enum GlimsComponentMode {
   GLIMS_COMPONENT_MODE_RGB     = 1,
   GLIMS_COMPONENT_MODE_GRAY    = 2,
-  GLIMS_COMPONENT_MODE_INDEXED = 3
+  GLIMS_COMPONENT_MODE_INDEXED = 3,
+  GLIMS_COMPONENT_MODE_MULTICHANNEL = 4 /* No fixed color-component bits; use image_channels. */
 } GlimsComponentMode;
 
 /* `supported` is the components the image's model actually has;
@@ -1006,7 +1007,7 @@ typedef struct GlimsChannelChange {
   uint32_t   properties;   /* GlimsChannelProperty bits */
   char       name[256];    /* UTF-8; empty restores the default name */
   bool       visible;
-  double     opacity;      /* 0 ... 1 */
+  double     opacity;      /* 0 ... 1; Multichannel ink attributes require 1. */
   GlimsColor color;
 } GlimsChannelChange;
 
@@ -1084,7 +1085,8 @@ typedef enum GlimsColorMode {
   GLIMS_COLOR_MODE_UNKNOWN   = 0,
   GLIMS_COLOR_MODE_RGB       = 1,
   GLIMS_COLOR_MODE_GRAYSCALE = 2,
-  GLIMS_COLOR_MODE_INDEXED   = 3
+  GLIMS_COLOR_MODE_INDEXED   = 3,
+  GLIMS_COLOR_MODE_MULTICHANNEL = 4
 } GlimsColorMode;
 
 /* The component type of the image's precision. */
@@ -3611,6 +3613,17 @@ typedef struct GlimsEngineAPI {
                                       const GlimsExportSettings *settings,
                                       const uint8_t *profile_icc, size_t profile_length,
                                       char **error);
+
+  /* Slot180: create a flat Multichannel document with 1..32 authoritative
+   * scalar ink planes, initially paper white. component accepts U8, U16 or
+   * FLOAT from GlimsColorComponent. Intensities are linear numeric samples:
+   * 0 is full ink and 1 is paper. UUID identities and ink definitions persist
+   * in XCF; the RGB ink preview is derived and is not an editable proxy.
+   * No document is published on failure. Clears *result and *error. */
+  GlimsStatus (*image_new_multichannel) (GlimsEngine *engine, int32_t width,
+                                         int32_t height, uint32_t component,
+                                         uint32_t channel_count,
+                                         GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

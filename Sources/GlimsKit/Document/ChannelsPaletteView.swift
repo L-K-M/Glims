@@ -52,19 +52,22 @@ final class ChannelsPaletteView: NSView {
         /// False while the document is busy or closing: the list stays
         /// readable but nothing is offered for editing.
         let acceptsEdits: Bool
+        let multichannel: Bool
 
         init(components: EngineSession.ComponentState? = nil,
              channels: [EngineSession.Channel] = [],
              activeChannel: Int32? = nil,
              hasSelectedChannels: Bool = false,
              quickMask: EngineSession.QuickMaskState? = nil,
-             acceptsEdits: Bool = false) {
+             acceptsEdits: Bool = false,
+             multichannel: Bool = false) {
             self.components = components
             self.channels = channels
             self.activeChannel = activeChannel
             self.hasSelectedChannels = hasSelectedChannels
             self.quickMask = quickMask
             self.acceptsEdits = acceptsEdits
+            self.multichannel = multichannel
         }
     }
 
@@ -131,6 +134,7 @@ final class ChannelsPaletteView: NSView {
             case .rgb: primaries = [.red, .green, .blue]
             case .grayscale: primaries = [.gray]
             case .indexed: primaries = [.indexed]
+            case .multichannel: primaries = []
             }
             var rows = primaries.filter { state.supported.contains($0.bit) }
             if state.supported.contains(alpha.bit) { rows.append(.alpha) }
@@ -561,6 +565,7 @@ final class ChannelsPaletteView: NSView {
 
     /// Reports an action to the controller.
     private func emit(_ action: Action) {
+        guard ChannelMenuPolicy.permits(action, multichannel: snapshot.multichannel) else { return }
         onAction?(action)
     }
 
@@ -668,24 +673,24 @@ final class ChannelsPaletteView: NSView {
 
     /// Where the footer stands right now, applied after every reload.
     private func refreshControls() {
-        componentStack.isHidden = snapshot.components == nil
+        componentStack.isHidden = snapshot.components == nil || snapshot.multichannel
         rule.isHidden = componentStack.isHidden
 
         let quick = snapshot.quickMask
         quickMaskButton.state = (quick?.enabled ?? false) ? .on : .off
-        quickMaskButton.isEnabled = canEdit && quick != nil
+        quickMaskButton.isEnabled = canEdit && quick != nil && !snapshot.multichannel
 
         let active = effectiveActiveChannel
         // Return to Layers works with any channel selected (also a
         // multi-selection); the single-id commands need exactly one.
-        returnToLayersButton.isEnabled = snapshot.acceptsEdits && (active != nil || snapshot.hasSelectedChannels)
-        selectionPopup.isEnabled = canEdit && active != nil
+        returnToLayersButton.isEnabled = snapshot.acceptsEdits && !snapshot.multichannel && (active != nil || snapshot.hasSelectedChannels)
+        selectionPopup.isEnabled = canEdit && active != nil && !snapshot.multichannel
 
-        buttonBar.setEnabled(canEdit, forItem: FooterCommand.new.rawValue)
-        buttonBar.setEnabled(canEdit && active != nil, forItem: FooterCommand.duplicate.rawValue)
+        buttonBar.setEnabled(canEdit && !snapshot.multichannel, forItem: FooterCommand.new.rawValue)
+        buttonBar.setEnabled(canEdit && active != nil && !snapshot.multichannel, forItem: FooterCommand.duplicate.rawValue)
         buttonBar.setEnabled(canEdit && active != nil, forItem: FooterCommand.edit.rawValue)
         let activeChannel = active.flatMap { id in snapshot.channels.first { $0.id == id } }
-        buttonBar.setEnabled(canEdit && activeChannel.map { !$0.isQuickMask } ?? false,
+        buttonBar.setEnabled(canEdit && !snapshot.multichannel && activeChannel.map { !$0.isQuickMask } ?? false,
                              forItem: FooterCommand.delete.rawValue)
     }
 

@@ -108,6 +108,9 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "multichannel", !NSApp.isRunning {
+            return EngineSmokeTestHost.run()
+        }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
             return runHostedCloseAll()
         }
@@ -161,6 +164,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "legacy-revert-load" {
                 try exerciseRevert(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (legacy Revert load)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "multichannel" {
+                try exerciseMultichannel(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (multichannel)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "filter-catalog-complete" {

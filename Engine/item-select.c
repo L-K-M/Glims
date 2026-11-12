@@ -137,6 +137,8 @@ glims_image_select_items (GlimsEngine       *engine,
   open = glims_lookup_image (engine, id);
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_document && (kind != GLIMS_ITEM_SET_CHANNEL || count != 1))
+    return GLIMS_STATUS_UNSUPPORTED;
   image = open->image;
 
   if (! kind_valid (kind))

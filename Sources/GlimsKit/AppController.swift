@@ -492,23 +492,33 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         if let newImagePanel { newImagePanel.showWindow(nil); return }
         let panel = NewImagePanel()
         panel.onCreate = { [weak self] settings in
-            self?.createDocument(width: settings.width, height: settings.height)
+            self?.createDocument(width: settings.width, height: settings.height,
+                                 kind: settings.kind, component: settings.component,
+                                 channelCount: settings.channelCount)
         }
         panel.onClose = { [weak self] in self?.newImagePanel = nil }
         newImagePanel = panel
         panel.showWindow(nil)
     }
 
-    private func createDocument(width: Int, height: Int) {
+    private func createDocument(width: Int, height: Int, kind: NewImageSettings.Kind = .rgb,
+                                component: EngineSession.ColorComponent = .u8, channelCount: Int = 4) {
         guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Creating an image", work: {
-            let result = Result { try session.newImage(width: width, height: height) }
+            let result = Result {
+                try kind == .multichannel
+                    ? session.newMultichannelImage(width: width, height: height,
+                                                   component: component, channelCount: channelCount)
+                    : session.newImage(width: width, height: height)
+            }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1
                 defer { self.advanceDocumentClosing() }
                 do {
-                    self.open(try ImageDocument(session: session, image: result.get(), name: "Untitled"))
+                    let image = try result.get()
+                    do { self.open(try ImageDocument(session: session, image: image, name: "Untitled")) }
+                    catch { try? session.closeImage(image); throw error }
                 } catch {
                     NSAlert(error: error).runModal()
                 }
@@ -1002,7 +1012,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         guard let item = sender as? NSMenuItem,
               item.identifier == MenuShortcutBridge.builtinIdentifier,
               item.action == #selector(selectToolFromMenu(_:)),
-              let tool = ToolMenuCatalog.tool(forTag: item.tag) else { return }
+              let tool = ToolMenuCatalog.tool(forTag: item.tag),
+              tool.isAvailable(in: frontDocument?.colorInfo.mode) else { return }
         ToolState.shared.select(tool)
     }
 
@@ -1077,7 +1088,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 menuItem.state = .off; return false
             }
             menuItem.state = tool == ToolState.shared.current ? .on : .off
-            return true
+            return tool.isAvailable(in: frontDocument?.colorInfo.mode)
         case #selector(selectMoveTargetFromMenu(_:)):
             guard menuItem.identifier == MenuShortcutBridge.builtinIdentifier,
                   let mode = ToolMenuCatalog.moveTarget(forTag: menuItem.tag) else {

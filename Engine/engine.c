@@ -14,6 +14,8 @@
  */
 #include "engine-private.h"
 #include "facade-policy.h"
+#include "plate-preview.h"
+#include "component-document.h"
 #include "operation-posterize.h"
 #include "operation-selective-color.h"
 #include "resource-mutation.h"
@@ -1011,6 +1013,14 @@ open_image_free (gpointer data)
   GlimsOpenImage *open = data;
 
   glims_item_sets_free (open->item_sets);
+  glims_plate_preview_free (open->component_preview);
+  for (guint i = 0; i < G_N_ELEMENTS (open->component_planes); i++)
+    if (open->component_planes[i])
+      {
+        if (open->component_updates[i])
+          g_signal_handler_disconnect (open->component_planes[i], open->component_updates[i]);
+        g_clear_object (&open->component_planes[i]);
+      }
 
   if (open->image)
     {
@@ -3943,6 +3953,34 @@ api_image_sample_color (GlimsEngine *e, GlimsImageID image, int32_t x, int32_t y
   return glims_facade_call (e, GLIMS_FACADE_OP_image_sample_color,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_sample_color_on_engine, &a, error);
+}
+
+typedef struct {
+  int32_t width, height;
+  uint32_t component, channel_count;
+  GlimsImageID *result;
+  char **error;
+} MultichannelNewArgs;
+
+static GlimsStatus
+image_new_multichannel_on_engine (GlimsEngine *e, gpointer data)
+{
+  MultichannelNewArgs *a = data;
+  return glims_image_new_multichannel (e, a->width, a->height, a->component,
+                                       a->channel_count, a->result, a->error);
+}
+
+static GlimsStatus
+api_image_new_multichannel (GlimsEngine *e, int32_t width, int32_t height,
+                            uint32_t component, uint32_t channel_count,
+                            GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  MultichannelNewArgs a = { width, height, component, channel_count, result, error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_new_multichannel,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_new_multichannel_on_engine, &a, error);
 }
 
 static const GlimsEngineAPI api_v1 = {
