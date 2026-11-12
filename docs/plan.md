@@ -5412,3 +5412,15 @@ tests pass; all four engines pass 174 Curves and 505 existing Levels workflow
 checks each. Independent panel and lifecycle reviews are clear. Hosted CI
 remains open. Smooth points and Curves Recorder commands are subsequent work;
 this is neither an installed feature nor a Photoshop-parity claim.
+
+### Smooth selected-ink Curves (candidate)
+
+The modeless Curves panel supports Smooth points, corner types, exact numeric
+input, pointer and keyboard editing, and Freehand conversion using the checked
+sampler. Completed edits preserve the original-image preview/Apply lifecycle;
+invalid drafts and excessive point counts refuse visibly. Reset and cancelled
+pointer gestures restore defined states. Parent regressions reproduced and
+fixed draft-loss, rounding and keyboard ownership defects. Pinned native UI
+passes 243 checks and the full prior Swift suite passes 1,665; additional
+pointer cancellation tests pass. Independent production review is clear.
+Four-engine UI qualification, fixture review and hosted CI remain in progress.
