@@ -78,7 +78,7 @@ final class NewImageSettingsTests: XCTestCase {
     }
 
     func testOtherModesIgnoreDormantCmykProfile() {
-        for kind in [NewImageSettings.Kind.rgb, .multichannel] {
+        for kind in [NewImageSettings.Kind.rgb, .multichannel, .lab] {
             let settings = NewImageSettings(width: "12", height: "13", kind: kind, profileICC: Data([0]))
             XCTAssertNotNil(settings)
             XCTAssertNil(settings?.profileICC)
@@ -92,5 +92,53 @@ final class NewImageSettingsTests: XCTestCase {
         for tool in ToolID.allCases {
             XCTAssertEqual(tool.isAvailable(in: .cmyk), tool.isAvailable(in: .multichannel))
         }
+    }
+
+    func testLabAllPrecisionsFixedCountNoICC() {
+        for component in [EngineSession.ColorComponent.u8, .u16, .float] {
+            let settings = NewImageSettings(width: "64", height: "48", kind: .lab,
+                                            component: component, channelCount: "1", profileICC: Data([0]))
+            XCTAssertEqual(settings?.kind, .lab)
+            XCTAssertEqual(settings?.component, component)
+            XCTAssertEqual(settings?.channelCount, 3)
+            XCTAssertNil(settings?.profileICC)
+        }
+    }
+
+    func testLabRejectsInvalidPrecisionsAndDimensions() {
+        for component in [EngineSession.ColorComponent.u32, .half, .double, .unknown] {
+            XCTAssertNil(NewImageSettings(width: "10", height: "10", kind: .lab, component: component), "\(component)")
+        }
+        for invalid in ["", "0", "-1", "1.5", "524289"] {
+            XCTAssertNil(NewImageSettings(width: invalid, height: "10", kind: .lab), invalid)
+            XCTAssertNil(NewImageSettings(width: "10", height: invalid, kind: .lab), invalid)
+        }
+    }
+
+    func testLabIgnoresDormantMalformedCountAndProfile() {
+        let settings = NewImageSettings(width: "10", height: "10", kind: .lab,
+                                        channelCount: "bogus", profileICC: Data([1, 2, 3]))
+        XCTAssertEqual(settings?.kind, .lab)
+        XCTAssertEqual(settings?.component, .u8)
+        XCTAssertEqual(settings?.channelCount, 3)
+        XCTAssertNil(settings?.profileICC)
+    }
+
+    func testKindChoicesExcludeLabByDefaultAndIncludeLabExplicitly() {
+        XCTAssertEqual(NewImageSettings.Kind.choices(), [.rgb, .multichannel, .cmyk])
+        XCTAssertEqual(NewImageSettings.Kind.choices(supportsLab: false), [.rgb, .multichannel, .cmyk])
+        XCTAssertEqual(NewImageSettings.Kind.choices(supportsLab: true), [.rgb, .multichannel, .cmyk, .lab])
+        XCTAssertEqual(NewImageSettings.Kind.choices(supportsLab: true).map(\.title),
+                       ["RGB", "Multichannel", "CMYK", "Lab (D50)"])
+    }
+
+    func testKindMappingRefusesInvalidIndexWithoutFallback() {
+        XCTAssertEqual(NewImageSettings.Kind.kind(at: 0, supportsLab: false), .rgb)
+        XCTAssertEqual(NewImageSettings.Kind.kind(at: 1, supportsLab: false), .multichannel)
+        XCTAssertEqual(NewImageSettings.Kind.kind(at: 2, supportsLab: true), .cmyk)
+        XCTAssertEqual(NewImageSettings.Kind.kind(at: 3, supportsLab: true), .lab)
+        XCTAssertNil(NewImageSettings.Kind.kind(at: 3, supportsLab: false))
+        XCTAssertNil(NewImageSettings.Kind.kind(at: -1, supportsLab: true))
+        XCTAssertNil(NewImageSettings.Kind.kind(at: 99, supportsLab: false))
     }
 }

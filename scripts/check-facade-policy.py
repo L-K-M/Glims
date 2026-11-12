@@ -32,6 +32,7 @@ def check(root=ROOT):
     component.update({'image_ink_snapshot_begin', 'image_ink_snapshot_levels', 'image_ink_snapshot_apply'})
     component.add('image_ink_channel_identity')
     component.add('image_lab_axes')
+    component.add('image_fill_lab')
     component_stroke = {'stroke_continue', 'stroke_continue_v2'}
     for name, wrapper, kind, policy in entries:
         if name in direct:

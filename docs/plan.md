@@ -1168,9 +1168,9 @@ run or push happened in this slice.
 
 ## Later, before any public release
 
-- Developer ID signing and notarization for the app, GTK3, Python and every
-  plug-in executable; third-party plug-ins probably need library validation
-  disabled. Lucerne and the other apps currently ship ad-hoc signed.
+- Qualify the app and every bundled executable with the selected signing
+  configuration. Notarization is excluded by the user's explicit request;
+  the current app and related tools use ad-hoc signatures.
 - A process for shipping engine security fixes within days. GIMP's file
   loaders had high-severity bugs in 2025 (for example CVE-2025-14424 in XCF
   and CVE-2025-10925 in ILBM).
@@ -5240,3 +5240,15 @@ compatibility checks apiece. All 1,560 Swift tests and 130 Python checks pass;
 independent native and Swift source reviews found no important issue. See
 [lab-documents.md](lab-documents.md). Hosted CI and subsequent UI qualification
 remain integration gates; this is not installed Lab editing or PS4 parity.
+
+### Native Lab channel editing candidate (2026-11-12)
+
+New Image, typed Channels and physical Fill now form the first Lab editing
+workflow, with native XCF Save/reopen and Undo/Redo. All four engines pass
+1,143 Fill and 306 policy checks; the pure kernel passes 2,998 checks in
+each optimized/sanitized run. The initial three-precision UI run passes
+after inset correction. Recovery retains explicit unsaved state, and shared
+exclusive edits retain pending input until native dirty reconciliation.
+Independent production reviews are clear. Integrated recovery, latest-source
+UI and bundle qualification remain in progress. Lab Brush, layers, conversion
+and interchange are still open; see `lab-channel-editing.md`.

@@ -1204,6 +1204,15 @@ typedef struct GlimsLabAxes {
   GlimsLabAxisInfo axes[3];  /* L*, a*, b* in that order, regardless of UI names. */
 } GlimsLabAxes;
 
+typedef struct GlimsLabFillSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;        /* Captured current handle; must remain solely selected. */
+  uint32_t role;           /* GlimsLabAxisRole, bound to the captured UUID. */
+  uint8_t uuid[16];        /* Identity within the supplied owning image. */
+  double value;           /* Physical L*, a* or b*, never normalized ink intensity. */
+  double opacity;         /* Finite [0,1], multiplied once by selection coverage. */
+} GlimsLabFillSettings;
+
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
  * GimpConvertPaletteType never crosses this boundary. */
@@ -3806,6 +3815,14 @@ typedef struct GlimsEngineAPI {
    * equality never establishes identity between unrelated documents. */
   GlimsStatus (*image_lab_axes) (GlimsEngine *engine, GlimsImageID image,
                                  GlimsLabAxes *out);
+  /* Slot192: fill one captured Lab axis, staging all affected tiles before one
+   * native Undo publication. U8/U16 values use nominal physical ranges L[0,100]
+   * and a/b[-128,127]; float permits any finite binary32-representable value.
+   * Zero coverage preserves exact bytes. Invalid input, cancellation, changed
+   * selection/identity or locks leave source pixels/history untouched. Other
+   * axes are unchanged. Ordinary and ink documents refuse. */
+  GlimsStatus (*image_fill_lab) (GlimsEngine *engine, GlimsImageID image,
+                                 const GlimsLabFillSettings *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -4,7 +4,9 @@ import Foundation
 /// the document's cached selection, channel list and edit gates; never the
 /// engine. The controller rechecks the same rules before acting.
 enum ChannelMenuPolicy {
-    static func permits(_ action: ChannelsPaletteView.Action, multichannel: Bool) -> Bool {
+    static func permits(_ action: ChannelsPaletteView.Action, multichannel: Bool, lab: Bool = false) -> Bool {
+        if lab { if case .selectLabAxis = action { return true }; return false }
+        if case .selectLabAxis = action { return false }
         guard multichannel else { return true }
         switch action {
         case .selectChannel, .setChannelVisible, .editChannel: return true

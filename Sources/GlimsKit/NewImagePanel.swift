@@ -5,11 +5,33 @@ import UniformTypeIdentifiers
 struct NewImageSettings: Equatable {
     /// The kind of image to create.
     enum Kind: Equatable {
-        case rgb, multichannel, cmyk
+        case rgb, multichannel, cmyk, lab
+
+        static func choices(supportsLab: Bool = false) -> [Kind] {
+            supportsLab ? [.rgb, .multichannel, .cmyk, .lab] : [.rgb, .multichannel, .cmyk]
+        }
+
+        static func kind(at index: Int, supportsLab: Bool) -> Kind? {
+            let choices = choices(supportsLab: supportsLab)
+            guard choices.indices.contains(index) else { return nil }
+            return choices[index]
+        }
+
+        var title: String {
+            switch self {
+            case .rgb: return "RGB"
+            case .multichannel: return "Multichannel"
+            case .cmyk: return "CMYK"
+            case .lab: return "Lab (D50)"
+            }
+        }
     }
 
     /// Precisions offered for native ink-channel images.
     static let multichannelComponents: [EngineSession.ColorComponent] = [.u8, .u16, .float]
+
+    /// Precisions offered for Lab documents.
+    static let labComponents: [EngineSession.ColorComponent] = [.u8, .u16, .float]
 
     let width: Int
     let height: Int
@@ -20,6 +42,7 @@ struct NewImageSettings: Equatable {
 
     /// RGB ignores dormant ink fields. CMYK has exactly four planes and keeps
     /// the selected immutable ICC bytes; Multichannel has a variable ink count.
+    /// Lab always has three physical axes and no supplied source profile.
     init?(width: String, height: String, kind: Kind = .rgb,
           component: EngineSession.ColorComponent = .u8, channelCount: String = "4", profileICC: Data? = nil) {
         guard let w = Int(width.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -46,6 +69,11 @@ struct NewImageSettings: Equatable {
             self.component = component
             self.channelCount = 4
             self.profileICC = profileICC
+        case .lab:
+            guard Self.labComponents.contains(component) else { return nil }
+            self.component = component
+            self.channelCount = 3
+            self.profileICC = nil
         }
     }
 }
@@ -64,15 +92,19 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     private var profileEntries: [PsdCmykProfileCatalogEntry] = []
     private var profileLoadStarted = false
     private var profileLoading = false
+    private var channelRow: NSGridRow?
     private var profileRows: [NSGridRow] = []
     private let profileLoader: any PsdCmykProfileCatalogLoading
+    private let supportsLab: Bool
     private let errorLabel = NSTextField(wrappingLabelWithString: "")
     private let createButton = NSButton(title: "Create", target: nil, action: nil)
     var onCreate: ((NewImageSettings) -> Void)?
     var onClose: (() -> Void)?
 
-    init(profileLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
+    init(profileLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader(),
+         supportsLab: Bool = false) {
         self.profileLoader = profileLoader
+        self.supportsLab = supportsLab
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 365),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         panel.title = "New Image"
@@ -89,7 +121,7 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
             field.setAccessibilityLabel(label)
             field.widthAnchor.constraint(equalToConstant: 100).isActive = true
         }
-        modePopup.addItems(withTitles: ["RGB", "Multichannel", "CMYK"])
+        modePopup.addItems(withTitles: NewImageSettings.Kind.choices(supportsLab: supportsLab).map(\.title))
         modePopup.target = self
         modePopup.action = #selector(modeChanged(_:))
         modePopup.setAccessibilityLabel("Image mode")
@@ -110,6 +142,7 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
                                      [NSTextField(labelWithString: "Source profile:"), profilePopup],
                                      [NSView(), profileButton]])
         grid.column(at: 0).xPlacement = .trailing
+        channelRow = grid.row(at: 4)
         profileRows = [grid.row(at: 5), grid.row(at: 6)]
         let buttons = NSStackView(views: [cancel, createButton])
         buttons.orientation = .horizontal
@@ -156,36 +189,41 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     func windowWillClose(_ notification: Notification) { onClose?() }
     func controlTextDidChange(_ notification: Notification) { updateValidation() }
 
-    private var kind: NewImageSettings.Kind {
-        switch modePopup.indexOfSelectedItem {
-        case 1: return .multichannel
-        case 2: return .cmyk
-        default: return .rgb
-        }
+    private var kind: NewImageSettings.Kind? {
+        NewImageSettings.Kind.kind(at: modePopup.indexOfSelectedItem, supportsLab: supportsLab)
     }
 
     private func currentSettings() -> NewImageSettings? {
+        guard let kind else { return nil }
         let index = precisionPopup.indexOfSelectedItem
-        let component = NewImageSettings.multichannelComponents.indices.contains(index)
-            ? NewImageSettings.multichannelComponents[index] : .u8
+        let components = kind == .lab ? NewImageSettings.labComponents : NewImageSettings.multichannelComponents
+        guard kind == .rgb || components.indices.contains(index) else { return nil }
+        let component = components.indices.contains(index) ? components[index] : .u8
         return NewImageSettings(width: widthField.stringValue, height: heightField.stringValue,
                                 kind: kind, component: component, channelCount: channelField.stringValue,
                                 profileICC: selectedProfile?.iccData)
     }
 
     private func updateValidation() {
-        let multichannel = kind == .multichannel
-        let cmyk = kind == .cmyk
-        precisionPopup.isEnabled = multichannel || cmyk
+        let selectedKind = kind
+        let multichannel = selectedKind == .multichannel
+        let cmyk = selectedKind == .cmyk
+        let lab = selectedKind == .lab
+        precisionPopup.isEnabled = multichannel || cmyk || lab
         channelField.isEnabled = multichannel
+        channelRow?.isHidden = lab
         if cmyk { channelField.stringValue = "4" }
         profilePopup.isEnabled = cmyk && !profileLoading
         profileButton.isEnabled = cmyk
         profileRows.forEach { $0.isHidden = !cmyk }
-        profileNote.isHidden = !cmyk
-        profileNote.stringValue = cmyk
-            ? "The source profile defines CMYK color. Preview uses relative colorimetric with black-point compensation."
-            : ""
+        profileNote.isHidden = !(cmyk || lab)
+        if cmyk {
+            profileNote.stringValue = "The source profile defines CMYK color. Preview uses relative colorimetric with black-point compensation."
+        } else if lab {
+            profileNote.stringValue = "Three physical axes: lightness (L*), a* and b*. The reference white is D50."
+        } else {
+            profileNote.stringValue = ""
+        }
         let settings = currentSettings()
         createButton.isEnabled = settings != nil
         guard settings == nil else { errorLabel.stringValue = ""; return }
@@ -194,7 +232,13 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         if !dimensionsValid { errorLabel.stringValue = "Enter whole numbers from 1 to 524288." }
         else if cmyk {
             errorLabel.stringValue = profileLoading ? "Reading installed CMYK profiles…" : "Choose a valid CMYK source profile no larger than 4 MB."
-        } else { errorLabel.stringValue = "Enter a whole number of ink channels from 1 to 32." }
+        } else if lab {
+            errorLabel.stringValue = "Choose 8-bit, 16-bit or 32-bit float Lab precision."
+        } else if multichannel {
+            errorLabel.stringValue = "Enter a whole number of ink channels from 1 to 32."
+        } else {
+            errorLabel.stringValue = "Choose an available image mode."
+        }
     }
 
     private func rebuildProfiles() {

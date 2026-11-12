@@ -19,6 +19,28 @@ final class DocumentFileStateTests: XCTestCase {
         XCTAssertEqual(state.saveRoute, .askForFile)
     }
 
+    func testRecoveredNativeCopyRequiresItsOwnSaveEvenAfterCleanReloads() {
+        var state = DocumentFileState(openedFrom: xcf)
+        state.noteExported(to: png)
+        state.noteRecovered()
+        XCTAssertNil(state.nativeURL)
+        XCTAssertNil(state.importedSourceURL)
+        XCTAssertNil(state.lastExportURL)
+        XCTAssertNil(state.revertSource)
+        XCTAssertEqual(state.saveRoute, .askForFile)
+        for dirty in [false, true, false] {
+            state.syncDirty(dirty)
+            XCTAssertTrue(state.hasUnsavedChanges)
+        }
+        state.noteExported(to: png)
+        state.syncDirty(false)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        state.noteSaved(to: otherXcf)
+        state.syncDirty(false)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertEqual(state.saveRoute, .write(otherXcf))
+    }
+
     func testAnOpenedXCFSavesBackToItself() {
         let state = DocumentFileState(openedFrom: xcf)
         XCTAssertEqual(state.nativeURL, xcf)

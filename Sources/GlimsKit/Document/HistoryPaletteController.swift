@@ -127,7 +127,7 @@ final class HistoryPaletteController: NSViewController, PaletteContent, NSTableV
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard menuItem.action == #selector(newSnapshot(_:)) else { return true }
-        return document?.acceptsEdits == true && document?.snapshotHandler != nil
+        return document?.acceptsEdits == true && document?.snapshotHandler != nil && document?.colorInfo.mode != .lab
     }
 
     func retarget(to target: ImageDocument?) {
@@ -136,7 +136,7 @@ final class HistoryPaletteController: NSViewController, PaletteContent, NSTableV
     }
 
     func reload() {
-        buttonBar.setEnabled(document?.acceptsEdits == true && document?.snapshotHandler != nil,
+        buttonBar.setEnabled(document?.acceptsEdits == true && document?.snapshotHandler != nil && document?.colorInfo.mode != .lab,
                              forItem: "snapshot")
         reloading = true
         defer { reloading = false }

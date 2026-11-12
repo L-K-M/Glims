@@ -219,6 +219,11 @@ final class EngineSession: @unchecked Sendable {
     /// Lab axes have physical color semantics, not scalar ink intensity.
     enum LabAxisRole: UInt32, CaseIterable {
         case lightness = 0, a = 1, b = 2
+
+        var title: String {
+            switch self { case .lightness: return "Lightness (L*)"; case .a: return "a*"; case .b: return "b*" }
+        }
+        var nominalRange: ClosedRange<Double> { self == .lightness ? 0...100 : -128...127 }
     }
 
     struct LabAxis: Equatable {
@@ -244,6 +249,35 @@ final class EngineSession: @unchecked Sendable {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_axes),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_axes) else { return false }
         return api.image_lab_axes != nil
+    }
+
+    var supportsLabFill: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_fill_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_fill_lab) else { return false }
+        return api.image_fill_lab != nil
+    }
+
+    /// The owning image and the captured role/UUID must still identify its sole
+    /// selected axis. Native admission checks them again before publication.
+    func fillLab(_ image: Int32, axis: LabAxis, value: Double, opacity: Double) throws {
+        guard supportsLabFill, let slot = api.image_fill_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support filling Lab channels.")
+        }
+        guard image > 0, axis.id > 0, value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              opacity.isFinite, (0...1).contains(opacity) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab channel, physical value and opacity.")
+        }
+        var settings = GlimsLabFillSettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabFillSettings>.size)
+        settings.axis = axis.id
+        settings.role = axis.role.rawValue
+        settings.uuid = axis.uuid.uuid
+        settings.value = value
+        settings.opacity = opacity
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &settings, &error), error)
     }
 
     /// Native metadata only. This does not expose Lab editing or UI creation.
@@ -3004,10 +3038,11 @@ final class EngineSession: @unchecked Sendable {
     /// goes through `convertToIndexed`, which takes palette and dither
     /// settings; an indexed image's info still reports `.indexed`.
     enum ColorMode: UInt32 {
-        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4, cmyk = 5
+        case unknown = 0, rgb = 1, grayscale = 2, indexed = 3, multichannel = 4, cmyk = 5, lab = 6
 
         /// The model's name in the window title and menus.
         var usesInkChannels: Bool { self == .multichannel || self == .cmyk }
+        var usesNativeChannels: Bool { usesInkChannels || self == .lab }
 
         var title: String {
             switch self {
@@ -3016,6 +3051,7 @@ final class EngineSession: @unchecked Sendable {
             case .indexed: return "Indexed"
             case .multichannel: return "Multichannel"
             case .cmyk: return "CMYK"
+            case .lab: return "Lab"
             case .unknown: return "Unknown"
             }
         }

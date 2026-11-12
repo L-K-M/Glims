@@ -127,9 +127,8 @@ removing a mismatched asset rather than serving it.
 The app is arm64-only because the GIMP engine it will link is built for the
 host architecture (`docs/plan.md`).
 
-**Why unsigned.** The app is ad-hoc signed (`codesign --sign -`), which Apple
-Silicon requires to launch, but carries no Developer ID signature and is not
-notarized, like the other apps in the family. A distributable build of the
-finished app needs Developer ID signing and notarization of the app, GTK3,
-Python and every plug-in executable; `docs/plan.md` lists that under work
-before any public release.
+**Signing.** The app is ad-hoc signed (`codesign --sign -`), which Apple
+Silicon requires to launch, and carries no Developer ID signature.
+Notarization is explicitly outside the user's requested scope. Bundle
+signature checks, source/license qualification and isolated launch/editing
+checks still apply to distribution artifacts.
