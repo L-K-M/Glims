@@ -31,6 +31,8 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         trackingMode: .selectOne, target: nil, action: nil)
     private weak var targetDocument: ImageDocument?
     private var shownMode: EngineSession.ColorMode?
+    private var shownLabBrush = false
+    private var shownLabSelections = false
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
     private var colorEditor: ToolColorEditorController { .shared }
@@ -84,16 +86,20 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     func retarget(to target: ImageDocument?) {
         targetDocument = target
         let mode = target?.colorInfo.mode
-        if shownMode != mode {
+        let labBrush = target?.session.supportsLabBrush == true
+        let labSelections = target?.session.supportsLabSelections == true
+        if shownMode != mode || shownLabBrush != labBrush || shownLabSelections != labSelections {
             shownMode = mode
+            shownLabBrush = labBrush
+            shownLabSelections = labSelections
             grid.slots = ToolID.paletteSlots.map { group in
                 ClassicToolGrid.Slot(tools: group.map {
                     ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,
-                        image: $0.image, isEnabled: $0.isAvailable(in: target?.colorInfo.mode))
+                        image: $0.image, isEnabled: target?.toolIsAvailable($0) ?? $0.isAvailable(in: nil))
                 })
             }
         }
-        if !ToolState.shared.current.isAvailable(in: target?.colorInfo.mode) {
+        if !(target?.toolIsAvailable(ToolState.shared.current) ?? true) {
             ToolState.shared.select(mode == .lab ? .hand : .paintbrush)
         }
         stateChanged()
@@ -136,7 +142,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
 
     @objc private func toolChosen(_ sender: ClassicToolGrid) {
         guard let id = sender.selectedToolID, let tool = ToolID(rawValue: id) else { return }
-        guard tool.isAvailable(in: targetDocument?.colorInfo.mode) else { stateChanged(); return }
+        guard targetDocument?.toolIsAvailable(tool) ?? true else { stateChanged(); return }
         ToolState.shared.select(tool)
     }
 
@@ -199,6 +205,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     /// The front document, retained (weakly) as the resource choosers'
     /// session and loading source.
     private weak var document: ImageDocument?
+    private var labValueField: NSTextField?
+    private var labValueMessage: NSTextField?
+    private var labFieldAxis: EngineSession.LabAxis?
+    private weak var labFieldOwner: ImageDocument?
 
     /// Everything the gradient rows show, so a change rebuilds them.
     private struct GradientPresentation: Equatable {
@@ -293,13 +303,16 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         // A different (or closing) document invalidates an open chooser, so
         // its late native results cannot restore a stale sheet.
         let modeChanged = document?.colorInfo.mode != target?.colorInfo.mode
+        let labTargetChanged = target?.colorInfo.mode == .lab &&
+            (target !== document || labFieldAxis?.id != target?.selectedLabAxis?.id ||
+             labFieldAxis?.uuid != target?.selectedLabAxis?.uuid)
         if target !== document {
             document = target
             if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
             if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
             rebindTransformObserver()
         }
-        if modeChanged && isViewLoaded { rebuild() }
+        if (modeChanged || labTargetChanged) && isViewLoaded { rebuild() }
     }
 
     private var targetWindowController: DocumentWindowController? {
@@ -342,6 +355,12 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     }
 
     @objc private func transformFieldChanged(_ notification: Notification) {
+        if let field = notification.object as? NSTextField, field === labValueField,
+           let owner = labFieldOwner, owner === document, let axis = labFieldAxis {
+            owner.setLabBrushDraft(field.currentEditor()?.string ?? field.stringValue, for: axis)
+            refreshLabBrushMessage()
+            return
+        }
         guard let field = notification.object as? NSTextField,
               let entry = transformFieldEntries.first(where: { $0.field === field }) else { return }
         entry.draft.update(field.currentEditor()?.string ?? field.stringValue)
@@ -374,6 +393,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         transformRefreshers.removeAll()
         transformFieldEntries.removeAll()
         transformErrorLabel = nil
+        labValueField = nil
+        labValueMessage = nil
+        labFieldAxis = nil
+        labFieldOwner = nil
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -382,6 +405,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         stack.addArrangedSubview(title)
 
         if tool.paintTool != nil {
+            if document?.colorInfo.mode == .lab { addLabBrushValueRow() }
             addPaintRows(for: tool, brush: state.brush(for: tool))
             if document?.colorInfo.mode.usesInkChannels == true {
                 stack.addArrangedSubview(hint("Paint the selected ink channel. Black adds full ink; white removes ink. Gray sets intermediate coverage."))
@@ -751,6 +775,44 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             + "layer to edit it. Escape or a click outside applies."))
     }
 
+    private func addLabBrushValueRow() {
+        guard let document, let axis = document.selectedLabAxis else {
+            stack.addArrangedSubview(hint("Select one Lab channel in Channels before painting."))
+            return
+        }
+        labFieldOwner = document
+        labFieldAxis = axis
+        let field = NSTextField(string: document.labBrushDraft(for: axis))
+        field.controlSize = .small
+        field.font = .systemFont(ofSize: 11)
+        field.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        field.setAccessibilityLabel("Lab brush \(axis.role.title) physical value")
+        labValueField = field
+        let label = axis.role == .lightness ? "L* value" : "\(axis.role.title) value"
+        stack.addArrangedSubview(row(label, field, onChange: nil))
+        let message = hint("")
+        message.setAccessibilityLabel("Lab brush value validation")
+        labValueMessage = message
+        stack.addArrangedSubview(message)
+        stack.addArrangedSubview(hint("Paint \(axis.name) using physical Lab units and the chosen brush mask. Color swatches and pen pressure do not change this value. Escape cancels a stroke."))
+        refreshLabBrushMessage()
+    }
+
+    private func refreshLabBrushMessage() {
+        guard let owner = labFieldOwner, let axis = labFieldAxis, let message = labValueMessage else { return }
+        switch owner.labBrushValue(for: axis) {
+        case .failure(let rejection):
+            message.stringValue = rejection.message
+            message.textColor = .systemRed
+        case .success:
+            let range = axis.role == .lightness ? "0 to 100" : "−128 to 127"
+            message.stringValue = owner.colorInfo.component == .float
+                ? "Nominal range: \(range). Float also accepts finite extended values."
+                : "Physical range: \(range)."
+            message.textColor = .secondaryLabelColor
+        }
+    }
+
     private func addPaintRows(for tool: ToolID, brush: EngineSession.Brush) {
         stack.addArrangedSubview(brushRow(for: tool, brush: brush))
         stack.addArrangedSubview(slider("Size", 1...PaintToolPresetLimits.maxSize, brush.size,
@@ -804,10 +866,17 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             break
         }
 
-        stack.addArrangedSubview(checkbox("Pen pressure sets size", brush.pressureSize,
-                                         readBrush: { $0.pressureSize }) { on in
+        let lab = document?.colorInfo.mode == .lab
+        let pressure = checkbox("Pen pressure sets size", !lab && brush.pressureSize,
+                                         readBrush: { !lab && $0.pressureSize }) { on in
             ToolState.shared.update(tool) { $0.pressureSize = on }
-        })
+        }
+        if lab, let pressure = pressure as? NSButton {
+            pressure.isEnabled = false
+            pressure.state = .off
+            pressure.toolTip = "Lab Brush uses the fixed size above."
+        }
+        stack.addArrangedSubview(pressure)
         stack.addArrangedSubview(presetsRow())
     }
 
@@ -950,12 +1019,16 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                                        trackingMode: .selectOne, target: nil, action: nil)
         modes.selectedSegment = Int(options.operation.rawValue)
         modes.controlSize = .small
+        modes.font = .systemFont(ofSize: 11)
         modes.toolTip = "Shift adds, Option subtracts, Shift-Option intersects when you start dragging"
         modes.setAccessibilityLabel("Selection mode")
-        stack.addArrangedSubview(row("Mode", modes) { control in
+        // Four named modes need the full palette width. A fixed label column
+        // clips Intersect in the default and narrower saved layouts.
+        actionBindings.append(ActionBinding(control: modes) { control in
             ToolState.shared.selectOptions.operation =
                 EngineSession.SelectOperation(rawValue: UInt32((control as! NSSegmentedControl).selectedSegment)) ?? .replace
         })
+        stack.addArrangedSubview(modes)
         stack.addArrangedSubview(slider("Feather", 0...100, options.feather, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.selectOptions.feather = value
         })
@@ -982,7 +1055,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
 
     // MARK: Controls
 
-    private func hint(_ text: String) -> NSView {
+    private func hint(_ text: String) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: 11)
         label.textColor = .secondaryLabelColor

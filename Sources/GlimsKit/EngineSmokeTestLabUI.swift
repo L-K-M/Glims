@@ -323,7 +323,12 @@ extension EngineSmokeTest {
                 func enabled() -> Set<String> { Set(grid.slots.flatMap(\.tools).filter(\.isEnabled).map(\.id)) }
                 expect(enabled().contains(ToolID.paintbrush.rawValue), "RGB tool grid initially enables Paintbrush")
                 tools.retarget(to: document)
-                expect(enabled() == Set([ToolID.hand.rawValue, ToolID.zoom.rawValue]), "Lab tool grid enables exactly Hand and Zoom")
+                var allowed: Set<ToolID> = [.hand, .zoom]
+                if session.supportsLabBrush { allowed.insert(.paintbrush) }
+                if session.supportsLabSelections {
+                    allowed.formUnion([.rectangleSelect, .ellipseSelect, .lasso])
+                }
+                expect(enabled() == Set(allowed.map(\.rawValue)), "Lab tool grid enables exactly the qualified Brush, selection and viewing routes")
                 tools.retarget(to: rgb)
                 expect(enabled().contains(ToolID.paintbrush.rawValue), "RGB tool grid restores Paintbrush after Lab retarget")
                 tools.retarget(to: document)

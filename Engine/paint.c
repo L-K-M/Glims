@@ -14,6 +14,8 @@
 #include "stroke-dynamics-fingerprint.h"
 #include "plate-storage.h"
 #include "component-paint.h"
+#include "lab-brush-core.h"
+#include "lab-fill.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -29,6 +31,7 @@
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-symmetry.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimppaintinfo.h"
@@ -73,7 +76,37 @@ typedef struct
   GlimsStrokeInputVersion input_version;
   guint32          last_time_ms; /* V2 only, after an entire accepted packet */
   gboolean         component_stroke;
+  gboolean         lab_stroke;
+  GlimsLabBrushSettings lab;
+  guint32          lab_storage;
 } GlimsStroke;
+
+gboolean
+glims_stroke_is_lab (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  return stroke && stroke->lab_stroke;
+}
+
+gboolean
+glims_lab_strokes_for_image (GlimsEngine *engine, GimpImage *image,
+                            GlimsLabStrokeAction action)
+{
+  GHashTableIter iter;
+  gpointer value;
+  gboolean found = FALSE;
+  g_hash_table_iter_init (&iter, engine->strokes);
+  while (g_hash_table_iter_next (&iter, NULL, &value))
+    {
+      GlimsStroke *stroke = value;
+      if (stroke->lab_stroke && stroke->image == image)
+        {
+          found = TRUE;
+          if (action == GLIMS_LAB_STROKES_CANCEL) g_hash_table_iter_remove (&iter);
+        }
+    }
+  return found;
+}
 
 /* Live source options may still sample another document on every motion.
  * Check both destination and retained sources on the serialized engine thread. */
@@ -127,7 +160,12 @@ glims_strokes_free (gpointer data)
   /* A stroke the app never ended is cancelled, leaving no undo step. */
   if (stroke->core && stroke->drawables)
     {
-      gimp_paint_core_cancel (stroke->core, stroke->drawables);
+      /* Native cancel returns before thawing an untouched drawable. */
+      if (stroke->lab_stroke &&
+          (stroke->core->x1 == stroke->core->x2 || stroke->core->y1 == stroke->core->y2))
+        gimp_paint_core_finish (stroke->core, stroke->drawables, FALSE);
+      else
+        gimp_paint_core_cancel (stroke->core, stroke->drawables);
       gimp_paint_core_cleanup (stroke->core);
     }
 
@@ -829,6 +867,166 @@ glims_stroke_begin_v2 (GlimsEngine                *engine,
   return status;
 }
 
+static GlimsStatus
+lab_stroke_target_ready (GlimsEngine *engine, GlimsStroke *stroke, char **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, gimp_image_get_id (stroke->image));
+  GlimsPlateStorage storage;
+  if (!open || open->image != stroke->image ||
+      !glims_plate_storage_read_open (open, &storage) ||
+      storage.map.mode != GLIMS_PLATE_MODE_LAB || storage.map.count != 3 ||
+      storage.map.storage != stroke->lab_storage || stroke->lab.role > GLIMS_LAB_AXIS_B ||
+      GIMP_DRAWABLE (storage.planes[stroke->lab.role]) != stroke->drawable ||
+      memcmp (storage.map.entries[stroke->lab.role].uuid, stroke->lab.uuid, 16))
+    {
+      if (error) *error = g_strdup ("The Lab brush target changed. The stroke was cancelled.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  GList *selected = gimp_image_get_selected_channels (stroke->image);
+  if (!selected || selected->next || selected->data != stroke->drawable)
+    {
+      if (error) *error = g_strdup ("The selected Lab axis changed. The stroke was cancelled.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (!gimp_image_undo_is_enabled (stroke->image) || gimp_image_get_undo_group_count (stroke->image))
+    return GLIMS_STATUS_BUSY;
+  return glims_check_item_locks (GIMP_ITEM (stroke->drawable), GLIMS_LOCK_PIXELS, error);
+}
+
+GlimsStatus
+glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  if (!stroke) return GLIMS_STATUS_NOT_FOUND;
+  if (!stroke->lab_stroke) return GLIMS_STATUS_UNSUPPORTED;
+  GimpImage *image = g_object_ref (stroke->image);
+  g_hash_table_remove (engine->strokes, GINT_TO_POINTER (id));
+  gimp_image_flush (image);
+  g_object_unref (image);
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
+                        GlimsResourceID brush_id, const GlimsLabBrushSettings *settings,
+                        const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out || !settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  const GlimsLabBrushSettings lab = *settings;
+  if (lab.axis <= 0 || lab.role > GLIMS_LAB_AXIS_B ||
+      !isfinite (lab.value) || !isfinite (lab.opacity) || lab.opacity < 0 || lab.opacity > 1 ||
+      !isfinite (lab.size) || lab.size < 1 || lab.size > 10000 ||
+      !isfinite (lab.hardness) || lab.hardness < 0 || lab.hardness > 1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, image_id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (!gimp_image_undo_is_enabled (open->image) || gimp_image_get_undo_group_count (open->image))
+    return GLIMS_STATUS_BUSY;
+  GlimsPlateStorage storage;
+  if (!glims_plate_storage_read_open (open, &storage) ||
+      storage.map.mode != GLIMS_PLATE_MODE_LAB || storage.map.count != 3)
+    return GLIMS_STATUS_UNSUPPORTED;
+  GimpDrawable *drawable = GIMP_DRAWABLE (storage.planes[lab.role]);
+  if (gimp_item_get_id (GIMP_ITEM (drawable)) != lab.axis ||
+      memcmp (storage.map.entries[lab.role].uuid, lab.uuid, 16))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GList *selected = gimp_image_get_selected_channels (open->image);
+  if (!selected || selected->next || selected->data != drawable)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  GimpSymmetry *symmetry = gimp_image_get_active_symmetry (open->image);
+  if (!symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY)
+    return GLIMS_STATUS_UNSUPPORTED;
+  const GlimsLabRole roles[] = { GLIMS_LAB_ROLE_L, GLIMS_LAB_ROLE_A, GLIMS_LAB_ROLE_B };
+  GlimsLabFormat format;
+  switch (storage.map.storage)
+    {
+    case GLIMS_PLATE_STORAGE_U8: format = GLIMS_LAB_FORMAT_U8; break;
+    case GLIMS_PLATE_STORAGE_U16: format = GLIMS_LAB_FORMAT_U16; break;
+    case GLIMS_PLATE_STORAGE_FLOAT: format = GLIMS_LAB_FORMAT_FLOAT; break;
+    default: return GLIMS_STATUS_UNSUPPORTED;
+    }
+  bool ignored;
+  if (!glims_lab_fill_row (roles[lab.role], format, lab.value, lab.opacity,
+                            0, NULL, NULL, NULL, &ignored))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStrokeSampleV2 *samples = NULL;
+  gsize count = 0;
+  status = read_stroke_packet_v2 (packet, TRUE, 0, &samples, &count, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  GimpBrush *brush = NULL;
+  if (brush_id) status = glims_lookup_brush (engine, brush_id, &brush);
+  else brush = gimp_context_get_brush (gimp_get_user_context (engine->gimp));
+  GimpPaintInfo *info = glims_paint_info_for_tool (engine->gimp, GLIMS_PAINT_PAINTBRUSH);
+  if (status != GLIMS_STATUS_OK || !brush || !info)
+    {
+      g_free (samples);
+      return status != GLIMS_STATUS_OK ? status :
+        glims_fail (error, NULL, "Choose an available mask brush before painting.");
+    }
+  GlimsBrushSettings geometry = { .struct_size = sizeof geometry,
+    .size = lab.size, .opacity = lab.opacity, .tool = GLIMS_PAINT_PAINTBRUSH,
+    .hardness = lab.hardness, .rate = -1, .flow = -1, .exposure = -1 };
+  GlimsStroke *stroke = g_new0 (GlimsStroke, 1);
+  stroke->image = g_object_ref (open->image);
+  stroke->drawable = g_object_ref (drawable);
+  stroke->lab_stroke = TRUE;
+  stroke->component_stroke = TRUE;
+  stroke->lab = lab;
+  stroke->lab_storage = storage.map.storage;
+  stroke->input_version = GLIMS_STROKE_INPUT_V2;
+  stroke->last_time_ms = samples[0].time_ms;
+  stroke->options = glims_make_paint_options (engine->gimp, info, &geometry, brush);
+  g_object_set (stroke->options, "use-applicator", FALSE,
+    "brush-spacing", .15, "brush-angle", 0.0, "brush-aspect-ratio", 0.0,
+    "brush-hardness", lab.hardness, "brush-force", .5,
+    "brush-lock-to-view", FALSE, "application-mode", GIMP_PAINT_CONSTANT,
+    "expand-use", FALSE, NULL);
+  stroke->options->jitter_options->use_jitter = FALSE;
+  stroke->options->smoothing_options->use_smoothing = FALSE;
+  gimp_paint_options_enable_dynamics (stroke->options, FALSE);
+  gimp_context_define_property (GIMP_CONTEXT (stroke->options), GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
+  gimp_context_set_paint_mode (GIMP_CONTEXT (stroke->options), GIMP_LAYER_MODE_NORMAL);
+  stroke->core = glims_lab_brush_core_new (roles[lab.role], format, lab.value, lab.opacity);
+  stroke->drawables = g_list_prepend (NULL, drawable);
+  GimpCoords coords = to_coords_v2 (&samples[0]);
+  g_free (samples);
+  GError *native_error = NULL;
+  if (!gimp_paint_core_start (stroke->core, stroke->drawables, stroke->options, &coords, &native_error))
+    {
+      /* Start did not reach native preview freeze. Cleanup without a thaw. */
+      g_list_free (stroke->drawables);
+      stroke->drawables = NULL;
+      gimp_paint_core_cleanup (stroke->core);
+      glims_strokes_free (stroke);
+      return glims_fail (error, native_error, "The Lab brush stroke could not start.");
+    }
+  stroke->core->last_coords = coords;
+  gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options,
+                         GIMP_PAINT_STATE_INIT, stroke->last_time_ms);
+  gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options,
+                         GIMP_PAINT_STATE_MOTION, stroke->last_time_ms);
+  const char *failure = glims_lab_brush_core_error (stroke->core);
+  if (failure)
+    {
+      if (error) *error = g_strdup (failure);
+      glims_strokes_free (stroke);
+      gimp_image_flush (open->image);
+      return GLIMS_STATUS_FAILED;
+    }
+  gint id = glims_next_session_id (engine);
+  g_hash_table_insert (engine->strokes, GINT_TO_POINTER (id), stroke);
+  *out = id;
+  gimp_image_flush (open->image);
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_stroke_continue (GlimsEngine            *engine,
                        GlimsStrokeID           id,
@@ -877,12 +1075,30 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
   if (!stroke) return GLIMS_STATUS_NOT_FOUND;
   if (stroke->input_version != GLIMS_STROKE_INPUT_V2) return GLIMS_STATUS_INVALID_ARGUMENT;
   GlimsStatus status = read_stroke_packet_v2 (packet, FALSE, stroke->last_time_ms, &samples, &count, error);
-  if (status != GLIMS_STATUS_OK || !count) return status;
+  if (status != GLIMS_STATUS_OK) return status;
+  if (stroke->lab_stroke)
+    {
+      status = lab_stroke_target_ready (engine, stroke, error);
+      if (status != GLIMS_STATUS_OK)
+        {
+          g_free (samples);
+          glims_stroke_cancel_lab (engine, id);
+          return status;
+        }
+    }
+  if (!count) return GLIMS_STATUS_OK;
   for (gsize i = 0; i < count; i++)
     {
       GimpCoords coords = to_coords_v2 (&samples[i]);
       gimp_paint_core_interpolate (stroke->core, stroke->drawables, stroke->options,
                                    &coords, samples[i].time_ms);
+      if (stroke->lab_stroke && glims_lab_brush_core_error (stroke->core))
+        {
+          if (error) *error = g_strdup (glims_lab_brush_core_error (stroke->core));
+          g_free (samples);
+          glims_stroke_cancel_lab (engine, id);
+          return GLIMS_STATUS_FAILED;
+        }
     }
   stroke->last_time_ms = samples[count - 1].time_ms;
   g_free (samples);
@@ -899,6 +1115,15 @@ glims_stroke_end (GlimsEngine   *engine,
   if (! stroke)
     return GLIMS_STATUS_NOT_FOUND;
 
+  if (stroke->lab_stroke)
+    {
+      GlimsStatus status = lab_stroke_target_ready (engine, stroke, NULL);
+      if (status != GLIMS_STATUS_OK || glims_lab_brush_core_error (stroke->core))
+        {
+          glims_stroke_cancel_lab (engine, id);
+          return status != GLIMS_STATUS_OK ? status : GLIMS_STATUS_FAILED;
+        }
+    }
   gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options,
                          GIMP_PAINT_STATE_FINISH, 0);
   gimp_paint_core_finish (stroke->core, stroke->drawables, TRUE);

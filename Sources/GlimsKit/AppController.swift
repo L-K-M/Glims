@@ -1045,7 +1045,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
               item.identifier == MenuShortcutBridge.builtinIdentifier,
               item.action == #selector(selectToolFromMenu(_:)),
               let tool = ToolMenuCatalog.tool(forTag: item.tag),
-              tool.isAvailable(in: frontDocument?.colorInfo.mode) else { return }
+              frontDocument?.toolIsAvailable(tool) ?? true else { return }
         ToolState.shared.select(tool)
     }
 
@@ -1120,7 +1120,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 menuItem.state = .off; return false
             }
             menuItem.state = tool == ToolState.shared.current ? .on : .off
-            return tool.isAvailable(in: frontDocument?.colorInfo.mode)
+            return frontDocument?.toolIsAvailable(tool) ?? true
         case #selector(selectMoveTargetFromMenu(_:)):
             guard menuItem.identifier == MenuShortcutBridge.builtinIdentifier,
                   let mode = ToolMenuCatalog.moveTarget(forTag: menuItem.tag) else {
