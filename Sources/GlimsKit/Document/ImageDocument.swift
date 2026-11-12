@@ -88,6 +88,10 @@ final class ImageDocument {
         /// An explicit source channel (Channel ▸ To Selection). It may differ
         /// from the active paint target, which is never substituted.
         case channel(Int32)
+        /// A nil identity exists only between live admission and the ordered
+        /// native read. Settled replay contexts always retain the validated
+        /// identity of this document's explicit channel.
+        case ink(channel: Int32, identity: RecorderInkIdentity?)
         case unavailable(String)
     }
 
@@ -333,6 +337,7 @@ final class ImageDocument {
     /// refused — the preview owns its drawable. Set by the controller.
     var filterPreviewIsOpen = false
     private var inkLevelsToken: UInt64?
+    private var inkLevelsRecordingTarget: (channel: Int32, identity: RecorderInkIdentity?)?
     private var inkLevelsStartIsPending = false
     private var inkLevelsCleanups = 0
     /// Queued engine commands whose result becomes or replaces the paint
@@ -2227,7 +2232,6 @@ final class ImageDocument {
         if let reason = inkEditRefusal(channel: channel) { refuse(reason); return false }
         let admission = InkEditAdmission()
         var rejection = "Wait for the current image operation to finish."
-        let unsupported = "Ink-channel fills, clears and inversions cannot be replayed by Recorder yet."
         let accepted = enqueueExclusive(label: settings.operation.title, admission: {
             if let reason = self.inkEditRefusal(channel: channel) {
                 rejection = reason
@@ -2238,7 +2242,7 @@ final class ImageDocument {
             // No reservation on a refused admission or a cancelled sheet.
             // Counted work already holds the image if a Recorder observer closes it.
             if self.recorder.isRecording {
-                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                do { admission.capture = try self.reserveRecording(context: .ink(channel: channel, identity: nil)) }
                 catch { admission.error = error }
             }
         }, rejected: {
@@ -2250,7 +2254,10 @@ final class ImageDocument {
                 try session.editInk(image, channel: channel, settings: settings)
             }
             let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
-                .failure(RecorderReplayError(message: unsupported))
+                if case .unavailable(let reason) = confirmed.binding {
+                    return .failure(RecorderReplayError(message: reason))
+                }
+                return .success(.editInk(settings))
             }
             self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
             self.dispatchReadWhenReady {
@@ -4730,12 +4737,19 @@ final class ImageDocument {
         inkLevelsStartIsPending = true
         EngineActivity.shared.beginTransformPreview()
         enqueue(on: inputQueue) { [session, image] in
-            let result = Result { try session.beginInkLevelsSnapshot(image, channel: channel) }
+            let result = Result { () throws -> (token: UInt64, identity: RecorderInkIdentity?) in
+                let identity = session.supportsInkChannelIdentity
+                    ? try RecorderInkIdentity(session.inkChannelIdentity(image, channel: channel)) : nil
+                return (try session.beginInkLevelsSnapshot(image, channel: channel), identity)
+            }
             DispatchQueue.main.async {
                 self.inkLevelsStartIsPending = false
-                if case .success(let token) = result { self.inkLevelsToken = token }
+                if case .success(let captured) = result {
+                    self.inkLevelsToken = captured.token
+                    self.inkLevelsRecordingTarget = (channel, captured.identity)
+                }
                 EngineActivity.shared.endTransformPreview()
-                completion(result)
+                completion(result.map(\.token))
             }
         }
     }
@@ -4776,7 +4790,10 @@ final class ImageDocument {
     /// Clearing the main-actor token also prevents late pixels from reviving it.
     func endInkLevelsPreview(_ token: UInt64,
                              completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
-        if inkLevelsToken == token { inkLevelsToken = nil }
+        if inkLevelsToken == token {
+            inkLevelsToken = nil
+            inkLevelsRecordingTarget = nil
+        }
         inkLevelsCleanups += 1
         pendingWork += 1
         // Order after work already queued. Any request deferred by another
@@ -4797,17 +4814,22 @@ final class ImageDocument {
     func applyInkLevelsPreview(_ token: UInt64, settings: EngineSession.InkLevelsSettings,
                                completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
         guard settings.isValid, filterPreviewIsOpen, inkLevelsToken == token,
+              let original = inkLevelsRecordingTarget,
               !refuseWhileEditingUnavailable(forPreviewWork: true) else {
             completion(.failure(DocumentError.busy))
             return false
         }
         let admission = InkEditAdmission()
-        let unsupported = "Ink-channel Levels cannot be replayed by Recorder yet."
         let accepted = enqueueExclusive(label: "Applying Levels", admission: {
             self.filterPreviewIsOpen && self.inkLevelsToken == token && !self.isClosing
         }, didAdmit: {
             if self.recorder.isRecording {
-                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                do {
+                    let context: RecorderContext = original.identity.map {
+                        .ink(channel: original.channel, identity: $0)
+                    } ?? .unavailable("This engine cannot capture the original ink identity for Recorder.")
+                    admission.capture = try self.reserveRecording(context: context)
+                }
                 catch { admission.error = error }
             }
         }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
@@ -4817,11 +4839,17 @@ final class ImageDocument {
                 try session.applyInkLevelsSnapshot(image, token: token, settings: settings)
             }
             let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
-                .failure(RecorderReplayError(message: unsupported))
+                if case .unavailable(let reason) = confirmed.binding {
+                    return .failure(RecorderReplayError(message: reason))
+                }
+                return .success(.applyInkLevels(settings))
             }
             self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
             self.dispatchReadWhenReady {
-                if case .success = result, self.inkLevelsToken == token { self.inkLevelsToken = nil }
+                if case .success = result, self.inkLevelsToken == token {
+                    self.inkLevelsToken = nil
+                    self.inkLevelsRecordingTarget = nil
+                }
                 if !self.isClosing {
                     do { try self.reload() }
                     catch { self.onError?("The ink channel state could not be refreshed: \(error)") }
@@ -5858,6 +5886,16 @@ final class ImageDocument {
             case .unavailable(let reason): throw RecorderFileError.invalid(reason)
             case .layer(let symbol): contexts[row.ordinal] = .layer(try layer(symbol))
             case .channel(let symbol): contexts[row.ordinal] = .channel(try channel(symbol))
+            case .ink(let symbol, let recorded):
+                let id = try channel(symbol)
+                let destination = try RecorderInkIdentity(session.inkChannelIdentity(image, channel: id))
+                guard recorded.permitsExplicitBinding(to: destination) else {
+                    throw RecorderInstallError.unavailableTarget(recorded.targetTitle)
+                }
+                // Choices came from explicit installation. Retain this
+                // document's UUID for later fresh replay admission; never
+                // pretend the recording's source UUID identifies this image.
+                contexts[row.ordinal] = .ink(channel: id, identity: destination)
             case .context(let saved):
                 var masks: [Int32: EngineSession.MaskState] = [:]
                 for mask in saved.masks {
@@ -6001,6 +6039,12 @@ final class ImageDocument {
                     guard channels.contains(where: { $0.id == channel }) else {
                         throw RecorderReplayError(message: "The recorded source channel is no longer in this image.")
                     }
+                case .ink(let channel, let identity):
+                    guard identity != nil, colorInfo.mode.usesInkChannels,
+                          selectedChannelIDs == [channel], activeChannel == channel,
+                          channels.contains(where: { $0.id == channel && !$0.isQuickMask }) else {
+                        throw RecorderReplayError(message: "Select the bound ink channel before replaying this command.")
+                    }
                 case .target:
                     guard captureRecorderContext(for: step.command).map({ Self.recorderContextsMatch($0, context) }) == true else {
                         throw RecorderReplayError(message: "The recorded layer, channel, mask or Quick Mask target has changed.")
@@ -6075,6 +6119,8 @@ final class ImageDocument {
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .channel(let channel)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
+                } else if case .ink(let channel, _)? = context {
+                    try step.command.apply(session: session, image: image, channel: channel)
                 } else {
                     try step.command.apply(session: session, image: image)
                 }
@@ -6108,8 +6154,8 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .channelToSelection: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .completeStroke: return true
+        case .channelToSelection, .editInk, .applyInkLevels: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke: return true
         default: return false
         }
     }
@@ -6117,6 +6163,14 @@ final class ImageDocument {
     private func captureRecorderContext(for command: SemanticImageCommand, explicitLayer: Int32? = nil,
                                         explicitChannel: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
+        switch command {
+        case .editInk, .applyInkLevels:
+            guard let channel = explicitChannel, channel > 0 else {
+                return .unavailable("The explicit ink channel was unavailable when this edit was recorded.")
+            }
+            return .ink(channel: channel, identity: nil)
+        default: break
+        }
         if case .layerProperties = command {
             guard let layer = explicitLayer, layer > 0 else {
                 return .unavailable("The explicit layer could not be identified when this change was recorded.")
@@ -6203,6 +6257,18 @@ final class ImageDocument {
 
     private nonisolated static func requireRecorderContext(_ context: RecorderContext,
                                                            session: EngineSession, image: Int32) throws {
+        if case .ink(let channel, let expected) = context {
+            guard channel > 0, let expected,
+                  try session.selectedItems(.channel, image: image) == [channel],
+                  try !session.quickMask(image).enabled else {
+                throw RecorderReplayError(message: "Select the bound ink channel before replaying this command.")
+            }
+            let actual = try RecorderInkIdentity(session.inkChannelIdentity(image, channel: channel))
+            guard expected.matchesInOwningDocument(actual) else {
+                throw RecorderReplayError(message: "The bound ink channel's identity or color mode has changed.")
+            }
+            return
+        }
         if case .layer(let layer) = context {
             guard layer > 0, try session.layers(image).contains(where: { $0.id == layer }) else {
                 throw RecorderReplayError(message: "The recorded layer no longer belongs to this native image.")
@@ -6253,7 +6319,7 @@ final class ImageDocument {
         var targets: [RecorderRuntimeTarget] = []
         switch context {
         case .layer(let layer)?: targets = [.layer(layer)]
-        case .channel(let channel)?: targets = [.channel(channel)]
+        case .channel(let channel)?, .ink(let channel, _)?: targets = [.channel(channel)]
         case .target(let target)?:
             targets = target.layers.map { .layer($0) } + target.channels.map { .channel($0) }
             switch target.target {
@@ -6275,7 +6341,15 @@ final class ImageDocument {
     private nonisolated static func confirmRecordingContext(_ context: RecorderContext?,
                                                             session: EngineSession, image: Int32) -> RecorderContext? {
         guard let context else { return nil }
-        do { try requireRecorderContext(context, session: session, image: image); return context }
+        do {
+            let confirmed: RecorderContext
+            if case .ink(let channel, nil) = context {
+                confirmed = .ink(channel: channel,
+                    identity: try RecorderInkIdentity(session.inkChannelIdentity(image, channel: channel)))
+            } else { confirmed = context }
+            try requireRecorderContext(confirmed, session: session, image: image)
+            return confirmed
+        }
         catch {
             // Capture is observational: an unavailable binding may refuse later
             // replay, but must not change the admitted live edit's behavior.
@@ -6383,6 +6457,9 @@ final class ImageDocument {
         case .unavailable(let reason): return .unavailable(reason)
         case .layer(let layer): return .layer(try symbol(.layer(layer)))
         case .channel(let channel): return .channel(try symbol(.channel(channel)))
+        case .ink(let channel, let identity):
+            guard let identity else { throw RecorderReplayError(message: "The original ink identity was unavailable.") }
+            return .ink(symbol: try symbol(.channel(channel)), identity: identity)
         case .target(let expected):
             let target: RecorderBindingDescription.Target
             switch expected.target {
@@ -6553,13 +6630,36 @@ final class ImageDocument {
         // may have changed cached targets or started another operation.
         guard admission?() != false else { rejected(); return false }
         pendingWork += 1
+        // An idle close retry may run before this command's cache refresh.
+        // Keep accepted mutations visibly unsaved from before busy observers
+        // until native dirty state has been reconciled. A nested activity can
+        // defer that read beyond the original exclusive completion.
+        let changesImage = effect == .changesImage
+        if changesImage { pendingInput += 1 }
         let accepted = EngineActivity.shared.perform(label: label, document: self,
                                                      didAdmit: didAdmit, work: work) {
-            self.jobDidFinish(input: false)
+            if changesImage {
+                EngineActivity.shared.whenReadyForSynchronousRead {
+                    if !self.isClosing {
+                        do {
+                            self.info = try self.session.info(self.image)
+                            self.fileState.syncDirty(self.info.isDirty)
+                        } catch {
+                            // An unreadable result cannot prove that accepted
+                            // edits are safe to discard without a Save decision.
+                            self.fileState.syncDirty(true)
+                            self.onError?("The edited image state could not be refreshed: \(error)")
+                        }
+                    }
+                    self.jobDidFinish(input: true)
+                }
+            } else {
+                self.jobDidFinish(input: false)
+            }
         }
         if accepted && strokeIsActive && effect != .readsPixels { strokeRecordingInterleaved = true }
         if !accepted {
-            jobDidFinish(input: false)
+            jobDidFinish(input: changesImage)
             rejected()
         }
         return accepted

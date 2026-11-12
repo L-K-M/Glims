@@ -1,8 +1,9 @@
 import CoreGraphics
 import Foundation
 
-/// Owned file values. File UUIDs identify recordings and symbols only. No
-/// native identity, executable closure or runtime epoch can enter this model.
+/// Owned file values. UUIDs identify recordings, symbols and validated,
+/// document-scoped persisted ink identity. They never establish a global
+/// cross-image binding or carry native runtime IDs, closures or epochs.
 struct RecorderFileValue: Equatable {
     struct Origin: Equatable {
         let imageLabel: String
@@ -175,6 +176,39 @@ enum RecorderFileCommand: Equatable {
     /// Glims' owned interpolation tags, not native enum ordinals.
     enum LayerInterpolation: String { case none, linear, cubic, noHalo, loHalo }
 
+    /// Native scalar edits use paper intensity: zero is full ink, one paper.
+    struct InkEdit: Equatable {
+        enum Operation: String { case fill, clear, invert }
+        let operation: Operation
+        let intensity: Double
+        let opacity: Double
+
+        var isValid: Bool {
+            guard [intensity, opacity].allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return false }
+            switch operation {
+            case .fill: return true
+            case .clear: return intensity == 1 && opacity == 1
+            case .invert: return intensity == 0 && opacity == 1
+            }
+        }
+    }
+
+    /// One ink plane's paper-intensity Levels mapping, with no RGB/TRC tags.
+    struct InkLevels: Equatable {
+        let lowInput: Double
+        let highInput: Double
+        let gamma: Double
+        let lowOutput: Double
+        let highOutput: Double
+        let clampInput: Bool
+        let clampOutput: Bool
+
+        var isValid: Bool {
+            [lowInput, highInput, lowOutput, highOutput].allSatisfy({ $0.isFinite && (0...1).contains($0) }) &&
+                gamma.isFinite && (0.1...10).contains(gamma)
+        }
+    }
+
     /// Complete committed Levels values: an owned TRC tag, both clamps and
     /// all five named channels, each with the five native fields. Equal or
     /// inverted endpoints are valid native mappings.
@@ -220,6 +254,8 @@ enum RecorderFileCommand: Equatable {
     /// The explicit layer is the record's `layer` binding; the command
     /// carries no native filter/effect identity.
     case applyLevels(Levels)
+    case editInk(InkEdit)
+    case applyInkLevels(InkLevels)
     /// A newly applied Curves adjustment with its whole accepted settings:
     /// the owned TRC tag and all five named channels, each preserving both
     /// curve representations and the HDR bypass flag. The explicit layer is
@@ -245,7 +281,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

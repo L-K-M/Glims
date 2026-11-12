@@ -152,6 +152,23 @@ enum RecorderFileSemanticBridge {
         case .applyColorBalance(let value): return .applyColorBalance(try value.settings())
         case .applyHueSaturation(let value): return .applyHueSaturation(try value.settings())
         case .applyBrightnessContrast(let value): return .applyBrightnessContrast(try value.settings())
+        case .editInk(let value):
+            let operation: EngineSession.InkEditOperation
+            switch value.operation {
+            case .fill: operation = .fill
+            case .clear: operation = .clear
+            case .invert: operation = .invert
+            }
+            let settings = EngineSession.InkEdit(operation: operation, intensity: value.intensity, opacity: value.opacity)
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink edit has invalid settings.") }
+            return .editInk(settings)
+        case .applyInkLevels(let value):
+            let settings = EngineSession.InkLevelsSettings(
+                value: .init(lowInput: value.lowInput, highInput: value.highInput, gamma: value.gamma,
+                             lowOutput: value.lowOutput, highOutput: value.highOutput),
+                clampInput: value.clampInput, clampOutput: value.clampOutput)
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Levels adjustment has invalid settings.") }
+            return .applyInkLevels(settings)
         case .completeStroke(let value): return .completeStroke(value)
         }
     }

@@ -7,6 +7,7 @@ extension RecorderFileCodec {
         }
         var pointCount = 0
         var fileVersion = version
+        var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         for record in value.records {
             switch record.outcome {
             case .success(.selectionShape(.polygon(let points), _), _):
@@ -41,6 +42,14 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, hueSaturationVersion)
             case .success(.applyBrightnessContrast, _):
                 fileVersion = max(fileVersion, brightnessContrastVersion)
+            case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
+                fileVersion = max(fileVersion, inkVersion)
+                if case .ink(let symbol, let identity) = binding {
+                    if let seen = inkIdentities[symbol], seen != identity {
+                        throw RecorderFileError.invalid("Ink identity is inconsistent across records.")
+                    }
+                    inkIdentities[symbol] = identity
+                }
             default: break
             }
         }
@@ -188,6 +197,16 @@ extension RecorderFileCodec {
             let value = try value.validated()
             return .object(["tag": .string("applyBrightnessContrast"), "settings": .object([
                 "brightness": try d(value.brightness), "contrast": try d(value.contrast)])])
+        case .editInk(let edit):
+            guard edit.isValid else { throw RecorderFileError.invalid("Invalid ink edit values.") }
+            return .object(["tag": .string("editInk"), "operation": .string(edit.operation.rawValue),
+                "intensity": try d(edit.intensity), "opacity": try d(edit.opacity)])
+        case .applyInkLevels(let levels):
+            guard levels.isValid else { throw RecorderFileError.invalid("Invalid ink Levels values.") }
+            return .object(["tag": .string("applyInkLevels"), "lowInput": try d(levels.lowInput),
+                "highInput": try d(levels.highInput), "gamma": try d(levels.gamma),
+                "lowOutput": try d(levels.lowOutput), "highOutput": try d(levels.highOutput),
+                "clampInput": .bool(levels.clampInput), "clampOutput": .bool(levels.clampOutput)])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }
@@ -212,6 +231,10 @@ extension RecorderFileCodec {
         case .none: return .object(["kind": .string("none")])
         case .layer(let symbol): return .object(["kind": .string("layer"), "symbol": id(symbol)])
         case .channel(let symbol): return .object(["kind": .string("channel"), "symbol": id(symbol)])
+        case .ink(let symbol, let identity):
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
+            return .object(["kind": .string("ink"), "symbol": id(symbol), "mode": .string(identity.mode.rawValue),
+                "role": .string(identity.role.rawValue), "uuid": id(identity.uuid)])
         case .unavailable(let reason): throw RecorderFileError.invalid("The original target description is unavailable: \(reason)")
         case .context(let context):
             let target: RecorderJSON
