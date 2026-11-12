@@ -1428,6 +1428,44 @@ final class EngineSession: @unchecked Sendable {
         return try decodeCurves(raw)
     }
 
+    /// Install a whole value without deriving samples or identity from points.
+    /// Each borrowed channel buffer stays alive until the synchronous facade
+    /// call returns; the engine owns an independent candidate afterward.
+    func setCurvesSettings(_ filter: Int32, to settings: CurvesSettings) throws {
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Curves needs five complete valid channels and a known transfer curve.")
+        }
+        let channels = CurveChannel.allCases.map { settings[$0] }
+        var error: UnsafeMutablePointer<CChar>?
+        func withChannels(_ index: Int, _ raw: [GlimsCurveState]) -> GlimsStatus {
+            if index == channels.count {
+                var input = GlimsCurvesSnapshot()
+                input.struct_size = UInt32(MemoryLayout<GlimsCurvesSnapshot>.size)
+                input.trc = settings.trc.rawValue
+                input.value = raw[0]; input.red = raw[1]; input.green = raw[2]
+                input.blue = raw[3]; input.alpha = raw[4]
+                return api.filter_curves_set(engine, filter, &input, &error)
+            }
+            let channel = channels[index]
+            var points = channel.points.map { GlimsCurvePoint(x: $0.x, y: $0.y, kind: $0.kind.rawValue) }
+            var samples = channel.samples
+            return points.withUnsafeMutableBufferPointer { pointBuffer in
+                samples.withUnsafeMutableBufferPointer { sampleBuffer in
+                    var state = GlimsCurveState()
+                    state.kind = channel.kind.rawValue
+                    state.identity = channel.identity ? 1 : 0
+                    state.point_count = UInt32(pointBuffer.count)
+                    state.points = pointBuffer.isEmpty ? nil : pointBuffer.baseAddress
+                    state.sample_count = UInt32(sampleBuffer.count)
+                    state.samples = sampleBuffer.baseAddress
+                    return withChannels(index + 1, raw + [state])
+                }
+            }
+        }
+        try check(withChannels(0, []), error)
+    }
+
     func setCurvesTRC(_ filter: Int32, to trc: ColorTRC) throws -> CurvesSettings {
         guard trc != .unknown else {
             throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "Choose a transfer curve.")
@@ -2150,12 +2188,58 @@ final class EngineSession: @unchecked Sendable {
     /// Applies `matrix` (image pixels, y down) to the layer as one undo step.
     func transformLayer(_ layer: Int32, image: Int32, matrix: CGAffineTransform,
                         interpolation: Interpolation) throws {
-        var values = GlimsMatrix(m: ((Double(matrix.a), Double(matrix.c), Double(matrix.tx)),
-                                     (Double(matrix.b), Double(matrix.d), Double(matrix.ty)),
-                                     (0, 0, 1)))
+        try transformLayer(layer, image: image, matrix: ProjectiveTransform(affine: matrix),
+                           interpolation: interpolation)
+    }
+
+    /// Applies a homogeneous image-coordinate transform. Native admission
+    /// checks fresh bounds, descendants, masks and output storage before editing.
+    func transformLayer(_ layer: Int32, image: Int32, matrix: ProjectiveTransform,
+                        interpolation: Interpolation) throws {
+        var values = GlimsMatrix(m: ((matrix.h00, matrix.h01, matrix.h02),
+                                     (matrix.h10, matrix.h11, matrix.h12),
+                                     (matrix.h20, matrix.h21, matrix.h22)))
         var error: UnsafeMutablePointer<CChar>?
         try check(api.layer_transform_matrix(engine, image, layer, &values, interpolation.rawValue, &error),
                   error)
+    }
+
+    /// The source bounds and actual native target are checked in the same
+    /// dispatch as the edit, so queued geometry changes cannot retarget Apply.
+    func transformLayer(_ layer: Int32, image: Int32, matrix: ProjectiveTransform,
+                        expectedBounds: CGRect, interpolation: Interpolation) throws {
+        var request = try Self.layerTransformRequest(matrix, bounds: expectedBounds, interpolation: interpolation)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.layer_transform_matrix_captured(engine, image, layer, &request, &error), error)
+    }
+
+    /// An owned private copy. Read and close it; never adopt it as a document.
+    func transformedPreviewImage(_ image: Int32, layer: Int32, matrix: ProjectiveTransform,
+                                 expectedBounds: CGRect, interpolation: Interpolation) throws -> Int32 {
+        var request = try Self.layerTransformRequest(matrix, bounds: expectedBounds, interpolation: interpolation)
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(api.image_transform_preview(engine, image, layer, &request, &result, &error), error)
+        return result
+    }
+
+    private static func layerTransformRequest(_ matrix: ProjectiveTransform, bounds expectedBounds: CGRect,
+                                              interpolation: Interpolation) throws -> GlimsLayerTransformRequest {
+        guard let x = Int32(exactly: expectedBounds.origin.x),
+              let y = Int32(exactly: expectedBounds.origin.y),
+              let width = Int32(exactly: expectedBounds.size.width),
+              let height = Int32(exactly: expectedBounds.size.height),
+              width > 0, height > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The original layer bounds cannot be represented.")
+        }
+        return GlimsLayerTransformRequest(
+            struct_size: UInt32(MemoryLayout<GlimsLayerTransformRequest>.size),
+            expected_bounds: GlimsRect(x: x, y: y, width: width, height: height),
+            matrix: GlimsMatrix(m: ((matrix.h00, matrix.h01, matrix.h02),
+                                    (matrix.h10, matrix.h11, matrix.h12),
+                                    (matrix.h20, matrix.h21, matrix.h22))),
+            interpolation: interpolation.rawValue)
     }
 
     // MARK: Layer masks

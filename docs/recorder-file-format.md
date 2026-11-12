@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 5
+# Recorder file format, versions 1 to 7
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,26 +7,17 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4` or `5`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4`, `5`, `6` or `7`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
-The writer selects version 5 exactly when at least one successful record is an
-`applyLevels`, version 4 when at least one successful record is a
-`transformLayer` and no Levels exists, version 3 when at least one successful
-record is a `channelToSelection` and neither exists, version 2 when at least
-one successful record is a `completeStroke` and none of them exist, and
-version 1 otherwise. A version 2 file must contain a successful
-`completeStroke`; a version 3 file must contain a successful
-`channelToSelection` (and may also contain strokes, which are readable from
-version 2 on); a version 4 file must contain a successful `transformLayer`
-(and may also contain strokes and channel selections); a version 5 file must
-contain a successful `applyLevels` (and may also contain every earlier
-family). Version 1 is therefore the pre-stroke schema, version 2 the
-stroke-extended schema, version 3 the channel-selection-extended schema,
-version 4 the layer-transform-extended schema and version 5 the
-Levels-extended schema. Version 6 is reserved for future projective work.
-Version integers outside 1...5 refuse the file.
+The writer chooses the highest version required by a successful record:
+`completeStroke` requires 2, `channelToSelection` 3, `transformLayer` 4,
+`applyLevels` 5, `transformProjectiveLayer` 6 and `applyCurves` 7. A file declaring one of
+those versions must contain at least one successful command from that
+version's family. It may also contain commands from all earlier versions.
+Failure/cancelled rows do not raise the version. With no extended successful
+commands, the writer uses version 1. Integers outside 1...7 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -55,15 +46,17 @@ Commands have an owned `tag` and the following exact fields:
 | `selectionShape` | `shape`, `options` |
 | `selectColor` | `point`, `options` |
 | `selectCommand` | `command`, `radius` |
-| `channelToSelection` | `operation` (version 3 only) |
+| `channelToSelection` | `operation` (version 3 and later) |
 | `transformImage` | `transform` |
-| `transformLayer` | `matrix`, `interpolation` (version 4 only) |
-| `applyLevels` | `settings` (version 5 only) |
+| `transformLayer` | `matrix`, `interpolation` (version 4 and later) |
+| `transformProjectiveLayer` | `matrix`, `interpolation` (version 6 and later) |
+| `applyLevels` | `settings` (version 5 and later) |
+| `applyCurves` | `settings` (version 7) |
 | `scale` | integer `width`, `height` |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
 | `layerProperties` | `properties` |
-| `completeStroke` | `settings`, `facts`, `first`, `batches` (version 2 only) |
+| `completeStroke` | `settings`, `facts`, `first`, `batches` (version 2 and later) |
 
 Shape tags are `rectangle`/`ellipse` with `rect`, or `polygon` with ordered
 `points`. Points are `{x,y}`; rectangles retain `{x,y,width,height}`. Options
@@ -83,7 +76,7 @@ worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
 with `symbol`, or `kind:"context"` with `context`. Layer properties, layer
-transforms and Levels require a layer symbol (any layer-kind description);
+transforms, Levels and Curves require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha and color selection with `sampleMerged:false` require context;
@@ -132,13 +125,62 @@ bound; finite coefficients can still overflow it), and the identity matrix is
 refused because live admission never admits it. The command is refused in a
 version 1, 2 or 3 file, and a version 4 file without a successful
 `transformLayer` is refused, exactly as earlier extensions always required
-their own successful command. Fresh membership, mode/lock gates and output
+their own successful command. Fresh membership, lock and target-role gates and output
 geometry against the bound layer's current native bounds remain replay
 duties; the codec cannot prove a binding-time target. Live acceptance and
 replay both require finite transformed corners within ±1,048,576 pixels and
 outward-rounded output dimensions from 1 to 524,288 pixels. This check runs
 before native mutation; symbol-description bounds cannot substitute for the
 freshly bound layer's geometry.
+
+## Projective layer transforms (version 6)
+
+`transformProjectiveLayer` stores the exact nine finite row-major coefficients
+`h00`, `h01`, `h02`, `h10`, `h11`, `h12`, `h20`, `h21`, `h22` and the same
+owned interpolation tag as an affine. It maps column vectors `[x,y,1]` in
+absolute image pixels, with y down; divide the first two outputs by the
+third. No native runtime identity is serialized. The binding must name an
+explicit layer symbol. Rebinding never adapts the matrix to the new size.
+
+The codec refuses zero, singular and scalar-identity matrices. It checks
+source-independent nonsingularity after magnitude normalization but preserves
+the original coefficients in storage. Nonzero positive/negative scalar
+multiples and `h22 == 0` can be valid. Horizon and output-geometry checks
+require the actual bound layer rectangle, not descriptive symbol bounds,
+and therefore run freshly before replay. Native allocation policy also
+remains authoritative.
+
+Both affine and projective semantic replay now call the captured native
+transform API, which checks that the freshly read rectangle still matches
+at mutation and refuses to implicitly rasterize editable text/link/vector
+sources or descendants. Existing version 4 wire values are unchanged.
+
+## Curves (version 7)
+
+`applyCurves` has exactly `settings`, with `trc` and the five named channels
+`value`, `red`, `green`, `blue`, `alpha`. `trc` is `linear`, `nonlinear` or
+`perceptual`. Each channel has exactly `kind` (`smooth` or `free`), Boolean
+`identity`, `points` and `samples`. Each point has finite `x` and `y` in 0...1
+and `kind` (`smooth` or `corner`). Points are ordered by nondecreasing x;
+zero points and duplicate x values are allowed. Each channel has at most
+65,536 points. Points also consume the shared whole-file 100,000-point
+budget. Samples are exactly 256 finite numbers in 0...1 per channel.
+
+Both points and actual sample tables are stored, including inactive points
+and imported Smooth tables that differ from what those points would derive.
+The identity flag is the native HDR bypass behavior, never inferred from
+points or samples. Replay installs a complete independent native candidate;
+replaying graph-edit patches would lose some of this state. No native filter
+or effect identity is serialized. A layer binding is required. Version 7
+requires a successful Curves command and accepts all earlier command families.
+
+Apply records final settings behind queued preview writes. Cancel adds no
+row. An accepted commit that later fails settles a failure row while retaining
+its capture metadata for retry. Mask/channel targets and existing-effect edits
+produce explicit unsupported rows instead of inventing layer actions. Replay
+checks current membership, color mode, locks and editing role, then commits
+one new effect with one Undo step. This format preserves exact Curves values;
+it does not change the native XCF format's handling of identity flags.
 
 ## Levels (version 5)
 
@@ -220,7 +262,7 @@ use finite IEEE binary64 values with normal nearest representation.
 The limits below are **file-format resource policy**, not engine/hardware limits:
 
 - 16 MiB UTF-8 input/output, 10,000 records and 10,000 symbols.
-- 100,000 points summed across successful polygon vertices and successful
+- 100,000 points summed across successful Curves channel points, polygon vertices and successful
   stroke samples (`first` included); each stroke is additionally capped at
   65,536 samples. Only successful records consume the budget.
 - 64 KiB decoded UTF-8 bytes per string, including keys.

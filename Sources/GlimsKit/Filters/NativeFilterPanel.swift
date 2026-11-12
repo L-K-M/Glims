@@ -10,10 +10,11 @@ import RigiUI
 /// input queue; a refused write restores the last value the engine
 /// accepted and keeps the error visible while Cancel stays available.
 @MainActor
-final class NativeFilterPanel: FilterPreviewPanel {
+class NativeFilterPanel: FilterPreviewPanel {
     let operation: EngineSession.FilterOperation
     private let mergesPixels: Bool
     /// Control refreshers by property name, for reads and refused writes.
+    /// Subclass layouts register their own through `control(for:)`.
     private var bindings: [String: (EngineSession.FilterValue) -> Void] = [:]
     /// Every send bumps its property's generation; only the newest
     /// request's answer decides the row. Values are unusable for this —
@@ -26,7 +27,7 @@ final class NativeFilterPanel: FilterPreviewPanel {
     private var draftFields: [String: () -> (NSTextField, String)?] = [:]
     /// The latest value the engine accepted, for reverts.
     private var accepted: [String: EngineSession.FilterValue] = [:]
-    private let statusField = NSTextField(wrappingLabelWithString: "")
+    let statusField = NSTextField(wrappingLabelWithString: "")
     private(set) var lastError: String?
 
     /// `filter` is the session `ImageDocument.beginFilterPreview` began
@@ -44,7 +45,7 @@ final class NativeFilterPanel: FilterPreviewPanel {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 200),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
-        panel.title = operation.title
+        panel.title = NativeFilterMenuLayout.displayTitle(operation)
         panel.isFloatingPanel = true
         super.init(document: imageDocument, panel: panel, filter: filter)
         buildContent(in: panel, properties: properties)
@@ -102,6 +103,11 @@ final class NativeFilterPanel: FilterPreviewPanel {
         }
     }
 
+    /// Register a specialized control without exposing the transport state.
+    func registerBinding(_ name: String, update: @escaping (EngineSession.FilterValue) -> Void) {
+        bindings[name] = update
+    }
+
     private func restore(_ name: String, _ value: EngineSession.FilterValue, submittedText: String?) {
         if let field = draftFields[name]?()?.0, let submittedText {
             FilterFieldDrafts.preserve([(field, submittedText)]) { bindings[name]?(value) }
@@ -110,7 +116,10 @@ final class NativeFilterPanel: FilterPreviewPanel {
         }
     }
 
-    private func buildContent(in panel: NSPanel, properties: [EngineSession.FilterProperty]) {
+    /// Builds the form's content during init; subclass editors override
+    /// it to lay out their own rows while reusing `control(for:)` and the
+    /// shared write/acknowledgement lifecycle.
+    func buildContent(in panel: NSPanel, properties: [EngineSession.FilterProperty]) {
         // Operations with no editable properties (Invert, Absolute, …)
         // get a note, not a settings grid — an empty NSGridView has no
         // column 0 and Apply/Cancel still need a stable window.
@@ -193,7 +202,7 @@ final class NativeFilterPanel: FilterPreviewPanel {
 
     /// Commit a typed-but-uncommitted field before the session commits,
     /// so the value it shows is the value that applies.
-    @objc private func apply() {
+    @objc func apply() {
         window?.endEditing(for: nil)
         commit()
     }
@@ -215,15 +224,18 @@ final class NativeFilterPanel: FilterPreviewPanel {
     }
 
     /// One property's control cell; the binding closure updates it from
-    /// the engine's answers.
-    private func control(for property: EngineSession.FilterProperty) -> NSView {
+    /// the engine's answers. `displayScale`/`unit` make a number row
+    /// present a scaled unit (percent over a -1...1 native property).
+    func control(for property: EngineSession.FilterProperty,
+                 displayScale: Double = 1, unit: String? = nil) -> NSView {
         switch property.kind {
         case .number, .integer:
-            let row = FilterNumberRow(property: property)
+            let row = FilterNumberRow(property: property, displayScale: displayScale, unitLabel: unit)
             let integer = property.kind == .integer
             draftFields[property.name] = { [weak row] in
                 guard let row else { return nil }
-                let displayed = row.formatter.string(from: NSNumber(value: row.value)) ?? "\(row.value)"
+                let shown = row.value * displayScale
+                let displayed = row.formatter.string(from: NSNumber(value: shown)) ?? "\(shown)"
                 return (row.field, displayed)
             }
             bindings[property.name] = { [weak row] value in

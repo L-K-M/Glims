@@ -911,6 +911,22 @@ glims_filter_curves_edit (GlimsEngine *engine, GlimsFilterID id,
 }
 
 GlimsStatus
+glims_filter_curves_set (GlimsEngine *engine, GlimsFilterID id,
+                         const GlimsCurvesSnapshot *settings, char **error)
+{
+  gboolean changed = FALSE;
+  GlimsStatus status = glims_filter_check_edit (engine, id, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  GlimsFilter *session = g_hash_table_lookup (engine->filters, GINT_TO_POINTER (id));
+  status = glims_curves_config_set (session->operation, settings, &changed, error);
+  if (status == GLIMS_STATUS_OK && changed) {
+    glims_filter_preview_apply (session);
+    gimp_image_flush (session->image);
+  }
+  return status;
+}
+
+GlimsStatus
 glims_filter_curves_set_trc (GlimsEngine *engine, GlimsFilterID id, uint32_t trc,
                              GlimsCurvesSnapshot *out, char **error)
 {

@@ -4223,6 +4223,40 @@ See [editor verification](editor-verification.md) for evidence boundaries,
 source-review failures that were not counted as approval, and the public
 release, spoken-accessibility and physical-display qualification gates.
 
+### Five-second startup and editor quality targets (2026-11-11 candidate)
+
+The expanded user brief is tracked in [quality-targets.md](quality-targets.md);
+notarization is explicitly excluded. The previous verification totals do not
+establish Photoshop 4 parity or complete usability.
+
+Startup now packages a relocatable command registry after signing inner
+executables. A fresh matching engine/language can seed it exclusively; native
+path, mtime and protocol checks still discover changed and custom plug-ins.
+A separate native font helper links bundled HarfBuzz and uses CoreText to
+locate downloaded font assets. Its config keeps ordinary/user font roots but
+omits the broad macOS Assets scans. The original native config remains the
+failure fallback. No system-font caches or font outlines are shipped. The
+helper alone runs with a non-root working directory to avoid a reproduced
+Fontconfig 2.18.3 absolute-glob bug; the application does not change global cwd.
+The optional helper has a three-second deadline. A stalled child is killed
+and reaped before native discovery resumes; its wait dispatches only a private
+GLib context. A CLI regression covers the deadline, reaping, working directory
+and success/failure paths without starting the editor. The packaging probe
+also confines its working directory and startup diagnostics to its temporary
+home, and catalog checks require a newly written report on every run.
+
+Integrated packaged launches reached the document in 2.70 seconds with fresh
+Glims data, 1.72 seconds cached, and 4.09 seconds relocated with fresh data.
+These are local measurements, not disk-cache-flushed or cross-Mac guarantees.
+The startup regression script compares font/command catalogs through corrupt
+caches, user font installation/removal, relocation, incompatible registry and
+missing-helper fallback. All pass. Corrupt command caches and incompatible
+registries use slower native discovery (about eleven seconds). The 128
+packaging checks and all four adapter suites pass. The integrated standalone
+bundle passes 1,917 native and 3,310 application checks with development
+trees denied. Other Macs, old preference collections and arbitrary custom
+plug-in changes remain outside this qualification.
+
 ### Typed transform controls (2026-11-11 candidate)
 
 Transform options now edit X/Y, Width/Height and clockwise Angle through the
@@ -4251,6 +4285,33 @@ Undo/Redo output and editable XCF reopening. The Swift suite passes 1,250
 tests. This closes the tonal-picker gap in the broader editor brief; it does
 not establish complete Photoshop 4 parity or final application acceptance.
 
+### Projective transform foundation (2026-11-11 candidate)
+
+The owned Swift transform type now carries all nine homogeneous coefficients,
+with checked composition, inverse mapping and a rectangle-to-quad solver.
+The native boundary normalizes equivalent matrices and refuses horizons,
+invalid source/output coordinates and excessive destination storage before
+editing. The shared 512 MiB budget includes descendants, attached masks and
+containing-group growth, using raw projection extents even behind a group
+mask. It bounds destination storage, not total working memory or Undo history.
+Active unclipped effects require merge or disable because their future extent
+cannot be predicted from their old margins. Ordinary clipped effects retain
+their existing path.
+
+All four native suites pass analytic perspective pixels, equivalent positive
+and negative matrix multiples, negative source origins, masks, exact Undo/Redo
+and XCF reopen. Bounded regressions reproduced both ancestor growth and a
+masked raw-projection admission gap before their fixes. The pure geometry has
+21 tests; the integrated Swift suite passes 1,287 tests. A focused native
+Swift bridge workflow verifies the complete coefficient mapping. Independent
+direct review is complete; a timed-out SWE-2 review supplied no verdict and
+is not counted as approval.
+
+This foundation does not expose skew/distort/perspective canvas modes yet.
+Captured-target atomic commits, the new handles, warped pixel previews,
+structured-layer qualification and large-image interaction timing remain
+separate work. It does not establish Photoshop 4 parity.
+
 ### Readable precision labels (2026-11-11 candidate)
 
 Document titles, the status information selector and Image Information use
@@ -4259,6 +4320,21 @@ the same readable component and transfer-curve labels, such as
 state remains "Unknown"; profiles and underlying color behavior are unchanged.
 All 1,266 unit tests and the existing native conversion/form/Undo/reopen
 workflow pass. Independent SWE-2-Flash review found no important issue.
+### Threshold in the adjustment chooser (2026-11-12)
+
+New Adjustment Layer also offers Threshold. `gimp:threshold` is a generic
+single-input operation — not a dedicated config op — so no engine change was
+needed: `adjustment_layer_new` already admits it and the generic
+effect-parameter session edits its `low`/`high` properties. The chooser's
+known set simply lists it; the runtime catalog's support gate still decides
+whether it is offered.
+
+The focused native suite passes 229 checks on each of all four engines, including
+threshold creation, non-default low/high edits against a literal
+max-channel composite oracle, untouched base pixels, exact Undo/Redo output,
+Cancel, an indexed refusal and editable XCF reopening (reloaded parameters
+read back within serialization tolerance). Swift and real chooser/editor
+checks are pending.
 
 ### Recorded affine layer transforms (2026-11-11 candidate)
 
@@ -4276,6 +4352,82 @@ refusals, deleted targets and accepted-command failure settlement. Independent
 production review and follow-up fixture review have no remaining important
 findings. These checks do not exercise the binding sheet itself or establish
 complete action/batch coverage; filter and text recording remain open.
+
+### Captured projective canvas controls (2026-11-11 candidate)
+
+Transform now exposes Scale / Rotate, Skew, Distort and Perspective in
+Tool Options and Layer > Transform. Independent warp geometry survives
+numeric frame changes and mode switches. Perspective keeps its first drag
+axis through later movement and release; hidden handle kinds do not steal
+hits. The overlay uses the actual projected source grid. It is still an
+outline preview, not a warped composite pixel preview.
+
+Apply captures the original layer rectangle and uses an additive native
+request whose bounds check and mutation share one engine dispatch. It
+refuses editable text/link/vector descendants until explicitly rasterized.
+Pending Apply disables repeated submission and reports success only after
+native completion and cache reconciliation. The same captured API protects
+both affine and perspective action replay. Format v6 carries all nine
+coefficients and explicit layer bindings; v5 Levels is integrated and mixed files preserve both command families.
+
+All four native conformance suites pass. The 184 focused geometry/Recorder
+tests pass; a hidden-handle hit regression reproduced two failures before
+its correction. Native canvas testing reproduced a stale-field focus bug
+that blocked initial mode changes; unchanged fields now perform no target
+command, while edited stale drafts still refuse. The pinned native workflow
+passes real canvas events, analytic transformed pixels, single Undo and exact
+Undo/Redo, save/load/rebinding, editable text refusal and queued stale bounds.
+Independent direct native, UI and Recorder source reviews are complete.
+After v5/v6 integration, all 1,351 Swift tests and 111 focused native editor
+checks on each of the four engines pass. This includes numeric controls,
+affine recording, Levels capture/replay, perspective pointer gestures,
+actual v6 file save/load/rebinding, source preservation and exact Undo/Redo.
+Independent merge-resolution review confirms both capture paths remain
+intact. The frozen integrated controls app also passes the ordinary full
+editor workflows on all four engines: 3,315 checks each on 3.2.8, 3.2.0
+and master, and 3,289 on 3.0.8, with zero failures.
+This does not establish complete Photoshop 4 parity or interaction latency.
+
+### Color-only Posterize (2026-11-12 candidate)
+
+Image > Adjust and New Adjustment Layer offer Posterize with 2–256 levels.
+The adapter-owned operation follows the upstream color quantization while
+copying alpha unchanged. The older operation remains available under the
+explicit name "Posterize Including Transparency". Both use the existing
+modeless preview, Apply/Cancel, Undo and editable-effect workflow.
+
+All four engine sets pass native conformance and 41 focused checks covering
+partial alpha, unchanged source pixels, cancellation, Undo/Redo, adjustment
+groups and editable XCF reopening. The app passes 1,279 units, all four
+focused menu/adjustment-layer workflows, and 3,322/3,322/3,296/3,322 full
+checks on 3.2.8/3.2.0/3.0.8/master. Independent source review found no
+important issue. The owned operation must be present to re-edit this XCF
+effect; upstream applications do not provide the `glims:` operation.
+
+### Selective Color (2026-11-12 candidate)
+
+The adapter now provides an owned Selective Color operation with nine color
+ranges, four CMYK adjustments per range and Relative/Absolute correction.
+The independent implementation follows the published formulas cited in the
+kernel; it adds no upstream patch or FFmpeg dependency. Alpha is preserved.
+Nonfinite and HDR RGB values outside the documented narrow endpoint-roundoff
+tolerance pass through unchanged; zero settings preserve every input bit.
+
+Image > Adjust and New Adjustment Layer share a compact native editor. The
+Colors popup switches four percentage rows without discarding other ranges.
+Queued acknowledgements preserve active text drafts, and Apply/Cancel keep
+the established one-Undo/no-Undo lifecycle. Display rounding alone does not
+change stored precision; explicit text edits still commit their typed value.
+
+All four engine sets pass native conformance and 49 focused public-facade
+checks, including literal pixels, alpha, cancellation, source preservation,
+Undo/Redo, all 36 settings and correction method through editable XCF. The
+pure kernel passes 46 ASan/UBSan checks. All four engines pass the focused
+real panel and adjustment-layer workflows. Independent native and UI source
+reviews found no important issue; full workflows and the final explicit-text
+refinement remain in verification at this checkpoint. Owned XCF operations
+require Glims for editing. This slice does not establish complete Photoshop 4
+mode support or complete Recorder/batch coverage.
 
 ### Recorded new Levels adjustments (2026-11-11 candidate)
 
@@ -4303,3 +4455,101 @@ The existing Recorder epoch tests cover stale completions after a new
 recording; this native case does not repeat them. Other adjustment families,
 existing-effect identity replay and text recording remain open. These
 checks establish this Levels slice, not complete action/batch coverage.
+
+
+### Transform composite pixel preview (2026-11-11 work in progress)
+
+The canvas now previews transformed composite pixels through a private image
+copy. It preserves the source raster resolution and uses the same captured
+native transform as Apply, including masks and group children. Only the
+visible viewport is rendered, with the window display profile and soft proof;
+a 4,096-pixel output edge limit bounds unusually large viewports. One native
+job and the latest requested mapping replace a queue of pointer samples.
+Cancel and source changes invalidate late results; clone destruction remains
+counted through document close. The temporary image is never saved or recorded.
+
+Private previews also have a read gate, separate from the edit gate. Native
+cache-reading command completions retain document ownership until their
+refresh finishes. Deferred Text and color picks retain cancellation and target
+generations. Crop to Selection reads the native selection on the input queue,
+so later selection changes cannot overtake the accepted crop.
+
+Tests on all four engines compare complete source state and exact preview
+pixels against independently committed projective and affine transforms,
+including nested masked groups, P3 display conversion, grayscale proofing,
+bounded and fractional 2x viewport output, repeated previews, stale bounds,
+multi-selection refusal, cancellation, target acknowledgement and close drain.
+All pass. The complete 1,360-test Swift suite passes, including nine
+preview/coalescing and read-gate tests. Resample invalidation reproduced a
+failed observer test before its fix. The 24 MP characterization measured 808 ms affine and 796 ms
+projective preview completion for an 800x600 viewport, with idle main-loop
+lateness below 7 ms. This is not yet low-latency interaction qualification.
+
+The actual canvas matches an independent transformed viewport on every engine.
+Its cancellation checks reproduce the late Text editor after Escape, then pass
+with generation checks. All three path-creation UI routes now queue counted
+input. The first anchor remains visible while its ID is pending; another click
+cannot duplicate it, and Escape ends extension without undoing accepted input.
+Selecting a hidden path waits for its geometry before allowing edits. Removing
+those guards produces two failing native assertions, including changed path
+geometry. Both pass with the guards restored. Mask toggles resolve prior queued
+values, and unknown-mask picks retain target admission until reconciliation.
+These focused UI and native checks pass on all four engines. Independent API
+and caller reviews found no remaining important issues after their fixes.
+
+The ordinary workflow matrix at `526556c` passes 3,315 / 3,315 / 3,289 /
+3,315 checks on 3.2.8 / 3.2.0 / 3.0.8 / master. Hosted CI/review and merged
+bundle verification remain open. Photoshop 4 parity is still incomplete.
+
+### Lazy transform preview pixels (2026-11-11 work in progress)
+
+Additive facade slot 176 creates an owned private transformed image, with
+the same captured target, geometry, storage, lock and editable-source admission
+as Apply. Ordinary root raster layers without masks or effects use the upstream
+transform matrix and sampler behind GIMP's tile-validation handler. The full
+native-resolution result exists logically; only demanded tiles are calculated.
+Groups, masked layers, nested layers and effect-bearing layers retain the
+ordinary native transform on the private copy. Apply is unchanged.
+
+The tile handler owns its graph and copied input buffer until the result image
+closes. The first native equivalence matrix covers all six sampler settings,
+opaque and partially transparent RGB, float-linear RGB, 16-bit grayscale and
+indexed images. Each source closes before the first preview read; off-origin,
+reduced, 2x and complete reads must equal an independently committed result.
+Unaligned/future prefixes and invalid/missing/stale requests exercise the API's
+admission and cleared output contract. These checks and the existing native
+conformance suites pass on all four engines. Independent source review found
+no important remaining issue.
+
+An initial 24 MP characterization measured 37.5 ms affine and 26.2 ms projective
+preview completion for the existing 800x600 viewport, versus 808 / 796 ms for
+the eager copy. Main-loop lateness was below 6 ms. These are single-run results
+on this Mac for eligible layers, not a guarantee for structured layers or
+arbitrary images. Full app, final packaging and hosted CI/review are pending.
+
+
+### Whole-value Curves recording (2026-11-12 candidate)
+
+New Curves Apply records its final native TRC and all five channels behind
+queued preview edits, retaining its begin-time layer if selection changes.
+Each channel stores kind, identity, points and all 256 actual samples,
+including inactive points and noncanonical Smooth tables. Format version 7
+uses owned named tags and shares the existing point/resource budgets; versions
+1 through 6 retain their existing meaning. Cancel records nothing, failed
+commits settle failure and retain retry metadata, and mask/channel targets or
+existing-effect edits remain explicit unsupported rows.
+
+Additive facade slot 177 installs an independent whole native Curves value.
+Validation precedes cloning, raw table/identity restoration happens only in
+an unpublished candidate, and the existing atomic configuration binding
+installs it. Replay checks the explicitly rebound layer's current membership,
+mode, locks and editing role before committing one effect with one Undo.
+The native fixtures pass on all four engines, including exact hidden state,
+HDR arithmetic, all TRCs, input lifetime, future/unaligned prefixes, invalid
+last-channel atomicity, real pixels, Cancel and Undo/Redo. Independent native
+review found no important defect; two inexpensive boundary cases and an array
+alignment contract note address its useful minor suggestions. All 1,380 Swift
+tests and the focused save/load/rebind/replay workflow pass on all four
+engines. The complete editor matrix and independent integration review are
+running.
+This slice does not establish complete Recorder coverage or Photoshop 4 parity.

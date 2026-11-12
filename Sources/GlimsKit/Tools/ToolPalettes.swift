@@ -428,6 +428,31 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     /// preview; nothing reaches the engine until Apply, which uses the
     /// canvas's native transform path and its single undo step.
     private func addTransformRows(_ state: ToolState) {
+        let modes = LayerTransformSession.Mode.allCases
+        let mode = NSPopUpButton(frame: .zero, pullsDown: false)
+        mode.controlSize = .small
+        mode.font = .systemFont(ofSize: 11)
+        mode.identifier = NSUserInterfaceItemIdentifier("transformMode")
+        mode.setAccessibilityLabel("Transform mode")
+        mode.addItems(withTitles: modes.map(\.title))
+        stack.addArrangedSubview(row("Mode", mode) { [weak self] control in
+            guard let self, let menu = control as? NSPopUpButton,
+                  modes.indices.contains(menu.indexOfSelectedItem) else { return }
+            let selected = modes[menu.indexOfSelectedItem]
+            for entry in self.transformFieldEntries where entry.field.currentEditor() != nil || entry.draft.hasDraft {
+                guard self.commitTransformField(entry) else {
+                    self.transformPreviewChanged()
+                    return
+                }
+            }
+            _ = self.transformTools?.setTransformMode(selected)
+            self.transformPreviewChanged()
+        })
+        transformRefreshers.append { [weak self, weak mode] in
+            let tools = self?.transformTools
+            mode?.selectItem(at: modes.firstIndex(of: tools?.transformPreview?.mode ?? .scaleRotate) ?? 0)
+            mode?.isEnabled = tools?.transformNumericEditsAllowed == true
+        }
         for (label, kind, read): (String, TransformNumericInput.Field,
                                   (LayerTransformSession) -> Double) in [
             ("X", .x, { $0.box.minX }),
@@ -453,10 +478,27 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                                        selected: methods.firstIndex(of: state.transformInterpolation) ?? 2) { index in
             ToolState.shared.transformInterpolation = methods[index]
         })
-        stack.addArrangedSubview(hint("Type the position, size and angle, or drag a corner or edge to "
-            + "scale (Shift keeps the proportions), inside to move, outside to rotate (Shift: 15° "
-            + "steps). Apply commits the transform. Return in a field accepts its value; "
-            + "Escape discards that field draft."))
+        let instructions = NSTextField(wrappingLabelWithString: "")
+        instructions.font = .systemFont(ofSize: 11)
+        instructions.textColor = .secondaryLabelColor
+        instructions.preferredMaxLayoutWidth = 220
+        stack.addArrangedSubview(instructions)
+        transformRefreshers.append { [weak self, weak instructions] in
+            let mode = self?.transformTools?.transformPreview?.mode ?? .scaleRotate
+            let gesture: String
+            switch mode {
+            case .scaleRotate:
+                gesture = "Drag a corner or edge to scale; Shift keeps the proportions."
+            case .skew:
+                gesture = "Drag an edge handle along its edge to skew."
+            case .distort:
+                gesture = "Drag a corner independently, or an edge to move both corners."
+            case .perspective:
+                gesture = "Drag a corner horizontally or vertically to move its pair symmetrically. The first movement fixes the direction."
+            }
+            instructions?.stringValue = gesture + " Drag inside to move or outside to rotate (Shift: 15° steps). "
+                + "Position, size and angle control the frame and preserve any warp. Apply commits; Escape cancels."
+        }
         transformRefreshers.forEach { $0() }
     }
 
@@ -529,15 +571,15 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             transformPreviewChanged()
             return false
         }
+        // An untouched field has no command to route. Focus/target refreshes
+        // must not manufacture a stale draft that blocks mode changes.
+        guard entry.draft.hasDraft else { return true }
         guard let tools = transformTools, let preview = tools.transformPreview else {
             return refuse("Select a layer to transform, or Cancel to discard this draft.")
         }
         guard entry.draft.canCommit(to: transformTarget) else {
             return refuse("The transform target changed. Cancel this draft, then edit the new target.")
         }
-        // Display precision must not round an untouched model value when
-        // Return, Tab or Apply ends a field edit.
-        guard entry.draft.hasDraft else { return true }
         guard let value = TransformNumericInput.parse(entry.draft.text) else {
             return refuse("Enter a number, for example 12.5.")
         }
@@ -592,7 +634,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         })
         transformRefreshers.append { [weak self, weak apply, weak cancel] in
             let tools = self?.transformTools
-            let busy = tools?.transformDragInProgress ?? false
+            let busy = tools?.transformDragInProgress == true || tools?.transformCommitIsPending == true
             let hasDraft = self?.transformFieldEntries.contains { $0.draft.hasDraft } == true
             apply?.isEnabled = tools?.transformNumericEditsAllowed == true
                 && (tools?.transformIsApplicable == true || hasDraft) && !busy

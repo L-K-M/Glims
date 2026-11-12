@@ -198,6 +198,34 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (numeric transform)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "transform-pixel-preview" {
+                try exerciseTransformPixelPreview(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED" : "FAILED")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-integration" {
+                try exerciseNumericTransform(session, documents: documents)
+                try exerciseRecorderAffine(session, work: work, documents: documents)
+                try exerciseRecorderLevels(session, work: work, documents: documents)
+                try exerciseProjectiveControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (projective integration)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-controls" {
+                try exerciseProjectiveControls(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (projective controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "projective-transform" {
+                try exerciseProjectiveTransform(session)
+                print(failures == 0 ? "PASSED (projective transform bridge)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-curves" {
+                try exerciseRecorderCurves(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Curves recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-levels" {
                 try exerciseRecorderLevels(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Levels recorder)" : "FAILED: \(failures) failure(s)")
@@ -642,6 +670,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (color balance)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selective-color" {
+                try exerciseSelectiveColor(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (selective color)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brightness-contrast" {
                 try exerciseBrightnessContrast(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (brightness contrast)" : "FAILED: \(failures) failure(s)")
@@ -894,6 +927,7 @@ enum EngineSmokeTest {
             try exerciseSelectiveGaussianSource(session, documents: documents)
             try exerciseBrightnessContrast(session, work: work, documents: documents)
             try exerciseColorBalance(session, work: work, documents: documents)
+            try exerciseSelectiveColor(session, work: work, documents: documents)
             try exerciseInputHistogram(session, work: work, documents: documents)
             try exerciseCurves(session, work: work, documents: documents)
             try exerciseLevels(session, work: work, documents: documents)
@@ -903,6 +937,7 @@ enum EngineSmokeTest {
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
+            try exerciseProjectiveTransform(session)
             try exerciseFloatSelectedPixels(session, work: work, documents: documents)
 
             try exerciseStrokeSelectionControls(session, work: work, documents: documents)
@@ -10656,9 +10691,14 @@ enum EngineSmokeTest {
             closing.closeImageWhenDrained()
             closingController.window?.close()
         }
-        closing.inputQueue.async { usleep(400_000) }
         let closingSheet = openSheet(closingController)
         let closingSheetRef = closingController.indexedSheet
+        // Opening a native sheet can take longer than a fixed delay under
+        // load. Hold the queue until the close has been requested, so this
+        // tests a pending conversion rather than an already-completed one.
+        let conversionGate = DispatchSemaphore(value: 0)
+        defer { conversionGate.signal() }
+        closing.inputQueue.async { conversionGate.wait() }
         formButton(closingSheet?.contentView, "Convert")?.performClick(nil)
         wait { closing.pendingWork > 0 && EngineActivity.shared.isBusy }
         check(closing.pendingWork > 0, "the queued conversion is counted behind the closing document's input drain")
@@ -10667,6 +10707,8 @@ enum EngineSmokeTest {
         if let closingSheet { closingController.window?.endSheet(closingSheet) }
         spin()
         check(closingController.indexedSheet == nil, "ending the sheet releases the window's reference")
+        check(!closed, "the close waits while the accepted conversion is held on the input queue")
+        conversionGate.signal()
         wait { closed && closing.pendingWork == 0 && !EngineActivity.shared.isBusy }
         spin()
         check(closed && (try? session.info(closingImage)) == nil,

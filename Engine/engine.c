@@ -13,6 +13,8 @@
  * network, and no change to the process locale.
  */
 #include "engine-private.h"
+#include "operation-posterize.h"
+#include "operation-selective-color.h"
 #include "resource-mutation.h"
 #include "resource-rename.h"
 #include "layer-delete.h"
@@ -22,6 +24,7 @@
 #include "curves-config.h"
 #include "filter-histogram.h"
 #include "filter-input.h"
+#include "startup-helper.h"
 
 #include <dlfcn.h>
 #include <stddef.h>
@@ -352,10 +355,14 @@ write_plug_in_theme (void)
 }
 
 static void
-init_status_noop (const gchar *text1,
-                  const gchar *text2,
-                  gdouble      percentage)
+init_status (const gchar *text1,
+             const gchar *text2,
+             gdouble      percentage)
 {
+  if (g_getenv ("GLIMS_STARTUP_TRACE"))
+    g_printerr ("startup %.6f %s | %s | %.3f\n",
+                g_get_monotonic_time () / 1000000.0,
+                text1 ? text1 : "", text2 ? text2 : "", percentage);
 }
 
 /* ---- Where the engine's files are -------------------------------------- */
@@ -652,6 +659,80 @@ check_engine_interface (Gimp    *gimp,
 
 /* ---- Start-up and shut-down (engine thread) --------------------------- */
 
+/* The packager queries the signed bundled plug-ins once, in a throwaway
+ * home. Seed a missing per-user registry only for that exact engine and
+ * language. GIMP still checks every executable's path/mtime and runs init
+ * procedures, so changed and user-installed plug-ins are discovered normally.
+ * Existing registries and preferences always belong to the user. */
+static gboolean
+seed_bundle_plugin_cache (const gchar *contents,
+                          const gchar *language)
+{
+  gboolean seeded = FALSE;
+  gchar *metadata_path, *metadata = NULL, *escaped, *expected;
+  GFile *source, *destination;
+
+  if (! contents || ! language)
+    return FALSE;
+
+  metadata_path = g_build_filename (contents, "Resources", "Engine-Startup", "identity", NULL);
+  escaped = g_strescape (language, NULL);
+  expected = g_strdup_printf ("%s\n%s\n", GIMP_VERSION, escaped);
+  if (g_file_get_contents (metadata_path, &metadata, NULL, NULL) &&
+      g_strcmp0 (metadata, expected) == 0)
+    {
+      source = g_file_new_build_filename (contents, "Resources", "Engine-Startup", "pluginrc", NULL);
+      destination = gimp_directory_file ("pluginrc", NULL);
+      gchar *registry = NULL;
+      gsize length = 0;
+      if (g_file_load_contents (source, NULL, &registry, &length, NULL, NULL))
+        {
+          /* File parameter defaults can contain bundle URIs. Preserve binary
+           * registry payloads (such as icons) while relocating only our token. */
+          const gchar token[] = "@GLIMS_BUNDLE_URI@";
+          gchar *uri = g_filename_to_uri (contents, NULL, NULL);
+          gchar *quoted_uri = uri ? g_strescape (uri, NULL) : NULL;
+          GString *expanded = g_string_sized_new (length);
+          for (gsize i = 0; quoted_uri && i < length; )
+            {
+              if (length - i >= sizeof token - 1 &&
+                  memcmp (registry + i, token, sizeof token - 1) == 0)
+                {
+                  g_string_append (expanded, quoted_uri);
+                  i += sizeof token - 1;
+                }
+              else
+                g_string_append_c (expanded, registry[i++]);
+            }
+          /* Exclusive create preserves existing caches, including symlinks
+           * and a concurrent first launch. A failed write is never accepted. */
+          GFileOutputStream *output = quoted_uri
+            ? g_file_create (destination, G_FILE_CREATE_PRIVATE, NULL, NULL) : NULL;
+          if (output)
+            {
+              seeded = g_output_stream_write_all (G_OUTPUT_STREAM (output), expanded->str,
+                                                   expanded->len, NULL, NULL, NULL);
+              if (! g_output_stream_close (G_OUTPUT_STREAM (output), NULL, NULL))
+                seeded = FALSE;
+              g_object_unref (output);
+              if (! seeded)
+                g_file_delete (destination, NULL, NULL);
+            }
+          g_string_free (expanded, TRUE);
+          g_free (quoted_uri);
+          g_free (uri);
+          g_free (registry);
+        }
+      g_object_unref (destination);
+      g_object_unref (source);
+    }
+  g_free (expected);
+  g_free (escaped);
+  g_free (metadata);
+  g_free (metadata_path);
+  return seeded;
+}
+
 static gboolean
 engine_initialize (GlimsEngine  *engine,
                    GError      **error)
@@ -674,6 +755,24 @@ engine_initialize (GlimsEngine  *engine,
   if (contents)
     {
       use_bundle (engine, contents);
+      /* Prepare the same native font caches in a small child. Its config
+       * retains user font roots and discovers downloaded macOS font assets
+       * through CoreText, avoiding scans of unrelated system asset trees.
+       * If preparation fails, keep native discovery as the fallback. */
+      gchar *helper = g_build_filename (contents, "MacOS", "glims-font-cache", NULL);
+      gchar *base = g_build_filename (contents, "etc", "fonts", "fonts-glims.conf", NULL);
+      gchar *config = g_build_filename (engine->cache_directory, "fonts.conf", NULL);
+      const gchar *argv[] = { helper, base, config, NULL };
+      if (g_file_test (helper, G_FILE_TEST_IS_EXECUTABLE))
+        {
+          if (glims_run_startup_helper (engine->cache_directory, argv, 3000))
+            g_setenv ("FONTCONFIG_FILE", config, TRUE);
+          else
+            g_printerr ("Glims: font cache preparation failed; loading fonts directly.\n");
+        }
+      g_free (config);
+      g_free (base);
+      g_free (helper);
     }
   else
     {
@@ -762,7 +861,6 @@ engine_initialize (GlimsEngine  *engine,
     use_bundle_config (gimp, contents);
   g_signal_handlers_unblock_matched (gimp->config, G_SIGNAL_MATCH_DATA,
                                      0, 0, NULL, NULL, gimp->edit_config);
-  g_free (contents);
 
   engine->icon_theme_dir = find_icon_theme_dir (gimp);
   write_plug_in_theme ();
@@ -781,21 +879,32 @@ engine_initialize (GlimsEngine  *engine,
   if (abort_message)
     {
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, abort_message);
+      g_free (contents);
       return FALSE;
     }
 
   gimp_gegl_init (gimp);
+  glims_operation_selective_color_register ();
+
+  /* The adapter's own operations register the way GIMP's do inside
+   * gimp_gegl_init(): the held class reference puts the type in GEGL's
+   * operation lookup before gimp_restore() and the plug-in catalogs
+   * enumerate operations. */
+  glims_operation_posterize_register ();
 
   current_language = language_init (NULL, NULL);
 
-  gimp_initialize (gimp, init_status_noop);
+  gimp_initialize (gimp, init_status);
 
   g_object_get (gimp->edit_config, "prev-language", &prev_language, NULL);
   gimp->query_all = (prev_language == NULL ||
                      g_strcmp0 (prev_language, current_language) != 0);
+  if (! prev_language && seed_bundle_plugin_cache (contents, current_language))
+    gimp->query_all = FALSE;
   g_free (prev_language);
+  g_free (contents);
 
-  gimp_restore (gimp, init_status_noop, &font_error);
+  gimp_restore (gimp, init_status, &font_error);
   if (font_error)
     {
       show_message (gimp, NULL, GIMP_MESSAGE_WARNING, NULL, font_error->message);
@@ -1175,6 +1284,10 @@ MARSHAL (text_layer_set, return glims_text_layer_set (e, a->image, a->item, a->s
                                                       a->error);)
 MARSHAL (layer_transform_matrix, return glims_layer_transform_matrix (e, a->image, a->item, a->in,
                                                                       (uint32_t) a->width, a->error);)
+MARSHAL (layer_transform_matrix_captured, return glims_layer_transform_matrix_captured (
+           e, a->image, a->item, a->in, a->error);)
+MARSHAL (image_transform_preview, return glims_image_transform_preview (
+           e, a->image, a->item, a->in, a->out, a->error);)
 MARSHAL (image_resize_canvas, return glims_image_resize_canvas (e, a->image, a->area.width, a->area.height,
                                                                 a->area.x, a->area.y, a->in, a->error);)
 MARSHAL (procedure_run, return glims_procedure_run (e, a->image, a->string, (uint32_t) a->width, a->error);)
@@ -1935,6 +2048,38 @@ api_fonts (GlimsEngine *e, char **names)
 {
   GlimsArgs a = { .out = names };
   return glims_engine_call (e, fonts_on_engine, &a);
+}
+
+static GlimsStatus
+api_layer_transform_matrix_captured (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                     const GlimsLayerTransformRequest *request, char **error)
+{
+  GlimsLayerTransformRequest copy;
+  uint32_t size;
+  GlimsArgs a = { .image = image, .item = layer, .in = &copy, .error = error };
+  if (error) *error = NULL;
+  if (! request) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, request, sizeof size);
+  if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&copy, request, sizeof copy);
+  return glims_engine_call (e, layer_transform_matrix_captured_on_engine, &a);
+}
+
+static GlimsStatus
+api_image_transform_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                              const GlimsLayerTransformRequest *request,
+                              GlimsImageID *result, char **error)
+{
+  GlimsLayerTransformRequest copy;
+  uint32_t size;
+  GlimsArgs a = { .image = image, .item = layer, .in = &copy, .out = result, .error = error };
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  if (! result || ! request) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, request, sizeof size);
+  if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&copy, request, sizeof copy);
+  return glims_engine_call (e, image_transform_preview_on_engine, &a);
 }
 
 static GlimsStatus
@@ -3229,6 +3374,7 @@ static GlimsStatus api_image_restore_layer_sources (GlimsEngine *e, GlimsImageID
 typedef struct {
   GlimsFilterID filter;
   const GlimsCurveEdit *edit;
+  const GlimsCurvesSnapshot *settings;
   uint32_t trc;
   GlimsCurvesSnapshot *out;
   char **error;
@@ -3247,6 +3393,24 @@ static GlimsStatus filter_curves_set_trc_on_engine (GlimsEngine *e, gpointer dat
 {
   GlimsCurvesArgs *a = data;
   return glims_filter_curves_set_trc (e, a->filter, a->trc, a->out, a->error);
+}
+static GlimsStatus filter_curves_set_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsCurvesArgs *a = data;
+  return glims_filter_curves_set (e, a->filter, a->settings, a->error);
+}
+static GlimsStatus api_filter_curves_set (GlimsEngine *e, GlimsFilterID filter,
+                                         const GlimsCurvesSnapshot *settings, char **error)
+{
+  GlimsCurvesSnapshot copy;
+  uint32_t size;
+  if (error) *error = NULL;
+  if (!settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof copy) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&copy, settings, sizeof copy);
+  GlimsCurvesArgs a = { .filter = filter, .settings = &copy, .error = error };
+  return glims_engine_call (e, filter_curves_set_on_engine, &a);
 }
 static GlimsStatus api_filter_curves_get (GlimsEngine *e, GlimsFilterID filter,
                                          GlimsCurvesSnapshot *out, char **error)
@@ -3551,6 +3715,9 @@ static const GlimsEngineAPI api_v1 = {
   .stroke_begin_v2 = api_stroke_begin_v2,
   .stroke_continue_v2 = api_stroke_continue_v2,
   .image_sample_color = api_image_sample_color,
+  .layer_transform_matrix_captured = api_layer_transform_matrix_captured,
+  .image_transform_preview = api_image_transform_preview,
+  .filter_curves_set = api_filter_curves_set,
 };
 
 __attribute__ ((visibility ("default")))

@@ -64,6 +64,16 @@ final class EngineCanvasView: NSView {
     /// backing and screen-profile changes. Read-only seam for tests.
     private(set) var destination = CanvasDisplayDestination.srgbFallback
     private(set) var softProof: CanvasSoftProof?
+    private var transformSourceRevision: UInt64 = 0
+    private lazy var transformPixels = TransformPixelPreview(render: { [weak self] request, completion in
+        guard let self else { return completion(.failure(ImageDocument.DocumentError.closed)) }
+        self.document.renderTransformPreview(request, completion: completion)
+    }, changed: { [weak self] in self?.needsDisplay = true }, failed: { [weak self] error in
+        self?.tools.onStatus?("Transform preview unavailable: \(error.localizedDescription)")
+    })
+    var transformPreviewImage: CGImage? { transformPixels.image }
+    var transformPreviewRequest: TransformPixelPreview.Request? { transformPixels.displayedRequest }
+    var transformPreviewIsPending: Bool { transformPixels.isPending }
     /// Destination observer tokens for the owning window and its associated
     /// screen; swapped on window changes and removed on detach/close. The
     /// blocks hold `self` weakly, so no observer retain cycle.
@@ -199,6 +209,7 @@ final class EngineCanvasView: NSView {
 
     /// The image's size changed (crop, undo of a crop): every tile is stale.
     func imageSizeDidChange() {
+        invalidateTransformPixelPreview()
         advanceRenderGeneration(clearingTiles: true)
         updateFrameSize()
         needsDisplay = true
@@ -222,6 +233,7 @@ final class EngineCanvasView: NSView {
     /// Called when the image changed (`rect` in image pixels): the tiles
     /// under it go stale and are re-rendered, still drawn until replaced.
     func imageDidChange(in rect: CGRect? = nil) {
+        invalidateTransformPixelPreview()
         let device = rect.map { CGRect(x: $0.minX * deviceScale, y: $0.minY * deviceScale,
                                        width: $0.width * deviceScale, height: $0.height * deviceScale) }
         for key in tiles.keys where device.map({ deviceRect(for: key).intersects($0) }) ?? true {
@@ -274,6 +286,7 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        transformPixels.update(nil)
         onRenderMetricsChange = nil
         tools.cancelFloatingShape()
         tools.stopHintEvents()
@@ -588,6 +601,7 @@ final class EngineCanvasView: NSView {
         // visible rectangle. The first draw is the first reliable chance
         // to request tiles; viewDidMoveToWindow alone leaves a gray canvas.
         setNeedsRender()
+        refreshTransformPixelPreview()
         surroundColor.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -604,6 +618,24 @@ final class EngineCanvasView: NSView {
             context.draw(image, in: CGRect(origin: .zero, size: rect.size))
             context.restoreGState()
         }
+        if let image = transformPixels.image, let request = transformPixels.displayedRequest {
+            // Replace the whole composite, including its transparent pixels.
+            // Painting a warped target over the old composite would leave the
+            // original layer visible beneath it and break masks/blend modes.
+            context.saveGState()
+            context.clip(to: bounds)
+            Self.transparencyChecks.setFill()
+            let rect = CGRect(x: request.renderArea.minX / request.renderScale * scale,
+                              y: request.renderArea.minY / request.renderScale * scale,
+                              width: Double(image.width) / request.renderScale * scale,
+                              height: Double(image.height) / request.renderScale * scale)
+            rect.intersection(dirtyRect).fill()
+            context.interpolationQuality = request.renderScale < deviceScale ? .low : .none
+            context.translateBy(x: rect.minX, y: rect.maxY)
+            context.scaleBy(x: 1, y: -1)
+            context.draw(image, in: CGRect(origin: .zero, size: rect.size))
+            context.restoreGState()
+        }
         // The grid draws between the image and the selection/path/guide
         // overlays: on top of the pixels, under everything else.
         if showsGrid { drawGridOverlay() }
@@ -613,6 +645,35 @@ final class EngineCanvasView: NSView {
         if showsGuides { drawGuidesOverlay() }
         drawGuideGhost()
         tools.drawOverlay(scale: scale)
+    }
+
+    /// Projection-only changes do not necessarily reload document state.
+    /// Their own generation prevents an old clone from repainting new pixels.
+    func invalidateTransformPixelPreview() {
+        transformSourceRevision &+= 1
+        transformPixels.update(nil)
+        needsDisplay = true
+    }
+
+    func refreshTransformPixelPreview() {
+        guard !renderingStopped, !document.isClosing, document.acceptsEdits,
+              !tools.transformCommitIsPending, ToolState.shared.current == .transform,
+              !document.hasMultipleSelectedLayers, !document.isMaskTargetActive, !document.isChannelTargetActive,
+              !visibleRect.intersection(bounds).isEmpty,
+              let session = tools.transformSession, !session.isIdentity,
+              tools.transformPreview?.projectiveMatrix == session.projectiveMatrix,
+              document.activeDrawable == session.layer else {
+            transformPixels.update(nil)
+            return
+        }
+        transformPixels.update(.init(layer: session.layer, original: session.original,
+            matrix: session.projectiveMatrix, interpolation: ToolState.shared.transformInterpolation,
+            imageSize: CGSize(width: document.info.width, height: document.info.height),
+            sourceRevision: transformSourceRevision, destination: destination, proof: softProof, maximumEdge: 4096,
+            viewport: CGRect(x: visibleRect.minX / scale, y: visibleRect.minY / scale,
+                             width: visibleRect.width / scale, height: visibleRect.height / scale)
+                .intersection(CGRect(x: 0, y: 0, width: document.info.width, height: document.info.height)),
+            displayScale: deviceScale))
     }
 
     /// The guide being dragged, as a dashed ghost line clipped to the

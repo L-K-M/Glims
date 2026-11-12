@@ -769,8 +769,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             self.startEffectPreview(title: operation.title, effect: effect, drawable: drawable,
                                     properties: properties) { [imageDocument] filter, values in
-                NativeFilterPanel(document: imageDocument, operation: operation,
-                                  properties: properties, filter: filter, initialValues: values)
+                NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
+                                                 properties: properties, filter: filter, initialValues: values)
             }
         }
     }
@@ -1117,8 +1117,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             self.startFilterPreview(title: operation.title, operation: operation.name,
                                     properties: properties) { [imageDocument] filter, values in
-                NativeFilterPanel(document: imageDocument, operation: operation,
-                                  properties: properties, filter: filter, initialValues: values)
+                NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
+                                                 properties: properties, filter: filter, initialValues: values)
             }
         }
     }
@@ -1588,6 +1588,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func rotateImage180(_ sender: Any?) { imageDocument.transformImage(.rotate180) }
     @objc func flipImageHorizontally(_ sender: Any?) { imageDocument.transformImage(.flipHorizontal) }
     @objc func flipImageVertically(_ sender: Any?) { imageDocument.transformImage(.flipVertical) }
+    @objc func setTransformModeFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              item.action == #selector(setTransformModeFromMenu(_:)),
+              let mode = LayerTransformSession.Mode.from(menuTag: item.tag),
+              canvas.tools.transformModeSelectionAllowed else { return }
+        ToolState.shared.select(.transform)
+        _ = canvas.tools.setTransformMode(mode)
+    }
+
     @objc func rotateLayer90(_ sender: Any?) { imageDocument.transformActiveLayer(.rotate90) }
     @objc func rotateLayer270(_ sender: Any?) { imageDocument.transformActiveLayer(.rotate270) }
     @objc func rotateLayer180(_ sender: Any?) { imageDocument.transformActiveLayer(.rotate180) }
@@ -1646,12 +1655,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func cropToSelection(_ sender: Any?) {
-        guard let bounds = try? imageDocument.session.selectionBounds(image: imageDocument.image) else {
-            statusBar.message = "Select the area to keep first."
-            NSSound.beep()
-            return
-        }
-        imageDocument.crop(to: bounds)
+        imageDocument.cropToSelection()
     }
 
     // MARK: Select menu
@@ -1763,7 +1767,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc func newPath(_ sender: Any?) {
         guard pathActionsAvailable else { return }
-        imageDocument.addPath(VectorPath())
+        imageDocument.addPath(VectorPath()) { _ in }
     }
 
     @objc func deletePath(_ sender: Any?) {
@@ -2216,6 +2220,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 return false
             }
             return true
+        case #selector(setTransformModeFromMenu(_:)):
+            guard let mode = LayerTransformSession.Mode.from(menuTag: menuItem.tag) else { return false }
+            menuItem.state = ToolState.shared.current == .transform && canvas.tools.transformPreview?.mode == mode ? .on : .off
+            return canvas.tools.transformModeSelectionAllowed
         case #selector(mergeDown(_:)),
              #selector(flattenImage(_:)), #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
              #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)),

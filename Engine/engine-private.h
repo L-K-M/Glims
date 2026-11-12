@@ -326,6 +326,7 @@ GlimsStatus glims_filter_levels_set (GlimsEngine *, GlimsFilterID, const GlimsLe
 GlimsStatus glims_filter_levels_auto (GlimsEngine *, GlimsFilterID, GlimsLevelsSettings *, char **);
 GlimsStatus glims_filter_curves_get (GlimsEngine *, GlimsFilterID, GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_curves_edit (GlimsEngine *, GlimsFilterID, const GlimsCurveEdit *, GlimsCurvesSnapshot *, char **);
+GlimsStatus glims_filter_curves_set (GlimsEngine *, GlimsFilterID, const GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_curves_set_trc (GlimsEngine *, GlimsFilterID, uint32_t, GlimsCurvesSnapshot *, char **);
 GlimsStatus glims_filter_commit    (GlimsEngine *e, GlimsFilterID id, char **error);
 GlimsStatus glims_filter_abort     (GlimsEngine *e, GlimsFilterID id);
@@ -518,6 +519,13 @@ GlimsStatus glims_text_layer_set (GlimsEngine *e, GlimsImageID image, GlimsItemI
 GlimsStatus glims_layer_transform_matrix (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                           const GlimsMatrix *matrix, uint32_t interpolation,
                                           char **error);
+GlimsStatus glims_layer_transform_matrix_captured (GlimsEngine *e, GlimsImageID image,
+                                                   GlimsItemID layer,
+                                                   const GlimsLayerTransformRequest *request,
+                                                   char **error);
+GlimsStatus glims_image_transform_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          const GlimsLayerTransformRequest *request,
+                                          GlimsImageID *result, char **error);
 GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
                                     char **error);
 GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,

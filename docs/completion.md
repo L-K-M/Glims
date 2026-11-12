@@ -185,10 +185,11 @@ Dated reports below retain their original scope and pending notes.
       English-copy review, and on-screen Classic Light/Neutral Gray/Dark checks.
 - [ ] Spoken VoiceOver and system Full Keyboard Access qualification on hardware.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
-      remaining license texts, signing/notarization and update process.
+      remaining license texts, distribution signing and update process.
+      Notarization is excluded by the user’s instruction.
 - [x] Combined build, four-engine ordinary workflows, standalone pinned bundle
       with development trees denied, and real editing/Save/reopen/Export workflows.
-      Verification excludes public notarized distribution and physical display accuracy.
+      Verification does not establish public distribution or physical display accuracy.
 
 ## Evidence and initial implementation reports
 
