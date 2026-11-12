@@ -5424,3 +5424,17 @@ fixed draft-loss, rounding and keyboard ownership defects. Pinned native UI
 passes 243 checks and the full prior Swift suite passes 1,665; additional
 pointer cancellation tests pass. Independent production review is clear.
 Four-engine UI qualification, fixture review and hosted CI remain in progress.
+
+### Physical Lab Curves numerical foundation (2026-11-13)
+
+A private row kernel maps normalized 256-sample tables into physical L/a/b
+values, retaining integer low bits and explicit physical-space selection
+blending. Canonical identity preserves every finite encoding, and invalid
+requests leave destination bytes unchanged. Parent regressions reproduced
+and fixed unaligned-settings access and an input-alias corruption on refusal.
+All 2,551 C checks pass optimized and with ASan/UBSan, including exhaustive
+U8/U16 identity on every axis; 10,368 samples match an independent Fraction
+oracle. A kernel-only 24 MP float-axis pass measured 0.172 seconds on this Mac;
+this excludes native transactions, rendering and UI work. Independent numerical/fixture review found no important issue. Hosted CI
+remains pending. This private slice does not yet expose Lab
+Curves in the editor. See [lab-curves.md](lab-curves.md).
