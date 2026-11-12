@@ -878,6 +878,14 @@ typedef enum GlimsCurvePointKind {
 #define GLIMS_CURVE_MAX_POINTS 65536u
 #define GLIMS_CURVE_SAMPLE_COUNT 256u
 
+/* Owned value for one scalar ink; 0 is full ink, 1 is paper. Samples are
+ * finite [0,1] outputs at inputs i/255, and may rise or fall. No RGB/TRC
+ * conversion, point pointers or native object lifetime crosses this value. */
+typedef struct GlimsInkCurvesSettings {
+  uint32_t struct_size;
+  double samples[GLIMS_CURVE_SAMPLE_COUNT];
+} GlimsInkCurvesSettings;
+
 typedef struct GlimsCurvePoint {
   double x;
   double y;
@@ -3937,6 +3945,33 @@ typedef struct GlimsEngineAPI {
                                                const char *path,
                                                GlimsImageID *result,
                                                char **error);
+  /* Slot199: apply a 256-sample scalar curve to the explicit sole selected
+   * CMYK/Multichannel ink. Same selection/lock/cancellation/one-Undo contract
+   * as slot184. U8 addresses the table; U16 and float interpolate between
+   * entries. Nonidentity curves extend endpoint values outside [0,1]. The
+   * canonical identity (sample[i] == (double)i/255) preserves finite bytes,
+   * including extended floats. Zero coverage preserves arbitrary bytes;
+   * affected nonfinite samples refuse before any publication. Selection
+   * blends once before integer half-up rounding or final float conversion.
+   * Requires struct_size >= sizeof(GlimsInkCurvesSettings). Borrowed settings
+   * are immutable until return. Clears *error, including dispatch refusal. */
+  GlimsStatus (*image_curves_ink) (GlimsEngine *engine, GlimsImageID image,
+                                  GlimsItemID channel, const GlimsInkCurvesSettings *settings,
+                                  char **error);
+  /* Slot200: evaluate Curves against a token captured by slot185. Returns
+   * an independent owned image from that frozen baseline, with the same
+   * ownership and source-preservation contract as slot186. Levels and Curves
+   * may share a token; their calculated caches must never be confused.
+   * Clears *copy and *error on entry, including dispatch refusal. */
+  GlimsStatus (*image_ink_snapshot_curves) (GlimsEngine *engine, GlimsImageID image,
+                                           uint64_t token, const GlimsInkCurvesSettings *settings,
+                                           GlimsImageID *copy, char **error);
+  /* Slot201: same baseline comparison and token lifecycle as slot187, with
+   * scalar Curves settings. Success (including no-op) consumes the token;
+   * cancellation/stale state/errors retain it and publish nothing. */
+  GlimsStatus (*image_ink_snapshot_apply_curves) (GlimsEngine *engine, GlimsImageID image,
+                                                 uint64_t token, const GlimsInkCurvesSettings *settings,
+                                                 char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

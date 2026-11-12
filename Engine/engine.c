@@ -4227,6 +4227,70 @@ api_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID image,
                             image_ink_snapshot_end_on_engine, &a, NULL);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  uint64_t token;
+  const GlimsInkCurvesSettings *settings;
+  GlimsImageID *copy;
+  char **error;
+} InkCurvesArgs;
+
+static GlimsStatus
+image_curves_ink_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkCurvesArgs *a = data;
+  return glims_image_curves_ink (engine, a->image, a->channel, a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_curves_ink (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel,
+                      const GlimsInkCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  InkCurvesArgs a = { .image = image, .channel = channel, .settings = settings, .error = error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_curves_ink,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_curves_ink_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_ink_snapshot_curves_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkCurvesArgs *a = data;
+  return glims_image_ink_snapshot_curves (engine, a->image, a->token, a->settings, a->copy, a->error);
+}
+
+static GlimsStatus
+api_image_ink_snapshot_curves (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                               const GlimsInkCurvesSettings *settings, GlimsImageID *copy, char **error)
+{
+  if (error) *error = NULL;
+  if (copy) *copy = 0;
+  InkCurvesArgs a = { .image = image, .token = token, .settings = settings, .copy = copy, .error = error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_snapshot_curves,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_ink_snapshot_curves_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_ink_snapshot_apply_curves_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkCurvesArgs *a = data;
+  return glims_image_ink_snapshot_apply_curves (engine, a->image, a->token, a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_ink_snapshot_apply_curves (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                                     const GlimsInkCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  InkCurvesArgs a = { .image = image, .token = token, .settings = settings, .error = error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_ink_snapshot_apply_curves,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_ink_snapshot_apply_curves_on_engine, &a, error);
+}
+
 static GlimsStatus
 image_ink_channel_identity_on_engine (GlimsEngine *engine, gpointer data)
 {
