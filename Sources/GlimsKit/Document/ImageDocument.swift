@@ -6630,13 +6630,36 @@ final class ImageDocument {
         // may have changed cached targets or started another operation.
         guard admission?() != false else { rejected(); return false }
         pendingWork += 1
+        // An idle close retry may run before this command's cache refresh.
+        // Keep accepted mutations visibly unsaved from before busy observers
+        // until native dirty state has been reconciled. A nested activity can
+        // defer that read beyond the original exclusive completion.
+        let changesImage = effect == .changesImage
+        if changesImage { pendingInput += 1 }
         let accepted = EngineActivity.shared.perform(label: label, document: self,
                                                      didAdmit: didAdmit, work: work) {
-            self.jobDidFinish(input: false)
+            if changesImage {
+                EngineActivity.shared.whenReadyForSynchronousRead {
+                    if !self.isClosing {
+                        do {
+                            self.info = try self.session.info(self.image)
+                            self.fileState.syncDirty(self.info.isDirty)
+                        } catch {
+                            // An unreadable result cannot prove that accepted
+                            // edits are safe to discard without a Save decision.
+                            self.fileState.syncDirty(true)
+                            self.onError?("The edited image state could not be refreshed: \(error)")
+                        }
+                    }
+                    self.jobDidFinish(input: true)
+                }
+            } else {
+                self.jobDidFinish(input: false)
+            }
         }
         if accepted && strokeIsActive && effect != .readsPixels { strokeRecordingInterleaved = true }
         if !accepted {
-            jobDidFinish(input: false)
+            jobDidFinish(input: changesImage)
             rejected()
         }
         return accepted
