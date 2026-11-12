@@ -63,6 +63,7 @@ jobs:
         run: scripts/test-conformance-abi.sh
 
       - name: Check private component metadata codec
+        timeout-minutes: 5
         run: bash scripts/test-plate-map.sh
 
       - name: Build
