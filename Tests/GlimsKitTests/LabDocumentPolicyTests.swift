@@ -9,7 +9,8 @@ final class LabDocumentPolicyTests: XCTestCase {
     func testLabIsSeparateFromInkAndOrdinaryToolTargets() {
         XCTAssertFalse(EngineSession.ColorMode.lab.usesInkChannels)
         XCTAssertTrue(EngineSession.ColorMode.lab.usesNativeChannels)
-        XCTAssertEqual(ToolID.allCases.filter { $0.isAvailable(in: .lab) }, [.paintbrush, .hand, .zoom])
+        XCTAssertEqual(ToolID.allCases.filter { $0.isAvailable(in: .lab) },
+                       [.rectangleSelect, .ellipseSelect, .lasso, .paintbrush, .hand, .zoom])
         XCTAssertTrue(ToolID.paintbrush.isAvailable(in: .cmyk))
         XCTAssertTrue(ToolID.text.isAvailable(in: .rgb))
     }
@@ -39,6 +40,19 @@ final class LabDocumentPolicyTests: XCTestCase {
         }
         XCTAssertFalse(ChannelMenuPolicy.permits(.selectLabAxis(axis), multichannel: false))
         XCTAssertFalse(ChannelMenuPolicy.permits(.selectLabAxis(axis), multichannel: true))
+    }
+
+    func testLabSelectionShortcutsChooseOnlyShapeTools() {
+        let state = ToolState()
+        state.select(.rectangleSelect)
+        state.select(shortcut: "m", cycle: true, available: { $0.isAvailable(in: .lab) })
+        XCTAssertEqual(state.current, .ellipseSelect)
+        state.select(shortcut: "m", cycle: true, available: { $0.isAvailable(in: .lab) })
+        XCTAssertEqual(state.current, .rectangleSelect)
+        state.select(shortcut: "l", cycle: false, available: { $0.isAvailable(in: .lab) })
+        XCTAssertEqual(state.current, .lasso)
+        XCTAssertFalse(ToolID.magicWand.isAvailable(in: .lab))
+        XCTAssertFalse(ToolID.selectByColor.isAvailable(in: .lab))
     }
 
     func testLabLabelsDescribePhysicalStorageWithoutCarrierGrayTransferCurve() {

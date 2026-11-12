@@ -321,6 +321,22 @@ typedef struct GlimsSelectOptions {
                             * active layer */
 } GlimsSelectOptions;
 
+/* Bounded, mask-only selection settings for native Lab documents. The
+ * borrowed settings and points may be unaligned; they must remain readable
+ * and immutable until the synchronous call returns. Extension tails are
+ * accepted and ignored. No native enum or C bool layout crosses this contract. */
+#define GLIMS_LAB_SELECT_MAX_POINTS       65536u
+#define GLIMS_LAB_SELECT_COORDINATE_LIMIT 1048576.0
+#define GLIMS_LAB_SELECT_RADIUS_LIMIT     1000.0
+
+typedef struct GlimsLabSelectOptions {
+  uint32_t struct_size;    /* Complete prefix through corner_radius required. */
+  uint32_t operation;      /* GlimsSelectOperation. */
+  uint32_t antialias;      /* Exactly 0 or 1. */
+  double feather;         /* Finite [0, GLIMS_LAB_SELECT_RADIUS_LIMIT] pixels. */
+  double corner_radius;   /* Same range; used only for rectangles. */
+} GlimsLabSelectOptions;
+
 typedef struct GlimsPoint {
   double x, y;             /* image pixels */
 } GlimsPoint;
@@ -3856,6 +3872,26 @@ typedef struct GlimsEngineAPI {
    * without Undo, even if axis metadata/selection changed. Ordinary strokes
    * refuse; expired handles return NOT_FOUND. */
   GlimsStatus (*stroke_cancel_lab) (GlimsEngine *engine, GlimsStrokeID stroke);
+  /* Slot195: native Lab root selection mask only. Rectangle/ellipse require
+   * exactly two opposite corners; polygon requires 3..MAX_POINTS vertices.
+   * Every coordinate must be finite within +/-COORDINATE_LIMIT; rounded
+   * rectangle/ellipse bounds must have positive width and height. Settings
+   * are required. Axis pixels, identity, selection of axes and locks are not
+   * changed or interpreted. A changed mask uses native selection Undo.
+   * Ordinary/ink images and damaged Lab storage refuse. BUSY during a stroke,
+   * engine activity, image filter preview, disabled Undo or an open Undo group.
+   * Invalid input refuses before any mask/history change. Clears *error on
+   * entry; any returned string belongs to the caller (free_string). General
+   * select_shape/select_command remain unavailable for Lab documents. */
+  GlimsStatus (*image_select_lab_shape) (GlimsEngine *engine, GlimsImageID image,
+                                        uint32_t shape, const GlimsPoint *points,
+                                        size_t count, const GlimsLabSelectOptions *options,
+                                        char **error);
+  /* Slot196: the same mask-only admission and failure contract as slot195.
+   * Only GLIMS_SELECT_ALL, GLIMS_SELECT_NONE and GLIMS_SELECT_INVERT are
+   * supported; every other command returns UNSUPPORTED without mutation. */
+  GlimsStatus (*image_select_lab_command) (GlimsEngine *engine, GlimsImageID image,
+                                          uint32_t command, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -472,6 +472,14 @@ GlimsStatus glims_image_set_quick_mask (GlimsEngine *e, GlimsImageID image,
 /* progress.c */
 GlimsProgress * glims_progress_new (GlimsEngine *engine);
 
+/* lab-select.c: bounded root-mask writers; never interpret Lab axis values. */
+GlimsStatus glims_image_select_lab_shape (GlimsEngine *engine, GlimsImageID image,
+                                         uint32_t shape, const GlimsPoint *points,
+                                         size_t count, const GlimsLabSelectOptions *options,
+                                         char **error);
+GlimsStatus glims_image_select_lab_command (GlimsEngine *engine, GlimsImageID image,
+                                           uint32_t command, char **error);
+
 /* select.c */
 GlimsStatus glims_select_shape     (GlimsEngine *e, GlimsImageID image, uint32_t shape,
                                     const GlimsPoint *points, size_t count,

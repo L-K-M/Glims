@@ -35,6 +35,8 @@ component_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_lab_axes:
     case GLIMS_FACADE_OP_image_fill_lab:
     case GLIMS_FACADE_OP_stroke_begin_lab:
+    case GLIMS_FACADE_OP_image_select_lab_shape:
+    case GLIMS_FACADE_OP_image_select_lab_command:
     case GLIMS_FACADE_OP_channel_command:
     case GLIMS_FACADE_OP_image_render:
     case GLIMS_FACADE_OP_image_render_to_profile:

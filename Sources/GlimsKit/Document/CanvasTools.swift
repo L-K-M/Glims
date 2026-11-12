@@ -416,7 +416,7 @@ final class CanvasToolController {
         guard document.toolIsAvailable(tool),
               !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil) else {
             onStatus?(document.colorInfo.mode == .lab
-                ? "Choose Brush, Hand or Zoom for Lab. Set the physical brush value in Tool Options."
+                ? "Choose an available Brush, selection, Hand or Zoom tool for Lab."
                 : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
             return
         }

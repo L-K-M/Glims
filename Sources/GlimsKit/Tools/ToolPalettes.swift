@@ -32,6 +32,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private weak var targetDocument: ImageDocument?
     private var shownMode: EngineSession.ColorMode?
     private var shownLabBrush = false
+    private var shownLabSelections = false
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
     private var colorEditor: ToolColorEditorController { .shared }
@@ -86,9 +87,11 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         targetDocument = target
         let mode = target?.colorInfo.mode
         let labBrush = target?.session.supportsLabBrush == true
-        if shownMode != mode || shownLabBrush != labBrush {
+        let labSelections = target?.session.supportsLabSelections == true
+        if shownMode != mode || shownLabBrush != labBrush || shownLabSelections != labSelections {
             shownMode = mode
             shownLabBrush = labBrush
+            shownLabSelections = labSelections
             grid.slots = ToolID.paletteSlots.map { group in
                 ClassicToolGrid.Slot(tools: group.map {
                     ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,
@@ -1016,12 +1019,16 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                                        trackingMode: .selectOne, target: nil, action: nil)
         modes.selectedSegment = Int(options.operation.rawValue)
         modes.controlSize = .small
+        modes.font = .systemFont(ofSize: 11)
         modes.toolTip = "Shift adds, Option subtracts, Shift-Option intersects when you start dragging"
         modes.setAccessibilityLabel("Selection mode")
-        stack.addArrangedSubview(row("Mode", modes) { control in
+        // Four named modes need the full palette width. A fixed label column
+        // clips Intersect in the default and narrower saved layouts.
+        actionBindings.append(ActionBinding(control: modes) { control in
             ToolState.shared.selectOptions.operation =
                 EngineSession.SelectOperation(rawValue: UInt32((control as! NSSegmentedControl).selectedSegment)) ?? .replace
         })
+        stack.addArrangedSubview(modes)
         stack.addArrangedSubview(slider("Feather", 0...100, options.feather, unit: "px", fractionDigits: 1) { value in
             ToolState.shared.selectOptions.feather = value
         })

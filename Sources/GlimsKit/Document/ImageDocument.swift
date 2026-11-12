@@ -260,8 +260,13 @@ final class ImageDocument {
             role: axis.role, component: colorInfo.component).map(\.value)
     }
     func toolIsAvailable(_ tool: ToolID) -> Bool {
-        tool.isAvailable(in: colorInfo.mode)
-            && (colorInfo.mode != .lab || tool != .paintbrush || session.supportsLabBrush)
+        guard tool.isAvailable(in: colorInfo.mode) else { return false }
+        guard colorInfo.mode == .lab else { return true }
+        switch tool {
+        case .paintbrush: return session.supportsLabBrush
+        case .rectangleSelect, .ellipseSelect, .lasso: return session.supportsLabSelections
+        default: return true
+        }
     }
     var selectedLabAxis: EngineSession.LabAxis? {
         guard !targetCommandIsPending, !rejectedTargetPick,
@@ -1389,6 +1394,10 @@ final class ImageDocument {
     // MARK: Selection
 
     func select(_ shape: EngineSession.SelectShape, options: EngineSession.SelectOptions) {
+        if colorInfo.mode == .lab {
+            runLabSelection(.shape(shape, options))
+            return
+        }
         guard !refuseWhileEditingUnavailable() else { return }
         let command = SemanticImageCommand.selectionShape(shape, options: options)
         run(semantic: command, command.apply)
@@ -1429,9 +1438,59 @@ final class ImageDocument {
     }
 
     func select(_ command: EngineSession.SelectCommand, radius: Double = 0) {
+        if colorInfo.mode == .lab {
+            guard [.all, .none, .invert].contains(command) else {
+                onError?("This selection command is unavailable for Lab documents.")
+                return
+            }
+            runLabSelection(.command(command))
+            return
+        }
         guard !refuseWhileEditingUnavailable() else { return }
         let semantic = SemanticImageCommand.selectCommand(command, radius: radius)
         run(semantic: semantic, semantic.apply)
+    }
+
+    private enum LabSelectionRequest {
+        case shape(EngineSession.SelectShape, EngineSession.SelectOptions)
+        case command(EngineSession.SelectCommand)
+
+        func apply(session: EngineSession, image: Int32) throws {
+            switch self {
+            case .shape(let shape, let options): try session.selectLab(shape, image: image, options: options)
+            case .command(let command): try session.selectLab(command, image: image)
+            }
+        }
+    }
+
+    /// Only these typed requests may bypass the general Lab mutation gate.
+    /// They change the root selection mask without interpreting Lab samples.
+    private func runLabSelection(_ request: LabSelectionRequest) {
+        guard !isClosing, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        // Admission observers can synchronously start a stroke or close.
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else { return }
+        guard !strokeIsActive else {
+            onError?("Finish the current stroke before changing the selection.")
+            return
+        }
+        guard session.supportsLabSelections else {
+            onError?("This engine cannot change selections in Lab documents.")
+            return
+        }
+        let unsupported = "Lab selections cannot be replayed by Recorder yet."
+        let capture: RecorderCapture?
+        do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil }
+        catch { onError?("Recorder could not accept this selection: \(error.localizedDescription)"); return }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            do { try request.apply(session: session, image: image) }
+            catch { self.report(error) }
+            if let capture {
+                self.settleRecording(capture,
+                    result: .failure(RecorderReplayError(message: unsupported)), confirmed: confirmed)
+            }
+        }
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Strokes the selection's boundary on the active layer with `brush`,

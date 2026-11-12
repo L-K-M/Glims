@@ -4348,6 +4348,59 @@ api_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID stroke)
     stroke_cancel_lab_on_engine, &stroke, NULL);
 }
 
+typedef struct {
+  GlimsImageID image;
+  uint32_t shape;
+  const GlimsPoint *points;
+  size_t count;
+  const GlimsLabSelectOptions *options;
+  char **error;
+} LabSelectShapeArgs;
+
+static GlimsStatus
+image_select_lab_shape_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSelectShapeArgs *a = data;
+  return glims_image_select_lab_shape (engine, a->image, a->shape, a->points,
+                                       a->count, a->options, a->error);
+}
+
+static GlimsStatus
+api_image_select_lab_shape (GlimsEngine *engine, GlimsImageID image,
+                            uint32_t shape, const GlimsPoint *points, size_t count,
+                            const GlimsLabSelectOptions *options, char **error)
+{
+  if (error) *error = NULL;
+  LabSelectShapeArgs a = { image, shape, points, count, options, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_select_lab_shape,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_select_lab_shape_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  uint32_t command;
+  char **error;
+} LabSelectCommandArgs;
+
+static GlimsStatus
+image_select_lab_command_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSelectCommandArgs *a = data;
+  return glims_image_select_lab_command (engine, a->image, a->command, a->error);
+}
+
+static GlimsStatus
+api_image_select_lab_command (GlimsEngine *engine, GlimsImageID image,
+                              uint32_t command, char **error)
+{
+  if (error) *error = NULL;
+  LabSelectCommandArgs a = { image, command, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_select_lab_command,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_select_lab_command_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

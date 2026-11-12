@@ -264,6 +264,12 @@ final class EngineSession: @unchecked Sendable {
             && api.stroke_continue_v2 != nil && api.stroke_end != nil
     }
 
+    var supportsLabSelections: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_select_lab_command),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_select_lab_command) else { return false }
+        return supportsLabAxes && api.image_select_lab_shape != nil && api.image_select_lab_command != nil
+    }
+
     /// Physical scalar painting. Brush colors and pressure dynamics have no
     /// meaning here; only the chosen mask, size, hardness and opacity are used.
     func beginLabStroke(image: Int32, axis: LabAxis, value: Double,
@@ -2131,6 +2137,52 @@ final class EngineSession: @unchecked Sendable {
     }
 
     // MARK: Selections
+
+    /// Explicit Lab mask writers. Slot presence alone on the old general
+    /// selection API does not imply that a producer supports Lab selections.
+    func selectLab(_ shape: SelectShape, image: Int32, options: SelectOptions) throws {
+        guard supportsLabSelections, let select = api.image_select_lab_shape else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot create selections in Lab documents.")
+        }
+        var settings = GlimsLabSelectOptions()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabSelectOptions>.size)
+        settings.operation = options.operation.rawValue
+        settings.antialias = options.antialias ? 1 : 0
+        settings.feather = options.feather
+        settings.corner_radius = options.cornerRadius
+        let kind: GlimsSelectShape, points: [GlimsPoint]
+        switch shape {
+        case .rectangle(let rect):
+            kind = GLIMS_SHAPE_RECTANGLE; points = Self.corners(rect)
+        case .ellipse(let rect):
+            kind = GLIMS_SHAPE_ELLIPSE; points = Self.corners(rect)
+        case .polygon(let vertices):
+            guard vertices.count >= 3, vertices.count <= Int(GLIMS_LAB_SELECT_MAX_POINTS) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "A Lab lasso needs 3 through \(GLIMS_LAB_SELECT_MAX_POINTS) points.")
+            }
+            kind = GLIMS_SHAPE_POLYGON
+            points = vertices.map { GlimsPoint(x: $0.x, y: $0.y) }
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try points.withUnsafeBufferPointer { buffer in
+            try check(select(engine, image, kind.rawValue, buffer.baseAddress, buffer.count, &settings, &error), error)
+        }
+    }
+
+    func selectLab(_ command: SelectCommand, image: Int32) throws {
+        guard supportsLabSelections, let select = api.image_select_lab_command else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot change selections in Lab documents.")
+        }
+        guard [.all, .none, .invert].contains(command) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This selection command is unavailable for Lab documents.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(select(engine, image, command.rawValue, &error), error)
+    }
 
     func select(_ shape: SelectShape, image: Int32, options: SelectOptions = SelectOptions()) throws {
         var settings = Self.selectOptions(options)

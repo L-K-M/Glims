@@ -34,6 +34,7 @@ def check(root=ROOT):
     component.add('image_lab_axes')
     component.add('image_fill_lab')
     component.add('stroke_begin_lab')
+    component.update({'image_select_lab_shape', 'image_select_lab_command'})
     component_stroke = {'stroke_continue', 'stroke_continue_v2'}
     for name, wrapper, kind, policy in entries:
         if name in direct:

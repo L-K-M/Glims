@@ -5278,3 +5278,21 @@ queued Swift and actual-window checks after retained regressions; all 1,598
 Swift and 130 Python tests pass. Independent production and fixture reviews
 are clear. Bundled and hosted qualification remain in progress. See
 [lab-brush.md](lab-brush.md) for the numeric contract and limits.
+
+
+### Native Lab selections candidate (2026-11-12)
+
+Typed slots 195/196 add native root-mask Rectangle/Ellipse/Lasso selections
+with Replace/Add/Subtract/Intersect and All/None/Invert. Physical Lab Fill
+and Brush honor that coverage; authoritative axes stay unchanged by selection.
+Old general selection APIs remain blocked, and the Swift service and tool/menu
+routes require the explicit new capability. All four engines pass 1,380
+focused native and 312 Lab admission checks, plus general conformance
+(2,268/2,054/2,268/2,268), 34 compressed-XCF and 206 TIFF checks per engine.
+The headless Swift case passes 55 checks and actual U8/float selection UI
+passes 179 checks on each engine, with surrounding Brush/Fill/axes/Close
+regressions green. All 1,599 Swift and 130 Python tests pass; real older
+slot192/194 adapters preserve capability refusal. UI qualification reproduced
+and fixed a clipped selection-mode control; independent reviews are clear.
+Bundle and hosted qualification remain pending, with no Photoshop-parity claim. See
+[lab-selections.md](lab-selections.md) for contracts, evidence and limits.
