@@ -10,6 +10,109 @@ final class DocumentFileStateTests: XCTestCase {
     private let otherXcf = URL(fileURLWithPath: "/tmp/other.xcf")
     private let png = URL(fileURLWithPath: "/tmp/photo.png")
     private let jpeg = URL(fileURLWithPath: "/tmp/photo.jpg")
+    private let cmykPSD = URL(fileURLWithPath: "/tmp/process-inks.psd")
+
+    func testPreservingCMYKImportHasItsOwnRevertRouteAndNoSaveDestination() {
+        let state = DocumentFileState(openedFrom: cmykPSD, importStrategy: .nativeCMYKPSD)
+        XCTAssertNil(state.nativeURL)
+        XCTAssertEqual(state.importedSourceURL, cmykPSD)
+        XCTAssertEqual(state.importStrategy, .nativeCMYKPSD)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.saveRoute, .askForFile)
+        XCTAssertEqual(state.revertSource, .nativeCMYKPSD(cmykPSD))
+        XCTAssertEqual(state.revertSource?.url, cmykPSD)
+        XCTAssertEqual(state.revertSource?.menuTitle, "Revert…")
+    }
+
+    func testPreservingImportOverridesEveryNativeFilenameSuffix() {
+        for name in ["inks.xcf", "INKS.XCF", "inks.xcf.gz", "inks.xcf.bz2", "inks.xcf.xz",
+                     "inks.xcfgz", "inks.xcfbz2", "inks.xcfxz"] {
+            let source = URL(fileURLWithPath: "/tmp/" + name)
+            XCTAssertTrue(DocumentFileState.isNative(source), name)
+            let state = DocumentFileState(openedFrom: source, importStrategy: .nativeCMYKPSD)
+            XCTAssertNil(state.nativeURL, name)
+            XCTAssertEqual(state.importedSourceURL, source, name)
+            XCTAssertEqual(state.importStrategy, .nativeCMYKPSD, name)
+            XCTAssertEqual(state.saveRoute, .askForFile, name)
+            XCTAssertEqual(state.revertSource, .nativeCMYKPSD(source), name)
+            XCTAssertTrue(state.hasUnsavedChanges, name)
+        }
+    }
+
+    func testPreservingRouteSurvivesDirtySyncAndExportUntilNativeSave() {
+        var state = DocumentFileState(openedFrom: cmykPSD, importStrategy: .nativeCMYKPSD)
+        for dirty in [false, true, false] {
+            state.syncDirty(dirty)
+            XCTAssertTrue(state.hasUnsavedChanges)
+            XCTAssertEqual(state.revertSource, .nativeCMYKPSD(cmykPSD))
+            XCTAssertEqual(state.importStrategy, .nativeCMYKPSD)
+        }
+        state.noteExported(to: png)
+        state.syncDirty(false)
+        XCTAssertEqual(state.lastExportURL, png)
+        XCTAssertEqual(state.importedSourceURL, cmykPSD)
+        XCTAssertEqual(state.importStrategy, .nativeCMYKPSD)
+        XCTAssertEqual(state.revertSource, .nativeCMYKPSD(cmykPSD))
+        XCTAssertEqual(state.saveRoute, .askForFile)
+        XCTAssertTrue(state.hasUnsavedChanges)
+
+        state.noteSaved(to: xcf)
+        XCTAssertNil(state.importedSourceURL)
+        XCTAssertNil(state.importStrategy)
+        XCTAssertEqual(state.nativeURL, xcf)
+        XCTAssertEqual(state.saveRoute, .write(xcf))
+        XCTAssertEqual(state.revertSource, .native(xcf))
+        XCTAssertEqual(state.lastExportURL, png)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        state.syncDirty(true)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertNil(state.importStrategy)
+        XCTAssertEqual(state.revertSource, .native(xcf))
+    }
+
+    func testRecoveredAndGeneratedCopiesDiscardPreservingSourceAndStrategy() {
+        for recovered in [false, true] {
+            var state = DocumentFileState(openedFrom: cmykPSD, importStrategy: .nativeCMYKPSD)
+            state.noteExported(to: png)
+            if recovered { state.noteRecovered() } else { state.noteUnsavedCopy() }
+            XCTAssertNil(state.nativeURL)
+            XCTAssertNil(state.importedSourceURL)
+            XCTAssertNil(state.importStrategy)
+            XCTAssertNil(state.lastExportURL)
+            XCTAssertNil(state.revertSource)
+            XCTAssertEqual(state.saveRoute, .askForFile)
+            state.syncDirty(false)
+            XCTAssertTrue(state.hasUnsavedChanges)
+            state.noteSaved(to: otherXcf)
+            XCTAssertNil(state.importStrategy)
+            XCTAssertEqual(state.revertSource, .native(otherXcf))
+            XCTAssertFalse(state.hasUnsavedChanges)
+        }
+    }
+
+    func testImportStrategyWithoutASourceDoesNotInventIdentityOrDirtyState() {
+        var state = DocumentFileState(importStrategy: .nativeCMYKPSD)
+        XCTAssertEqual(state, DocumentFileState())
+        XCTAssertNil(state.importStrategy)
+        XCTAssertNil(state.revertSource)
+        state.syncDirty(true)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        state.syncDirty(false)
+        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertNil(state.importStrategy)
+    }
+
+    func testDefaultAppearanceImportRemainsCompatibleAndDistinctFromPreservingImport() {
+        let ordinary = DocumentFileState(openedFrom: cmykPSD)
+        XCTAssertEqual(ordinary, DocumentFileState(openedFrom: cmykPSD, importStrategy: .appearance))
+        XCTAssertEqual(ordinary.importStrategy, .appearance)
+        XCTAssertEqual(ordinary.revertSource, .imported(cmykPSD))
+        XCTAssertNotEqual(ordinary, DocumentFileState(openedFrom: cmykPSD, importStrategy: .nativeCMYKPSD))
+        XCTAssertNotEqual(ordinary.revertSource, .nativeCMYKPSD(cmykPSD))
+        let native = DocumentFileState(openedFrom: xcf)
+        XCTAssertNil(native.importStrategy)
+        XCTAssertEqual(native.revertSource, .native(xcf))
+    }
 
     func testANewImageHasNoFileAndNeedsNoSave() {
         let state = DocumentFileState()

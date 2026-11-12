@@ -9,12 +9,21 @@ import Foundation
 /// never a save target, XCF bytes over a JPEG would corrupt it — and
 /// the unsaved-changes flag the close prompt consults.
 struct DocumentFileState: Equatable {
+    /// The decoding route that must be used again when reverting an import.
+    enum ImportStrategy: Equatable {
+        case appearance
+        case nativeCMYKPSD
+    }
+
     /// The native (XCF) file this image is written to; `nil` while it
     /// only exists in memory or came from a foreign file.
     private(set) var nativeURL: URL?
     /// The foreign file this image was imported from, if any. Cleared
     /// when a native save gives the image its own file.
     private(set) var importedSourceURL: URL?
+    /// Present only for an imported source; a native Save or detached copy
+    /// clears both the source and its decoding strategy.
+    private(set) var importStrategy: ImportStrategy?
     /// The last successful foreign-format export, independent of native Save.
     private(set) var lastExportURL: URL?
     /// Changes not written to `nativeURL`: edits the engine counted
@@ -29,14 +38,18 @@ struct DocumentFileState: Equatable {
 
     /// `source` is the file the image was opened from: native when it
     /// is an XCF, an imported source otherwise; `nil` for a new image.
-    init(openedFrom source: URL? = nil) {
-        if let source, Self.isNative(source) {
+    /// Explicit preserving import identifies foreign content independently of
+    /// its filename, including a PSD whose name ends in an XCF suffix.
+    init(openedFrom source: URL? = nil, importStrategy: ImportStrategy = .appearance) {
+        if let source, importStrategy == .appearance, Self.isNative(source) {
             nativeURL = source
             importedSourceURL = nil
+            self.importStrategy = nil
             hasUnsavedChanges = false
         } else {
             nativeURL = nil
             importedSourceURL = source
+            self.importStrategy = source == nil ? nil : importStrategy
             // Imported pixels have no writable file: the image counts
             // as unsaved until a native save creates one.
             hasUnsavedChanges = source != nil
@@ -84,16 +97,19 @@ struct DocumentFileState: Equatable {
         /// The foreign file the image was imported from. Reloading it
         /// is a fresh import, so the document keeps imported identity.
         case imported(URL)
+        /// Reload the authoritative CMYK samples and embedded profile through
+        /// the preserving PSD importer, never the appearance-oriented opener.
+        case nativeCMYKPSD(URL)
 
         var url: URL {
-            switch self { case .native(let url), .imported(let url): return url }
+            switch self { case .native(let url), .imported(let url), .nativeCMYKPSD(let url): return url }
         }
 
         /// The File menu item's title for this source.
         var menuTitle: String {
             switch self {
             case .native: return "Revert to Saved…"
-            case .imported: return "Revert…"
+            case .imported, .nativeCMYKPSD: return "Revert…"
             }
         }
     }
@@ -104,7 +120,9 @@ struct DocumentFileState: Equatable {
     /// no file; untitled documents have nothing to revert to.
     var revertSource: RevertSource? {
         if let nativeURL { return .native(nativeURL) }
-        if let importedSourceURL { return .imported(importedSourceURL) }
+        if let importedSourceURL {
+            return importStrategy == .nativeCMYKPSD ? .nativeCMYKPSD(importedSourceURL) : .imported(importedSourceURL)
+        }
         return nil
     }
 
@@ -122,6 +140,7 @@ struct DocumentFileState: Equatable {
     mutating func noteUnsavedCopy() {
         nativeURL = nil
         importedSourceURL = nil
+        importStrategy = nil
         lastExportURL = nil
         unsavedCopyNeedsSave = true
         hasUnsavedChanges = true
@@ -131,6 +150,7 @@ struct DocumentFileState: Equatable {
     mutating func noteSaved(to url: URL) {
         nativeURL = url
         importedSourceURL = nil
+        importStrategy = nil
         unsavedCopyNeedsSave = false
         hasUnsavedChanges = false
     }

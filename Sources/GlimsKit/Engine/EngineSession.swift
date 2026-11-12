@@ -287,6 +287,12 @@ final class EngineSession: @unchecked Sendable {
         return api.image_convert_lab_copy != nil && supportsLabCreation && supportsLabAxes && supportsLabFill
     }
 
+    var supportsNativeCMYKPSDImport: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_import_native_cmyk_psd),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_import_native_cmyk_psd) else { return false }
+        return api.image_import_native_cmyk_psd != nil
+    }
+
     /// Physical scalar painting. Brush colors and pressure dynamics have no
     /// meaning here; only the chosen mask, size, hardness and opacity are used.
     func beginLabStroke(image: Int32, axis: LabAxis, value: Double,
@@ -953,6 +959,31 @@ final class EngineSession: @unchecked Sendable {
                               message: "The converted copy has no independent image identity.")
         }
         return result
+    }
+
+    /// Preserves native CMYK samples and the embedded profile. This explicit
+    /// import never falls back to ordinary Open. Run it off the main thread;
+    /// the caller owns a successful result and must close it if adoption fails.
+    func importNativeCMYKPSD(path: String) throws -> Int32 {
+        guard supportsNativeCMYKPSDImport, let importPSD = api.image_import_native_cmyk_psd else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support native CMYK PSD import.")
+        }
+        guard !path.isEmpty, path.hasPrefix("/"), !path.utf8.contains(0) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose an absolute local path for the CMYK PSD file.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status = path.withCString { importPSD(engine, $0, &image, &error) }
+        // Failure transfers no ownership, even if a malformed producer returns
+        // an image ID. It could name an existing document and must not be closed.
+        try check(status, error)
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The imported CMYK PSD has no valid image identity.")
+        }
+        return image
     }
 
     func openImage(path: String) throws -> Int32 {

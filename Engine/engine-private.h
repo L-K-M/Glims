@@ -237,6 +237,8 @@ gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStroke
 gboolean         glims_pixel_bytes       (int width, int height, size_t *bytes);
 
 /* lab-copy.c: publishes only fully converted, independent images. */
+GlimsStatus glims_image_import_native_cmyk_psd (GlimsEngine *engine, const char *path,
+                                               GlimsImageID *result, char **error);
 GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
                                           const GlimsLabCopySettings *settings,
                                           GlimsImageID *result, char **error);
