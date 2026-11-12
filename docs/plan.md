@@ -5112,6 +5112,18 @@ Three independent source reviews found no important findings. Qualified source
 fixture-only compatibility fix leaves the qualified editor behavior unchanged.
 See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
 
+### Private preserving CMYK PSD reader (candidate)
+
+A bounded private reader inspects flat RAW U8/U16 CMYK PSDs and decodes exact
+host-endian ink samples. It accepts exactly four channels and one structural
+CMYK ICC resource, refusing extra metadata and unsupported compression/layers.
+It has no native image or app entry point yet. Independent literal fixtures
+pass 485 optimized and 485 ASan/UBSan checks, including row/chunk boundaries,
+malformed input, exact intensity orientation and immediate callback failures.
+Full profile admission, private input staging, image ownership and preserving
+Open/Revert remain subsequent work. Native compatibility checks are in progress.
+See [cmyk-psd-import.md](cmyk-psd-import.md).
+
 ### Tool Options first-launch visibility (2026-11-12)
 
 The default Tool Options content height increases from 190 to 300 points so the
