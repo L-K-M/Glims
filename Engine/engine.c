@@ -4017,6 +4017,33 @@ api_image_new_cmyk (GlimsEngine *e, int32_t width, int32_t height,
 }
 
 typedef struct {
+  int32_t width, height;
+  uint32_t component;
+  GlimsImageID *result;
+  char **error;
+} LabNewArgs;
+
+static GlimsStatus
+image_new_lab_on_engine (GlimsEngine *e, gpointer data)
+{
+  LabNewArgs *a = data;
+  return glims_image_new_lab (e, a->width, a->height, a->component,
+                              a->result, a->error);
+}
+
+static GlimsStatus
+api_image_new_lab (GlimsEngine *e, int32_t width, int32_t height,
+                   uint32_t component, GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  LabNewArgs a = { width, height, component, result, error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_new_lab,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_new_lab_on_engine, &a, error);
+}
+
+typedef struct {
   GlimsImageID image;
   const char *path;
   char **error;

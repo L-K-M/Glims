@@ -12,10 +12,14 @@
 #define GLIMS_PLATE_MAP_ENTRY_SIZE 40u
 #define GLIMS_PLATE_MAP_MAX_SIZE (GLIMS_PLATE_MAP_HEADER_SIZE + GLIMS_PLATE_LIMIT * GLIMS_PLATE_MAP_ENTRY_SIZE)
 
-enum { GLIMS_PLATE_MODE_MULTICHANNEL = 1, GLIMS_PLATE_MODE_CMYK = 2 };
+enum { GLIMS_PLATE_MODE_MULTICHANNEL = 1, GLIMS_PLATE_MODE_CMYK = 2,
+       GLIMS_PLATE_MODE_LAB = 3 };
 enum { GLIMS_PLATE_STORAGE_U8 = 1, GLIMS_PLATE_STORAGE_U16 = 2,
        GLIMS_PLATE_STORAGE_FLOAT = 3 };
 enum { GLIMS_PLATE_ENCODING_INTENSITY = 1 }; /* 0 = full ink, 1 = paper */
+/* Fixed D50: ICC v4 U8/U16 samples, physical-unit float. Entries 0,1,2
+ * mean Lightness,a,b. ink_rgb is reserved and must contain positive-zero bits. */
+enum { GLIMS_PLATE_ENCODING_LAB_D50 = 2 };
 
 typedef struct {
     uint8_t uuid[16];

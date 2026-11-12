@@ -134,7 +134,8 @@ new_component_image (GlimsEngine *engine,
   map.height   = (uint32_t) height;
   map.count    = channel_count;
   map.mode     = mode;
-  map.encoding = GLIMS_PLATE_ENCODING_INTENSITY;
+  map.encoding = mode == GLIMS_PLATE_MODE_LAB ? GLIMS_PLATE_ENCODING_LAB_D50
+                                            : GLIMS_PLATE_ENCODING_INTENSITY;
 
   for (uint32_t i = 0; i < channel_count; i++)
     {
@@ -145,7 +146,7 @@ new_component_image (GlimsEngine *engine,
         return glims_fail (error, NULL,
                            "A component identity could not be generated.");
 
-      if (channel_count > 1 && i < GLIMS_DEFAULT_INK_COUNT)
+      if (mode != GLIMS_PLATE_MODE_LAB && channel_count > 1 && i < GLIMS_DEFAULT_INK_COUNT)
         memcpy (map.entries[i].ink_rgb, default_inks[i].rgb,
                 sizeof map.entries[i].ink_rgb);
       /* Single-channel documents and channels past the defaults are
@@ -169,7 +170,9 @@ new_component_image (GlimsEngine *engine,
   named = glims_plate_storage_read (image, &storage) == GLIMS_PLATE_STORAGE_VALID;
   for (uint32_t i = 0; named && i < channel_count; i++)
     {
-      gchar *name = plane_display_name (i, channel_count);
+      const char *lab_names[] = { "Lightness", "a", "b" };
+      gchar *name = mode == GLIMS_PLATE_MODE_LAB ? g_strdup (lab_names[i])
+                                               : plane_display_name (i, channel_count);
       if (! gimp_item_rename (GIMP_ITEM (storage.planes[i]), name, &gerror))
         named = FALSE;
       g_free (name);
@@ -215,4 +218,12 @@ glims_image_new_cmyk (GlimsEngine *engine, int32_t width, int32_t height,
 {
   return new_component_image (engine, width, height, component, 4,
                                GLIMS_PLATE_MODE_CMYK, icc, size, result, error);
+}
+
+GlimsStatus
+glims_image_new_lab (GlimsEngine *engine, int32_t width, int32_t height,
+                     uint32_t component, GlimsImageID *result, char **error)
+{
+  return new_component_image (engine, width, height, component, 3,
+                               GLIMS_PLATE_MODE_LAB, NULL, 0, result, error);
 }

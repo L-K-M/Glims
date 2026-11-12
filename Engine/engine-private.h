@@ -153,6 +153,7 @@ typedef struct
   guint64    history_revision;
   /* Set only after complete native storage validation at adoption. */
   gboolean   component_document;
+  guint32    component_mode;
   GBytes    *component_cmyk_profile;
   gchar     *component_profile_label;
   struct _GlimsPlatePreview *component_preview;
