@@ -5123,6 +5123,9 @@ before busy observers can Stop or begin another epoch, and drains before Close.
 All four engines pass 1,314 numeric and 39 ownership/cancellation checks each;
 828 optimized/sanitized scalar checks and a separate 197,397-check numeric probe
 pass. The pinned actual-window fixture passes 246 checks, including the observed
-and fixed six-failure Recorder regression. All 1,526 units pass. All-engine UI
-and packaged qualification continue; no installed-app or parity claim yet. See
-[component-edits.md](component-edits.md).
+and fixed six-failure Recorder regression. All 1,526 units and all 16 actual-window
+cases across the four engines pass. The standalone app passes native/full/ink-edit/
+CMYK/Multichannel checks with development trees blocked; fresh/cached/relocated
+launches take 1.720/1.408/3.202 seconds. The actual Fill sheet is visually usable;
+Tool Options scroll presentation is being checked separately. Latest CI and merge
+remain pending before installation. See [component-edits.md](component-edits.md).
