@@ -5408,7 +5408,7 @@ The actual CMYK/Multichannel Curves menu now routes to a modeless freehand
 panel, with whole-table graph edits, explicit sample index/output, Reset,
 owned preview, Apply and Cancel. Levels and Curves share counted snapshot
 cleanup while retaining separate typed capability gates. All 1,644 Swift
-tests pass; pinned Curves and existing Levels workflows pass. Independent
-panel and lifecycle reviews are clear. Other-engine UI and hosted CI gates
-remain open. Smooth points and Curves Recorder commands are subsequent work;
+tests pass; all four engines pass 174 Curves and 505 existing Levels workflow
+checks each. Independent panel and lifecycle reviews are clear. Hosted CI
+remains open. Smooth points and Curves Recorder commands are subsequent work;
 this is neither an installed feature nor a Photoshop-parity claim.

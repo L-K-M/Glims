@@ -66,7 +66,9 @@ combinations, real graph drags and field editors, invalid Return, queued-preview
 Cancel, Reset, displayed-pixel equality against an independent Fill oracle,
 Apply/Undo/Redo and Close during capture. The existing ink Levels case remains
 green. Independent panel and lifecycle reviews found no important findings.
-Other engine UI runs and latest-head CI are in progress.
+All four engines pass 174 Curves and 505 existing Levels hosted UI checks
+each, with the frozen executable and unchanged adapters. Latest-head CI
+remains in progress.
 
 This first panel exposes Freehand only. Smooth point sampling and semantic
 Recorder support are subsequent work; when recording is active, the edit's
