@@ -5173,3 +5173,22 @@ checks each, plus general conformance. Twelve decoder/guard-page tests and
 clear after the loader fix. This is a prerequisite for ink Recorder support,
 not completed recording/replay. See `ink-channel-identity.md`. CI and full app
 qualification remain integration gates.
+
+### Private Lab sample and preview foundation (2026-11-12)
+
+The private candidate uses ICC-v4 U8/U16 samples and physical signed float
+L*, a*, b*, with explicit role/format conversion independent of ink intensity.
+All 608,467 optimized/sanitized sample checks and a separate 986,850-case
+rational boundary probe pass. A private D50-to-linear-sRGB primitive uses
+double intermediates to reject real output overflow rather than accepting the
+finite sentinel observed in LittleCMS for extreme Lab inputs. Its 7,800
+optimized/sanitized checks pass, with separate numeric/source review.
+
+Literal scalar-channel storage checks pass 155 times per engine across all
+four engines, retaining signed zero, subnormals and extreme finite floats
+through Undo/Redo, duplication and XCF finalization/reopen. Independent codec
+and transform reviews found no important issue. These are prerequisites:
+public Lab mode, document admission, Lab editing, layers and interchange are
+still unavailable. See [lab-samples.md](lab-samples.md) and
+[lab-transform.md](lab-transform.md). Hosted CI and native integration of the
+new private modules remain qualification gates for this foundation.
