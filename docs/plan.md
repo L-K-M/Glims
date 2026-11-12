@@ -4810,3 +4810,54 @@ the engine-specific depth without suppressing the newer capability. All native P
 engines. Both independent C and Swift/profile-guard reviews found no important
 issues. Actual Export/Repeat Export and combined Batch app qualification
 remain in progress.
+
+
+### Explicit CMYK PSD output (2026-11-12)
+
+The shared Export and Batch form now offers Document RGB/Grayscale or CMYK.
+CMYK requires an explicitly selected installed ColorSync ICC profile; discovery
+runs lazily off the main thread. Repeat Export and Batch retain the exact
+profile bytes, including when the installed catalog changes. No default profile
+is silently selected. The RGB editing document and XCF save remain unchanged.
+
+An additive facade function converts a private copy with the native PSD writer,
+using relative colorimetric rendering with black-point compensation. Output is
+8-bit for u8 and 16-bit for higher precision; HDR range is clipped. Layered and
+merged layouts remain explicit. This does not provide native CMYK/Lab editing,
+duotone/spot-channel support, or CMYK-preserving import.
+
+Independent LCMS output comparison exposed two native constraints. Babl's
+qualified CMYK path always uses relative colorimetric plus BPC, so the interface
+does not offer ignored intent choices. Development GIMP 5374deeec1 requests a
+float RGBA merged buffer but treats it as bytes in its CMYK PSD preview writer.
+The independent raw-plane oracle reproduced differences up to 204/255. The
+adapter refuses CMYK output on that 3.3 engine before touching a destination;
+the bundled stable engine supports it. No upstream sources are patched.
+
+Native conformance and existing PSD regressions pass on all four engine sets.
+The three stable sets pass 35 CMYK checks, including exact ICC embedding,
+independent color values, layouts, precision conversion and source preservation.
+The development engine passes 21 refusal/source-preservation checks. Independent
+native and version-guard source reviews found no important issue. App, actual
+save-panel, Batch and standalone bundle qualification remain in progress.
+
+### Recorder Brightness/Contrast candidate (2026-11-12)
+
+A newly applied Brightness/Contrast adjustment now captures the complete
+accepted brightness/contrast pair with its explicit layer binding. Recording
+format 10 carries the finite values; earlier versions reject the new command,
+and mixed recordings choose the highest needed version. Replay retains the
+existing native admission, target and lifetime gates. Preview, Cancel and
+refused Apply add no successful row; unsupported targets/effect edits and
+actual native failures keep their explicit failure behavior.
+
+The standalone candidate passes all 1,493 unit tests and its focused native
+fixture across all four engine sets. Independent source review found no
+important issue. Combined qualification with CMYK output remains in progress.
+This expands Recorder coverage; it does not complete Photoshop 4 actions support.
+
+PSD predecessor qualification completed before this integration: all 1,483
+unit tests, actual Export/Repeat Export, full app and Batch checks passed on
+four engines. The standalone bundle passed with development trees blocked.
+Launch measured 1.634 seconds fresh, 1.379 cached and 3.386 after relocation.
+PR #221 passed hosted CI, merged as 4e93a3f, and its qualified bundle is installed.

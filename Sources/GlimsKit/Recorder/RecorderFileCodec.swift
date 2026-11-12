@@ -11,6 +11,7 @@ enum RecorderFileCodec {
     static let curvesVersion = 7
     static let colorBalanceVersion = 8
     static let hueSaturationVersion = 9
+    static let brightnessContrastVersion = 10
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -87,7 +88,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...hueSaturationVersion)
+        let fileVersion = try integer(root.get("version"), range: version...brightnessContrastVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -112,6 +113,7 @@ enum RecorderFileCodec {
         var hasCurves = false
         var hasColorBalance = false
         var hasHueSaturation = false
+        var hasBrightnessContrast = false
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
             let outcomeName = try string(outcome)
@@ -129,6 +131,7 @@ enum RecorderFileCodec {
                 if case .applyCurves = command { hasCurves = true }
                 if case .applyColorBalance = command { hasColorBalance = true }
                 if case .applyHueSaturation = command { hasHueSaturation = true }
+                if case .applyBrightnessContrast = command { hasBrightnessContrast = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 result = .success(command, binding)
@@ -168,6 +171,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == hueSaturationVersion, !hasHueSaturation {
             throw RecorderFileError.invalid("Version 9 requires a successful Hue/Saturation command.")
+        }
+        if fileVersion == brightnessContrastVersion, !hasBrightnessContrast {
+            throw RecorderFileError.invalid("Version 10 requires a successful Brightness/Contrast command.")
         }
         return RecorderFileValue(recordingID: try uuid(root.get("recordingID")), name: name, origin: source, symbols: symbols, records: records)
     }
@@ -373,6 +379,10 @@ enum RecorderFileCodec {
             guard version >= hueSaturationVersion else { throw RecorderFileError.invalid("A Hue/Saturation command needs recording version 9.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyHueSaturation(try hueSaturation(value.get("settings")))
+        case "applyBrightnessContrast":
+            guard version >= brightnessContrastVersion else { throw RecorderFileError.invalid("A Brightness/Contrast command needs recording version 10.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyBrightnessContrast(try brightnessContrast(value.get("settings")))
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -475,6 +485,14 @@ enum RecorderFileCodec {
             master: range("master"), red: range("red"), yellow: range("yellow"),
             green: range("green"), cyan: range("cyan"), blue: range("blue"),
             magenta: range("magenta")).validated()
+    }
+
+    /// Whole Brightness/Contrast values: the owned pair, matching the
+    /// finite −1...1 contract of the native typed settings.
+    private static func brightnessContrast(_ node: RecorderJSON) throws -> RecorderBrightnessContrastValue {
+        let value = try Object(node, required: ["brightness", "contrast"])
+        return try RecorderBrightnessContrastValue(brightness: number(value.get("brightness")),
+            contrast: number(value.get("contrast"))).validated()
     }
 
     private static func descriptionKind(_ node: RecorderJSON) throws -> RecorderTargetDescription.Kind {
@@ -589,6 +607,9 @@ enum RecorderFileCodec {
             return
         case (.applyHueSaturation, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A Hue/Saturation adjustment needs a layer description.") }
+            return
+        case (.applyBrightnessContrast, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Brightness/Contrast adjustment needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }

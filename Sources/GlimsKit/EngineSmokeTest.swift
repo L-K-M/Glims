@@ -246,6 +246,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Hue/Saturation recorder)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-brightness-contrast" {
+                try exerciseRecorderBrightnessContrast(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Brightness/Contrast recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-install" {
                 try exerciseRecorderInstall(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder install)" : "FAILED: \(failures) failure(s)")
@@ -565,9 +570,10 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (image adjust)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ["export-options", "export-psd"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
+            if ["export-options", "export-psd", "export-cmyk-controls"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
                 try exerciseExportOptions(session, work: work, documents: documents,
-                    psd: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-psd")
+                    psd: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] != "export-options",
+                    cmyk: ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-cmyk-controls")
                 print(failures == 0 ? "PASSED (export options)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }

@@ -39,6 +39,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, colorBalanceVersion)
             case .success(.applyHueSaturation, _):
                 fileVersion = max(fileVersion, hueSaturationVersion)
+            case .success(.applyBrightnessContrast, _):
+                fileVersion = max(fileVersion, brightnessContrastVersion)
             default: break
             }
         }
@@ -182,6 +184,10 @@ extension RecorderFileCodec {
                 "red": try rangeJSON(hueSaturation.red), "yellow": try rangeJSON(hueSaturation.yellow),
                 "green": try rangeJSON(hueSaturation.green), "cyan": try rangeJSON(hueSaturation.cyan),
                 "blue": try rangeJSON(hueSaturation.blue), "magenta": try rangeJSON(hueSaturation.magenta)])])
+        case .applyBrightnessContrast(let value):
+            let value = try value.validated()
+            return .object(["tag": .string("applyBrightnessContrast"), "settings": .object([
+                "brightness": try d(value.brightness), "contrast": try d(value.contrast)])])
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

@@ -124,6 +124,48 @@ extension EngineSmokeTest {
         check(try Data(contentsOf: layeredInput) == layeredOriginal,
               "Layered and merged PSD Batch exports preserve the source file")
 
+        // Keep the selected ICC bytes in the immutable Batch settings, and
+        // compare replay output with an independently authored flipped image.
+        guard let cmykBytes = NSColorSpace.genericCMYK.iccProfileData else {
+            throw NSError(domain: "BatchFixture", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Fixture needs a CMYK ICC profile"])
+        }
+        let cmykProfile = try PsdCmykProfile(displayName: "Fixture printer", iccData: cmykBytes)
+        for layout in ExportSettings.PsdLayout.allCases {
+            var settings = ExportSettings()
+            settings.format = .psd
+            settings.psdLayout = layout
+            settings.psdColor = .cmyk
+            settings.psdCmykProfile = cmykProfile
+            let destination = try folder("cmyk-\(layout)")
+            let items = try run(flip, [layeredInput], destination, format: .exported(settings))
+            try require(items.count == 1, "CMYK Batch result missing")
+            if session.version.hasPrefix("3.3.") {
+                if case .failed(let reason) = items[0].outcome {
+                    check(reason.contains("development image engine"), "Batch reports the CMYK development writer refusal")
+                } else { check(false, "Development CMYK Batch must refuse") }
+                check(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty,
+                      "Refused CMYK Batch publishes no file or staging directory")
+                continue
+            }
+            let output = try saved(items[0])
+            let data = try Data(contentsOf: output)
+            check(data.count > 26 && data[24] == 0 && data[25] == 4 && data.range(of: cmykBytes) != nil,
+                  "Batch publishes CMYK PSD with the captured ICC bytes")
+            let reopened = try session.openImage(path: output.path)
+            defer { try? session.closeImage(reopened) }
+            check(try session.layers(reopened).count == (layout == .layers ? 2 : 1),
+                  "CMYK Batch preserves the selected PSD layout")
+            let expected = try session.newImage(pixels: .init(width: 4, height: 3, pixels: Data(flipped), origin: .zero))
+            defer { try? session.closeImage(expected) }
+            let expectedFile = root.appendingPathComponent("expected-cmyk-\(layout).psd")
+            try session.export(expected, to: expectedFile.path, settings: settings)
+            check(try session.copyPixels(reopened, merged: true).pixels == pixels(expectedFile),
+                  "CMYK Batch contains the independently authored flipped image after the same output conversion")
+        }
+        check(try Data(contentsOf: layeredInput) == layeredOriginal,
+              "CMYK Batch leaves its source XCF unchanged")
+
         let symbol = UUID()
         let description = RecorderTargetDescription(name: "Subject", kind: .pixel, ancestors: [], siblingIndex: 0,
                                                    bounds: .init(x: 0, y: 0, width: 4, height: 3))

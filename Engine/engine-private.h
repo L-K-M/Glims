@@ -241,6 +241,9 @@ GlimsStatus glims_image_save_copy  (GlimsEngine *e, GlimsImageID id, const char 
 GlimsStatus glims_image_export     (GlimsEngine *e, GlimsImageID id, const char *path, char **error);
 GlimsStatus glims_image_export_configured (GlimsEngine *e, GlimsImageID id, const char *path,
                                            const GlimsExportSettings *settings, char **error);
+GlimsStatus glims_image_export_psd_cmyk (GlimsEngine *e, GlimsImageID id, const char *path,
+                                        const GlimsExportSettings *settings,
+                                        const uint8_t *icc, size_t length, char **error);
 GlimsStatus glims_image_layers     (GlimsEngine *e, GlimsImageID id, GlimsLayerInfo *layers,
                                     int32_t capacity, int32_t *count);
 /* The facade kind of one layer; rasterized text/link/vector instances

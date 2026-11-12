@@ -37,4 +37,18 @@ extension ExportSettings {
         value.psd_layout = psdLayout == .layers ? GLIMS_PSD_LAYERS.rawValue : GLIMS_PSD_MERGED.rawValue
         return value
     }
+
+    /// The captured CMYK profile bytes required for a PSD CMYK export, after
+    /// validating the active export choice.
+    func validatedPsdCmykProfileData() throws -> Data {
+        guard format == .psd, psdColor == .cmyk else {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                            message: "CMYK profile data is only valid for PSD CMYK export.")
+        }
+        guard let profile = psdCmykProfile, PsdCmykProfile.isValidICCData(profile.iccData) else {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                            message: "Choose a valid CMYK profile before exporting.")
+        }
+        return profile.iccData
+    }
 }
