@@ -138,6 +138,22 @@ extension EngineSmokeTest {
         check(try Data(contentsOf: layeredInput) == layeredOriginal,
               "GIF Batch leaves its source file unchanged")
 
+        for format in [ExportFormat.bmp, .tga] {
+            var settings = ExportSettings()
+            settings.format = format
+            let items = try run(flip, [layeredInput], folder(format.rawValue), format: .exported(settings))
+            try require(items.count == 1, "Bitmap Batch result missing")
+            let output = try saved(items[0])
+            let image = try session.openImage(path: output.path)
+            check(try session.layers(image).count == 1 && output.pathExtension == format.preferredExtension,
+                  "Bitmap Batch publishes one visible image in the chosen format")
+            check(try session.copyPixels(image, merged: true).pixels == Data(flipped),
+                  "Bitmap Batch contains the independently expected flipped pixels")
+            try session.closeImage(image)
+            check(try Data(contentsOf: layeredInput) == layeredOriginal,
+                  "Bitmap Batch leaves its source file unchanged")
+        }
+
         // Keep the selected ICC bytes in the immutable Batch settings, and
         // compare replay output with an independently authored flipped image.
         guard let cmykBytes = NSColorSpace.genericCMYK.iccProfileData else {

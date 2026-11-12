@@ -62,7 +62,7 @@ Saving and exporting are two separate jobs:
   name. Save a Copy… writes an XCF copy without changing the file you
   are editing.
 
-  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF, PSD or GIF. After exporting once, File > Export Again… (Command-E) reads
+  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF, PSD, GIF, BMP or TGA. After exporting once, File > Export Again… (Command-E) reads
   "Export to name.png" and overwrites that file with the current
   image.
 
@@ -88,6 +88,13 @@ not available.
 GIF exports the visible canvas as one still image with up to 256 colors.
 Pixels below 50% opacity become transparent; other pixels become opaque.
 Layers, animation and higher precision remain in your XCF working file.
+
+BMP and TGA export the visible canvas as one uncompressed 32-bit sRGB image
+with eight alpha bits, including partial transparency. BMP writes V5 sRGB
+information; some older readers ignore its alpha channel. TGA uses top-left
+origin and embeds no ICC profile. Grayscale and indexed documents are converted
+to RGB only in the export copy. High precision is reduced to eight bits per
+channel. Save XCF to retain the original layers, profile and precision.
 
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.
@@ -385,7 +392,7 @@ partial success never passes for a complete macro.
 # Batch
 
 File > Batch… runs a saved .glimsrecording on several images. Choose the
-recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF/PSD/GIF.
+recording, input files or folders, an output folder, and XCF or PNG/JPEG/TIFF/PSD/GIF/BMP/TGA.
 Folders contribute visible files directly inside them, without subfolders
 or links. Files the editor cannot open appear as individual failures.
 

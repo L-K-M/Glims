@@ -6,7 +6,7 @@ import AppKit
 /// leading dot; an unknown or empty extension gets nil so the caller
 /// picks a fallback rather than guessing.
 enum ExportFormat: String, CaseIterable {
-    case png, jpeg, tiff, psd, gif
+    case png, jpeg, tiff, psd, gif, bmp, tga
 
     var title: String {
         switch self {
@@ -15,6 +15,8 @@ enum ExportFormat: String, CaseIterable {
         case .tiff: return "TIFF"
         case .psd: return "PSD"
         case .gif: return "GIF"
+        case .bmp: return "BMP"
+        case .tga: return "TGA"
         }
     }
 
@@ -27,6 +29,8 @@ enum ExportFormat: String, CaseIterable {
         case .tiff: return "tiff"
         case .psd: return "psd"
         case .gif: return "gif"
+        case .bmp: return "bmp"
+        case .tga: return "tga"
         }
     }
 
@@ -38,6 +42,8 @@ enum ExportFormat: String, CaseIterable {
         case "tif", "tiff": return .tiff
         case "psd": return .psd
         case "gif": return .gif
+        case "bmp": return .bmp
+        case "tga": return .tga
         default: return nil
         }
     }
@@ -352,6 +358,10 @@ final class ExportOptionsForm: NSView {
     let psdColorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let psdCmykProfilePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let psdExplanation = NSTextField(wrappingLabelWithString: "")
+    let bmpExplanation = NSTextField(wrappingLabelWithString:
+        "Exports the visible image as uncompressed 32-bit sRGB with transparency. Some older BMP readers ignore alpha. Save XCF to retain layers, profile and precision.")
+    let tgaExplanation = NSTextField(wrappingLabelWithString:
+        "Exports the visible image as uncompressed 32-bit sRGB with transparency and top-left origin. No color profile is embedded. Save XCF to retain layers, profile and precision.")
     let gifExplanation = NSTextField(wrappingLabelWithString:
         "Exports the visible image with up to 256 colors. Pixels below 50% opacity become transparent; other pixels become opaque. One image, without animation. Save XCF to retain layers and precision.")
     let messageLabel = NSTextField(labelWithString: "")
@@ -420,6 +430,12 @@ final class ExportOptionsForm: NSView {
         gifExplanation.font = .systemFont(ofSize: 11)
         gifExplanation.textColor = .secondaryLabelColor
         gifExplanation.preferredMaxLayoutWidth = 270
+        for explanation in [bmpExplanation, tgaExplanation] {
+            explanation.font = .systemFont(ofSize: 11)
+            explanation.textColor = .secondaryLabelColor
+            explanation.preferredMaxLayoutWidth = 270
+            explanation.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        }
         psdExplanation.widthAnchor.constraint(equalToConstant: 270).isActive = true
 
         for box in [optimizeBox, progressiveBox, interlacedBox, pngTransparentBox, tiffTransparentBox] {
@@ -469,9 +485,13 @@ final class ExportOptionsForm: NSView {
             [NSTextField(labelWithString: "CMYK profile:"), psdCmykProfilePopup],
             [NSGridCell.emptyContentView, psdExplanation],
         ]
-        let gifRows: [[NSView]] = [[NSGridCell.emptyContentView, gifExplanation]]
+        let bitmapRows: [[NSView]] = [
+            [NSGridCell.emptyContentView, gifExplanation],
+            [NSGridCell.emptyContentView, bmpExplanation],
+            [NSGridCell.emptyContentView, tgaExplanation],
+        ]
         let grid = NSGridView(views:
-            [[NSTextField(labelWithString: "Format:"), formatPopup]] + jpegRows + pngRows + tiffRows + psdRows + gifRows)
+            [[NSTextField(labelWithString: "Format:"), formatPopup]] + jpegRows + pngRows + tiffRows + psdRows + bitmapRows)
         grid.column(at: 0).xPlacement = .trailing
         grid.rowSpacing = 8
         grid.columnSpacing = 12
@@ -484,6 +504,8 @@ final class ExportOptionsForm: NSView {
             .tiff: (8...9).map { grid.row(at: $0) },
             .psd: psdAllRows,
             .gif: [grid.row(at: psdStart + psdRows.count)],
+            .bmp: [grid.row(at: psdStart + psdRows.count + 1)],
+            .tga: [grid.row(at: psdStart + psdRows.count + 2)],
         ]
         let fullWidth = ceil(grid.fittingSize.width)
 
@@ -760,7 +782,7 @@ final class ExportOptionsForm: NSView {
                 window?.makeFirstResponder(compressionRow.field)
                 return false
             }
-        case .tiff, .psd, .gif:
+        case .tiff, .psd, .gif, .bmp, .tga:
             break
         }
         guard ExportSettings.validate(settings) else {

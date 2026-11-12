@@ -14,6 +14,7 @@
 #include "core/gimpimage.h"
 #include "core/gimpimage-color-profile.h"
 #include "core/gimpimage-convert-precision.h"
+#include "core/gimpimage-convert-type.h"
 #include "core/gimpimage-duplicate.h"
 #include "core/gimpimage-undo.h"
 #include "core/gimplayer.h"
@@ -27,7 +28,7 @@
 static gboolean
 settings_valid (const GlimsExportSettings *s)
 {
-  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_GIF &&
+  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_TGA &&
          isfinite (s->jpeg_quality) && s->jpeg_quality >= 0 && s->jpeg_quality <= 1 &&
          s->jpeg_progressive <= 1 && s->jpeg_optimize <= 1 &&
          s->jpeg_subsampling <= GLIMS_JPEG_BOTH &&
@@ -104,6 +105,17 @@ configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gb
     case GLIMS_EXPORT_GIF:
       return set_bool (p, a, "interlace", FALSE) &&
              set_bool (p, a, "as-animation", FALSE);
+    case GLIMS_EXPORT_BMP:
+      /* Uncompressed 32-bit RGBA, V5 header with sRGB metadata. The native
+       * writer reads babl's default (sRGB) pixel format; output is sRGB. */
+      return set_bool (p, a, "use-rle", FALSE) &&
+             set_bool (p, a, "write-color-space", TRUE) &&
+             set_choice (p, a, "rgb-format", "rgba-8888");
+    case GLIMS_EXPORT_TGA:
+      /* Uncompressed 32-bit RGBA, top-left origin, no ICC. The native writer
+       * reads babl's default (sRGB) pixel format; output is sRGB. */
+      return set_bool (p, a, "rle", FALSE) &&
+             set_choice (p, a, "origin", "top-left");
     default:
       return FALSE;
     }
@@ -149,7 +161,7 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
                    GimpColorProfile *cmyk_profile, GimpColorRenderingIntent intent,
                    char **error)
 {
-  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export", "file-gif-export" };
+  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export", "file-gif-export", "file-bmp-export", "file-tga-export" };
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpPlugInProcedure *file_proc;
   GimpProcedure *proc;
@@ -195,6 +207,44 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
           if (error) *error = g_strdup ("GIF export requires a .gif filename.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
+    }
+  if (settings->format == GLIMS_EXPORT_BMP)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || g_ascii_strcasecmp (extension, ".bmp") != 0)
+        {
+          if (error) *error = g_strdup ("BMP export requires a .bmp filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_TGA)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || g_ascii_strcasecmp (extension, ".tga") != 0)
+        {
+          if (error) *error = g_strdup ("TGA export requires a .tga filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_BMP)
+    {
+      /* The V5 file header is 138 bytes. Keep the whole uncompressed
+       * RGBA payload within the native writer's signed offset range. */
+      uint64_t width = (uint64_t) gimp_image_get_width (open->image);
+      uint64_t height = (uint64_t) gimp_image_get_height (open->image);
+      if (width * height * 4u + 138u > INT32_MAX)
+        {
+          if (error) *error = g_strdup ("BMP export requires a file smaller than 2 GiB. Reduce the image dimensions first.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_TGA &&
+      (gimp_image_get_width (open->image) > 65535 ||
+       gimp_image_get_height (open->image) > 65535))
+    {
+      /* Native TGA writes each dimension into an unsigned 16-bit field. */
+      if (error) *error = g_strdup ("TGA export supports dimensions up to 65535 pixels. Reduce the image dimensions first.");
+      return GLIMS_STATUS_UNSUPPORTED;
     }
   if (cmyk_profile && gimp_image_get_base_type (open->image) != GIMP_RGB)
     {
@@ -290,21 +340,55 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
   /* Plug-ins nest a main loop: retain the image, never use `open` afterward. */
   image = g_object_ref (open->image);
   if ((settings->format == GLIMS_EXPORT_PSD && (settings->psd_layout == GLIMS_PSD_MERGED || cmyk_profile)) ||
-      settings->format == GLIMS_EXPORT_GIF)
+      settings->format == GLIMS_EXPORT_GIF ||
+      settings->format == GLIMS_EXPORT_BMP ||
+      settings->format == GLIMS_EXPORT_TGA)
     {
-      private_image = settings->format == GLIMS_EXPORT_GIF || settings->psd_layout == GLIMS_PSD_MERGED
-        ? merged_export_image (image) : gimp_image_duplicate (image);
+      const gboolean need_merged = settings->format == GLIMS_EXPORT_GIF ||
+                                   settings->format == GLIMS_EXPORT_BMP ||
+                                   settings->format == GLIMS_EXPORT_TGA ||
+                                   (settings->format == GLIMS_EXPORT_PSD && settings->psd_layout == GLIMS_PSD_MERGED);
+      private_image = need_merged ? merged_export_image (image) : gimp_image_duplicate (image);
       if (!private_image)
         {
+          const char *prepare_error = "The visible image could not be prepared for export.";
+          if (settings->format == GLIMS_EXPORT_GIF)
+            prepare_error = "The visible image could not be prepared for GIF export.";
+          else if (settings->format == GLIMS_EXPORT_PSD)
+            prepare_error = "The visible image could not be prepared for PSD export.";
+          else if (settings->format == GLIMS_EXPORT_BMP)
+            prepare_error = "The visible image could not be prepared for BMP export.";
+          else if (settings->format == GLIMS_EXPORT_TGA)
+            prepare_error = "The visible image could not be prepared for TGA export.";
           gimp_value_array_unref (args);
           g_object_unref (file);
           g_object_unref (image);
-          return glims_fail (error, NULL, settings->format == GLIMS_EXPORT_GIF
-                               ? "The visible image could not be prepared for GIF export."
-                               : "The visible image could not be prepared for PSD export.");
+          return glims_fail (error, NULL, prepare_error);
         }
       if (settings->format == GLIMS_EXPORT_GIF)
         gimp_image_parasite_detach (private_image, "gif/animated", FALSE);
+      if (settings->format == GLIMS_EXPORT_BMP || settings->format == GLIMS_EXPORT_TGA)
+        {
+          GimpImageBaseType base = gimp_image_get_base_type (private_image);
+          if (base == GIMP_GRAY || base == GIMP_INDEXED)
+            {
+              /* Convert the private merged image to RGB as the engine would for
+               * an RGB-only export path. The native writers read babl's default
+               * sRGB; output is sRGB rather than an embedded source profile. */
+              gimp_image_undo_disable (private_image);
+              if (!gimp_image_convert_type (private_image, GIMP_RGB, NULL, NULL, &gerror))
+                {
+                  gimp_value_array_unref (args);
+                  g_object_unref (file);
+                  g_object_unref (image);
+                  g_object_unref (private_image);
+                  return glims_fail (error, gerror, settings->format == GLIMS_EXPORT_BMP
+                                       ? "The image could not be converted to RGB for BMP export."
+                                       : "The image could not be converted to RGB for TGA export.");
+                }
+              gimp_image_flush (private_image);
+            }
+        }
       if (cmyk_profile)
         {
           gimp_image_undo_disable (private_image);

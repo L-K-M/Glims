@@ -139,7 +139,8 @@ typedef struct GlimsLayerInfo {
 /* Owned export choices. These values never encode an upstream enum. */
 typedef enum { GLIMS_EXPORT_PNG = 1, GLIMS_EXPORT_JPEG = 2,
                GLIMS_EXPORT_TIFF = 3, GLIMS_EXPORT_PSD = 4,
-               GLIMS_EXPORT_GIF = 5 } GlimsExportFormat;
+               GLIMS_EXPORT_GIF = 5, GLIMS_EXPORT_BMP = 6,
+               GLIMS_EXPORT_TGA = 7 } GlimsExportFormat;
 /* PSD supports RGB/grayscale here. Layers retain the native exporter's
  * baked effects and perceptual blending; merged captures visible pixels
  * into one alpha-capable layer without editing the source image. */
