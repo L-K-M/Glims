@@ -4695,3 +4695,21 @@ PNG/TIFF/JPEG screenshots exposed tight accessory margins; the form now has
 insets and shorter transparent-pixel labels. All 1,418 units and the actual
 native picker workflow pass after that layout-only change. The final
 combined package will include it.
+
+### File and Recorder integration checkpoint (2026-11-12)
+
+The combined source includes export settings and the native save panel,
+recorded Color Balance and Hue/Saturation, and TIFF thumbnail preparation.
+Color Balance passes all 1,401 units and 31 dedicated native AppKit checks
+per engine. Hue/Saturation passes all 1,413 units and 31 dedicated checks
+per engine, including the actual panel, pixel oracle, save/load/rebinding,
+Undo/Redo, native role refusals and failed-Apply retry. Its independent
+source review found no important defect. These supersede the earlier unrun
+notes for those two candidates.
+
+The first combined engine run passed native conformance, 102 TIFF and 60
+export checks on all four engines. The final TIFF loader gate/memory bound
+and Export sheet spacing are now integrated and are undergoing the affected
+checks and final application/package qualification. No completed package is
+claimed for this combined revision yet; Photoshop 4 parity, native CMYK/Lab
+editing, wider Recorder coverage and folder batch processing remain open.
