@@ -157,6 +157,21 @@ extension RecorderFileCommand {
         case .applyColorBalance(let settings): self = .applyColorBalance(try RecorderColorBalanceValue(settings))
         case .applyHueSaturation(let settings): self = .applyHueSaturation(try RecorderHueSaturationValue(settings))
         case .applyBrightnessContrast(let settings): self = .applyBrightnessContrast(try RecorderBrightnessContrastValue(settings))
+        case .editInk(let settings):
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink edit has invalid settings.") }
+            let operation: RecorderFileCommand.InkEdit.Operation
+            switch settings.operation {
+            case .fill: operation = .fill
+            case .clear: operation = .clear
+            case .invert: operation = .invert
+            }
+            self = .editInk(.init(operation: operation, intensity: settings.intensity, opacity: settings.opacity))
+        case .applyInkLevels(let settings):
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Levels adjustment has invalid settings.") }
+            self = .applyInkLevels(.init(lowInput: settings.value.lowInput, highInput: settings.value.highInput,
+                                         gamma: settings.value.gamma, lowOutput: settings.value.lowOutput,
+                                         highOutput: settings.value.highOutput,
+                                         clampInput: settings.clampInput, clampOutput: settings.clampOutput))
         case .completeStroke(let value): self = .completeStroke(value)
         }
     }

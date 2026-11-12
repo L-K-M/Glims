@@ -1168,9 +1168,9 @@ run or push happened in this slice.
 
 ## Later, before any public release
 
-- Developer ID signing and notarization for the app, GTK3, Python and every
-  plug-in executable; third-party plug-ins probably need library validation
-  disabled. Lucerne and the other apps currently ship ad-hoc signed.
+- Verify the ad-hoc signatures of the app and bundled executables. The user
+  explicitly excluded notarization; Developer ID signing and notarization are
+  not release gates for this task.
 - A process for shipping engine security fixes within days. GIMP's file
   loaders had high-severity bugs in 2025 (for example CVE-2025-14424 in XCF
   and CVE-2025-10925 in ILBM).
@@ -5112,6 +5112,15 @@ Three independent source reviews found no important findings. Qualified source
 fixture-only compatibility fix leaves the qualified editor behavior unchanged.
 See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
 
+### Tool Options first-launch visibility (2026-11-12)
+
+The default Tool Options content height increases from 190 to 300 points so the
+paint controls and native-ink explanation fit without scrolling. Existing saved
+sizes, the 120-point minimum, scrolling and stable sizing across tool switches
+remain unchanged. A real CMYK window reproduced the partly hidden explanation;
+the revised first-launch window shows it completely and stays outside the canvas.
+The debug build passes. This is a default-layout change, not a scrolling repair.
+
 ### Native ink Fill, Clear and Invert (2026-11-12)
 
 Selected CMYK and Multichannel ink planes now have explicit scalar Fill, Clear
@@ -5192,3 +5201,16 @@ public Lab mode, document admission, Lab editing, layers and interchange are
 still unavailable. See [lab-samples.md](lab-samples.md) and
 [lab-transform.md](lab-transform.md). Hosted CI and native integration of the
 new private modules remain qualification gates for this foundation.
+
+### Native ink Recorder candidate (2026-11-12)
+
+Successful Fill/Clear/Invert and Levels Apply now capture exact semantic values
+and authoritative ink bindings. Strict recording version 11 preserves owned
+settings and document-scoped identity; explicit Load choices validate CMYK
+roles and retain the destination UUID. Replay requires the bound ink already
+selected, revalidates natively and stops on failure. Batch name matching
+refuses ink recordings. Twenty pure tests and 329 document-service checks on
+each of four engines pass, including disk round trips, XCF reopen, independent
+scalar oracles, Undo/Redo and stale-target refusal. Independent file/runtime
+reviews found no important issue. Full UI, bundle and launch qualification are
+in progress. See `ink-recorder.md` for scope and remaining selection/Batch work.

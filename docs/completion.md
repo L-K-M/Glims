@@ -7,24 +7,24 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The installed editor uses qualified source `40c3b74`, merged in native CMYK
-PSD export [#233](https://github.com/L-K-M/Glims/pull/233). It includes native
+The installed editor uses qualified source `eee1f48`, merged with ink Levels
+controls [#237](https://github.com/L-K-M/Glims/pull/237). It includes native
 CMYK and Multichannel creation, conversion, ink painting and XCF persistence,
 plus native U8/U16 CMYK PSD export retaining the original inks and profile,
 the merged Rigi tool-availability controls, Sponge saturation tools, GIF/BMP/TGA
-export and the preceding reviewed editor work. All 1,523 units and native/app
-checks on four engines pass. Its standalone pinned bundle passed native, full
-app, CMYK and Multichannel checks with development trees denied, plus actual
-Export/Repeat Export controls. Fresh/cached/relocated launch measured
-1.732/1.449/3.245 seconds on this Mac. Those timings do not establish every
+export, scalar ink Fill/Clear/Invert, modeless ink Levels and the preceding
+reviewed editor work. All 1,538 units and native/app checks on four engines
+pass. Its standalone pinned bundle passed native, full app, ink edits, ink
+Levels, CMYK and Multichannel checks with development trees denied.
+Fresh/cached/relocated launch measured 1.763/1.449/3.522 seconds on this Mac.
+Those timings do not establish every
 machine's latency. No notarization is requested or required for this task.
 
 This is not yet a claim of complete Photoshop 4 parity. Native ink adjustment
 breadth, Lab and duotone editing, broader Recorder coverage, PSD fidelity and
-physical-tablet/VoiceOver qualification remain open. Scalar ink Fill/Clear/Invert
-and ink Levels are subsequent integration
-candidates; their source, review and qualification evidence does not imply
-they are already installed. See
+physical-tablet/VoiceOver qualification remain open. Ink identity is merged;
+ink Recorder capture/replay is a subsequent integration candidate, whose
+source, review and qualification evidence does not imply it is installed. See
 [the plan](plan.md) for current slice evidence and [the earlier verification
 report](editor-verification.md) for its exact historical scope. Dated reports
 below retain their original scope and pending notes.
@@ -198,7 +198,7 @@ below retain their original scope and pending notes.
       English-copy review, and on-screen Classic Light/Neutral Gray/Dark checks.
 - [ ] Spoken VoiceOver and system Full Keyboard Access qualification on hardware.
 - [ ] Public distribution checks from `plan.md`: corresponding sources,
-      remaining license texts, distribution signing and update process.
+      remaining license texts, signature verification and update process.
       Notarization is excluded by the user’s instruction.
 - [x] Combined build, four-engine ordinary workflows, standalone pinned bundle
       with development trees denied, and real editing/Save/reopen/Export workflows.
