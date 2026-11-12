@@ -43,7 +43,7 @@ final class ToolMenuCatalogTests: XCTestCase {
         XCTAssertNil(owner.session)
         let invalid = NSMenuItem(title: "Invalid tool", action: Selector(("selectToolFromMenu:")), keyEquivalent: "")
         invalid.identifier = MenuShortcutBridge.builtinIdentifier
-        for tag in [-1, 0, 27, 1001, Int.max] {
+        for tag in [-1, 0, 29, 1001, Int.max] {
             invalid.tag = tag
             XCTAssertFalse(owner.validateMenuItem(invalid))
             owner.selectToolFromMenu(invalid)

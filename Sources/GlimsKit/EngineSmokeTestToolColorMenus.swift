@@ -170,7 +170,7 @@ extension EngineSmokeTest {
                    "\(name) is the sole cached selected menu mark")
             expect(grid.selectedToolID == tool.rawValue, "the existing Tools palette follows menu selection of \(name)")
         }
-        expect(try snapshot(image) == before, "all 26 context choices leave native pixels, selection and history unchanged")
+        expect(try snapshot(image) == before, "all 28 context choices leave native pixels, selection and history unchanged")
         guard let swap = items.first(where: { $0.action == Selector(("swapColorsFromMenu:")) }),
               let reset = items.first(where: { $0.action == Selector(("resetColorsFromMenu:")) }) else {
             throw NSError(domain: "ToolMenuFixture", code: 4)
@@ -219,7 +219,7 @@ extension EngineSmokeTest {
 
         let invalid = NSMenuItem(title: "Invalid", action: Selector(("selectToolFromMenu:")), keyEquivalent: "")
         invalid.identifier = MenuShortcutBridge.builtinIdentifier
-        for tag in [-1, 0, 27, 1001, Int.max] {
+        for tag in [-1, 0, 29, 1001, Int.max] {
             invalid.tag = tag
             expect(!owner.validateMenuItem(invalid), "unknown tool tag \(tag) is refused")
             owner.selectToolFromMenu(invalid)
