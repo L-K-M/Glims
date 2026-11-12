@@ -10,7 +10,7 @@ final class ToolMenuCatalogTests: XCTestCase {
             (.lasso, 6), (.magicWand, 7), (.selectByColor, 8), (.eyedropper, 9), (.text, 10),
             (.path, 11), (.paintbrush, 12), (.pencil, 13), (.airbrush, 14), (.eraser, 15),
             (.clone, 16), (.heal, 17), (.smudge, 18), (.blur, 19), (.sharpen, 20),
-            (.dodge, 21), (.burn, 22), (.gradient, 23), (.bucketFill, 24), (.hand, 25), (.zoom, 26),
+            (.dodge, 21), (.burn, 22), (.gradient, 23), (.bucketFill, 24), (.hand, 25), (.zoom, 26), (.spongeDesaturate, 27), (.spongeSaturate, 28),
         ]
         for (tool, tag) in stable { XCTAssertEqual(ToolMenuCatalog.tag(for: tool), tag) }
         let tags = ToolID.allCases.map(ToolMenuCatalog.tag(for:))
@@ -38,7 +38,7 @@ final class ToolMenuCatalogTests: XCTestCase {
         let menu = MainMenu.make()
         let tools = try XCTUnwrap(menu.item(withTitle: "View")?.submenu?.item(withTitle: "Tools")?.submenu)
         let items = tools.items.flatMap { $0.submenu?.items ?? [$0] }.filter { !$0.isSeparatorItem }
-        XCTAssertEqual(items.count, 30)
+        XCTAssertEqual(items.count, 32)
         XCTAssertTrue(items.allSatisfy(owner.validateMenuItem))
         XCTAssertNil(owner.session)
         let invalid = NSMenuItem(title: "Invalid tool", action: Selector(("selectToolFromMenu:")), keyEquivalent: "")

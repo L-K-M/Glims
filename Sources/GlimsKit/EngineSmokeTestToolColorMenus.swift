@@ -151,10 +151,11 @@ extension EngineSmokeTest {
             ("Text", .text), ("Path", .path), ("Brush", .paintbrush), ("Pencil", .pencil), ("Airbrush", .airbrush),
             ("Eraser", .eraser), ("Clone", .clone), ("Heal", .heal), ("Smudge", .smudge),
             ("Blur", .blur), ("Sharpen", .sharpen), ("Dodge", .dodge), ("Burn", .burn),
+            ("Sponge Desaturate", .spongeDesaturate), ("Sponge Saturate", .spongeSaturate),
             ("Gradient", .gradient), ("Paint Bucket", .bucketFill), ("Hand", .hand), ("Zoom", .zoom),
         ]
-        expect(toolItems.count == 26 && Set(toolItems.map(\.tag)).count == 26 && tools.items.count == 21,
-               "actual menu mirrors exactly 26 choices in the 16 palette slots")
+        expect(toolItems.count == 28 && Set(toolItems.map(\.tag)).count == 28 && tools.items.count == 21,
+               "actual menu mirrors exactly 28 choices in the 16 palette slots")
         expect(items.allSatisfy { $0.keyEquivalent.isEmpty && $0.keyEquivalentModifierMask.isEmpty },
                "every tool and color command has an unassigned factory shortcut")
         expect(owner.session == nil && items.allSatisfy(owner.validateMenuItem), "global context commands validate without an app-owned engine session")

@@ -12,7 +12,7 @@ enum ToolID: String, CaseIterable {
     case eraser
     case clone, heal
     case smudge, blur, sharpen
-    case dodge, burn
+    case dodge, burn, spongeDesaturate, spongeSaturate
     case gradient, bucketFill
     case hand, zoom
 
@@ -42,6 +42,8 @@ enum ToolID: String, CaseIterable {
         case .sharpen: return "Sharpen"
         case .dodge: return "Dodge"
         case .burn: return "Burn"
+        case .spongeDesaturate: return "Sponge Desaturate"
+        case .spongeSaturate: return "Sponge Saturate"
         case .hand: return "Hand"
         case .zoom: return "Zoom"
         }
@@ -63,7 +65,7 @@ enum ToolID: String, CaseIterable {
         case .eraser: return "E"
         case .clone, .heal: return "S"
         case .smudge, .blur, .sharpen: return "R"
-        case .dodge, .burn: return "O"
+        case .dodge, .burn, .spongeDesaturate, .spongeSaturate: return "O"
         case .hand: return "H"
         case .zoom: return "Z"
         }
@@ -96,6 +98,8 @@ enum ToolID: String, CaseIterable {
         case .sharpen: return ["triangle"]
         case .dodge: return ["sun.max"]
         case .burn: return ["flame"]
+        case .spongeDesaturate: return ["circle.lefthalf.filled"]
+        case .spongeSaturate: return ["circle.lefthalf.filled.inverse"]
         case .hand: return ["hand.raised"]
         case .zoom: return ["magnifyingglass"]
         }
@@ -137,6 +141,8 @@ enum ToolID: String, CaseIterable {
         case .sharpen: return .sharpen
         case .dodge: return .dodge
         case .burn: return .burn
+        case .spongeDesaturate: return .spongeDesaturate
+        case .spongeSaturate: return .spongeSaturate
         default: return nil
         }
     }
@@ -152,7 +158,7 @@ enum ToolID: String, CaseIterable {
         [.magicWand, .selectByColor], [.eyedropper],
         [.paintbrush, .pencil, .airbrush], [.eraser],
         [.clone, .heal], [.smudge, .blur, .sharpen],
-        [.dodge, .burn], [.gradient, .bucketFill],
+        [.dodge, .burn, .spongeDesaturate, .spongeSaturate], [.gradient, .bucketFill],
         [.text], [.path],
         [.hand], [.zoom],
     ]
@@ -410,6 +416,9 @@ final class ToolState {
         case .eraser: brush.size = 20
         case .clone, .heal: brush.size = 20
         case .smudge, .blur, .sharpen, .dodge, .burn: brush.size = 24
+        case .spongeDesaturate, .spongeSaturate:
+            brush.size = 24
+            brush.opacity = 0.5
         case .airbrush: brush.size = 30
         default: break
         }

@@ -385,6 +385,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (native guides)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "sponge-tools" {
+                try runSpongeTools(session: session, documents: documents)
+                print(failures == 0 ? "PASSED (sponge-tools)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-chooser" {
                 try exerciseBrushChooserPresentation(session, documents: documents)
                 print(failures == 0 ? "PASSED (brush chooser)" : "FAILED: \(failures) failure(s)")

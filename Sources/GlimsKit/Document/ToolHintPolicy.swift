@@ -51,6 +51,8 @@ enum ToolHintPolicy {
             if flags.contains(.shift) { return "Shift-click toggles an anchor or starts a new subpath." }
             if flags.contains(.option) { return "Option-drag an anchor to pull out its handles." }
             return "Click to add an anchor; drag for handles. Shift-click selects or starts a subpath."
+        case .spongeDesaturate, .spongeSaturate:
+            return "Drag to change saturation on RGB pixels; Opacity sets strength; [ ] changes size."
         case .paintbrush, .pencil, .airbrush, .eraser, .smudge, .blur, .sharpen, .dodge, .burn:
             return phase == .dragging ? "Drag to apply \(tool.name.lowercased()); release to finish."
                 : "Drag to apply \(tool.name.lowercased()). Option samples color; [ ] changes size."

@@ -552,6 +552,9 @@ glims_selection_stroke (GlimsEngine              *engine,
   if (gimp_viewable_get_children (GIMP_VIEWABLE (layer)))
     return glims_fail (error, NULL, "A selection cannot be stroked onto a layer group.");
 
+  status = glims_check_sponge_target (GIMP_DRAWABLE (layer), &settings, error);
+  if (status != GLIMS_STATUS_OK) return status;
+
   /* The same lock policy as a paint stroke: pixels always, plus alpha
    * for the eraser on a layer with alpha. */
   if (settings.tool == GLIMS_PAINT_ERASER && gimp_drawable_has_alpha (GIMP_DRAWABLE (layer)))

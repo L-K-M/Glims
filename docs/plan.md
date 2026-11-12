@@ -4892,3 +4892,27 @@ are converted to RGB only in the private copy to preserve their transparency.
 The source document and XCF save retain their mode, profile, layers and Undo.
 Older BMP readers may ignore alpha; this is stated in the form and manual.
 Native, actual Export/Repeat Export, Batch and release qualification are pending.
+
+
+### Sponge painting candidate (2026-11-12)
+
+Tools > Dodge/Burn now includes Sponge Desaturate and Sponge Saturate, also
+cycled with Shift-O. Each retains its own brush/preset, size, hardness, pressure
+and opacity strength. These tools edit RGB pixels and preserve source alpha;
+scalar masks/channels, grayscale and indexed targets are refused explicitly.
+Recorder capture remains unsupported and visible as such.
+
+An owned GimpBrushCore subclass computes saturation in the document's working
+space, then applies native brush masks, selections and component locks through
+nonlinear replacement. GIMP's default linear replacement bent hue at partial
+strength; its legacy HSV blend could turn neutral/near-neutral samples red.
+The new core avoids both paths and never takes color from brush pixmaps or
+mutable gradient dynamics. No upstream engine sources are modified.
+
+The pinned native fixture passes 94 checks: chromatic and neutral pixels,
+independently encoded near-neutral float TIFF, opaque/partial alpha, exact
+Undo/Redo/XCF, a proved color-dynamics counterexample, colored/pipe brushes,
+selection strokes and alpha/pixel locks, plus non-RGB refusals. The previous
+implementation fails the neutral and dynamics counterexamples. Native matrix,
+actual Tool Options/canvas fixture, independent review, CI and standalone
+release qualification are still in progress.

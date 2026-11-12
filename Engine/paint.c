@@ -54,6 +54,8 @@ static const gchar *const paint_infos[] =
   [GLIMS_PAINT_BURN]       = "gimp-dodge-burn",
   [GLIMS_PAINT_CLONE]      = "gimp-clone",
   [GLIMS_PAINT_HEAL]       = "gimp-heal",
+  [GLIMS_PAINT_SPONGE_DESATURATE] = "glims-sponge-desaturate",
+  [GLIMS_PAINT_SPONGE_SATURATE]   = "glims-sponge-saturate",
 };
 
 typedef enum { GLIMS_STROKE_INPUT_V1, GLIMS_STROKE_INPUT_V2 } GlimsStrokeInputVersion;
@@ -75,6 +77,8 @@ GimpPaintInfo *
 glims_paint_info_for_tool (Gimp    *gimp,
                            uint32_t tool)
 {
+  if (tool == GLIMS_PAINT_SPONGE_DESATURATE || tool == GLIMS_PAINT_SPONGE_SATURATE)
+    return glims_sponge_paint_info (gimp, tool == GLIMS_PAINT_SPONGE_SATURATE);
   if (tool >= G_N_ELEMENTS (paint_infos))
     return NULL;
 
@@ -221,6 +225,22 @@ set_number (GObject     *options,
 }
 
 /* The tool's own options, as GIMP's tool options dialogs set them. */
+/* Saturation has no meaning on a scalar mask/channel or indexed pixels. */
+GlimsStatus
+glims_check_sponge_target (GimpDrawable *drawable,
+                           const GlimsBrushSettings *brush, char **error)
+{
+  if (brush->tool != GLIMS_PAINT_SPONGE_DESATURATE &&
+      brush->tool != GLIMS_PAINT_SPONGE_SATURATE)
+    return GLIMS_STATUS_OK;
+  if (!gimp_drawable_is_rgb (drawable))
+    {
+      if (error) *error = g_strdup ("Sponge requires RGB pixels. Masks, channels, grayscale and indexed pixels are not supported.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+  return GLIMS_STATUS_OK;
+}
+
 void
 glims_set_tool_options (GimpPaintOptions         *options,
                         const GlimsBrushSettings *brush,
@@ -340,6 +360,8 @@ glims_make_paint_options (Gimp                     *gimp,
       gimp_context_set_dynamics (context, GIMP_DYNAMICS (dynamics));
     }
   gimp_paint_options_enable_dynamics (options, dynamics != NULL);
+  if (brush->tool == GLIMS_PAINT_SPONGE_DESATURATE || brush->tool == GLIMS_PAINT_SPONGE_SATURATE)
+    g_object_set (options, "use-applicator", TRUE, NULL);
 
   return options;
 }
@@ -546,6 +568,9 @@ stroke_begin_common (GlimsEngine              *engine,
         *error = strdup ("Groups cannot be painted on.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  status = glims_check_sponge_target (drawable, brush, error);
+  if (status != GLIMS_STATUS_OK) return status;
+
   if (brush->tool == GLIMS_PAINT_ERASER && gimp_drawable_has_alpha (drawable))
     locks |= GLIMS_LOCK_ALPHA;
   status = glims_check_item_locks (GIMP_ITEM (drawable), locks, error);
@@ -568,7 +593,9 @@ stroke_begin_common (GlimsEngine              *engine,
   stroke->image     = g_object_ref (open->image);
   stroke->drawable  = g_object_ref (drawable);
   stroke->options   = glims_make_paint_options (engine->gimp, info, brush, brush_resource);
-  stroke->core      = g_object_new (info->paint_type, "undo-desc", info->blurb, NULL);
+  stroke->core      = g_object_new (info->paint_type, "undo-desc",
+                        brush->tool == GLIMS_PAINT_SPONGE_SATURATE ? "Sponge Saturate" :
+                        brush->tool == GLIMS_PAINT_SPONGE_DESATURATE ? "Sponge Desaturate" : info->blurb, NULL);
   stroke->input_version = first_coords_v2 ? GLIMS_STROKE_INPUT_V2 : GLIMS_STROKE_INPUT_V1;
   stroke->last_time_ms = first->time_ms;
   glims_set_tool_options (stroke->options, brush, source);

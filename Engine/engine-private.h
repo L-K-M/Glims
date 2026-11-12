@@ -300,6 +300,9 @@ GimpPaintOptions *glims_make_paint_options (Gimp                     *gimp,
                                             const GlimsBrushSettings *brush,
                                             GimpBrush                *brush_resource);
 /* The tool-specific options (rate, flow, exposure, clone source, ...). */
+GimpPaintInfo *glims_sponge_paint_info (Gimp *gimp, gboolean saturate);
+GlimsStatus glims_check_sponge_target (GimpDrawable *drawable,
+                                      const GlimsBrushSettings *brush, char **error);
 void             glims_set_tool_options    (GimpPaintOptions         *options,
                                             const GlimsBrushSettings *brush,
                                             GimpDrawable             *source);
