@@ -214,6 +214,7 @@ extension EngineSmokeTest {
         let tonalPanels: [(String, (FilterPreviewPanel) -> Bool)] = [
             ("gimp:levels", { $0 is LevelsPanel }),
             ("gimp:curves", { $0 is CurvesPanel }),
+            ("glims:selective-color", { $0 is SelectiveColorPanel }),
             ("gimp:color-balance", { $0 is ColorBalancePanel }),
             ("gimp:hue-saturation", { $0 is HueSaturationPanel }),
         ]

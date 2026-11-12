@@ -80,6 +80,10 @@ final class FilterNumberRow: NSView {
     private let isInteger: Bool
     private let scale: GammaScale
     private let step: Double
+    /// The slider and field show `value * displayScale` — a percent row
+    /// over a -1...1 native property displays -100...100; `onChange` and
+    /// `show` still carry the native value.
+    private let displayScale: Double
     private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     let field = NSTextField()
     /// Displays and parses the field's text; its locale is the user's,
@@ -88,18 +92,20 @@ final class FilterNumberRow: NSView {
     /// The largest Double an integer send can carry into Int64 exactly.
     private static let integerFieldLimit = 9_007_199_254_740_992.0
     private(set) var value: Double = 0
+    private var hasEditedText = false
     var onChange: ((Double) -> Void)?
 
-    init(property: EngineSession.FilterProperty) {
+    init(property: EngineSession.FilterProperty, displayScale: Double = 1, unitLabel: String? = nil) {
         self.property = property
         self.isInteger = property.kind == .integer
-        self.scale = GammaScale(minimum: property.suggestedRange.lowerBound,
-                                maximum: property.suggestedRange.upperBound,
+        self.displayScale = displayScale > 0 && displayScale.isFinite ? displayScale : 1
+        self.scale = GammaScale(minimum: property.suggestedRange.lowerBound * self.displayScale,
+                                maximum: property.suggestedRange.upperBound * self.displayScale,
                                 gamma: property.uiGamma)
-        self.step = property.uiStepSmall > 0 ? property.uiStepSmall : 0
+        self.step = property.uiStepSmall > 0 ? property.uiStepSmall * self.displayScale : 0
         super.init(frame: .zero)
         formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = property.displayDigits
+        formatter.maximumFractionDigits = max(0, property.displayDigits - Int(log10(self.displayScale).rounded()))
         formatter.usesGroupingSeparator = false
 
         slider.target = self
@@ -119,8 +125,9 @@ final class FilterNumberRow: NSView {
 
         let stack = NSStackView(views: [slider, field])
         stack.spacing = 8
-        if !property.displayUnit.isEmpty {
-            let unit = NSTextField(labelWithString: property.displayUnit)
+        let unit = unitLabel ?? property.displayUnit
+        if !unit.isEmpty {
+            let unit = NSTextField(labelWithString: unit)
             unit.textColor = .secondaryLabelColor
             stack.addArrangedSubview(unit)
         }
@@ -138,28 +145,32 @@ final class FilterNumberRow: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     /// Shows an engine-side value without sending it back — the initial
-    /// read and the revert of a refused write.
+    /// read and the revert of a refused write. `newValue` is native;
+    /// the controls display it times `displayScale`.
     func show(_ newValue: Double) {
         value = newValue
-        field.stringValue = formatter.string(from: NSNumber(value: newValue)) ?? "\(newValue)"
-        slider.doubleValue = scale.position(for: newValue)
+        let shown = newValue * displayScale
+        field.stringValue = formatter.string(from: NSNumber(value: shown)) ?? "\(shown)"
+        slider.doubleValue = scale.position(for: shown)
     }
 
     /// Slider drags snap to the suggested small step when the engine
-    /// gives one, and always quantize integers.
+    /// gives one, and always quantize integers. `raw` is displayed.
     private func quantized(_ raw: Double) -> Double {
         var result = raw
         if step > 0 { result = (result / step).rounded() * step }
         if isInteger { result = result.rounded() }
-        return result.clamped(to: property.suggestedRange)
+        let range = property.suggestedRange
+        return result.clamped(to: range.lowerBound * displayScale...range.upperBound * displayScale)
     }
 
     @objc private func sliderChanged() {
         let dragged = quantized(scale.value(forPosition: slider.doubleValue))
-        guard dragged != value else { return }
-        value = dragged
+        let draggedNative = dragged / displayScale
+        guard draggedNative != value else { return }
+        value = draggedNative
         field.stringValue = formatter.string(from: NSNumber(value: dragged)) ?? "\(dragged)"
-        onChange?(dragged)
+        onChange?(draggedNative)
     }
 
     @objc private func fieldChanged() {
@@ -171,21 +182,27 @@ final class FilterNumberRow: NSView {
     /// so NaN and Inf never reach a value send.
     @discardableResult
     func commitField() -> Bool {
+        defer { hasEditedText = false }
         let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        // A rounded display is not an edit. Preserve the stored precision
+        // when focus moves or Apply ends an unchanged field editor.
+        if !hasEditedText, text == formatter.string(from: NSNumber(value: value * displayScale)) { return true }
         guard let typed = formatter.number(from: text)?.doubleValue, typed.isFinite else {
             show(value)
             NSSound.beep()
             return false
         }
-        var accepted = isInteger ? typed.rounded() : typed
+        var accepted = typed / displayScale
+        if isInteger { accepted = accepted.rounded() }
         accepted = accepted.clamped(to: property.absoluteRange)
         if isInteger {
             // The send converts to Int64; stay inside the span Double
             // can convert exactly even when the engine's bounds are not.
             accepted = accepted.clamped(to: -Self.integerFieldLimit...Self.integerFieldLimit)
         }
-        field.stringValue = formatter.string(from: NSNumber(value: accepted)) ?? "\(accepted)"
-        slider.doubleValue = scale.position(for: accepted)
+        let shown = accepted * displayScale
+        field.stringValue = formatter.string(from: NSNumber(value: shown)) ?? "\(shown)"
+        slider.doubleValue = scale.position(for: shown)
         guard accepted != value else { return true }
         value = accepted
         onChange?(accepted)
@@ -194,6 +211,17 @@ final class FilterNumberRow: NSView {
 }
 
 extension FilterNumberRow: NSTextFieldDelegate {
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        hasEditedText = false
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        // Peer acknowledgements may refresh `value` while the panel
+        // restores this field's draft. Keep the explicit-input marker
+        // until that draft commits, even when it equals rounded display.
+        hasEditedText = true
+    }
+
     /// Committing happens on Return or when the field loses focus, the
     /// same two moments a value field applies elsewhere in the app.
     func controlTextDidEndEditing(_ notification: Notification) {

@@ -13,6 +13,7 @@
  * network, and no change to the process locale.
  */
 #include "engine-private.h"
+#include "operation-selective-color.h"
 #include "resource-mutation.h"
 #include "resource-rename.h"
 #include "layer-delete.h"
@@ -785,6 +786,7 @@ engine_initialize (GlimsEngine  *engine,
     }
 
   gimp_gegl_init (gimp);
+  glims_operation_selective_color_register ();
 
   current_language = language_init (NULL, NULL);
 
