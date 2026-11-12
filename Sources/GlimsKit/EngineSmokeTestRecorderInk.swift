@@ -82,7 +82,8 @@ extension EngineSmokeTest {
                     ("Fill", .init(operation: .fill, intensity: 0.75, opacity: 0.5), component == .u8 ? 128.0 / 255 : 0.5),
                     ("Clear", .clear, 1),
                     ("Invert", .invert, component == .u8 ? 191.0 / 255 : component == .u16 ? 49151.0 / 65535 : 0.75),
-                    ("Levels", nil, component == .u8 ? 128.0 / 255 : 0.5)
+                    ("Levels", nil, component == .u8 ? 128.0 / 255 : 0.5),
+                    ("Curves", nil, 0.5)
                 ]
                 for (name, edit, expectedValue) in operations {
                     for (image, channel) in [(a.image, aChannel), (b.image, bChannel)] {
@@ -101,12 +102,21 @@ extension EngineSmokeTest {
                     } else {
                         a.filterPreviewIsOpen = true
                         var began: Result<UInt64, Error>?
-                        a.beginInkLevelsPreview(channel: aChannel) { began = $0 }
+                        if name == "Curves" {
+                            a.beginInkCurvesPreview(channel: aChannel) { began = $0 }
+                        } else {
+                            a.beginInkLevelsPreview(channel: aChannel) { began = $0 }
+                        }
                         try drain(a)
                         let token = try began!.get()
-                        check(a.recorder.records.isEmpty, "Levels Begin creates no Recorder row")
-                        check(a.applyInkLevelsPreview(token, settings: .init(value: .init(gamma: 2))) { applied = $0 },
-                              "Levels Apply recording is admitted")
+                        check(a.recorder.records.isEmpty, "\(name) Begin creates no Recorder row")
+                        if name == "Curves" {
+                            check(a.applyInkCurvesPreview(token, settings: .init(samples: Array(repeating: 0.5, count: 256))) { applied = $0 },
+                                  "Curves Apply recording is admitted")
+                        } else {
+                            check(a.applyInkLevelsPreview(token, settings: .init(value: .init(gamma: 2))) { applied = $0 },
+                                  "Levels Apply recording is admitted")
+                        }
                     }
                     try drain(a)
                     a.filterPreviewIsOpen = false
@@ -127,7 +137,8 @@ extension EngineSmokeTest {
                     try drain(a); try require(saved != nil, "Ink recording save callback missing"); _ = try saved!.get()
                     let bytes = try Data(contentsOf: url)
                     let object = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
-                    check(object["version"] as? Int == 11, "\(name) persists as recording version eleven")
+                    let expectedVersion = name == "Curves" ? 12 : 11
+                    check(object["version"] as? Int == expectedVersion, "\(name) persists as recording version \(expectedVersion)")
                     var loaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
                     a.prepareRecordingFile(at: url, checkpoint: try a.recorderInstallCheckpoint()) { loaded = $0 }
                     try drain(a); try require(loaded != nil, "Ink recording load callback missing")
@@ -159,7 +170,7 @@ extension EngineSmokeTest {
                     } else { check(false, "\(name) must not silently select another ink") }
                     check(try pixels(b.image) == beforeRefusal && session.undoInfo(b.image) == refusalUndo,
                           "\(name) selection refusal preserves pixels and Undo")
-                    if name == "Levels", component == .u8 {
+                    if (name == "Levels" || name == "Curves"), component == .u8 {
                         // A successful suffix must never run after a refused
                         // first command, even though it would visibly clear ink.
                         let stoppedFile = RecorderFileValue(recordingID: prepared.file.recordingID,
@@ -193,8 +204,8 @@ extension EngineSmokeTest {
                     b.redo(); try drain(b)
                     check(try pixels(b.image) == expected, "\(name) replay Redo restores expected destination")
                     check(try pixels(a.image) == expected, "\(name) destination replay leaves source untouched")
-                    if name == "Levels", mode == .multichannel, component == .u8 {
-                        let xcf = work.appendingPathComponent("recorded-ink.xcf")
+                    if (name == "Levels" || name == "Curves"), mode == .multichannel, component == .u8 {
+                        let xcf = work.appendingPathComponent("recorded-ink-\(name).xcf")
                         try session.save(a.image, to: xcf.path)
                         let reopened = try session.openImage(path: xcf.path); loose.append(reopened)
                         let restored = try document(reopened, "Reopened ink")

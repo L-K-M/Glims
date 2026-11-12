@@ -70,7 +70,9 @@ All four engines pass 174 Curves and 505 existing Levels hosted UI checks
 each, with the frozen executable and unchanged adapters. Latest-head CI
 remains in progress.
 
-This first panel exposes Freehand only. Smooth point sampling and semantic
-Recorder support are subsequent work; when recording is active, the edit's
-Recorder row explicitly reports that Curves recording is unavailable. This
+This first panel exposes Freehand only. Smooth point editing remains separate work. Successful Apply now records
+its exact owned table and original ink identity in recording format v12;
+preview and Cancel add no rows. The expanded four-engine fixture passes 186
+panel and 423 ink Recorder checks per engine, including saved replay and
+Undo/Redo. See [ink-recorder.md](ink-recorder.md). This
 candidate has not replaced the installed, separately qualified editor.
