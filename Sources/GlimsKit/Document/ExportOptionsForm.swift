@@ -77,6 +77,13 @@ struct ExportSettings: Equatable {
     /// profile later changes or leaves the catalog.
     var psdCmykProfile: PsdCmykProfile?
 
+    /// Native ink output uses the document's own profile and fixed channels.
+    /// Conversion or merged-appearance settings must not be silently ignored.
+    var permitsNativeCmykPSD: Bool {
+        Self.validate(self) && format == .psd && psdColor == .document
+            && psdLayout == .layers && psdCmykProfile == nil
+    }
+
     enum PsdLayout: String, CaseIterable {
         case layers, merged
 
@@ -375,14 +382,32 @@ final class ExportOptionsForm: NSView {
     private var psdCmykLoadGeneration = 0
     private var psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading
     private let psdCmykPlaceholderTitle = "Choose a profile"
+    enum Context {
+        case ordinary
+        case nativeCmyk(profileName: String)
+    }
+    private let context: Context
+    private var nativeCmyk: Bool {
+        if case .nativeCmyk = context { return true }
+        return false
+    }
 
     init(settings: ExportSettings = ExportSettings(),
+         context: Context = .ordinary,
          psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
-        self.settings = settings
+        self.context = context
+        var initial = settings
+        if case .nativeCmyk = context {
+            initial.format = .psd
+            initial.psdColor = .document
+            initial.psdLayout = .layers
+            initial.psdCmykProfile = nil
+        }
+        self.settings = initial
         self.psdCmykCatalogLoader = psdCmykCatalogLoader
         super.init(frame: .zero)
         buildContent()
-        show(settings)
+        show(initial)
         applyFormatVisibility()
     }
 
@@ -414,6 +439,15 @@ final class ExportOptionsForm: NSView {
         psdColorPopup.setAccessibilityLabel("PSD color")
         psdColorPopup.target = self
         psdColorPopup.action = #selector(psdColorChanged(_:))
+
+        if nativeCmyk {
+            formatPopup.isEnabled = false
+            psdLayoutPopup.item(at: 0)?.title = "Native ink channels"
+            psdLayoutPopup.isEnabled = false
+            psdColorPopup.item(at: 0)?.title = "Document CMYK"
+            psdColorPopup.isEnabled = false
+            psdCmykProfilePopup.isEnabled = false
+        }
 
         rebuildPsdCmykProfilePopup(entries: [])
         psdCmykProfilePopup.setAccessibilityLabel("CMYK profile")
@@ -564,12 +598,16 @@ final class ExportOptionsForm: NSView {
         for (format, rows) in optionRows {
             rows.forEach { $0.isHidden = format != settings.format }
         }
-        let showCmyk = settings.format == .psd && settings.psdColor == .cmyk
+        let showCmyk = settings.format == .psd && (nativeCmyk || settings.psdColor == .cmyk)
         psdCmykProfileRow?.isHidden = !showCmyk
         if showCmyk { loadPsdCmykCatalogIfNeeded() }
     }
 
     private func updatePsdExplanation() {
+        if nativeCmyk {
+            psdExplanation.stringValue = "All four inks, including hidden inks, and the source profile are preserved. Print resolution and other metadata are omitted. Save XCF to retain full editing."
+            return
+        }
         switch settings.psdColor {
         case .document:
             psdExplanation.stringValue = settings.psdLayout.explanation
@@ -599,6 +637,11 @@ final class ExportOptionsForm: NSView {
 
     private func rebuildPsdCmykProfilePopup(entries: [PsdCmykProfileCatalogEntry]) {
         psdCmykProfilePopup.removeAllItems()
+        if case .nativeCmyk(let name) = context {
+            psdCmykProfilePopup.addItem(withTitle: name.isEmpty ? "Document source profile" : name)
+            psdCmykProfilePopup.toolTip = name
+            return
+        }
         psdCmykProfilePopup.addItem(withTitle: psdCmykPlaceholderTitle)
         psdCmykProfilePopup.lastItem?.representedObject = nil
         func append(_ profile: PsdCmykProfile) {
@@ -633,6 +676,7 @@ final class ExportOptionsForm: NSView {
     }
 
     private func loadPsdCmykCatalogIfNeeded() {
+        guard !nativeCmyk else { return }
         guard settings.format == .psd, settings.psdColor == .cmyk else { return }
         if case .loading = psdCmykCatalog.state { return }
         if case .loaded = psdCmykCatalog.state { return }
@@ -675,6 +719,7 @@ final class ExportOptionsForm: NSView {
     /// makes, reported through `onFormatChange`. No-op when already
     /// current.
     func selectFormat(_ format: ExportFormat) {
+        guard !nativeCmyk || format == .psd else { return }
         guard format != settings.format else { return }
         settings.format = format
         if let index = ExportFormat.allCases.firstIndex(of: format) {
@@ -706,6 +751,7 @@ final class ExportOptionsForm: NSView {
     }
 
     @objc private func psdLayoutChanged(_ sender: NSPopUpButton) {
+        guard !nativeCmyk else { return }
         let choices = ExportSettings.PsdLayout.allCases
         guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
         settings.psdLayout = choices[sender.indexOfSelectedItem]
@@ -714,6 +760,7 @@ final class ExportOptionsForm: NSView {
     }
 
     @objc private func psdColorChanged(_ sender: NSPopUpButton) {
+        guard !nativeCmyk else { return }
         let choices = PsdOutputColor.allCases
         guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
         settings.psdColor = choices[sender.indexOfSelectedItem]
@@ -723,6 +770,7 @@ final class ExportOptionsForm: NSView {
     }
 
     @objc private func psdCmykProfileChanged(_ sender: NSPopUpButton) {
+        guard !nativeCmyk else { return }
         guard let data = sender.selectedItem?.representedObject as? Data,
               PsdCmykProfile.isValidICCData(data) else {
             settings.psdCmykProfile = nil
@@ -771,6 +819,14 @@ final class ExportOptionsForm: NSView {
     /// not block an export of the visible format.
     func commitEditing() -> Bool {
         window?.endEditing(for: nil)
+        if nativeCmyk {
+            guard settings.permitsNativeCmykPSD else {
+                refuse("Native CMYK export requires PSD with the document's ink channels and source profile.")
+                return false
+            }
+            clearMessage()
+            return true
+        }
         switch settings.format {
         case .jpeg:
             guard qualityRow.commitField() else {

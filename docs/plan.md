@@ -5095,6 +5095,22 @@ The private PSD codec now compiles into all four adapters, whose normal
 conformance, XCF and TIFF suites pass 9,818 checks in total. Actual native
 file export is a separate integration; the codec remains unused by the editor.
 
+### Native CMYK PSD export integration (2026-11-12)
+
+Slot182 writes the four authoritative integer ink planes and exact source ICC
+into a flat PSD without RGB conversion. Export/Repeat Export use the source
+profile and include hidden inks; float and incompatible settings refuse. A
+private sibling transaction commits only after complete write/sync/close and
+cancellation checks. Busy/read/cancel/shutdown ownership is explicit, and
+progress routes to the activity's document. Pinned numeric/control tests,
+portable transaction checks and actual Export UI pass. All four engines pass
+the numeric, cancellation, independent reader-appearance and full editor suites.
+The standalone package passes native/full/CMYK/Multichannel checks with development
+trees blocked; fresh/cached/relocated launch measures 1.73/1.45/3.25 seconds.
+Three independent source reviews found no important findings. Qualified source
+`40c3b74` is awaiting latest CI and merge before replacing the installed app.
+See [native-cmyk-psd-export.md](native-cmyk-psd-export.md).
+
 ### Tool Options first-launch visibility (2026-11-12)
 
 The default Tool Options content height increases from 190 to 300 points so the

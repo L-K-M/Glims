@@ -4015,6 +4015,30 @@ api_image_new_cmyk (GlimsEngine *e, int32_t width, int32_t height,
                             image_new_cmyk_on_engine, &a, error);
 }
 
+typedef struct {
+  GlimsImageID image;
+  const char *path;
+  char **error;
+} NativeCmykExportArgs;
+
+static GlimsStatus
+image_export_native_cmyk_psd_on_engine (GlimsEngine *engine, gpointer data)
+{
+  NativeCmykExportArgs *a = data;
+  return glims_image_export_native_cmyk_psd (engine, a->image, a->path, a->error);
+}
+
+static GlimsStatus
+api_image_export_native_cmyk_psd (GlimsEngine *engine, GlimsImageID image,
+                                  const char *path, char **error)
+{
+  if (error) *error = NULL;
+  NativeCmykExportArgs a = { image, path, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_export_native_cmyk_psd,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_export_native_cmyk_psd_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),
