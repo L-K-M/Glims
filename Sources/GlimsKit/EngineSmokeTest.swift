@@ -10691,9 +10691,14 @@ enum EngineSmokeTest {
             closing.closeImageWhenDrained()
             closingController.window?.close()
         }
-        closing.inputQueue.async { usleep(400_000) }
         let closingSheet = openSheet(closingController)
         let closingSheetRef = closingController.indexedSheet
+        // Opening a native sheet can take longer than a fixed delay under
+        // load. Hold the queue until the close has been requested, so this
+        // tests a pending conversion rather than an already-completed one.
+        let conversionGate = DispatchSemaphore(value: 0)
+        defer { conversionGate.signal() }
+        closing.inputQueue.async { conversionGate.wait() }
         formButton(closingSheet?.contentView, "Convert")?.performClick(nil)
         wait { closing.pendingWork > 0 && EngineActivity.shared.isBusy }
         check(closing.pendingWork > 0, "the queued conversion is counted behind the closing document's input drain")
@@ -10702,6 +10707,8 @@ enum EngineSmokeTest {
         if let closingSheet { closingController.window?.endSheet(closingSheet) }
         spin()
         check(closingController.indexedSheet == nil, "ending the sheet releases the window's reference")
+        check(!closed, "the close waits while the accepted conversion is held on the input queue")
+        conversionGate.signal()
         wait { closed && closing.pendingWork == 0 && !EngineActivity.shared.isBusy }
         spin()
         check(closed && (try? session.info(closingImage)) == nil,
