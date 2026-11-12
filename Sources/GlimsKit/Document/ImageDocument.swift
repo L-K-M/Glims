@@ -495,11 +495,12 @@ final class ImageDocument {
 
     /// `source` is the file the image was opened from — native XCF or a
     /// foreign file it was imported from; `nil` for a new image.
-    init(session: EngineSession, image: Int32, name: String, openedFrom source: URL? = nil) throws {
+    init(session: EngineSession, image: Int32, name: String, openedFrom source: URL? = nil,
+         importStrategy: DocumentFileState.ImportStrategy = .appearance) throws {
         self.session = session
         self.image = image
         self.name = name
-        self.fileState = DocumentFileState(openedFrom: source)
+        self.fileState = DocumentFileState(openedFrom: source, importStrategy: importStrategy)
         let initialInfo = try session.info(image)
         self.info = initialInfo
         self.recorderFileMetadata = RecorderFileMetadata(origin: .init(imageLabel: name,

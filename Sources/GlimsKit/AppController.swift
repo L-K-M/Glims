@@ -1,4 +1,5 @@
 import AppKit
+import CGlimsEngine
 import RigiUI
 
 /// Owns the engine and the open documents for an interactive run.
@@ -27,6 +28,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var batchWindow: RecorderBatchWindowController?
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
+    private var openingNativeCMYKURLs: Set<URL> = []
     private var pendingFileOperations = 0
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
@@ -109,6 +111,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     var session: EngineSession? {
         if case .running(let session) = state { return session }
         return nil
+    }
+
+    override init() { super.init() }
+
+    /// Hosts document workflows on an engine whose startup and event routing
+    /// are already owned by the caller, such as the native acceptance host.
+    init(session: EngineSession) {
+        state = .running(session)
+        super.init()
     }
 
     /// The first-launch layout (docs/design.md, section 2): Tools at the
@@ -579,6 +590,89 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         openFiles(panel.urls)
     }
 
+    @objc func openNativeCMYKPSD(_ sender: Any?) {
+        guard session?.supportsNativeCMYKPSDImport == true,
+              !terminationRequested, !PlugInCommands.isRunning else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Open CMYK PSD"
+        panel.message = "Preserve the four ink channels and embedded color profile. Choose a flat, uncompressed 8-bit or 16-bit PSD containing only image data and its profile. Other metadata is not supported."
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importNativeCMYKPSD(from: url) { [weak self] result in
+            guard self?.terminationRequested == false, case .failure(let error) = result else { return }
+            if let engineError = error as? EngineSession.EngineError,
+               engineError.status == Int32(GLIMS_STATUS_CANCELLED.rawValue) { return }
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// Explicit ink-preserving import owns its result until adoption or complete
+    /// cleanup. An appearance import of the same path is a distinct document.
+    func importNativeCMYKPSD(from requested: URL,
+                            completion: @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) {
+        guard let session, !terminationRequested else {
+            return completion(.failure(ImageDocument.DocumentError.closed))
+        }
+        guard session.supportsNativeCMYKPSDImport else {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                message: "This engine cannot preserve CMYK PSD inks.")))
+        }
+        guard requested.isFileURL else {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                message: "Choose a local CMYK PSD file.")))
+        }
+        let url = requested.standardizedFileURL
+        guard !PlugInCommands.isRunning, fileWrites.owner(writing: url) == nil,
+              !openingNativeCMYKURLs.contains(where: { FileWriteCoordinator.sameFile($0, url) }) else {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue),
+                message: "Wait for the current file operation to finish, then open the CMYK PSD again.")))
+        }
+        if let existing = documents.first(where: {
+            guard $0.imageDocument.fileState.importStrategy == .nativeCMYKPSD,
+                  let source = $0.imageDocument.fileState.importedSourceURL else { return false }
+            return FileWriteCoordinator.sameFile(source, url)
+        }) {
+            existing.window?.makeKeyAndOrderFront(nil)
+            return completion(.success(existing))
+        }
+        openingNativeCMYKURLs.insert(url)
+        pendingFileOperations += 1
+        EngineActivity.shared.performWhenReady(label: "Opening CMYK \(url.lastPathComponent)", work: {
+            let result = Result { try session.importNativeCMYKPSD(path: url.path) }
+            DispatchQueue.main.async {
+                let finish = { (outcome: Result<DocumentWindowController, Error>) in
+                    self.openingNativeCMYKURLs.remove(url)
+                    self.pendingFileOperations -= 1
+                    completion(outcome)
+                    self.advanceDocumentClosing()
+                }
+                let discard = { (image: Int32, error: Error) in
+                    EngineActivity.shared.closeImage(image, session: session) { cleanup in
+                        if case .failure(let cleanupError) = cleanup { finish(.failure(cleanupError)) }
+                        else { finish(.failure(error)) }
+                    }
+                }
+                switch result {
+                case .failure(let error): finish(.failure(error))
+                case .success(let image):
+                    guard !self.terminationRequested else {
+                        return discard(image, ImageDocument.DocumentError.closed)
+                    }
+                    do {
+                        let document = try ImageDocument(session: session, image: image,
+                            name: url.lastPathComponent, openedFrom: url, importStrategy: .nativeCMYKPSD)
+                        self.open(document)
+                        guard let controller = self.documents.first(where: { $0.imageDocument === document }) else {
+                            return finish(.failure(ImageDocument.DocumentError.closed))
+                        }
+                        finish(.success(controller))
+                    } catch { discard(image, error) }
+                }
+            }
+        })
+    }
+
     // Finder sends these before the engine has necessarily finished starting.
     func application(_ sender: NSApplication, open urls: [URL]) {
         if session != nil {
@@ -1019,13 +1113,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         // The reload runs in the document's own engine session.
         let session = controller.imageDocument.session
+        let strategy = controller.imageDocument.fileState.importStrategy ?? .appearance
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Reverting \(source.lastPathComponent)", work: {
-            let result = Result { try session.openImage(path: source.path) }
+            let result = Result {
+                try strategy == .nativeCMYKPSD
+                    ? session.importNativeCMYKPSD(path: source.path)
+                    : session.openImage(path: source.path)
+            }
             DispatchQueue.main.async {
-                self.pendingFileOperations -= 1
-                defer { self.advanceDocumentClosing() }
-                self.adoptRevertedImage(result, from: source, into: controller, completion: completion)
+                self.adoptRevertedImage(result, from: source, strategy: strategy, into: controller) { outcome in
+                    self.pendingFileOperations -= 1
+                    completion(outcome)
+                    self.advanceDocumentClosing()
+                }
             }
         })
     }
@@ -1037,6 +1138,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// closed or a Quit that began while the file loaded wins instead:
     /// the loaded image is destroyed unopened.
     private func adoptRevertedImage(_ result: Result<Int32, Error>, from source: URL,
+                                    strategy: DocumentFileState.ImportStrategy,
                                     into controller: DocumentWindowController,
                                     completion: @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) {
         let session = controller.imageDocument.session
@@ -1052,19 +1154,24 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 // image nobody can adopt is destroyed on the engine
                 // queue, behind every earlier file call.
                 controller.approveDiscard()
-                EngineActivity.shared.closeImage(image, session: session) { _ in }
-                return completion(.failure(ImageDocument.DocumentError.closed))
+                EngineActivity.shared.closeImage(image, session: session) { _ in
+                    completion(.failure(ImageDocument.DocumentError.closed))
+                }
+                return
             }
             guard controller.canDiscardRecordingForRevert else {
-                EngineActivity.shared.closeImage(image, session: session) { _ in }
-                return completion(.failure(RecorderFileCoordinator.Refusal.changed))
+                EngineActivity.shared.closeImage(image, session: session) { _ in
+                    completion(.failure(RecorderFileCoordinator.Refusal.changed))
+                }
+                return
             }
             let frame = controller.window?.frame
             let zoom = controller.canvas.zoomPercent
             let center = controller.canvasCenter
             do {
                 let document = try ImageDocument(session: session, image: image,
-                                                 name: source.lastPathComponent, openedFrom: source)
+                                                 name: source.lastPathComponent, openedFrom: source,
+                                                 importStrategy: strategy)
                 open(document)
                 guard let replacement = documents.first(where: { $0.imageDocument === document }) else {
                     // open() only appends, so this cannot happen; if it
@@ -1081,8 +1188,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 }
                 completion(.success(replacement))
             } catch {
-                EngineActivity.shared.closeImage(image, session: session) { _ in }
-                completion(.failure(error))
+                EngineActivity.shared.closeImage(image, session: session) { _ in completion(.failure(error)) }
             }
         }
     }
@@ -1140,6 +1246,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(openNativeCMYKPSD(_:)):
+            return session?.supportsNativeCMYKPSDImport == true && !terminationRequested && !PlugInCommands.isRunning
         case #selector(closeAllDocuments(_:)):
             return canCloseAllDocuments
         case #selector(pasteAsNewImage(_:)):
