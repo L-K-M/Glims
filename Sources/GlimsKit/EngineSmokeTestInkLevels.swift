@@ -353,10 +353,11 @@ extension EngineSmokeTest {
                 expect(document.recorder.pendingCount == 0 && document.recorder.records.count == 1,
                        "Recorder settles exactly one accepted ink Levels row")
                 if document.recorder.records.count == 1,
-                   case .failure(let reason) = document.recorder.records[0].resolution {
-                    expect(reason.contains("Ink-channel Levels") && reason.contains("Recorder"),
-                           "Recorder row explicitly reports unsupported ink Levels replay")
-                } else { expect(false, "Recorder must not claim ink Levels is replayable") }
+                   case .success(.applyInkLevels(let captured)) = document.recorder.records[0].resolution,
+                   case .ink(_, let identity)? = document.recorderBindingDescriptions[0] {
+                    expect(captured == .init(value: .init(gamma: 2)) && identity.isValid,
+                           "Recorder captures exact final Levels settings and the original ink identity")
+                } else { expect(false, "Recorder must capture the accepted ink Levels Apply") }
                 try document.stopRecording()
                 expect(!document.recorder.isRecording && document.recorder.pendingCount == 0,
                        "Recorder Stop leaves no pending reservation")

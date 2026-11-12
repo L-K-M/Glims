@@ -22,6 +22,7 @@ enum RecorderBatchBindings {
         case missing(String)
         case ambiguous(String)
         case duplicateTarget(String)
+        case explicitInkBindingRequired
 
         var errorDescription: String? {
             switch self {
@@ -36,6 +37,8 @@ enum RecorderBatchBindings {
                 return "More than one target matches “\(name)”. Use unique names or a more specific matching policy."
             case .duplicateTarget(let name):
                 return "“\(name)” matches a target already used by another recording symbol. Each needs a distinct target."
+            case .explicitInkBindingRequired:
+                return "This recording edits ink channels. Load it into each image and choose its ink targets explicitly. Batch name matching cannot bind inks."
             }
         }
     }
@@ -53,6 +56,7 @@ enum RecorderBatchBindings {
             guard case .success(_, let binding) = record.outcome else {
                 throw MatchError.unsuccessfulCommand(record.ordinal + 1)
             }
+            if case .ink = binding { throw MatchError.explicitInkBindingRequired }
             required.formUnion(try RecorderFileCodec.referencedSymbols(binding))
             if case .context(let context) = binding {
                 maskOwners.formUnion(context.masks.filter(\.isPresent).map(\.owner))

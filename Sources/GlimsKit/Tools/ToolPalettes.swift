@@ -152,7 +152,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     static let definition = PaletteDefinition(
         kind: PaletteKind("ch.lkmc.Glims.toolOptions"),
         title: "Tool Options",
-        contentSize: NSSize(width: 250, height: 190),
+        // Leave room for paint settings and their ink-channel explanation in
+        // fresh/reset layouts. Saved sizes and smaller scrollable panels remain.
+        contentSize: NSSize(width: 250, height: 300),
         sizing: .resizable(minimumContentSize: NSSize(width: 220, height: 120)),
         frameAutosaveName: "Glims.palette.toolOptions")
 
