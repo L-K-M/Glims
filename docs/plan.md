@@ -4320,6 +4320,21 @@ the same readable component and transfer-curve labels, such as
 state remains "Unknown"; profiles and underlying color behavior are unchanged.
 All 1,266 unit tests and the existing native conversion/form/Undo/reopen
 workflow pass. Independent SWE-2-Flash review found no important issue.
+### Threshold in the adjustment chooser (2026-11-12)
+
+New Adjustment Layer also offers Threshold. `gimp:threshold` is a generic
+single-input operation — not a dedicated config op — so no engine change was
+needed: `adjustment_layer_new` already admits it and the generic
+effect-parameter session edits its `low`/`high` properties. The chooser's
+known set simply lists it; the runtime catalog's support gate still decides
+whether it is offered.
+
+The focused native suite passes 229 checks on each of all four engines, including
+threshold creation, non-default low/high edits against a literal
+max-channel composite oracle, untouched base pixels, exact Undo/Redo output,
+Cancel, an indexed refusal and editable XCF reopening (reloaded parameters
+read back within serialization tolerance). Swift and real chooser/editor
+checks are pending.
 
 ### Recorded affine layer transforms (2026-11-11 candidate)
 

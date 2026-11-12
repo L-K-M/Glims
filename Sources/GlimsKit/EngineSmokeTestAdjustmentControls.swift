@@ -209,11 +209,12 @@ extension EngineSmokeTest {
         check(docA.layers.first { $0.name == "Brightness Test" } != nil,
               "Redo brings the adjustment layer back")
 
-        // All dedicated tonal choices must reach their actual parameter
+        // Tonal choices must reach their actual parameter
         // editor from the creation sheet, then cancel without an edit undo.
         let tonalPanels: [(String, (FilterPreviewPanel) -> Bool)] = [
             ("gimp:levels", { $0 is LevelsPanel }),
             ("gimp:curves", { $0 is CurvesPanel }),
+            ("gimp:threshold", { $0 is NativeFilterPanel }),
             ("gimp:color-balance", { $0 is ColorBalancePanel }),
             ("gimp:hue-saturation", { $0 is HueSaturationPanel }),
         ]
@@ -234,7 +235,7 @@ extension EngineSmokeTest {
             wait { !tonalSheet.isCreating && a.previewPanel != nil }
             settle(docA)
             check(a.previewPanel.map(isExpectedPanel) == true,
-                  "\(operation) creation opens its dedicated parameter editor")
+                  "\(operation) creation opens its parameter editor")
             check(docA.undoInfo.undoCount == previousUndo + 1,
                   "\(operation) sheet creation adds one undo step")
             a.previewPanel?.cancel()
