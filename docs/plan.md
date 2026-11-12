@@ -5296,3 +5296,12 @@ slot192/194 adapters preserve capability refusal. UI qualification reproduced
 and fixed a clipped selection-mode control; independent reviews are clear.
 Bundle and hosted qualification remain pending, with no Photoshop-parity claim. See
 [lab-selections.md](lab-selections.md) for contracts, evidence and limits.
+### Private linear RGB to Lab conversion (2026-11-12)
+
+The private transform now converts linear-sRGB float triples into physical
+D50 Lab with bounded atomic rows and no clipping or transfer-curve decoding.
+Independent forward checks pass 752 cases in optimized and ASan/UBSan builds;
+the unchanged reverse suite passes 7,800 in each mode. Source review found
+no important issue. This is numeric preparation only: profile admission,
+alpha/layer policy and the actual document conversion workflow remain open.
+See [lab-transform.md](lab-transform.md).
