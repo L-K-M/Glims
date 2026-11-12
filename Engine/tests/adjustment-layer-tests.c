@@ -10,6 +10,7 @@
  * failure count and the exit status is non-zero when any check failed.
  */
 #include <dlfcn.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -875,6 +876,177 @@ test_tonal_grayscale (const TonalOp *op)
   api->image_close (engine, image);
 }
 
+/* gimp:threshold is a generic single-input operation, not a dedicated
+ * config op: the chooser offers it beside the tonal ops when the catalog
+ * reports it supported, and the generic property session edits it. The
+ * flat base makes its output uniform, so the oracle computes the op's
+ * own rule literally — the maximum channel against [low, high] in
+ * R'G'B'A float, white inside and black outside, alpha kept. */
+static bool
+threshold_oracle (GlimsImageID image, double low, double high)
+{
+  uint8_t px[IMG_W * IMG_H * 4];
+  double  value = BASE_R;
+  int     expected;
+  size_t  i;
+
+  if (BASE_G > value) value = BASE_G;
+  if (BASE_B > value) value = BASE_B;
+  value /= 255.0;
+  expected = (value >= low && value <= high) ? 255 : 0;
+
+  if (api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                         px, IMG_W * 4) != GLIMS_STATUS_OK)
+    return false;
+  for (i = 0; i < sizeof px; i += 4)
+    if (abs (px[i] - expected) > 1 || abs (px[i + 1] - expected) > 1 ||
+        abs (px[i + 2] - expected) > 1 || px[i + 3] != 255)
+      return false;
+  return true;
+}
+
+/* Creation, non-default low/high through the generic session, the
+ * literal composite oracle, untouched base pixels, one Undo/Redo and an
+ * editable XCF reopen. */
+static void
+test_threshold_adjustment (const char *work)
+{
+  GlimsImageID         image, reopened = 0;
+  GlimsItemID          bg = 0, layer = 0;
+  GlimsEffectID        effect = 0;
+  GlimsFilterID        filter = 0;
+  GlimsLayerInfo       rows[MAX_ROWS];
+  GlimsEffectInfo      effects[4];
+  GlimsFilterProperty *props;
+  GlimsFilterValue     value;
+  uint8_t              committed_px[IMG_W * IMG_H * 4] = { 0 };
+  uint8_t              redone_px[IMG_W * IMG_H * 4] = { 0 };
+  int32_t              n = 0, count = 0, pn = 0, i, depth;
+  bool                 have_low = false, have_high = false;
+  char                *error = NULL, xcf[1024];
+
+  image = new_colored_image ();
+  CHECK (image != 0 && composite_base (image), "gimp:threshold: a colored opaque base");
+  if (! image) return;
+  bg = first_layer (image);
+  depth = undo_depth (image);
+
+  CHECK (api->filter_operation_properties (engine, "gimp:threshold", NULL, 0, &pn) == GLIMS_STATUS_OK &&
+         pn > 0, "gimp:threshold: exposes %d editable properties", pn);
+  if (pn > 0 && pn <= 4096)
+    {
+      int32_t capacity = pn;
+      props = calloc ((size_t) capacity, sizeof *props);
+      if (props && api->filter_operation_properties (engine, "gimp:threshold", props, capacity, &pn) == GLIMS_STATUS_OK &&
+          pn >= 0 && pn <= capacity)
+        for (i = 0; i < pn; i++)
+          if (props[i].kind == GLIMS_FILTER_VALUE_NUMBER && props[i].min == 0 && props[i].max == 1)
+            {
+              have_low  |= strcmp (props[i].name, "low") == 0;
+              have_high |= strcmp (props[i].name, "high") == 0;
+            }
+      free (props);
+    }
+  CHECK (have_low && have_high, "gimp:threshold: numeric low and high are discovered with their bounds");
+
+  CHECK (api->adjustment_layer_new (engine, image, 0, 0, "gimp:threshold", "Threshold",
+                                    &layer, &effect, &error) == GLIMS_STATUS_OK &&
+         layer > 0 && effect > 0, "gimp:threshold: admitted as an adjustment layer%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! layer) { api->image_close (engine, image); return; }
+
+  CHECK (api->image_layers (engine, image, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].id == layer && rows[0].kind == GLIMS_LAYER_GROUP &&
+         strcmp (rows[0].mode, "pass-through") == 0 && rows[0].parent == 0 && rows[0].depth == 0 &&
+         rows[0].filter_count == 1 && strcmp (rows[0].name, "Threshold") == 0 && rows[1].id == bg,
+         "gimp:threshold: a named pass-through group with one filter above the base");
+  CHECK (api->drawable_effects (engine, image, layer, effects, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && effects[0].id == effect && strcmp (effects[0].operation, "gimp:threshold") == 0 &&
+         effects[0].enabled, "gimp:threshold: the committed effect reads back under the returned id");
+  CHECK (undo_depth (image) == depth + 1 && threshold_oracle (image, 0.5, 1.0),
+         "gimp:threshold: one creation undo; the factory default composites white by the oracle");
+
+  CHECK (api->filter_edit_begin (engine, image, layer, effect, &filter, &error) == GLIMS_STATUS_OK &&
+         filter != 0, "gimp:threshold: the committed effect opens for editing%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! filter) { api->image_close (engine, image); return; }
+
+  memset (&value, 0, sizeof value);
+  CHECK (api->filter_get_property (engine, filter, "low", &value) == GLIMS_STATUS_OK &&
+         value.kind == GLIMS_FILTER_VALUE_NUMBER && value.number == 0.5 &&
+         api->filter_get_property (engine, filter, "high", &value) == GLIMS_STATUS_OK &&
+         value.number == 1.0, "gimp:threshold: the generic getter reads the factory low and high");
+  CHECK (api->filter_set_double (engine, filter, "low", 0.4) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, filter, "high", 0.6) == GLIMS_STATUS_OK &&
+         threshold_oracle (image, 0.4, 0.6),
+         "gimp:threshold: the upper threshold alone excludes the base color");
+  CHECK (api->filter_set_double (engine, filter, "high", 0.85) == GLIMS_STATUS_OK &&
+         threshold_oracle (image, 0.4, 0.85),
+         "gimp:threshold: widening the upper threshold includes the base color");
+  CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1 && threshold_oracle (image, 0.5, 1.0),
+         "gimp:threshold: Cancel restores defaults without an undo step");
+  filter = 0;
+  CHECK (api->filter_edit_begin (engine, image, layer, effect, &filter, NULL) == GLIMS_STATUS_OK && filter,
+         "gimp:threshold: the cancelled editor can reopen");
+  if (! filter) { api->image_close (engine, image); return; }
+  CHECK (api->filter_set_double (engine, filter, "low", 0.75) == GLIMS_STATUS_OK &&
+         api->filter_set_double (engine, filter, "high", 0.85) == GLIMS_STATUS_OK &&
+         threshold_oracle (image, 0.75, 0.85),
+         "gimp:threshold: non-default low/high preview the oracle's black");
+  CHECK (base_pixels_intact (image, bg), "gimp:threshold: the preview left base pixels untouched");
+  CHECK (api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 2 && threshold_oracle (image, 0.75, 0.85) &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                            committed_px, IMG_W * 4) == GLIMS_STATUS_OK,
+         "gimp:threshold: commit applies the edit as exactly one undo step");
+  CHECK (base_pixels_intact (image, bg), "gimp:threshold: the committed effect leaves base pixels untouched");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth + 1 &&
+         threshold_oracle (image, 0.5, 1.0),
+         "gimp:threshold: one undo restores the default composite");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == depth + 2 &&
+         api->image_render (engine, image, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                            redone_px, IMG_W * 4) == GLIMS_STATUS_OK &&
+         memcmp (redone_px, committed_px, sizeof redone_px) == 0,
+         "gimp:threshold: redo restores the exact committed composite");
+
+  snprintf (xcf, sizeof xcf, "%s/threshold-adjustment.xcf", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_close (engine, image) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK && reopened != 0,
+         "gimp:threshold: the image saves and reopens as XCF");
+  if (! reopened) return;
+
+  CHECK (api->image_layers (engine, reopened, rows, MAX_ROWS, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].kind == GLIMS_LAYER_GROUP && strcmp (rows[0].mode, "pass-through") == 0 &&
+         rows[0].filter_count == 1 &&
+         api->drawable_effects (engine, reopened, rows[0].id, effects, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1 && strcmp (effects[0].operation, "gimp:threshold") == 0,
+         "gimp:threshold: reopen keeps the pass-through group and the operation");
+  {
+    uint8_t px[IMG_W * IMG_H * 4];
+
+    CHECK (api->image_render (engine, reopened, 1.0, (GlimsRect) { 0, 0, IMG_W, IMG_H },
+                              px, IMG_W * 4) == GLIMS_STATUS_OK &&
+           memcmp (px, committed_px, sizeof px) == 0,
+           "gimp:threshold: reopen keeps the adjusted composite output");
+    memset (&value, 0, sizeof value);
+    CHECK (api->filter_edit_begin (engine, reopened, rows[0].id, effects[0].id, &filter, NULL) == GLIMS_STATUS_OK &&
+           filter != 0 &&
+           api->filter_get_property (engine, filter, "low", &value) == GLIMS_STATUS_OK &&
+           fabs (value.number - 0.75) < 1e-6 &&
+           api->filter_get_property (engine, filter, "high", &value) == GLIMS_STATUS_OK &&
+           fabs (value.number - 0.85) < 1e-6 &&
+           api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+           "gimp:threshold: the reloaded parameters read back and stay editable");
+  }
+  api->image_close (engine, reopened);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -946,6 +1118,8 @@ main (int argc, char **argv)
     for (i = 0; i < (int32_t) (sizeof TONAL_OPS / sizeof TONAL_OPS[0]); i++)
       expect_refusal (indexed, 0, 0, TONAL_OPS[i].operation, NULL, GLIMS_STATUS_UNSUPPORTED,
                       TONAL_OPS[i].operation);
+    expect_refusal (indexed, 0, 0, "gimp:threshold", NULL, GLIMS_STATUS_UNSUPPORTED,
+                    "gimp:threshold");
     api->image_close (engine, indexed);
   }
   test_nested_placement ();
@@ -954,6 +1128,7 @@ main (int argc, char **argv)
       test_tonal_adjustment (&TONAL_OPS[i], argv[2]);
       test_tonal_grayscale (&TONAL_OPS[i]);
     }
+  test_threshold_adjustment (argv[2]);
 
   api->stop (engine);
   printf ("adjustment-layer-tests: %d checks, %d failures, %d skips\n", checks, failures, skips);

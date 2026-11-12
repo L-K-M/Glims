@@ -4320,6 +4320,21 @@ the same readable component and transfer-curve labels, such as
 state remains "Unknown"; profiles and underlying color behavior are unchanged.
 All 1,266 unit tests and the existing native conversion/form/Undo/reopen
 workflow pass. Independent SWE-2-Flash review found no important issue.
+### Threshold in the adjustment chooser (2026-11-12)
+
+New Adjustment Layer also offers Threshold. `gimp:threshold` is a generic
+single-input operation — not a dedicated config op — so no engine change was
+needed: `adjustment_layer_new` already admits it and the generic
+effect-parameter session edits its `low`/`high` properties. The chooser's
+known set simply lists it; the runtime catalog's support gate still decides
+whether it is offered.
+
+The focused native suite passes 229 checks on each of all four engines, including
+threshold creation, non-default low/high edits against a literal
+max-channel composite oracle, untouched base pixels, exact Undo/Redo output,
+Cancel, an indexed refusal and editable XCF reopening (reloaded parameters
+read back within serialization tolerance). Swift and real chooser/editor
+checks are pending.
 
 ### Recorded affine layer transforms (2026-11-11 candidate)
 
@@ -4372,6 +4387,47 @@ intact. The frozen integrated controls app also passes the ordinary full
 editor workflows on all four engines: 3,315 checks each on 3.2.8, 3.2.0
 and master, and 3,289 on 3.0.8, with zero failures.
 This does not establish complete Photoshop 4 parity or interaction latency.
+
+### Color-only Posterize (2026-11-12 candidate)
+
+Image > Adjust and New Adjustment Layer offer Posterize with 2–256 levels.
+The adapter-owned operation follows the upstream color quantization while
+copying alpha unchanged. The older operation remains available under the
+explicit name "Posterize Including Transparency". Both use the existing
+modeless preview, Apply/Cancel, Undo and editable-effect workflow.
+
+All four engine sets pass native conformance and 41 focused checks covering
+partial alpha, unchanged source pixels, cancellation, Undo/Redo, adjustment
+groups and editable XCF reopening. The app passes 1,279 units, all four
+focused menu/adjustment-layer workflows, and 3,322/3,322/3,296/3,322 full
+checks on 3.2.8/3.2.0/3.0.8/master. Independent source review found no
+important issue. The owned operation must be present to re-edit this XCF
+effect; upstream applications do not provide the `glims:` operation.
+
+### Selective Color (2026-11-12 candidate)
+
+The adapter now provides an owned Selective Color operation with nine color
+ranges, four CMYK adjustments per range and Relative/Absolute correction.
+The independent implementation follows the published formulas cited in the
+kernel; it adds no upstream patch or FFmpeg dependency. Alpha is preserved.
+Nonfinite and HDR RGB values outside the documented narrow endpoint-roundoff
+tolerance pass through unchanged; zero settings preserve every input bit.
+
+Image > Adjust and New Adjustment Layer share a compact native editor. The
+Colors popup switches four percentage rows without discarding other ranges.
+Queued acknowledgements preserve active text drafts, and Apply/Cancel keep
+the established one-Undo/no-Undo lifecycle. Display rounding alone does not
+change stored precision; explicit text edits still commit their typed value.
+
+All four engine sets pass native conformance and 49 focused public-facade
+checks, including literal pixels, alpha, cancellation, source preservation,
+Undo/Redo, all 36 settings and correction method through editable XCF. The
+pure kernel passes 46 ASan/UBSan checks. All four engines pass the focused
+real panel and adjustment-layer workflows. Independent native and UI source
+reviews found no important issue; full workflows and the final explicit-text
+refinement remain in verification at this checkpoint. Owned XCF operations
+require Glims for editing. This slice does not establish complete Photoshop 4
+mode support or complete Recorder/batch coverage.
 
 ### Recorded new Levels adjustments (2026-11-11 candidate)
 

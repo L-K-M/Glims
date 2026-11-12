@@ -769,8 +769,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             self.startEffectPreview(title: operation.title, effect: effect, drawable: drawable,
                                     properties: properties) { [imageDocument] filter, values in
-                NativeFilterPanel(document: imageDocument, operation: operation,
-                                  properties: properties, filter: filter, initialValues: values)
+                NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
+                                                 properties: properties, filter: filter, initialValues: values)
             }
         }
     }
@@ -1117,8 +1117,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             self.startFilterPreview(title: operation.title, operation: operation.name,
                                     properties: properties) { [imageDocument] filter, values in
-                NativeFilterPanel(document: imageDocument, operation: operation,
-                                  properties: properties, filter: filter, initialValues: values)
+                NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
+                                                 properties: properties, filter: filter, initialValues: values)
             }
         }
     }

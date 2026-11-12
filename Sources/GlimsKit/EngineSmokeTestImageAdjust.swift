@@ -44,7 +44,7 @@ extension EngineSmokeTest {
         }
         let original = try session.copyPixels(image, merged: true).pixels
         let otherPixels = try session.copyPixels(otherImage, merged: true).pixels
-        let specs = [("Threshold…", "gimp:threshold"), ("Invert Perceptual…", "gegl:invert-gamma"),
+        let specs = [("Threshold…", "gimp:threshold"), ("Posterize…", "glims:posterize"), ("Invert Perceptual…", "gegl:invert-gamma"),
                      ("Invert Linear…", "gegl:invert-linear")]
         for (title, name) in specs {
             guard let item = adjust.item(withTitle: title), let command = item.representedObject as? NativeFilterCommand,
@@ -67,6 +67,7 @@ extension EngineSmokeTest {
                 let input = Double(bytes[i]) / 255
                 let expected: Double
                 if name == "gimp:threshold" { expected = input >= 0.25 && input <= 0.75 ? 1 : 0 }
+                else if name == "glims:posterize" { expected = (input * 2).rounded() / 2 }
                 else if name == "gegl:invert-gamma" { expected = 1 - input }
                 else {
                     let linear = input <= 0.04045 ? input / 12.92 : pow((input + 0.055) / 1.055, 2.4)
