@@ -4960,6 +4960,17 @@ admission and each supported edit need dedicated component routes and independen
 oracles. A valid parasite alone must never switch the user-visible mode or allow
 ordinary layer/projection operations to edit a derived representation.
 
+### CMYK preview conversion foundation (2026-11-12)
+
+A private per-instance LittleCMS primitive converts authoritative C/M/Y/K ink
+intensity into derived linear-sRGB RGBA with explicit percentage units and a
+fixed relative-colorimetric/BPC policy. It exposes no new document mode yet.
+All four engines pass optimized and sanitized numerical checks against an
+independent double-precision oracle, and rebuilt adapter conformance. One
+independent source review found no confirmed important issue. See
+[cmyk-transform.md](cmyk-transform.md) for the exact contract, measured error,
+profile scope and remaining document integration work.
+
 
 ### Private component command admission (2026-11-12)
 
