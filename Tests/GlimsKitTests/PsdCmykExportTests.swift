@@ -14,10 +14,12 @@ final class PsdCmykExportTests: XCTestCase {
         XCTAssertTrue(control.sendAction(action, to: control.target))
     }
 
-    private func waitForRunLoop(_ condition: () -> Bool, timeout: TimeInterval = 1.0) -> Bool {
+    private func waitForCatalog(_ condition: () -> Bool, timeout: TimeInterval = 5.0) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() && Date() < deadline {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            // Yield the main actor so the production main-queue reply can run.
+            // Polling NSRunLoop synchronously can starve it on hosted macOS.
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return condition()
     }
@@ -107,14 +109,15 @@ final class PsdCmykExportTests: XCTestCase {
         XCTAssertNil(form.settings.psdCmykProfile)
     }
 
-    func testExplicitPopupChoiceCapturesProfileAndRestoresAfterFormatSwitch() throws {
+    func testExplicitPopupChoiceCapturesProfileAndRestoresAfterFormatSwitch() async throws {
         let profile = try makeCmykICC(name: "GenericCMYK")
         let loader = TestCmykCatalogLoader(result: .success([.init(profile: profile)]))
         let form = ExportOptionsForm(psdCmykCatalogLoader: loader)
         form.selectFormat(.psd)
         form.psdColorPopup.selectItem(at: 1)
         fire(form.psdColorPopup)
-        XCTAssertTrue(waitForRunLoop { form.psdCmykProfilePopup.numberOfItems >= 2 })
+        let loaded1 = await waitForCatalog { form.psdCmykProfilePopup.numberOfItems >= 2 }
+        XCTAssertTrue(loaded1)
         form.psdCmykProfilePopup.selectItem(at: 1)
         fire(form.psdCmykProfilePopup)
         XCTAssertEqual(form.settings.psdCmykProfile?.iccData, profile.iccData)
@@ -126,7 +129,7 @@ final class PsdCmykExportTests: XCTestCase {
         XCTAssertEqual(form.settings.psdCmykProfile?.iccData, profile.iccData, "format reselect restores captured choice")
     }
 
-    func testRestorePreviousProfileEvenIfNotInCurrentCatalog() throws {
+    func testRestorePreviousProfileEvenIfNotInCurrentCatalog() async throws {
         let missing = try makeCmykICC(name: "Old Profile")
         var seed = ExportSettings()
         seed.format = .psd
@@ -134,7 +137,8 @@ final class PsdCmykExportTests: XCTestCase {
         seed.psdCmykProfile = missing
         let loader = TestCmykCatalogLoader(result: .success([]))
         let form = ExportOptionsForm(settings: seed, psdCmykCatalogLoader: loader)
-        XCTAssertTrue(waitForRunLoop { form.psdCmykProfilePopup.numberOfItems >= 2 || form.lastError != nil || form.messageLabel.stringValue.contains("No installed") })
+        let loaded2 = await waitForCatalog { form.psdCmykProfilePopup.numberOfItems >= 2 || form.lastError != nil || form.messageLabel.stringValue.contains("No installed") }
+        XCTAssertTrue(loaded2)
         XCTAssertEqual(form.settings.psdCmykProfile?.iccData, missing.iccData, "captured bytes retained")
         XCTAssertTrue((0..<form.psdCmykProfilePopup.numberOfItems).contains {
             (form.psdCmykProfilePopup.item(at: $0)?.representedObject as? Data) == missing.iccData
@@ -157,12 +161,13 @@ final class PsdCmykExportTests: XCTestCase {
         XCTAssertEqual(form.settings.psdCmykProfile?.iccData, captured.iccData)
     }
 
-    func testFailedOrEmptyCatalogShowsActionableMessageWithoutFallback() throws {
+    func testFailedOrEmptyCatalogShowsActionableMessageWithoutFallback() async throws {
         let formEmpty = ExportOptionsForm(psdCmykCatalogLoader: TestCmykCatalogLoader(result: .success([])))
         formEmpty.selectFormat(.psd)
         formEmpty.psdColorPopup.selectItem(at: 1)
         fire(formEmpty.psdColorPopup)
-        XCTAssertTrue(waitForRunLoop { formEmpty.messageLabel.stringValue.contains("ColorSync") || formEmpty.lastError != nil })
+        let loaded3 = await waitForCatalog { formEmpty.messageLabel.stringValue.contains("ColorSync") || formEmpty.lastError != nil }
+        XCTAssertTrue(loaded3)
         XCTAssertNil(formEmpty.settings.psdCmykProfile)
         XCTAssertFalse(formEmpty.commitEditing())
 
@@ -170,18 +175,20 @@ final class PsdCmykExportTests: XCTestCase {
         formFailed.selectFormat(.psd)
         formFailed.psdColorPopup.selectItem(at: 1)
         fire(formFailed.psdColorPopup)
-        XCTAssertTrue(waitForRunLoop { formFailed.lastError?.contains("ColorSync") == true })
+        let loaded4 = await waitForCatalog { formFailed.lastError?.contains("ColorSync") == true }
+        XCTAssertTrue(loaded4)
         XCTAssertNil(formFailed.settings.psdCmykProfile)
         XCTAssertFalse(formFailed.commitEditing())
         XCTAssertNotEqual(formFailed.settings.psdColor, .document)
     }
 
-    func testPlaceholderMeansNoExportUntilExplicitChoice() throws {
+    func testPlaceholderMeansNoExportUntilExplicitChoice() async throws {
         let profile = try makeCmykICC(name: "GenericCMYK")
         let form = ExportOptionsForm(settings: {
             var s = ExportSettings(); s.format = .psd; s.psdColor = .cmyk; return s
         }(), psdCmykCatalogLoader: TestCmykCatalogLoader(result: .success([.init(profile: profile)])))
-        XCTAssertTrue(waitForRunLoop { form.psdCmykProfilePopup.numberOfItems >= 2 })
+        let loaded5 = await waitForCatalog { form.psdCmykProfilePopup.numberOfItems >= 2 }
+        XCTAssertTrue(loaded5)
         XCTAssertEqual(form.psdCmykProfilePopup.indexOfSelectedItem, 0, "placeholder selected")
         XCTAssertFalse(form.commitEditing())
         form.psdCmykProfilePopup.selectItem(at: 1)
