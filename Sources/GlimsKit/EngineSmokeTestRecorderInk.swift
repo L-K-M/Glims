@@ -95,7 +95,29 @@ extension EngineSmokeTest {
                         settings: .init(operation: .fill, intensity: expectedValue, opacity: 1))
                     let original = try pixels(a.image), expected = try pixels(oracle)
                     let aUndo = a.undoInfo.undoCount
+                    if name == "Fill" {
+                        a.clearRecording()
+                        try drain(a)
+                        let idle = RecorderPalettePresentation(document: a)
+                        check(idle.canPerform(.record), "\(mode.rawValue)/\(component.rawValue) idle allows Record for ink")
+                        check(idle.refusal(for: .stop) == "No recording is running.", "\(mode.rawValue)/\(component.rawValue) idle gates Stop")
+                        check(idle.refusal(for: .replay) == "Record commands before replaying.", "\(mode.rawValue)/\(component.rawValue) empty gates Replay")
+                        a.filterPreviewIsOpen = true
+                        let busy = RecorderPalettePresentation(document: a)
+                        check(busy.refusal(for: .record) == "Finish the current image operation before recording.",
+                              "\(mode.rawValue)/\(component.rawValue) busy gates Record")
+                        check(busy.refusal(for: .saveRecording) == "Finish the current image operation before using Recorder files.",
+                              "\(mode.rawValue)/\(component.rawValue) busy gates file actions")
+                        a.filterPreviewIsOpen = false
+                    }
                     try a.startRecording()
+                    if name == "Fill" {
+                        let recording = RecorderPalettePresentation(document: a)
+                        check(recording.canPerform(.stop), "\(mode.rawValue)/\(component.rawValue) recording allows Stop")
+                        check(recording.refusal(for: .record) == "Stop the current recording first.", "\(mode.rawValue)/\(component.rawValue) recording gates Record")
+                        check(recording.refusal(for: .clear) == "Stop recording before clearing it.", "\(mode.rawValue)/\(component.rawValue) recording gates Clear")
+                        check(recording.refusal(for: .saveRecording) == "Stop recording before using Recorder files.", "\(mode.rawValue)/\(component.rawValue) recording gates file actions")
+                    }
                     var applied: Result<Void, Error>?
                     if let edit {
                         check(a.editInk(edit, channel: aChannel) { applied = $0 }, "\(name) recording is admitted")
@@ -123,6 +145,10 @@ extension EngineSmokeTest {
                     try require(applied != nil, "Ink edit completion missing")
                     try applied!.get()
                     try a.stopRecording()
+                    if name == "Fill" {
+                        let settled = RecorderPalettePresentation(document: a)
+                        check(settled.canPerform(.replay), "\(mode.rawValue)/\(component.rawValue) settled allows Replay for ink")
+                    }
                     check(try pixels(a.image) == expected && expected != original && a.undoInfo.undoCount == aUndo + 1,
                           "\(name) live capture matches independent scalar Fill and one Undo")
                     guard case .ink(let symbol, let identity)? = a.recorderBindingDescriptions[0] else {

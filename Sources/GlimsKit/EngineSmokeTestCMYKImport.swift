@@ -205,6 +205,129 @@ extension EngineSmokeTest {
             guard let next = owner.documents.last else { throw NSError(domain: "CMYKImportSmoke", code: 7) }
             return next
         }
+        func failFixture(_ message: String) -> NSError {
+            NSError(domain: "CMYKImportSmoke", code: 20, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        func readU16BE(_ data: Data, at offset: Int, _ label: String) throws -> Int {
+            guard offset >= 0, data.count >= offset + 2 else { throw failFixture("\(label): truncated UInt16") }
+            return Int(data[offset]) << 8 | Int(data[offset + 1])
+        }
+        func readU32BE(_ data: Data, at offset: Int, _ label: String) throws -> Int {
+            guard offset >= 0, data.count >= offset + 4 else { throw failFixture("\(label): truncated UInt32") }
+            return (Int(data[offset]) << 24) | (Int(data[offset + 1]) << 16)
+                | (Int(data[offset + 2]) << 8) | Int(data[offset + 3])
+        }
+        func checkedAdd(_ a: Int, _ b: Int, _ label: String) throws -> Int {
+            let (sum, overflow) = a.addingReportingOverflow(b)
+            guard !overflow else { throw failFixture("\(label): overflow") }
+            return sum
+        }
+        func checkedMul(_ a: Int, _ b: Int, _ label: String) throws -> Int {
+            let (product, overflow) = a.multipliedReportingOverflow(by: b)
+            guard !overflow else { throw failFixture("\(label): overflow") }
+            return product
+        }
+        func appendU16BE(_ value: Int, to data: inout Data, _ label: String) throws {
+            guard value >= 0, value <= 0xFFFF else { throw failFixture("\(label): value \(value) outside UInt16") }
+            data.append(UInt8((value >> 8) & 0xFF))
+            data.append(UInt8(value & 0xFF))
+        }
+        func literalPackBitsRow(_ row: Data, _ label: String) throws -> Data {
+            guard row.count <= 0xFFFF else { throw failFixture("\(label): row length exceeds UInt16") }
+            var encoded = Data()
+            encoded.reserveCapacity(2 + row.count + (row.count + 127) / 128)
+            try appendU16BE(row.count + (row.count + 127) / 128, to: &encoded, "\(label) byte count")
+            var offset = 0
+            while offset < row.count {
+                let count = min(128, row.count - offset)
+                encoded.append(UInt8(count - 1))
+                encoded.append(row[(row.startIndex + offset)..<(row.startIndex + offset + count)])
+                offset += count
+            }
+            // Keep the declared count and payload in exact agreement for bounds checks.
+            let declared = Int(encoded[0]) << 8 | Int(encoded[1])
+            guard encoded.count == declared + 2 else { throw failFixture("\(label): encoded length mismatch") }
+            return encoded
+        }
+        func makePackBitsRLEPSD(from raw: Data, label: String) throws -> Data {
+            guard raw.count >= 26 else { throw failFixture("\(label): RAW PSD too small") }
+            guard raw[0] == 0x38, raw[1] == 0x42, raw[2] == 0x50, raw[3] == 0x53 else {
+                throw failFixture("\(label): missing PSD signature")
+            }
+            guard try readU16BE(raw, at: 4, "\(label) version") == 1 else { throw failFixture("\(label): unsupported PSD version") }
+            let channels = try readU16BE(raw, at: 12, "\(label) channels")
+            let height = try readU32BE(raw, at: 14, "\(label) height")
+            let width = try readU32BE(raw, at: 18, "\(label) width")
+            let depth = try readU16BE(raw, at: 22, "\(label) depth")
+            let colorMode = try readU16BE(raw, at: 24, "\(label) color mode")
+            guard channels == 4 else { throw failFixture("\(label): expected 4 channels, got \(channels)") }
+            guard colorMode == 4 else { throw failFixture("\(label): expected CMYK color mode, got \(colorMode)") }
+            guard depth == 8 || depth == 16 else { throw failFixture("\(label): unsupported depth \(depth)") }
+            guard width > 0, height > 0 else { throw failFixture("\(label): invalid dimensions") }
+
+            var offset = 26
+            let colorDataLen = try readU32BE(raw, at: offset, "\(label) color data length"); offset = try checkedAdd(offset, 4, "\(label) color data offset")
+            let colorDataEnd = try checkedAdd(offset, colorDataLen, "\(label) color data end")
+            guard raw.count >= colorDataEnd else { throw failFixture("\(label): truncated color data section") }
+            let resourcesLen = try readU32BE(raw, at: colorDataEnd, "\(label) resources length"); offset = try checkedAdd(colorDataEnd, 4, "\(label) resources offset")
+            let resourcesEnd = try checkedAdd(offset, resourcesLen, "\(label) resources end")
+            guard raw.count >= resourcesEnd else { throw failFixture("\(label): truncated resources section") }
+            let layerMaskLen = try readU32BE(raw, at: resourcesEnd, "\(label) layer/mask length"); offset = try checkedAdd(resourcesEnd, 4, "\(label) layer/mask offset")
+            let layerMaskEnd = try checkedAdd(offset, layerMaskLen, "\(label) layer/mask end")
+            guard raw.count >= layerMaskEnd else { throw failFixture("\(label): truncated layer/mask section") }
+            let imageOffset = layerMaskEnd
+            let imageHeaderEnd = try checkedAdd(imageOffset, 2, "\(label) image data header")
+            guard raw.count >= imageHeaderEnd else { throw failFixture("\(label): truncated image data header") }
+            let compression = try readU16BE(raw, at: imageOffset, "\(label) compression")
+            guard compression == 0 else { throw failFixture("\(label): expected RAW compression, got \(compression)") }
+
+            let bytesPerSample = depth / 8
+            let rowBytes = try checkedMul(width, bytesPerSample, "\(label) row bytes")
+            let planeBytes = try checkedMul(rowBytes, height, "\(label) plane bytes")
+            let imageBytes = try checkedMul(planeBytes, channels, "\(label) image bytes")
+            let payloadOffset = try checkedAdd(imageOffset, 2, "\(label) image payload offset")
+            let payloadEnd = try checkedAdd(payloadOffset, imageBytes, "\(label) image payload end")
+            guard raw.count == payloadEnd else {
+                throw failFixture("\(label): RAW payload size mismatch (expected \(payloadEnd), got \(raw.count))")
+            }
+
+            var result = Data()
+            result.reserveCapacity(raw.count)
+            result.append(raw[0..<imageOffset])
+            result.append(0); result.append(1) // PackBits/RLE
+
+            var rowLengths = Data()
+            rowLengths.reserveCapacity(channels * height * 2)
+            var encodedRows = Data()
+            encodedRows.reserveCapacity(imageBytes)
+            for channel in 0..<channels {
+                for row in 0..<height {
+                    let start = try checkedAdd(payloadOffset, try checkedAdd(try checkedMul(channel, planeBytes, "\(label) channel offset"),
+                                                                             try checkedMul(row, rowBytes, "\(label) row offset"),
+                                                                             "\(label) sample offset"), "\(label) sample start")
+                    let end = try checkedAdd(start, rowBytes, "\(label) sample end")
+                    let encoded = try literalPackBitsRow(raw[start..<end], "\(label) ch\(channel) row\(row)")
+                    let count = try readU16BE(encoded, at: 0, "\(label) ch\(channel) row\(row) byte count")
+                    try appendU16BE(count, to: &rowLengths, "\(label) ch\(channel) row\(row) table")
+                    encodedRows.append(encoded.dropFirst(2))
+                }
+            }
+            result.append(rowLengths)
+            result.append(encodedRows)
+            // Preserve every section before image data unchanged (header, color, ICC/resources, layer/mask).
+            expect(result.starts(with: raw[0..<imageOffset]), "RLE fixture preserves header/ICC/sections for \(label)")
+            return result
+        }
+
+        struct ImportFixture {
+            let label: String
+            let component: EngineSession.ColorComponent
+            let url: URL
+            let sourceBytes: Data
+            let rawOriginal: Data
+            let originalPixels: Data
+        }
+        var fixtures: [ImportFixture] = []
         var exampleURL: URL?
         for component in [EngineSession.ColorComponent.u8, .u16] {
             let source = try session.newCmykImage(width: 16, height: 12, component: component, profileICC: icc)
@@ -215,82 +338,102 @@ extension EngineSmokeTest {
                 try session.editInk(source, channel: channel.id,
                                     settings: .init(operation: .fill, intensity: Double(index + 1) / 5, opacity: 1))
             }
-            let url = work.appendingPathComponent("preserved-\(component.rawValue).psd")
-            try session.export(source, to: url.path)
-            if exampleURL == nil { exampleURL = url }
-            let original = try Data(contentsOf: url), originalPixels = try pixels(source)
-            expect(original.range(of: icc) != nil && original.count > icc.count,
-                   "\(component): source fixture contains exact embedded profile and real ink samples")
+            let rawURL = work.appendingPathComponent("preserved-\(component.rawValue)-raw.psd")
+            try session.export(source, to: rawURL.path)
+            let rawOriginal = try Data(contentsOf: rawURL)
+            let originalPixels = try pixels(source)
+            expect(rawOriginal.range(of: icc) != nil && rawOriginal.count > icc.count,
+                   "\(component)/RAW: source fixture contains exact embedded profile and real ink samples")
+
+            let rleURL = work.appendingPathComponent("preserved-\(component.rawValue)-rle.psd")
+            let rleBytes = try makePackBitsRLEPSD(from: rawOriginal, label: "\(component)/RAW->RLE")
+            try rleBytes.write(to: rleURL)
+
+            fixtures.append(.init(label: "\(component.rawValue)-raw", component: component,
+                                  url: rawURL, sourceBytes: rawOriginal, rawOriginal: rawOriginal, originalPixels: originalPixels))
+            fixtures.append(.init(label: "\(component.rawValue)-rle", component: component,
+                                  url: rleURL, sourceBytes: rleBytes, rawOriginal: rawOriginal, originalPixels: originalPixels))
+            if component == .u8 { exampleURL = rleURL } // Prefer RLE for downstream tests.
+        }
+        for fixture in fixtures {
+            let component = fixture.component
+            let label = fixture.label
+            let url = fixture.url
+            let sourceBytes = fixture.sourceBytes
+            let rawOriginal = fixture.rawOriginal
+            let originalPixels = fixture.originalPixels
             let owner = AppController(session: session); owners.append(owner)
-            expect(owner.validateMenuItem(menuItem), "\(component): actual File item is enabled for the live producer")
+            expect(owner.validateMenuItem(menuItem), "\(label): actual File item is enabled for the live producer")
 
             // A real ordinary PSD import at this path is an RGB appearance document.
             let appearanceID = try session.openImage(path: url.path); loose.append(appearanceID)
-            let appearance = try ImageDocument(session: session, image: appearanceID, name: "Appearance", openedFrom: url)
+            let appearance = try ImageDocument(session: session, image: appearanceID, name: "Appearance \(label)", openedFrom: url)
             owner.open(appearance); retain(owner)
-            try wait({ appearance.pendingWork == 0 && !EngineActivity.shared.isBusy }, "Appearance import settles")
+            try wait({ appearance.pendingWork == 0 && !EngineActivity.shared.isBusy }, "\(label): Appearance import settles")
             let appearancePixels = try pixels(appearanceID)
             expect(appearance.colorInfo.mode == .rgb && appearance.fileState.importStrategy == .appearance,
-                   "\(component): same-path ordinary Open is an RGB appearance import")
+                   "\(label): same-path ordinary Open is an RGB appearance import")
             CMYKImportSmokeProxy.arm()
             var controller = try imported(url, owner: owner)
             var document = controller.imageDocument
             expect(owner.documents.count == 2 && document !== appearance && document.image != appearanceID,
-                   "\(component): preserving import does not reuse the same-path appearance document")
+                   "\(label): preserving import does not reuse the same-path appearance document")
             expect(document.colorInfo.mode == .cmyk && document.colorInfo.component == component && document.channels.count == 4,
-                   "\(component): imported document exposes four native CMYK inks at source depth")
+                   "\(label): imported document exposes four native CMYK inks at source depth")
             expect(document.fileState.importStrategy == .nativeCMYKPSD && document.fileState.nativeURL == nil
                    && document.fileState.importedSourceURL == url && document.hasUnsavedChanges
                    && document.fileState.saveRoute == .askForFile && document.fileState.revertSource == .nativeCMYKPSD(url),
-                   "\(component): preserving import is unsaved with its typed foreign identity")
-            expect(try serialized(document.image) == original && pixels(document.image) == originalPixels,
-                   "\(component): exported native samples/profile and displayed composite match the source exactly")
+                   "\(label): preserving import is unsaved with its typed foreign identity")
+            expect(try serialized(document.image) == rawOriginal && pixels(document.image) == originalPixels,
+                   "\(label): exported native samples/profile (engine exports RAW) and displayed composite match the source exactly")
+            expect(try Data(contentsOf: url) == sourceBytes,
+                   "\(label): source fixture bytes remain unchanged for input comparisons")
             expect(document.undoInfo.undoCount == 0 && document.undoInfo.redoCount == 0,
-                   "\(component): imported native image begins with empty history")
+                   "\(label): imported native image begins with empty history")
             let repeatController = try imported(url, owner: owner)
             expect(repeatController === controller && owner.documents.count == 2 && CMYKImportSmokeProxy.snapshot.calls == 1,
-                   "\(component): second preserving import focuses the existing document without another native import")
-            expect(NSApp.keyWindow === controller.window, "\(component): repeated preserving import brings its window forward")
+                   "\(label): second preserving import focuses the existing document without another native import")
+            expect(NSApp.keyWindow === controller.window, "\(label): repeated preserving import brings its window forward")
 
             guard let channel = document.channels.first?.id else {
                 throw NSError(domain: "CMYKImportSmoke", code: 10)
             }
             document.selectChannel(channel)
-            try wait({ document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "Ink target selection settles")
+            try wait({ document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "\(label): Ink target selection settles")
             var edit: Result<Void, Error>?
             expect(document.editInk(.init(operation: .fill, intensity: 0.95, opacity: 1), channel: channel) { edit = $0 },
-                   "\(component): supported scalar Fill is accepted on imported CMYK")
-            try wait({ edit != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "Imported ink edit settles")
+                   "\(label): supported scalar Fill is accepted on imported CMYK")
+            try wait({ edit != nil && document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "\(label): Imported ink edit settles")
             try edit!.get()
-            expect(try serialized(document.image) != original && document.undoInfo.undoCount == 1,
-                   "\(component): imported ink edit changes actual samples with one Undo")
+            expect(try serialized(document.image) != rawOriginal && document.undoInfo.undoCount == 1,
+                   "\(label): imported ink edit changes actual samples with one Undo")
             CMYKImportSmokeProxy.arm()
             controller = try revert(controller, owner: owner); document = controller.imageDocument
             expect(CMYKImportSmokeProxy.snapshot.calls == 1 && CMYKImportSmokeProxy.openCalls == 0
                    && document.colorInfo.mode == .cmyk && document.fileState.importStrategy == .nativeCMYKPSD,
-                   "\(component): actual Revert uses preserving import and remains native CMYK")
-            expect(try serialized(document.image) == original && pixels(document.image) == originalPixels
-                   && document.undoInfo.undoCount == 0, "\(component): Revert restores exact source samples/profile/history")
-            expect(try pixels(appearanceID) == appearancePixels && Data(contentsOf: url) == original,
-                   "\(component): preserving edits and Revert leave appearance document and source file unchanged")
+                   "\(label): actual Revert uses preserving import and remains native CMYK")
+            expect(try serialized(document.image) == rawOriginal && pixels(document.image) == originalPixels
+                   && document.undoInfo.undoCount == 0, "\(label): Revert restores exact source samples/profile/history (RAW engine export)")
+            expect(try pixels(appearanceID) == appearancePixels && Data(contentsOf: url) == sourceBytes,
+                   "\(label): preserving edits and Revert leave appearance document and source file unchanged")
 
-            let saved = work.appendingPathComponent("preserved-\(component.rawValue).xcf")
+            let saved = work.appendingPathComponent("preserved-\(label).xcf")
             var savedDone = false, saveError: Error?
             document.save(to: saved) { error in
                 saveError = error
                 if error == nil { document.noteSaved(to: saved) }
                 savedDone = true
             }
-            try wait({ savedDone && document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "Native Save settles")
-            try require(saveError == nil, "Native Save failed: \(String(describing: saveError))")
+            try wait({ savedDone && document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "\(label): Native Save settles")
+            try require(saveError == nil, "Native Save failed (\(label)): \(String(describing: saveError))")
             expect(!document.hasUnsavedChanges && document.fileState.importStrategy == nil
-                   && document.fileState.revertSource == .native(saved), "\(component): native Save replaces preserving import identity")
+                   && document.fileState.revertSource == .native(saved), "\(label): native Save replaces preserving import identity")
             CMYKImportSmokeProxy.arm()
             controller = try revert(controller, owner: owner); document = controller.imageDocument
             expect(CMYKImportSmokeProxy.snapshot.calls == 0 && CMYKImportSmokeProxy.openCalls == 1
                    && document.colorInfo.mode == .cmyk && document.fileState.nativeURL == saved && !document.hasUnsavedChanges,
-                   "\(component): saved XCF Revert switches to ordinary native Open while retaining CMYK")
-            expect(try serialized(document.image) == original, "\(component): XCF Save/Revert retains exact native inks/profile")
+                   "\(label): saved XCF Revert switches to ordinary native Open while retaining CMYK")
+            expect(try serialized(document.image) == rawOriginal, "\(label): XCF Save/Revert retains exact native inks/profile (RAW engine export)")
         }
         guard let exampleURL else { throw NSError(domain: "CMYKImportSmoke", code: 8) }
         let failureOwner = AppController(session: session); owners.append(failureOwner)

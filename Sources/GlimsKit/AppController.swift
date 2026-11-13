@@ -595,7 +595,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
               !terminationRequested, !PlugInCommands.isRunning else { return }
         let panel = NSOpenPanel()
         panel.title = "Open CMYK PSD"
-        panel.message = "Preserve the four ink channels and embedded color profile. Choose a flat, uncompressed 8-bit or 16-bit PSD containing only image data and its profile. Other metadata is not supported."
+        panel.message = "Preserve the four ink channels and embedded color profile. Choose a flat 8-bit or 16-bit PSD with RAW or RLE compression containing only image data and its profile. Other metadata is not supported."
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }

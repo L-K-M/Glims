@@ -29,8 +29,13 @@ the parent afterward. Latest-head CI remains pending.
 
 Build/run the oracle with `scripts/test-ink-curve-sampler.py build` and `run`,
 selecting an existing producer via `--producer` and a fresh `--work` directory.
-The output is `oracles.json`; the committed expected data lives in
-`Engine/tests/fixtures/ink-curve-sampler.json`. Engine runs use isolated homes.
+`run` writes `oracles.json` in `--work` and, after a successful native run,
+compares it to `Engine/tests/fixtures/ink-curve-sampler.json` with a `2e-14`
+tolerance (exact case count/order/names, 256 finite non-bool samples per case).
+Explicit comparison is available via
+`scripts/test-ink-curve-sampler.py compare <oracles.json>`.
+Engine runs use isolated homes. Native oracle build/run was not executed in
+this environment for this change.
 
 This calculation alone does not expose Smooth in the ink panel, add a Recorder
 command, or establish Photoshop spline equivalence. Those are separate gates.

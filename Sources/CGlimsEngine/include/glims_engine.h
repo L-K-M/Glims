@@ -3953,7 +3953,7 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_convert_lab_copy) (GlimsEngine *engine, GlimsImageID image,
                                          const GlimsLabCopySettings *settings,
                                          GlimsImageID *result, char **error);
-  /* Slot198: explicit preserving import of flat PSD v1 RAW U8/U16 with four
+  /* Slot198: explicit preserving import of flat PSD v1 RAW/RLE U8/U16 with four
    * CMYK channels and exactly one usable embedded CMYK ICC resource. No layers,
    * alpha, other resources or appearance fallback. Creates fresh authoritative
    * process-ink planes with exact raw samples/profile, fresh UUIDs, empty history
