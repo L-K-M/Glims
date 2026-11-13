@@ -803,6 +803,7 @@ engine_initialize (GlimsEngine  *engine,
   gchar       *temporary_registry_dir = NULL;
   gchar       *temporary_registry_path = NULL;
   gboolean     temporary_registry_active = FALSE;
+  gboolean     preserve_previous_language = FALSE;
   GError      *font_error    = NULL;
   gchar       *contents;
 
@@ -976,8 +977,9 @@ engine_initialize (GlimsEngine  *engine,
   g_object_get (gimp->edit_config, "prev-language", &prev_language, NULL);
   gimp->query_all = (prev_language == NULL ||
                      g_strcmp0 (prev_language, current_language) != 0);
-  if (!prev_language || g_strcmp0 (prev_language, current_language) == 0)
-    {
+  {
+      gboolean language_changed = prev_language &&
+                                  g_strcmp0 (prev_language, current_language) != 0;
       GFile *selected = configured_plugin_cache (gimp);
       if (selected && !g_file_query_exists (selected, NULL))
         {
@@ -988,7 +990,10 @@ engine_initialize (GlimsEngine  *engine,
                 g_printerr ("Glims: seeded bundled command cache\n");
             }
         }
-      else if (configured_plugin_cache_unusable (gimp))
+      else if (selected &&
+               ((!language_changed && configured_plugin_cache_unusable (gimp)) ||
+                (language_changed &&
+                 g_file_query_file_type (selected, G_FILE_QUERY_INFO_NONE, NULL) == G_FILE_TYPE_REGULAR)))
         {
           temporary_registry_dir = g_dir_make_tmp ("glims-pluginrc-XXXXXX", NULL);
           if (temporary_registry_dir)
@@ -1025,6 +1030,9 @@ engine_initialize (GlimsEngine  *engine,
                   g_object_set (gimp->config, "pluginrc-path", config_path, NULL);
                   gimp->query_all = FALSE;
                   temporary_registry_active = TRUE;
+                  /* The selected registry still contains the old language.
+                   * Retain its tag so later launches also use a fresh seed. */
+                  preserve_previous_language = language_changed;
                   if (g_getenv ("GLIMS_STARTUP_TRACE"))
                     g_printerr ("Glims: using temporary bundled command cache\n");
                 }
@@ -1034,7 +1042,7 @@ engine_initialize (GlimsEngine  *engine,
             }
         }
       g_clear_object (&selected);
-    }
+  }
   g_free (prev_language);
   g_free (contents);
 
@@ -1054,10 +1062,9 @@ engine_initialize (GlimsEngine  *engine,
 
   gimp_rc_set_autosave (GIMP_RC (gimp->edit_config), TRUE);
 
-  g_object_set (gimp->edit_config,
-                "config-version", GIMP_VERSION,
-                "prev-language",  current_language,
-                NULL);
+  g_object_set (gimp->edit_config, "config-version", GIMP_VERSION, NULL);
+  if (!preserve_previous_language)
+    g_object_set (gimp->edit_config, "prev-language", current_language, NULL);
 
   gimp->initialized = TRUE;
 
