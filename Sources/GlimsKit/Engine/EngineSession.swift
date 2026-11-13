@@ -1325,6 +1325,7 @@ final class EngineSession: @unchecked Sendable {
         let allowsLayerProperties: Bool
         let allowsLayerRename: Bool
         let allowsLayerDuplicate: Bool
+        let allowsLayerCreate: Bool
 
         var restrictedEditingMessage: String {
             if allowsLayerDuplicate { return "This layered Lab document supports viewing and limited layer edits." }
@@ -1334,17 +1335,18 @@ final class EngineSession: @unchecked Sendable {
         }
 
         init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false,
-             allowsLayerRename: Bool = false, allowsLayerDuplicate: Bool = false) {
+             allowsLayerRename: Bool = false, allowsLayerDuplicate: Bool = false, allowsLayerCreate: Bool = false) {
             self.layout = layout
             self.readOnly = readOnly
             self.allowsLayerProperties = allowsLayerProperties
             self.allowsLayerRename = allowsLayerRename
             self.allowsLayerDuplicate = allowsLayerDuplicate
+            self.allowsLayerCreate = allowsLayerCreate
         }
 
         static func decode(_ info: GlimsImageStorageInfo) throws -> ImageStorage {
             guard info.struct_size == UInt32(MemoryLayout<GlimsImageStorageInfo>.size),
-                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE) == 0 else {
+                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE) == 0 else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1361,8 +1363,10 @@ final class EngineSession: @unchecked Sendable {
             let allowsLayerProperties = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) != 0
             let allowsLayerRename = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME) != 0
             let allowsLayerDuplicate = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE) != 0
-            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate)) &&
-                  (!allowsLayerRename || allowsLayerProperties) && (!allowsLayerDuplicate || allowsLayerProperties) else {
+            let allowsLayerCreate = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_CREATE) != 0
+            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate && !allowsLayerCreate)) &&
+                  (!allowsLayerRename || allowsLayerProperties) && (!allowsLayerDuplicate || allowsLayerProperties) &&
+                  (!allowsLayerCreate || allowsLayerProperties) else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1371,7 +1375,8 @@ final class EngineSession: @unchecked Sendable {
                                   message: "This engine cannot safely open layered Lab documents.")
             }
             return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties,
-                                allowsLayerRename: allowsLayerRename, allowsLayerDuplicate: allowsLayerDuplicate)
+                                allowsLayerRename: allowsLayerRename, allowsLayerDuplicate: allowsLayerDuplicate,
+                                allowsLayerCreate: allowsLayerCreate)
         }
     }
 

@@ -36,7 +36,11 @@ final class ImageStorageTests: XCTestCase {
         let duplicate = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)))
         XCTAssertTrue(duplicate.allowsLayerDuplicate)
+        XCTAssertFalse(duplicate.allowsLayerCreate, "older engines do not advertise creation")
         XCTAssertEqual(duplicate.restrictedEditingMessage, "This layered Lab document supports viewing and limited layer edits.")
+        let create = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_CREATE)))
+        XCTAssertTrue(create.allowsLayerCreate)
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
@@ -51,6 +55,10 @@ final class ImageStorageTests: XCTestCase {
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_CREATE))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_CREATE))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)

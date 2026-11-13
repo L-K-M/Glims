@@ -142,7 +142,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         ClassicPaletteButtonBar.Item(id: command.id, title: command.title, image: command.image) { [weak self] in
             guard let document = self?.document,
                   !document.colorInfo.mode.usesNativeChannels ||
-                    (command.id == "duplicate" && document.storage.layout == .layeredLab && document.acceptsLayerDuplicate) else { return }
+                    (document.storage.layout == .layeredLab &&
+                     ((command.id == "duplicate" && document.acceptsLayerDuplicate) ||
+                      (command.id == "new" && document.acceptsLayerCreate))) else { return }
             command.run(document)
         }
     }
@@ -433,7 +435,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
         guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
         guard document?.colorInfo.mode.usesNativeChannels != true ||
-              (command == .duplicate && document?.storage.layout == .layeredLab && document?.acceptsLayerDuplicate == true) else { return }
+              (document?.storage.layout == .layeredLab &&
+               ((command == .duplicate && document?.acceptsLayerDuplicate == true) ||
+                (command == .new && document?.acceptsLayerCreate == true))) else { return }
         if command == .duplicate, document?.hasMultipleSelectedLayers == true {
             document?.duplicateSelectedLayers()
         } else {
@@ -639,10 +643,19 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         return layerBatchAdmission(document)
     }
 
+    private func createAdmission(_ document: ImageDocument) -> Bool {
+        if document.storage.layout == .layeredLab {
+            return document.acceptsLayerCreate && document.selectedLayerIDs.count <= 1 &&
+                !document.targetCommandIsPending && !document.floatingState.isActive
+        }
+        return document.acceptsEdits && !document.colorInfo.mode.usesNativeChannels && !document.floatingState.isActive
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if document?.colorInfo.mode.usesNativeChannels == true {
             guard menuItem.action == #selector(runLayerCommand(_:)),
-                  menuItem.tag == Int(EngineSession.LayerCommand.duplicate.rawValue),
+                  (menuItem.tag == Int(EngineSession.LayerCommand.duplicate.rawValue) ||
+                   menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue)),
                   document?.storage.layout == .layeredLab else { return false }
         }
         if let item = menuItem.representedObject as? EffectItem {
@@ -674,6 +687,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         case #selector(runLayerCommand(_:)):
             guard let document,
                   let command = EngineSession.LayerCommand(rawValue: UInt32(menuItem.tag)) else { return false }
+            if command == .new && document.storage.layout == .layeredLab {
+                return createAdmission(document)
+            }
             if command == .duplicate || command == .delete {
                 let verb = command == .duplicate ? "Duplicate" : "Delete"
                 menuItem.title = "\(verb) \(document.hasMultipleSelectedLayers ? "Layers" : "Layer")"
@@ -806,7 +822,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // commands are gated resolve-first, so their buttons go quiet too.
         let floatingActive = document?.floatingState.isActive == true
         // Duplicate and Delete admit bounded ordinary-pixel batches.
-        buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
+        buttonBar.setEnabled(document.map(createAdmission) == true, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
         buttonBar.setEnabled(document.map(duplicateAdmission) == true, forItem: "duplicate")
         buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "delete")

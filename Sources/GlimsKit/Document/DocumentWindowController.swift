@@ -2541,6 +2541,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(newLayer(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerCreate
         case #selector(duplicateLayer(_:)):
             return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerDuplicate
         case #selector(runNativeFilter(_:)):
@@ -2570,6 +2572,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
+            case #selector(newLayer(_:)) where imageDocument.acceptsLayerCreate:
+                break
             case #selector(duplicateLayer(_:)) where imageDocument.acceptsLayerDuplicate:
                 break
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
@@ -2627,6 +2631,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
+        if menuItem.action == #selector(newLayer(_:)), imageDocument.storage.layout == .layeredLab {
+            return imageDocument.acceptsLayerCreate && imageDocument.selectedLayerIDs.count <= 1 &&
+                !editingBlocked && !previewBusy && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+        }
         switch menuItem.action {
         case #selector(toggleSoftProof(_:)):
             menuItem.state = canvas.softProof == nil ? .off : .on

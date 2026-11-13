@@ -199,6 +199,33 @@ extension EngineSmokeTest {
                   "older engines keep logical duplication disabled")
         }
         palette.reload()
+        let newMenu = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
+        let newButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "New Layer" }
+        if opened.storage.allowsLayerCreate {
+            check(windowController.validateMenuItem(newMenu), "Layer menu enables logical layer creation")
+            check(newButton?.isEnabled == true, "palette enables logical layer creation")
+            let originalIDs = opened.layers.map(\.id)
+            newButton?.performClick(nil)
+            drain("new logical layer")
+            check(opened.layers.count == 3 && Set(originalIDs).isSubset(of: Set(opened.layers.map(\.id))),
+                  "palette creates one logical layer")
+            let undo = EngineUndoManager(document: opened)
+            check(undo.canUndo, "logical layer creation offers Undo")
+            undo.undo()
+            drain("new layer Undo")
+            check(opened.layers.map(\.id) == originalIDs, "Undo restores the original layer tree")
+            check(undo.canRedo, "logical layer creation offers Redo")
+            undo.redo()
+            drain("new layer Redo")
+            check(opened.layers.count == 3, "Redo restores the new logical layer")
+            undo.undo()
+            drain("restore original layers after creation")
+            check(opened.layers.map(\.id) == originalIDs, "final Undo removes the new logical layer")
+        } else {
+            check(!windowController.validateMenuItem(newMenu) && newButton?.isEnabled == false,
+                  "older engines keep logical layer creation disabled")
+        }
+        palette.reload()
         var editedOpacity = -1.0 // No valid layer opacity can satisfy the saved-copy check until an edit runs.
         if let target = opened.activeLayer,
            let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),

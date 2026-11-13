@@ -44,6 +44,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   CHECK(s==GLIMS_STATUS_OK&&layout.layout==GLIMS_IMAGE_LAYOUT_LAYERED_LAB&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_CREATE)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
@@ -115,6 +116,79 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     g_free(dup_path);
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"duplicate test restores the original fixture");
    }
+   guint8 old_pixel[4]={0},new_pixel[4]={0};
+   CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},old_pixel,4)==GLIMS_STATUS_OK,
+         "render before creating a logical layer succeeds");
+   GlimsItemID new_layer=0;error=NULL;
+   GlimsStatus made=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_NEW,&new_layer,&error);
+   CHECK(made==GLIMS_STATUS_OK&&new_layer,"public command creates a logical Lab layer");
+   if(error)api->free_string(error);error=NULL;
+   if(made==GLIMS_STATUS_OK&&new_layer){
+    GlimsLayerInfo created_rows[8];int32_t n=0;
+    CHECK(api->image_layers(engine,id,created_rows,8,&n)==GLIMS_STATUS_OK&&n==3&&
+          created_rows[0].id==new_layer&&created_rows[1].id==rows[0].id,
+          "new logical layer appears above the captured root");
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},new_pixel,4)==GLIMS_STATUS_OK&&
+          !memcmp(old_pixel,new_pixel,sizeof old_pixel),"new transparent layer does not change the composite");
+    GlimsOpenImage *created_open=glims_lookup_image(engine,id);GlimsLabLayerStorage created_storage;
+    gboolean created_valid=created_open&&glims_lab_layer_storage_read(created_open->image,&created_storage)==GLIMS_LAB_LAYER_STORAGE_VALID&&
+                           created_storage.map.count==3;
+    CHECK(created_valid,"new logical layer has a valid physical mapping");
+    if(created_valid)for(guint role=0;role<4;role++){
+     GimpDrawable *plane=GIMP_DRAWABLE(created_storage.layers[0].planes[role]);guint8 samples[16];
+     gegl_buffer_get(gimp_drawable_get_buffer(plane),GEGL_RECTANGLE(0,0,4,4),1,
+                     gimp_drawable_get_format(plane),samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+     guint8 expected=role==0?255:role==3?0:128;gboolean same=TRUE;
+     for(guint px=0;px<16;px++)if(samples[px]!=expected)same=FALSE;
+     CHECK(same,"new layer has the expected transparent Lab plane samples");
+    }
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,created_rows,8,&n)==GLIMS_STATUS_OK&&n==2,
+          "one Undo removes the new layer");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,created_rows,8,&n)==GLIMS_STATUS_OK&&n==3&&created_rows[0].id==new_layer,
+          "Redo restores the same logical layer");
+    gchar *new_path=g_build_filename((const gchar*)work,"layered-lab-new.xcf",NULL);
+    GlimsStatus new_saved=api->image_save_copy(engine,id,new_path,&error);
+    CHECK(new_saved==GLIMS_STATUS_OK,"new logical layer saves");if(error)api->free_string(error);error=NULL;
+    if(new_saved==GLIMS_STATUS_OK){
+     GlimsImageID new_copy=0;GlimsStatus new_opened=api->image_open(engine,new_path,&new_copy,&error);
+     CHECK(new_opened==GLIMS_STATUS_OK&&new_copy,"new logical layer reopens");if(error)api->free_string(error);error=NULL;
+     if(new_opened==GLIMS_STATUS_OK&&new_copy){
+      CHECK(api->image_layers(engine,new_copy,created_rows,8,&n)==GLIMS_STATUS_OK&&n==3,
+            "saved XCF preserves the new logical layer");
+      CHECK(api->image_close(engine,new_copy)==GLIMS_STATUS_OK,"new-layer copy closes");
+     }
+    }
+    g_free(new_path);
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"creation test restores the original fixture");
+   }
+   error=NULL;
+   GlimsStatus cleared=api->image_select_layers(engine,id,NULL,0,&error);
+   CHECK(cleared==GLIMS_STATUS_OK,"logical selection can be cleared");
+   if(error)api->free_string(error);error=NULL;
+   if(cleared==GLIMS_STATUS_OK){
+    GlimsItemID empty_new=0;GlimsStatus empty_made=api->layer_command(engine,id,0,GLIMS_LAYER_NEW,&empty_new,&error);
+    CHECK(empty_made==GLIMS_STATUS_OK&&empty_new,"creation without selection succeeds");
+    if(error)api->free_string(error);error=NULL;
+    if(empty_made==GLIMS_STATUS_OK&&empty_new){
+     GlimsLayerInfo empty_rows[8];int32_t n=0;GlimsItemID selected[8]={0};int32_t selected_count=0;
+     CHECK(api->image_layers(engine,id,empty_rows,8,&n)==GLIMS_STATUS_OK&&n==3&&empty_rows[0].id==empty_new,
+           "creation without selection inserts at the top");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+           api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&selected_count==0,
+           "Undo restores an empty layer selection");
+     CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+           api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&
+           selected_count==1&&selected[0]==empty_new,"Redo selects the same created layer");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"empty-selection test removes the new layer");
+    }
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"original logical selection restored");
+   }
+   GlimsItemID stale=123;error=NULL;
+   CHECK(api->layer_command(engine,id,2147483647,GLIMS_LAYER_NEW,&stale,&error)==GLIMS_STATUS_NOT_FOUND&&stale==0,
+         "creation with a stale explicit anchor is refused");
+   if(error)api->free_string(error);error=NULL;
    GlimsItemID implicit_copy=0;error=NULL;
    GlimsStatus implicit_status=api->layer_command(engine,id,0,GLIMS_LAYER_DUPLICATE,&implicit_copy,&error);
    CHECK(implicit_status==GLIMS_STATUS_OK&&implicit_copy,"implicit single-selection duplication succeeds");
@@ -167,6 +241,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    GlimsItemID ambiguous=123;
    CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_DUPLICATE,&ambiguous,&error)==GLIMS_STATUS_UNSUPPORTED&&ambiguous==0,
          "implicit duplication refuses an ambiguous multi-selection");
+   if(error)api->free_string(error);error=NULL;
+   ambiguous=123;
+   CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_NEW,&ambiguous,&error)==GLIMS_STATUS_UNSUPPORTED&&ambiguous==0,
+         "implicit creation refuses an ambiguous multi-selection");
    if(error)api->free_string(error);error=NULL;
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"single logical selection restored");
    GlimsLayerChange visibility={.struct_size=sizeof visibility,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};
@@ -242,6 +320,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     GlimsItemID hidden_copy=123;error=NULL;
     CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_DUPLICATE,&hidden_copy,&error)==GLIMS_STATUS_UNSUPPORTED&&hidden_copy==0,
           "a private scalar plane cannot be duplicated through the public layer command");
+    if(error)api->free_string(error);error=NULL;
+    hidden_copy=123;
+    CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_NEW,&hidden_copy,&error)==GLIMS_STATUS_UNSUPPORTED&&hidden_copy==0,
+          "a private scalar plane cannot anchor a public layer creation");
     if(error)api->free_string(error);error=NULL;
     GimpLayer *locked_root=current.layers[0].group;GimpItem *locked_item=GIMP_ITEM(locked_root);
     gboolean old_visible=gimp_item_get_visible(locked_item);gdouble old_opacity=gimp_layer_get_opacity(locked_root);
