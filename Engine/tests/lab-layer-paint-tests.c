@@ -69,6 +69,10 @@ int main(void)
   const uint8_t *empty_sources[4] = {NULL, NULL, NULL, NULL};
   uint8_t *empty_destinations[4] = {NULL, NULL, NULL, NULL}; changed = true;
   CHECK(glims_lab_layer_paint_row(0, empty_sources, NULL, 50, 0, 0, 1, empty_destinations, &changed) && !changed);
+  /* Empty data ranges can lie inside descriptor storage without aliasing it. */
+  for (unsigned i = 0; i < 4; i++) empty_destinations[i] = (uint8_t *)empty_sources + 1;
+  changed = true;
+  CHECK(glims_lab_layer_paint_row(0, empty_sources, NULL, 50, 0, 0, 1, empty_destinations, &changed) && !changed);
   printf("%u checks, %u failures\n", checks, failures);
   return failures ? 1 : 0;
 }
