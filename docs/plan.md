@@ -5723,3 +5723,25 @@ checks and 4,984 row-render checks across the four engines, with independent
 reviews and unchanged producer inputs. These private modules are not part of
 the installed #277 build and do not yet enable layered document adoption or
 editing. The tiled preview and its alpha-aware sampling remain in progress.
+
+### Private tiled Lab layer preview (candidate)
+
+A derived associated-linear cache now tracks all four source planes per layer,
+including hidden layers, and recaptures changed identities/order/attributes.
+Bounded reads preserve alpha through filtering and unassociate afterward.
+Adapter-owned bilinear sampling between 1x and 2x avoids reproduced native
+BOX corner loss and invalid forced-BILINEAR magnification; no upstream
+source is changed. The API remains synchronous on the engine thread.
+
+Independent native fixtures pass 16,312 checks on each of four engines
+(65,248 total), with unchanged producer/header inputs. Coverage includes
+literal corner/seam values, sub-floor alpha, dirty cache updates, hidden
+layers, buffer replacement and unchanged source/history state. Initial
+compile and native sampling failures remain retained separately from the
+final runs. A single pinned 24 MP/two-layer experiment measured 453 ms cold
+fit, about 6 ms cached/edited fit, 2.4 ms cached 100% and 4.2 ms cached 130%
+viewports. These are native timings on this Mac, not app latency guarantees.
+
+This remains private infrastructure: facade adoption, layered editing and
+whole-editor qualification are pending. See [lab-layer-preview.md](lab-layer-preview.md)
+and `/tmp/glims-lab-layer-preview` for contracts and retained evidence.
