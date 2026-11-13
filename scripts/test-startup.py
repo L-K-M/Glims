@@ -309,6 +309,9 @@ def main():
         profile_env['GLIMS_PATH_OBSERVER'] = str(special_profile / 'observed-path.txt')
         profile_env['GLIMS_SCRIPT_PATH_OBSERVER'] = str(special_profile / 'script-observed-path.txt')
         profile_env['GLIMS_SCRIPT_DIRECTORY_OBSERVER'] = str(special_profile / 'script-observed-directory.txt')
+        profile_env['GLIMS_STARTUP_ENV_REPORT'] = str(special_profile / 'environment-after-stop.txt')
+        profile_env['GLIMS_SCRIPT_DOLLAR_PREEXISTING'] = 'keep-dollar'
+        profile_env['GLIMS_SCRIPT_TILDE_PREEXISTING'] = 'keep-tilde'
         profile_env.pop('GLIMS_TEST_UNDEFINED_PATH_TOKEN', None)
         def check_special_profile(label, script_dir):
             process = subprocess.Popen([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
@@ -334,6 +337,9 @@ def main():
             assert script_observed == expected_path, f'a user Script-Fu script received {script_observed!r}, expected {expected_path!r}'
             assert (special_profile / 'script-observed-directory.txt').read_text() == str(special_profile / 'user'), \
                 'a user Script-Fu script received a modified unrelated config query'
+            assert set((special_profile / 'environment-after-stop.txt').read_text().splitlines()) == {
+                'GLIMS_SCRIPT_DOLLAR_PREEXISTING=keep-dollar', 'GLIMS_SCRIPT_TILDE_PREEXISTING=keep-tilde'
+            }, 'temporary environment values leaked or existing values changed'
             assert (profile_fonts, profile_commands - {'script-fu-glims-path-regression', 'plug-in-glims-meta-oracle'}) == baseline, \
                 'special profile changed unrelated fonts or commands'
             print(f'{label}: {stdout.strip()}', flush=True)

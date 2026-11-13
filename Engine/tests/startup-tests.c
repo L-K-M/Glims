@@ -7,8 +7,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include "glims_engine.h"
+
+extern char **environ;
 
 static double now (void)
 {
@@ -80,6 +83,21 @@ int main (int argc, char **argv)
   fflush (stdout);
   if (image) api->image_close (engine, image);
   if (engine) api->stop (engine);
+  const char *environment_report = getenv ("GLIMS_STARTUP_ENV_REPORT");
+  if (environment_report)
+    {
+      FILE *report = fopen (environment_report, "w");
+      if (!report) failed = 1;
+      else
+        {
+          for (char **entry = environ; entry && *entry; entry++)
+            if (strncmp (*entry, "GLIMS_SCRIPT_DOLLAR_", 20) == 0 ||
+                strncmp (*entry, "GLIMS_SCRIPT_TILDE_", 19) == 0)
+              fprintf (report, "%s\n", *entry);
+          if (ferror (report)) failed = 1;
+          if (fclose (report) != 0) failed = 1;
+        }
+    }
   if (error) api->free_string (error);
   free (pixels);
   return failed;
