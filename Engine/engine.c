@@ -689,9 +689,9 @@ default_plugin_cache_missing (Gimp *gimp)
   return missing;
 }
 
-/* The packager queries the signed bundled plug-ins once, in a throwaway
- * home. Seed a missing per-user registry only for that exact engine and
- * language. GIMP still checks every executable's path/mtime and runs init
+/* The bundle contains a registry captured for one engine and language.
+ * Seed a missing default per-user registry when that identity matches. GIMP
+ * still checks every executable's path/mtime and runs init
  * procedures, so changed and user-installed plug-ins are discovered normally.
  * Existing registries and preferences always belong to the user. */
 static gboolean
@@ -949,7 +949,11 @@ engine_initialize (GlimsEngine  *engine,
   if ((!prev_language || g_strcmp0 (prev_language, current_language) == 0) &&
       default_plugin_cache_missing (gimp) &&
       seed_bundle_plugin_cache (contents, current_language))
-    gimp->query_all = FALSE;
+    {
+      gimp->query_all = FALSE;
+      if (g_getenv ("GLIMS_STARTUP_TRACE"))
+        g_printerr ("Glims: seeded bundled command cache\n");
+    }
   g_free (prev_language);
   g_free (contents);
 

@@ -41,38 +41,41 @@ def main():
             (work / leaf).mkdir(exist_ok=True)
             environment[key] = str(work / leaf)
         environment['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / 'catalog.txt')
-        environment.pop('GLIMS_STARTUP_TRACE', None)
+        environment['GLIMS_STARTUP_TRACE'] = '1'
 
-        def run(label):
+        def run(label, seeded=None):
             (work / 'catalog.txt').unlink(missing_ok=True)
             result = subprocess.run([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                                      str(work / 'user'), str(work / 'cache')],
                                     env=environment, cwd=work, capture_output=True, text=True, timeout=180)
             if result.returncode:
                 raise AssertionError(f'{label}: {result.stdout}\n{result.stderr}')
+            marker = 'Glims: seeded bundled command cache' in result.stderr
+            if seeded is not None:
+                assert marker == seeded, f'{label}: unexpected command-cache seeding state'
             fonts, commands = (work / 'catalog.txt').read_text().split('[procedures]\n', 1)
             catalog = (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines()))
             assert catalog[0] and catalog[1], f'{label}: empty catalog'
             print(f'{label}: {result.stdout.strip()}', flush=True)
             return catalog
 
-        def unchanged(label, reference):
-            actual = run(label)
+        def unchanged(label, reference, seeded=None):
+            actual = run(label, seeded)
             assert actual == reference, f'{label}: changed font or command catalog'
 
-        baseline = run('fresh relocated bundle')
-        unchanged('warm restart', baseline)
+        baseline = run('fresh relocated bundle', True)
+        unchanged('warm restart', baseline, False)
         (work / 'user/pluginrc').unlink()
-        unchanged('missing command cache recovery', baseline)
+        unchanged('missing command cache recovery', baseline, True)
         plugin_dir = work / 'user/plug-ins/glims-metadata-loader'
         plugin_dir.mkdir(parents=True)
         plugin = plugin_dir / 'glims-metadata-loader.py'
         shutil.copy2(ROOT / 'Engine/tests/metadata-loader.py', plugin)
         plugin.chmod(0o755)
-        with_custom = run('user plug-in installed')
+        with_custom = run('user plug-in installed', False)
         assert 'plug-in-glims-meta-oracle' in with_custom[1], 'custom plug-in was not discovered'
         (work / 'user/pluginrc').unlink()
-        unchanged('missing cache with user plug-in', with_custom)
+        unchanged('missing cache with user plug-in', with_custom, True)
         rc = work / 'user/gimprc'
         previous_rc = rc.read_bytes()
         changed_rc, replacements = re.subn(rb'\(prev-language "(?:[^"\\]|\\.)*"\)',
@@ -81,11 +84,12 @@ def main():
         try:
             rc.write_bytes(changed_rc)
             (work / 'user/pluginrc').unlink()
-            unchanged('missing cache after language change', with_custom)
+            unchanged('missing cache after language change', with_custom, False)
         finally:
             rc.write_bytes(previous_rc)
         shutil.rmtree(plugin_dir)
         unchanged('user plug-in removed', baseline)
+        valid_registry = (work / 'user/pluginrc').read_bytes()
         # A configured registry belongs to the user. Do not manufacture the
         # default file just because it is absent while this path is active.
         rc = work / 'user/gimprc'
@@ -95,12 +99,15 @@ def main():
         (work / 'user/pluginrc').unlink()
         try:
             rc.write_bytes(original_rc + b'\n(pluginrc-path "${gimp_dir}/alternate-pluginrc")\n')
-            unchanged('alternate user registry', baseline)
+            unchanged('alternate user registry', baseline, False)
             assert not (work / 'user/pluginrc').exists(), 'created default cache despite alternate registry'
         finally:
             rc.write_bytes(original_rc)
+            alternate.unlink(missing_ok=True)
         (work / 'user/pluginrc').write_text('invalid registry\n')
-        unchanged('corrupt command cache recovery', baseline)
+        unchanged('corrupt command cache recovery', baseline, False)
+        (work / 'user/pluginrc').write_bytes(valid_registry[:len(valid_registry)//2])
+        unchanged('truncated command cache recovery', baseline, False)
         caches = list((work / 'cache/fontconfig').glob('*.cache-*'))
         assert caches, 'no native font caches were generated'
         for cache in caches:
@@ -121,7 +128,7 @@ def main():
         (work / 'user').mkdir()
         identity = clone / 'Contents/Resources/Engine-Startup/identity'
         identity.write_text('0.0.0\nincompatible-language\n')
-        unchanged('incompatible packaged registry fallback', baseline)
+        unchanged('incompatible packaged registry fallback', baseline, False)
         # A missing optional helper keeps the original native font config.
         (clone / 'Contents/MacOS/glims-font-cache').unlink()
         shutil.rmtree(work / 'cache')
