@@ -151,7 +151,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->layer_change(engine,id,rows[0].id,&bad,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
           "non-finite opacity is refused before mutation");
     if(error)api->free_string(error);error=NULL;
-    bad.properties=GLIMS_LAYER_MODE;
+    bad.properties=GLIMS_LAYER_MODE;bad.opacity=1;
     CHECK(api->layer_change(engine,id,rows[0].id,&bad,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
           "unsupported Lab blend-mode edits are refused before mutation");
     if(error)api->free_string(error);error=NULL;
