@@ -2,7 +2,8 @@
 
 This private Recorder foundation fingerprints the effective, registered
 brush mask, sRGB color and alpha, opacity, geometry, hard-edge setting and
-size-only pressure dynamics for one layered Lab stroke. It captures the
+size-only pressure dynamics and GIMP, GEGL, Babl and Little CMS versions for
+one layered Lab stroke. It captures the
 resource identity for later resolution. Logical root IDs, UUIDs and selection
 are deliberately not part of the fingerprint: a future Recorder binding must
 capture and validate them separately before replay.

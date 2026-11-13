@@ -208,6 +208,7 @@ static void facts_probe(GlimsEngine *engine,GimpImage *image) {
   gboolean captured=glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&a);
   CHECK(captured&&a.brush_name&&a.fingerprint&&strlen(a.fingerprint)==64,
         "fixed-size brush yields owned resource identity and fingerprint");
+  if(captured&&a.fingerprint)printf("OBS engine=%s fingerprint=%s\n",GIMP_VERSION,a.fingerprint);
   settings.root=987;memset(settings.uuid,0x7a,sizeof settings.uuid);
   CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
         !strcmp(a.fingerprint,b.fingerprint),"logical target identity is excluded from brush facts");

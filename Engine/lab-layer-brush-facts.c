@@ -10,6 +10,7 @@
 #include "core/gimpsymmetry.h"
 #include "paint/gimppaintoptions.h"
 
+#include <lcms2.h>
 #include <math.h>
 #include <string.h>
 
@@ -77,6 +78,17 @@ glims_lab_layer_brush_capture_facts (GlimsEngine *engine, GimpImage *image,
   static const gchar domain[] = "glims-layered-lab-brush-configuration-v1";
   g_autoptr(GChecksum) hash = g_checksum_new (G_CHECKSUM_SHA256);
   g_checksum_update (hash, (const guchar *) domain, sizeof domain);
+  /* Native brush geometry can change across engine versions. */
+  static const gchar engine_version[] = GIMP_VERSION;
+  g_checksum_update (hash, (const guchar *) engine_version, sizeof engine_version);
+  gint gegl_major, gegl_minor, gegl_micro, babl_major, babl_minor, babl_micro;
+  gegl_get_version (&gegl_major, &gegl_minor, &gegl_micro);
+  babl_get_version (&babl_major, &babl_minor, &babl_micro);
+  gchar dependencies[96];
+  g_snprintf (dependencies, sizeof dependencies, "%d.%d.%d/%d.%d.%d/%d",
+              gegl_major, gegl_minor, gegl_micro, babl_major, babl_minor,
+              babl_micro, cmsGetEncodedCMMversion ());
+  g_checksum_update (hash, (const guchar *) dependencies, strlen (dependencies) + 1);
   g_checksum_update (hash, (const guchar *) content, strlen (content) + 1);
   const guint8 flags[] = { options->hard != FALSE, enabled != FALSE };
   g_checksum_update (hash, flags, sizeof flags);
