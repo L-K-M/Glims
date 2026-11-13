@@ -3,9 +3,10 @@
 #include "engine-private.h"
 
 /* Private serialized fill of one selected logical Lab root. The caller must
- * exclude native mutation and nested engine dispatch for the whole call.
+ * exclude direct native mutation throughout; progress may dispatch nested
+ * engine work, which is gated by engine busy ownership.
  * Four candidate planes are staged before one native Undo group publishes
- * them; ordinary failures and a zero-coverage result do not change history.
+ * them; cancellation, ordinary failures and zero coverage do not change history.
  * No public facade or UI capability is enabled by this helper. */
 GlimsStatus glims_lab_layer_fill (GlimsEngine *engine, GimpImage *image,
                                   GimpLayer *root, double lightness,
