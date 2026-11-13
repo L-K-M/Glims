@@ -836,7 +836,23 @@ engine_initialize (GlimsEngine  *engine,
   gimpdir = gimp_directory_file (NULL);
   if (g_file_query_file_type (gimpdir, G_FILE_QUERY_INFO_NONE, NULL) != G_FILE_TYPE_DIRECTORY)
     {
-      GimpUserInstall *install = gimp_user_install_new (G_OBJECT (gimp), FALSE);
+      GimpUserInstall *install;
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 2 && GIMP_MICRO_VERSION == 0
+      /* 3.2.0's migration scan passes an absent SNAP to g_file_test(). An
+       * empty value takes the non-Snap path without changing existing values.
+       * Only the constructor scans old installations; restore it immediately. */
+      gboolean restore_absent_snap = g_getenv ("SNAP") == NULL;
+
+      if (restore_absent_snap)
+        g_setenv ("SNAP", "", TRUE);
+#endif
+
+      install = gimp_user_install_new (G_OBJECT (gimp), FALSE);
+
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 2 && GIMP_MICRO_VERSION == 0
+      if (restore_absent_snap)
+        g_unsetenv ("SNAP");
+#endif
 
       gimp_user_install_run (install, 1);
       gimp_user_install_free (install);
