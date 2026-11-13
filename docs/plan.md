@@ -5903,6 +5903,18 @@ catalogs unchanged; one ordinary launch showed its document window at 1.51
 seconds. Corrupt caches, language changes and incompatible packaged registries
 still fall back to a slower scan. Review and release qualification remain open.
 
+### Logical Lab layer names (candidate)
+
+The limited layered Lab editor can rename a logical root without changing its
+scalar planes or identity map. Rename is a separate, undoable property change;
+invalid names and combinations with other edits are refused before mutation.
+The engine advertises this separately from visibility and opacity, so an older
+adapter leaves the name field disabled. The public fixture passes 146 checks
+on each of four engines, including rename, Undo/Redo, XCF persistence and
+refusal. The actual palette smoke test exercises rename and window Undo/Redo;
+the full Swift suite passes 1,764 tests. Review and release qualification remain
+in progress; pixel editing is not enabled by this.
+
 ### Layered Lab read-only adoption (experimental branch)
 
 The candidate opens a strictly validated v2 layered Lab XCF as logical layer

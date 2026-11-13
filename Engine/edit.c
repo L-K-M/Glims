@@ -1042,6 +1042,20 @@ glims_layer_change (GlimsEngine            *engine,
       if (!storage) return GLIMS_STATUS_FAILED;
       if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID ||
           !layered_lab_contains_root (storage, layer)) return GLIMS_STATUS_UNSUPPORTED;
+      /* Rename is a separate operation so an invalid name or a failed
+       * native rename cannot partially apply visibility or opacity changes. */
+      if (change->properties == GLIMS_LAYER_NAME)
+        {
+          if (!memchr (change->name, '\0', sizeof change->name) || !change->name[0] ||
+              !g_utf8_validate (change->name, -1, NULL))
+            return GLIMS_STATUS_INVALID_ARGUMENT;
+          status = glims_edit_ready (engine, open, error);
+          if (status != GLIMS_STATUS_OK) return status;
+          if (!gimp_item_rename (GIMP_ITEM (layer), change->name, &gerror))
+            return glims_fail (error, gerror, "The layer could not be renamed.");
+          gimp_image_flush (image);
+          return GLIMS_STATUS_OK;
+        }
       if (!change->properties || (change->properties & ~(GLIMS_LAYER_VISIBLE | GLIMS_LAYER_OPACITY)) ||
           ((change->properties & GLIMS_LAYER_OPACITY) &&
            (!isfinite (change->opacity) || change->opacity < 0 || change->opacity > 1)))

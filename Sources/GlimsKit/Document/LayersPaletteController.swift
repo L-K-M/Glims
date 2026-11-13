@@ -981,6 +981,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     private func commitLayerChange(_ context: LayerRowView.Context, _ change: EngineSession.LayerChange) -> Bool {
         guard let document, document.acceptsLayerProperties,
               (document.acceptsEdits || change.isLimitedLayerPropertyChange),
+              (change.name == nil || document.acceptsLayerRename),
               LayerRowView.canChange(context, document: document, layers: document.layers) else { return false }
         document.changeLayer(context.layerID, change)
         return true
@@ -1059,7 +1060,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             self?.commitLayerChange(context, change) ?? false
         }
         rowView.checkbox.isEnabled = document.acceptsLayerProperties
-        rowView.nameField.isEditable = document.acceptsEdits
+        rowView.nameField.isEditable = document.acceptsLayerRename
         rowView.layerThumb.isEnabled = document.acceptsLayerSelection
         rowView.maskThumb?.isEnabled = document.acceptsEdits
         rowView.onThumbnail = { [weak self, weak rowView] pick, option in

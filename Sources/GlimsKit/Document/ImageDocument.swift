@@ -510,6 +510,9 @@ final class ImageDocument {
     var acceptsLayerProperties: Bool {
         acceptsEdits || (acceptsImageReads && storage.allowsLayerProperties && !recorder.isReplaying && !recorder.isRecording)
     }
+    var acceptsLayerRename: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerRename)
+    }
     var acceptsLayerSelection: Bool {
         acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
     }
@@ -3267,7 +3270,8 @@ final class ImageDocument {
                      completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         let limited = storage.layout == .layeredLab
         if limited {
-            guard acceptsLayerProperties, change.isLimitedLayerPropertyChange else {
+            guard acceptsLayerProperties, change.isLimitedLayerPropertyChange,
+                  change.name == nil || acceptsLayerRename else {
                 completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
             }
         }

@@ -27,13 +27,21 @@ final class ImageStorageTests: XCTestCase {
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)))
         XCTAssertFalse(editable.readOnly)
         XCTAssertTrue(editable.allowsLayerProperties)
+        XCTAssertFalse(editable.allowsLayerRename, "older engines do not advertise rename")
         XCTAssertEqual(editable.restrictedEditingMessage, "This layered Lab document supports viewing and limited layer-property edits.")
+        let rename = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME)))
+        XCTAssertTrue(rename.allowsLayerRename)
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(UInt32.max)))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue, flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue)))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)
@@ -45,7 +53,9 @@ final class ImageStorageTests: XCTestCase {
         XCTAssertFalse(EngineSession.LayerChange().isLimitedLayerPropertyChange)
         XCTAssertTrue(EngineSession.LayerChange(isVisible: false).isLimitedLayerPropertyChange)
         XCTAssertTrue(EngineSession.LayerChange(opacity: 0.5).isLimitedLayerPropertyChange)
+        XCTAssertTrue(EngineSession.LayerChange(name: "Other").isLimitedLayerPropertyChange)
         XCTAssertFalse(EngineSession.LayerChange(name: "Other", opacity: 0.5).isLimitedLayerPropertyChange)
+        XCTAssertFalse(EngineSession.LayerChange(name: "Other", isVisible: false).isLimitedLayerPropertyChange)
         XCTAssertFalse(EngineSession.LayerChange(isVisible: true, mode: "normal").isLimitedLayerPropertyChange)
     }
 }
