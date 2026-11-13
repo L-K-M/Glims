@@ -20,6 +20,11 @@ provide a color workflow and cancellation/progress UI, and reconcile errors
 and close. A brush needs
 separate coverage accumulation and a single stroke-wide Undo transaction.
 
+A separate typed operation accepts bounded straight sRGB, converts its transfer
+curve and D50 Lab values with the same transform used for display, and combines
+color alpha with fill opacity. It shares the same captured target and transaction.
+An independent ICC oracle checks primary red, mid-gray and translucent blending.
+
 The standalone row tests exercise output staging, aliases, unaligned coverage,
 in-place rows, invisible stored colors and invalid late coverage. An independent
 rational oracle covers 300 rows, more than 36,000 component comparisons and

@@ -248,6 +248,76 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     }
    }
    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"public fill fixture restores the empty selection");
+   GlimsLabLayerColorFillSettings color_fill={.struct_size=sizeof color_fill,.root=rows[0].id,
+     .color={1,0,0,1},.opacity=1};memcpy(color_fill.uuid,first_identity.uuid,16);
+   guint8 color_request[sizeof color_fill+2];memset(color_request,0xa5,sizeof color_request);
+   memcpy(color_request+1,&color_fill,sizeof color_fill);
+   GlimsStatus color_status=api->image_fill_lab_layer_srgb(engine,id,(const GlimsLabLayerColorFillSettings*)(color_request+1),&error);
+   CHECK(color_status==GLIMS_STATUS_OK&&color_request[0]==0xa5&&color_request[sizeof color_request-1]==0xa5,
+         "unaligned sRGB fill request succeeds");if(error)api->free_string(error);error=NULL;
+   if(color_status==GLIMS_STATUS_OK){
+    guint8 red[4]={0};
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},red,4)==GLIMS_STATUS_OK&&
+          red[0]>245&&red[1]<20&&red[2]<20&&red[3]==255,"sRGB red fills the logical Lab root as red");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"one Undo restores the sRGB fill");
+   }
+   cmsHPROFILE color_srgb=cmsCreate_sRGBProfile(),color_lab=cmsCreateLab4Profile(NULL);
+   cmsHTRANSFORM color_oracle=color_srgb&&color_lab?cmsCreateTransform(color_srgb,TYPE_RGB_DBL,color_lab,TYPE_Lab_DBL,INTENT_RELATIVE_COLORIMETRIC,0):NULL;
+   double red_rgb[3]={1,0,0},red_lab[3]={0};if(color_oracle)cmsDoTransform(color_oracle,red_rgb,red_lab,1);
+   CHECK(color_oracle!=NULL,"independent sRGB-to-Lab oracle creates");
+   color_fill.color=(GlimsColor){.5,.5,.5,1};
+   color_status=api->image_fill_lab_layer_srgb(engine,id,&color_fill,&error);
+   CHECK(color_status==GLIMS_STATUS_OK,"mid-gray sRGB fill succeeds");if(error)api->free_string(error);error=NULL;
+   if(color_status==GLIMS_STATUS_OK&&color_oracle){
+    double gray_rgb[3]={.5,.5,.5},gray_lab[3]={0};cmsDoTransform(color_oracle,gray_rgb,gray_lab,1);
+    GlimsOpenImage *gray_open=glims_lookup_image(engine,id);GlimsLabLayerStorage gray_storage;
+    gboolean valid_gray=gray_open&&glims_lab_layer_storage_read(gray_open->image,&gray_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+    CHECK(valid_gray,"mid-gray fill retains the carrier");
+    if(valid_gray){
+     guint8 sample=0;GimpDrawable *plane=GIMP_DRAWABLE(gray_storage.layers[0].planes[0]);
+     gegl_buffer_get(gimp_drawable_get_buffer(plane),GEGL_RECTANGLE(1,1,1,1),1,
+                     gimp_drawable_get_format(plane),&sample,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+     CHECK(abs((int)sample-(int)floor(gray_lab[0]*255/100+.5))<=1,
+           "sRGB mid-gray uses the correct transfer curve");
+    }
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"Undo restores the mid-gray fill");
+   }
+   color_fill.color=(GlimsColor){1,0,0,1};
+   color_fill.color.alpha=.5;color_fill.opacity=.5;
+   color_status=api->image_fill_lab_layer_srgb(engine,id,&color_fill,&error);
+   CHECK(color_status==GLIMS_STATUS_OK,"sRGB fill accepts separate color alpha and opacity");if(error)api->free_string(error);error=NULL;
+   if(color_status==GLIMS_STATUS_OK&&color_oracle){
+    GlimsOpenImage *color_open=glims_lookup_image(engine,id);GlimsLabLayerStorage color_storage;
+    gboolean valid_color=color_open&&glims_lab_layer_storage_read(color_open->image,&color_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+    CHECK(valid_color,"sRGB fill preserves the carrier");
+    if(valid_color){
+     double target[3]={red_lab[0]*255/100,red_lab[1]+128,red_lab[2]+128};
+     for(guint role=0;role<3;role++){
+      guint8 sample=0;GimpDrawable *plane=GIMP_DRAWABLE(color_storage.layers[0].planes[role]);
+      gegl_buffer_get(gimp_drawable_get_buffer(plane),GEGL_RECTANGLE(1,1,1,1),1,
+                      gimp_drawable_get_format(plane),&sample,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+      int expected=(int)floor(128+.25*(target[role]-128)+.5);
+      CHECK(abs((int)sample-expected)<=1,"sRGB alpha and opacity multiply in physical Lab");
+     }
+    }
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"one Undo restores the translucent sRGB fill");
+   }
+   if(color_oracle)cmsDeleteTransform(color_oracle);if(color_srgb)cmsCloseProfile(color_srgb);if(color_lab)cmsCloseProfile(color_lab);
+   GlimsUndoInfo color_before={0},color_after={0};color_fill.color.alpha=0;
+   CHECK(api->image_undo_info(engine,id,&color_before)==GLIMS_STATUS_OK&&
+         api->image_fill_lab_layer_srgb(engine,id,&color_fill,&error)==GLIMS_STATUS_OK&&
+         api->image_undo_info(engine,id,&color_after)==GLIMS_STATUS_OK&&color_before.undo_count==color_after.undo_count&&
+         color_before.redo_count==color_after.redo_count,"transparent sRGB fill leaves Undo and Redo unchanged");
+   if(error)api->free_string(error);error=NULL;
+   color_fill.color.red=NAN;
+   CHECK(api->image_fill_lab_layer_srgb(engine,id,&color_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "sRGB fill rejects nonfinite components");if(error)api->free_string(error);error=NULL;
+   color_fill.color.red=1.01;
+   CHECK(api->image_fill_lab_layer_srgb(engine,id,&color_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "sRGB fill rejects out-of-range components");if(error)api->free_string(error);error=NULL;
+   color_fill.color.red=1;color_fill.uuid[0]^=0xff;
+   CHECK(api->image_fill_lab_layer_srgb(engine,id,&color_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "sRGB fill refuses a stale root UUID");if(error)api->free_string(error);error=NULL;
    GlimsItemID duplicate=0;error=NULL;
    GlimsStatus duplicated=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,&duplicate,&error);
    CHECK(duplicated==GLIMS_STATUS_OK&&duplicate!=0,"public command duplicates a logical Lab layer");

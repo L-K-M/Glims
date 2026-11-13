@@ -18,6 +18,7 @@
 #include "lab-layer-preview.h"
 #include "lab-layer-storage.h"
 #include "lab-layer-fill.h"
+#include "lab-transform.h"
 #include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
@@ -34,6 +35,7 @@
 #include "startup-helper.h"
 
 #include <dlfcn.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5166,6 +5168,63 @@ api_image_fill_lab_layer (GlimsEngine *engine, GlimsImageID image,
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab_layer,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_fill_lab_layer_on_engine, &args, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsLabLayerColorFillSettings settings;
+  char **error;
+} LabLayerColorFillArgs;
+
+static GlimsStatus
+image_fill_lab_layer_srgb_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLayerColorFillArgs *args = data;
+  const double channels[3] = { args->settings.color.red, args->settings.color.green,
+                               args->settings.color.blue };
+  float linear[3], lab[3];
+  for (guint i = 0; i < 3; i++)
+    linear[i] = (float) (channels[i] <= 0.04045 ? channels[i] / 12.92 :
+                         pow ((channels[i] + 0.055) / 1.055, 2.4));
+  GlimsLabTransform *transform = glims_lab_transform_new ();
+  if (!transform) return GLIMS_STATUS_FAILED;
+  gboolean converted = glims_lab_transform_from_linear_rgb (transform, linear, 1, lab);
+  glims_lab_transform_free (transform);
+  if (!converted) return GLIMS_STATUS_FAILED;
+  LabLayerFillArgs fill = { .image = args->image, .error = args->error };
+  fill.settings.struct_size = sizeof fill.settings;
+  fill.settings.root = args->settings.root;
+  memcpy (fill.settings.uuid, args->settings.uuid, sizeof fill.settings.uuid);
+  fill.settings.lightness = CLAMP ((double)lab[0], 0, 100);
+  fill.settings.a = CLAMP ((double)lab[1], -128, 127);
+  fill.settings.b = CLAMP ((double)lab[2], -128, 127);
+  fill.settings.opacity = args->settings.opacity * args->settings.color.alpha;
+  return image_fill_lab_layer_on_engine (engine, &fill);
+}
+
+static GlimsStatus
+api_image_fill_lab_layer_srgb (GlimsEngine *engine, GlimsImageID image,
+                               const GlimsLabLayerColorFillSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  uint32_t size;
+  if (!settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof (GlimsLabLayerColorFillSettings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabLayerColorFillArgs args = { .image = image, .error = error };
+  memcpy (&args.settings, settings, sizeof args.settings);
+  const double values[] = { args.settings.color.red, args.settings.color.green,
+                            args.settings.color.blue, args.settings.color.alpha,
+                            args.settings.opacity };
+  guint8 zero_uuid[16] = { 0 };
+  if (args.settings.root <= 0 || !memcmp (args.settings.uuid, zero_uuid, sizeof zero_uuid))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  for (guint i = 0; i < G_N_ELEMENTS (values); i++)
+    if (!isfinite (values[i]) || values[i] < 0 || values[i] > 1)
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab_layer_srgb,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_fill_lab_layer_srgb_on_engine, &args, error);
 }
 
 static const GlimsEngineAPI api_v1 = {

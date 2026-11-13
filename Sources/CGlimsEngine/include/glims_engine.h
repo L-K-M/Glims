@@ -1263,6 +1263,14 @@ typedef struct GlimsLabLayerFillSettings {
   double opacity;         /* Finite [0,1]. */
 } GlimsLabLayerFillSettings;
 
+typedef struct GlimsLabLayerColorFillSettings {
+  uint32_t struct_size;
+  GlimsItemID root;
+  uint8_t uuid[16];
+  GlimsColor color;       /* Straight, bounded nonlinear sRGB. */
+  double opacity;         /* Finite [0,1], multiplied by color alpha. */
+} GlimsLabLayerColorFillSettings;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -4204,6 +4212,13 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_fill_lab_layer) (GlimsEngine *engine, GlimsImageID image,
                                        const GlimsLabLayerFillSettings *settings,
                                        char **error);
+  /* Slot216: same captured target, selection, cancellation and Undo rules as
+   * slot215, with a straight sRGB color converted to physical D50 Lab. All
+   * color components and opacity must be finite [0,1]; alpha multiplies
+   * opacity. Conversion saturates to the carrier's physical U8 range. */
+  GlimsStatus (*image_fill_lab_layer_srgb) (GlimsEngine *engine, GlimsImageID image,
+                                            const GlimsLabLayerColorFillSettings *settings,
+                                            char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
