@@ -5745,3 +5745,44 @@ viewports. These are native timings on this Mac, not app latency guarantees.
 This remains private infrastructure: facade adoption, layered editing and
 whole-editor qualification are pending. See [lab-layer-preview.md](lab-layer-preview.md)
 and `/tmp/glims-lab-layer-preview` for contracts and retained evidence.
+
+### Private logical Lab layer commands (candidate)
+
+The tiled preview merged through #281 at `3d51a561`, after both jobs in
+latest-head CI `43379560878` passed with independent review complete.
+
+Three private commands create transparent logical layers, duplicate an
+explicit root and delete an explicit root, including the last root. New
+and duplicated roots receive five fresh identities. Map changes, detached
+staging and selection vectors are prepared before native history changes.
+Each command creates one Undo step and preserves the complete original
+ordered selection through Undo. Ordinary refusals preserve existing Redo.
+
+Independent final fixtures pass on every supported engine:
+
+| Command | Checks per engine | Four-engine total |
+| --- | ---: | ---: |
+| Create | 329 | 1,316 |
+| Duplicate | 120 | 480 |
+| Delete | 197 | 788 |
+| Combined command/preview workflow | 537 | 2,148 |
+
+Coverage includes empty/plural/scalar selections, a real partial selection
+mask and Redo branch, permuted storage, exact raw data, XCF persistence and
+layer-count boundaries. Review caught native Undo choosing a surviving
+root for an originally empty selection. Actual failing controls preceded
+the creation/duplication selection-companion fixes; deletion's companion
+already handled this case. Final source reviews have no remaining important
+findings under the documented serialized caller contract. Producer inputs
+remain unchanged.
+
+The combined workflow keeps one preview cache through create, duplicate,
+delete and three Undo/Redo transitions. Temporary sole-root alpha mutations
+prove that the cache recaptures the actual surviving source; each command's
+mask is compared directly with the original nonempty mask. Earlier weaker
+fixtures remain separate from the final 537-check matrix. Hosted CI and
+public layered editing remain pending. Contracts
+and limits are in [lab-layer-create.md](lab-layer-create.md),
+[lab-layer-duplicate.md](lab-layer-duplicate.md) and
+[lab-layer-delete.md](lab-layer-delete.md). The installed app remains
+qualified #277; no notarization is requested.
