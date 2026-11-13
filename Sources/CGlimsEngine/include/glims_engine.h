@@ -1215,6 +1215,23 @@ typedef struct GlimsProofSettings {
   uint32_t flags;           /* GlimsProofFlags; unknown bits are invalid */
 } GlimsProofSettings;
 
+/* Storage layout is independent of color mode. A layered Lab carrier is
+ * initially read-only except logical-root selection and native XCF saving. */
+typedef enum GlimsImageStorageLayout {
+  GLIMS_IMAGE_LAYOUT_ORDINARY = 0,
+  GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT = 1,
+  GLIMS_IMAGE_LAYOUT_LAYERED_LAB = 2
+} GlimsImageStorageLayout;
+
+/* Absence of READ_ONLY does not promise that every editing operation is
+ * supported for the layout. Individual operations may still refuse it. */
+enum { GLIMS_IMAGE_STORAGE_READ_ONLY = 1u << 0 };
+typedef struct GlimsImageStorageInfo {
+  uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */
+  uint32_t layout;      /* GlimsImageStorageLayout */
+  uint64_t flags;       /* GLIMS_IMAGE_STORAGE_* */
+} GlimsImageStorageInfo;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -4130,6 +4147,11 @@ typedef struct GlimsEngineAPI {
                                                  uint64_t token,
                                                  const GlimsLabLevelsSettings *settings,
                                                  char **error);
+  /* Slot213: per-image storage layout and read-only capability. Caller sets
+   * struct_size; unaligned pointers are supported. Short outputs are untouched.
+   * The known prefix is filled on success and any extension tail is untouched. */
+  GlimsStatus (*image_storage_info) (GlimsEngine *engine, GlimsImageID image,
+                                     GlimsImageStorageInfo *info);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

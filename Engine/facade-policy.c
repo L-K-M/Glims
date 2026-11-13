@@ -1,5 +1,6 @@
 #include "facade-policy.h"
 #include "plate-storage.h"
+#include "lab-layer-storage.h"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
 #include <string.h>
@@ -22,6 +23,50 @@ typedef struct {
   gboolean *invoked;
 } FacadeCall;
 
+/* The initial layered Lab surface is read-only, except transient logical-root
+ * selection and XCF saving. Never inherit flat Lab mutation permissions. */
+static gboolean
+layered_lab_operation_allowed (GlimsFacadeOperation operation)
+{
+  switch (operation)
+    {
+    case GLIMS_FACADE_OP_image_info:
+    case GLIMS_FACADE_OP_image_layers:
+    case GLIMS_FACADE_OP_image_color_info:
+    case GLIMS_FACADE_OP_image_storage_info:
+    case GLIMS_FACADE_OP_image_render:
+    case GLIMS_FACADE_OP_image_render_to_profile:
+    case GLIMS_FACADE_OP_image_save:
+    case GLIMS_FACADE_OP_image_save_copy:
+    case GLIMS_FACADE_OP_image_undo_info:
+    case GLIMS_FACADE_OP_image_history:
+    case GLIMS_FACADE_OP_selection_bounds:
+    case GLIMS_FACADE_OP_selection_outline:
+    case GLIMS_FACADE_OP_paths:
+    case GLIMS_FACADE_OP_image_quick_mask:
+    case GLIMS_FACADE_OP_image_guides:
+    case GLIMS_FACADE_OP_image_grid:
+    case GLIMS_FACADE_OP_image_floating_selection:
+    case GLIMS_FACADE_OP_image_selected_layers:
+    case GLIMS_FACADE_OP_image_selected_items:
+    case GLIMS_FACADE_OP_layer_select:
+    case GLIMS_FACADE_OP_image_select_layers:
+      return TRUE;
+    default:
+      return FALSE;
+    }
+}
+
+static GlimsStatus
+layered_lab_admission (GlimsOpenImage *open, GlimsFacadeOperation operation)
+{
+  if (!layered_lab_operation_allowed (operation)) return GLIMS_STATUS_UNSUPPORTED;
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  if (!storage) return GLIMS_STATUS_FAILED;
+  return glims_lab_layer_storage_read (open->image, storage) == GLIMS_LAB_LAYER_STORAGE_VALID
+    ? GLIMS_STATUS_OK : GLIMS_STATUS_UNSUPPORTED;
+}
+
 /* Lab shares native scalar storage, not ink editing semantics. New component
  * operations must be admitted explicitly rather than inherit permission. */
 static gboolean
@@ -32,6 +77,7 @@ component_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_info:
     case GLIMS_FACADE_OP_image_layers:
     case GLIMS_FACADE_OP_image_color_info:
+    case GLIMS_FACADE_OP_image_storage_info:
     case GLIMS_FACADE_OP_image_lab_axes:
     case GLIMS_FACADE_OP_image_fill_lab:
     case GLIMS_FACADE_OP_image_curves_lab:
@@ -162,6 +208,22 @@ dispatch (GlimsEngine *engine, gpointer data)
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (descriptor->policy == POLICY_ORDINARY && target_is_component (engine, call->target))
     {
+      GlimsOpenImage *open = call->target.kind == GLIMS_FACADE_TARGET_IMAGE
+        ? glims_lookup_image (engine, call->target.id) : NULL;
+      if (open && open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB &&
+          (call->operation == GLIMS_FACADE_OP_layer_select ||
+           call->operation == GLIMS_FACADE_OP_image_select_layers) &&
+          !call->target.sources[0] && !call->target.sources[1])
+        {
+          GlimsStatus status = layered_lab_admission (open, call->operation);
+          if (status != GLIMS_STATUS_OK)
+            {
+              if (call->error) *call->error = strdup ("The layered Lab storage is damaged or unavailable.");
+              return status;
+            }
+          if (call->invoked) *call->invoked = TRUE;
+          return call->func (engine, call->data);
+        }
       if (call->error) *call->error = strdup ("This command is not available for component documents.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
@@ -178,6 +240,17 @@ dispatch (GlimsEngine *engine, gpointer data)
       GlimsOpenImage *open = glims_lookup_image (engine, call->target.id);
       if (open && open->component_document)
         {
+          if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+            {
+              GlimsStatus status = layered_lab_admission (open, call->operation);
+              if (status != GLIMS_STATUS_OK)
+                {
+                  if (call->error) *call->error = strdup ("This command is unavailable or the layered Lab storage is invalid.");
+                  return status;
+                }
+              if (call->invoked) *call->invoked = TRUE;
+              return call->func (engine, call->data);
+            }
           GlimsPlateStorage storage;
           if (!glims_plate_storage_read_open (open, &storage))
             {

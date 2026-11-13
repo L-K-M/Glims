@@ -1059,7 +1059,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         rowView.checkbox.isEnabled = document.acceptsEdits
         rowView.nameField.isEditable = document.acceptsEdits
-        rowView.layerThumb.isEnabled = document.acceptsEdits
+        rowView.layerThumb.isEnabled = document.acceptsLayerSelection
         rowView.maskThumb?.isEnabled = document.acceptsEdits
         rowView.onThumbnail = { [weak self, weak rowView] pick, option in
             guard let self, let rowView else { return }
@@ -1068,7 +1068,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         rowView.onEditEnded = { [weak self] in
             DispatchQueue.main.async { self?.reload() }
         }
-        requestThumbnails(layer: layer, mask: mask, into: rowView, document: document)
+        if document.storage.layout != .layeredLab {
+            requestThumbnails(layer: layer, mask: mask, into: rowView, document: document)
+        }
         return rowView
     }
 
@@ -1077,16 +1079,18 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// layer still in it.
     private func thumbnailPicked(_ pick: LayerRowView.ThumbnailPick, _ option: Bool,
                                  row: LayerRowView) {
-        guard let document, document.acceptsEdits,
+        guard let document, document.acceptsLayerSelection,
               LayerRowView.canChange(row.context, document: document, layers: document.layers)
         else { return }
         switch (pick, option) {
         case (.layer, _):
             document.selectLayer(row.context.layerID)
         case (.mask, true):
+            guard document.acceptsEdits else { return }
             // Option-click is View Mask, a display flag on that layer.
             document.toggleMaskShowing(row.context.layerID)
         case (.mask, false):
+            guard document.acceptsEdits else { return }
             document.editMask(row.context.layerID)
         }
     }
@@ -1165,7 +1169,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         guard let layer = snapshot.layer(for: item, for: document,
                                          currentLayers: document.layers) else { return false }
-        guard document.acceptsEdits else {
+        guard document.acceptsLayerSelection else {
             // The pick is refused; asking the document still shows why.
             document.selectLayer(layer.id)
             return false

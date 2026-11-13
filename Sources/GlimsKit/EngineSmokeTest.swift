@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-curves", "lab-levels", "recorder-lab", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-curves", "lab-levels", "recorder-lab", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "layered-lab-readonly", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -168,6 +168,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "layered-lab-readonly" {
+                try exerciseLayeredLabReadOnly(session: session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (layered Lab read-only)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "cmyk-import" {
                 try exerciseCMYKImport(session: session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (CMYK Import)" : "FAILED: \(failures) failure(s)")
