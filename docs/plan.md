@@ -5839,8 +5839,11 @@ The unchanged fixture covers RGB/Gray/profile/proof reads, tiny alpha, signed
 values, cache damage/replacement, large coordinates, minimum zoom, source
 state and busy admission. Existing display, proof and gamut fixtures also pass
 on all four engines. Independent source reviews are clear. The Swift suite
-passes 1,761 tests and the Python suite 141 tests. Hosted CI and app
-qualification remain in progress.
+passes 1,761 tests and the Python suite 141 tests. PR #283 merged at
+`fc454318` after both CI jobs passed on `55745dc`. A self-contained pinned
+bundle passed 2,268 conformance and 3,355 app smoke checks with development
+trees blocked. One fresh ordinary launch reached its untitled document window
+in 2.90 seconds. Further installed-app qualification remains pending.
 
 A facade-only 24 MP, 20-layer comparison on this Mac measured these cached
 viewport means (three reads, milliseconds):
@@ -5857,3 +5860,34 @@ removes unnecessary interpolation but does not eliminate that cost. Cold fit
 was 1.28 versus 1.47 seconds. These are native viewport measurements with a
 linear RGB destination profile, not ordinary app startup or interaction
 guarantees. Installed #277 remains unchanged pending qualification.
+
+### Alpha-aware sRGB fallback (candidate)
+
+The legacy sRGB renderer also uses associated-linear sampling for fractional
+zoom before converting to premultiplied sRGB. It reuses the per-image cache,
+preserves viewing during unrelated plug-in activity, and refuses sampler
+reentry. Unit and 200% or greater paths remain direct. A 4-by-4 transparent
+red-corner fixture reproduced wrong coverage or color at 50%, 75% and 125%
+before the fix. The candidate passes 352 checks on each engine, including
+RGB/gray/indexed, edits, padded rows and both chunk boundaries. An independent ICC and
+spatial fixture passes 6,197 checks per engine, and the existing component
+editor fixture passes 4,060 per engine. Producer inputs remained unchanged.
+GIMP's RGB and indexed projections expose alpha-bearing RGB, gray projections
+expose alpha-bearing gray, and the component preview is RGBA float; the sampler
+checks those formats rather than silently falling back to incorrect filtering.
+
+A facade-only 24 MP timing run measured cached 22.5%, 50%, 100% and 130%
+viewports at 22.6, 15.3, 1.1 and 22.8 ms respectively, versus 5.3, 1.1,
+1.1 and 9.1 ms for the previous renderer. The additional fractional-zoom
+work preserves alpha and correct color. These are native timings, not app
+interaction guarantees. Review, CI and app qualification remain pending;
+the private layered Lab preview is still a separate sampling path.
+
+The fractional-zoom cost remains an open responsiveness issue. A five-second
+sample of repeated 50% reads attributed much of the time to Babl color
+conversion, with additional time in sampling and unassociation. A guarded
+associated-output prototype preserved the tested small-alpha HDR cases but did
+not improve the cached 24 MP viewport: nine-read means were 16.18 ms versus
+15.49 ms for this candidate at 50%, and 23.34 versus 23.01 ms at 130%. The
+prototype was not adopted; pursue a faster color-correct path and measure it
+with interactive panning and alpha/profile regressions before claiming a fix.
