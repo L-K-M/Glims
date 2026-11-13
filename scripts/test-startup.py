@@ -160,6 +160,8 @@ def main():
                         process.wait()
             assert selected_alternate.is_file(), 'concurrent launch did not create the selected registry'
             assert registry.read_text() == 'invalid registry\n', 'concurrent alternate launch replaced the default registry'
+            assert not list((work / 'tmp').glob('glims-pluginrc-*')), 'concurrent alternate recovery left a temporary registry'
+            assert 'glims-pluginrc-' not in selected_rc.read_text(), 'concurrent alternate recovery leaked a temporary path'
             print('concurrent missing alternate recovery: both catalogs preserved', flush=True)
         finally:
             selected_rc.write_bytes(prior_rc)
@@ -201,6 +203,19 @@ def main():
         finally:
             rc.write_bytes(original_rc)
             alternate.unlink(missing_ok=True)
+        relative = work / 'user/relative-pluginrc'
+        relative.write_text('invalid registry\n')
+        try:
+            rc.write_bytes(original_rc + b'\n(pluginrc-path "relative-pluginrc")\n')
+            unchanged('corrupt relative user registry', baseline, temporary=True)
+            assert relative.read_text() == 'invalid registry\n', 'relative registry was replaced'
+            relative.unlink()
+            unchanged('missing relative user registry', baseline, True)
+            assert relative.is_file(), 'relative registry was not created in the user directory'
+            assert not (work / 'user/pluginrc').exists(), 'created default cache for a relative registry'
+        finally:
+            rc.write_bytes(original_rc)
+            relative.unlink(missing_ok=True)
         link_target = work / 'linked-pluginrc'
         link_target.write_text('invalid registry\n')
         (work / 'user/pluginrc').symlink_to(link_target)
