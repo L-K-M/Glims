@@ -72,6 +72,19 @@ int main (int argc, char **argv)
           fprintf (report, "[fonts]\n%s\n[procedures]\n", fonts ? fonts : "");
           for (int i = 0; i < count; i++) fprintf (report, "%s\n", procedures[i].name);
           if (ferror (report)) failed = 1;
+          const char *labels_path = getenv ("GLIMS_STARTUP_LABEL_REPORT");
+          if (labels_path)
+            {
+              FILE *labels = fopen (labels_path, "w");
+              if (!labels) failed = 1;
+              else
+                {
+                  for (int i = 0; i < count; i++)
+                    fprintf (labels, "%s\t%s\n", procedures[i].name, procedures[i].label);
+                  if (ferror (labels)) failed = 1;
+                  if (fclose (labels) != 0) failed = 1;
+                }
+            }
         }
       if (report && fclose (report) != 0) failed = 1;
       if (fonts) api->free_string (fonts);

@@ -89,6 +89,34 @@ extension EngineSmokeTest {
         } else {
             check(false, "fixture has a second selectable layer")
         }
+        let busyReady = DispatchSemaphore(value: 0), busyRelease = DispatchSemaphore(value: 0)
+        let busyAdmitted = EngineActivity.shared.perform(label: "Layered Lab selection test", work: {
+            busyReady.signal(); busyRelease.wait()
+        }, completion: {})
+        check(busyAdmitted, "busy selection fixture is admitted")
+        if busyAdmitted {
+            defer { busyRelease.signal() }
+            let deadline = Date().addingTimeInterval(15)
+            while busyReady.wait(timeout: .now()) != .success && Date() < deadline {
+                EngineSmokeTestHost.pumpEvents(for: 0.02)
+            }
+            var message: String?
+            let previousError = opened.onError
+            opened.onError = { message = $0 }
+            let before = opened.selectedLayerIDs
+            if let other = opened.layers.first(where: { !before.contains($0.id) }),
+               let list = outline(in: palette.view),
+               let row = (0..<list.numberOfRows).first(where: { index in
+                   (list.item(atRow: index) as? LayerTree.Node)?.layer.id == other.id
+               }), let item = list.item(atRow: row) {
+                check(!palette.outlineView(list, shouldSelectItem: item) && message != nil && opened.selectedLayerIDs == before,
+                      "a busy logical-layer pick explains its refusal and leaves the selection unchanged")
+            } else { check(false, "busy fixture has a second selectable layer") }
+            opened.onError = previousError
+        }
+        let idleDeadline = Date().addingTimeInterval(15)
+        while EngineActivity.shared.isBusy && Date() < idleDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+        check(!EngineActivity.shared.isBusy, "busy selection fixture drains")
         let rendered = try session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 1, height: 1))
         check(rendered.width == 1 && rendered.height == 1, "layered Lab canvas renders")
         let copy = work.appendingPathComponent("layered-copy.xcf")

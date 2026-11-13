@@ -42,6 +42,7 @@ def main():
             (work / leaf).mkdir(exist_ok=True)
             environment[key] = str(work / leaf)
         environment['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / 'catalog.txt')
+        environment['GLIMS_STARTUP_LABEL_REPORT'] = str(work / 'labels.txt')
         environment['GLIMS_STARTUP_TRACE'] = '1'
 
         def run(label, seeded=False, temporary=False, tmpdir=None):
@@ -82,7 +83,11 @@ def main():
         plugin_dir = work / 'user/plug-ins/glims-metadata-loader'
         plugin_dir.mkdir(parents=True)
         plugin = plugin_dir / 'glims-metadata-loader.py'
-        shutil.copy2(ROOT / 'Engine/tests/metadata-loader.py', plugin)
+        plugin_source = (ROOT / 'Engine/tests/metadata-loader.py').read_text()
+        original_label = "procedure.set_menu_label('Glims metadata oracle')"
+        assert plugin_source.count(original_label) == 1
+        plugin.write_text(plugin_source.replace(original_label,
+            "procedure.set_menu_label(os.environ.get('GLIMS_TEST_METADATA_LABEL', 'Glims metadata oracle'))"))
         plugin.chmod(0o755)
         with_custom = run('user plug-in installed', False)
         assert 'plug-in-glims-meta-oracle' in with_custom[1], 'custom plug-in was not discovered'
@@ -107,6 +112,7 @@ def main():
             for index in range(2):
                 concurrent_env = environment.copy()
                 concurrent_env['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / f'catalog-concurrent-{index}.txt')
+                concurrent_env.pop('GLIMS_STARTUP_LABEL_REPORT', None)
                 processes.append(subprocess.Popen(
                     [str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                      str(work / 'user'), str(work / 'cache')],
@@ -146,6 +152,7 @@ def main():
                 for index in range(2):
                     concurrent_env = environment.copy()
                     concurrent_env['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / f'alternate-concurrent-{index}.txt')
+                    concurrent_env.pop('GLIMS_STARTUP_LABEL_REPORT', None)
                     alternate_processes.append(subprocess.Popen(
                         [str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                          str(work / 'user'), str(work / 'cache')],
@@ -181,9 +188,83 @@ def main():
         assert replacements == 1, 'fixture is missing its previous-language setting'
         try:
             rc.write_bytes(changed_rc)
+            # A valid registry with labels from the old language must not be
+            # used as the current-language user plug-in catalog. The original
+            # registry and its language tag remain paired across restarts.
+            registry.write_bytes(valid_with_custom)
+            environment['GLIMS_TEST_METADATA_LABEL'] = 'Fresh language oracle'
+            unchanged('existing cache after language change', with_custom, temporary=True)
+            assert 'plug-in-glims-meta-oracle\tFresh language oracle' in (work / 'labels.txt').read_text(), \
+                'language-change recovery retained a stale user plug-in label'
+            assert registry.read_bytes() == valid_with_custom, 'language-change recovery replaced the user registry'
+            assert b'(prev-language "glims-test-other-language")' in rc.read_bytes(), \
+                'language-change recovery detached the old registry from its language'
+            unchanged('language-change recovery restart', with_custom, temporary=True)
+            assert 'plug-in-glims-meta-oracle\tFresh language oracle' in (work / 'labels.txt').read_text(), \
+                'restart reused stale user plug-in labels'
+            assert registry.read_bytes() == valid_with_custom, 'restart replaced the user registry'
+            language_processes = []
+            try:
+                for index in range(2):
+                    concurrent_env = environment.copy()
+                    concurrent_env['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / f'language-catalog-{index}.txt')
+                    concurrent_env['GLIMS_STARTUP_LABEL_REPORT'] = str(work / f'language-labels-{index}.txt')
+                    language_processes.append(subprocess.Popen(
+                        [str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
+                         str(work / 'user'), str(work / 'cache')], env=concurrent_env, cwd=work,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True))
+                for index, process in enumerate(language_processes):
+                    stdout, stderr = process.communicate(timeout=180)
+                    assert process.returncode == 0, f'language-change launch {index}: {stdout}\n{stderr}'
+                    assert 'Glims: using temporary bundled command cache' in stderr, 'concurrent language launch did not use private registry'
+                    fonts, commands = (work / f'language-catalog-{index}.txt').read_text().split('[procedures]\n', 1)
+                    assert (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines())) == with_custom, \
+                        'concurrent language launch changed the catalog'
+                    assert 'plug-in-glims-meta-oracle\tFresh language oracle' in (work / f'language-labels-{index}.txt').read_text(), \
+                        'concurrent language launch retained a stale label'
+            finally:
+                for process in language_processes:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait()
+            assert registry.read_bytes() == valid_with_custom, 'concurrent language launches replaced the registry'
+            assert b'(prev-language "glims-test-other-language")' in rc.read_bytes(), \
+                'concurrent language launches detached the old registry from its language'
+            assert not list((work / 'tmp').glob('glims-pluginrc-*')), 'concurrent language recovery left a temporary registry'
+            print('concurrent language-change recovery: both catalogs and labels preserved', flush=True)
+            alternate_language = work / 'user/language-alternate-pluginrc'
+            alternate_language.write_bytes(valid_with_custom)
+            rc.write_bytes(changed_rc + b'\n(pluginrc-path "${gimp_dir}/language-alternate-pluginrc")\n')
+            unchanged('alternate cache after language change', with_custom, temporary=True)
+            assert alternate_language.read_bytes() == valid_with_custom, 'language change replaced the alternate registry'
+            assert b'(prev-language "glims-test-other-language")' in rc.read_bytes(), \
+                'alternate registry lost its previous-language tag'
+            assert 'plug-in-glims-meta-oracle\tFresh language oracle' in (work / 'labels.txt').read_text(), \
+                'alternate recovery retained a stale user plug-in label'
+            alternate_language.unlink()
+            identity = clone / 'Contents/Resources/Engine-Startup/identity'
+            compatible_identity = identity.read_bytes()
+            try:
+                identity.write_text('0.0.0\nincompatible-language\n')
+                rc.write_bytes(changed_rc)
+                registry.write_bytes(valid_with_custom)
+                unchanged('language change with incompatible bundle', with_custom)
+                assert 'plug-in-glims-meta-oracle\tFresh language oracle' in (work / 'labels.txt').read_text(), \
+                    'native language-change fallback retained a stale user plug-in label'
+                assert b'(prev-language "glims-test-other-language")' not in rc.read_bytes(), \
+                    'native language-change fallback did not update the language tag'
+            finally:
+                identity.write_bytes(compatible_identity)
+            rc.write_bytes(changed_rc)
             (work / 'user/pluginrc').unlink()
-            unchanged('missing cache after language change', with_custom, False)
+            unchanged('missing cache after language change', with_custom, True)
+            assert 'plug-in-glims-meta-oracle\tFresh language oracle' in (work / 'labels.txt').read_text(), \
+                'missing-cache recovery failed to query the user plug-in'
         finally:
+            environment.pop('GLIMS_TEST_METADATA_LABEL', None)
             rc.write_bytes(previous_rc)
         shutil.rmtree(plugin_dir)
         unchanged('user plug-in removed', baseline)
