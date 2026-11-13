@@ -822,7 +822,9 @@ glims_layer_command (GlimsEngine  *engine,
     {
       /* Never let a generic layer command mutate the physical scalar tree. */
       if (result) *result = 0;
-      if (command != GLIMS_LAYER_DUPLICATE && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_DELETE)
+      if (command != GLIMS_LAYER_DUPLICATE && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_DELETE &&
+          command != GLIMS_LAYER_RAISE && command != GLIMS_LAYER_LOWER &&
+          command != GLIMS_LAYER_TO_TOP && command != GLIMS_LAYER_TO_BOTTOM)
         return GLIMS_STATUS_UNSUPPORTED;
       if (!layer_id && g_list_length (gimp_image_get_selected_layers (image)) != 1)
         {
@@ -850,6 +852,38 @@ glims_layer_command (GlimsEngine  *engine,
         status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
       else if (command == GLIMS_LAYER_DELETE)
         status = glims_lab_layer_delete (engine, image, layer, error);
+      else if (command == GLIMS_LAYER_RAISE || command == GLIMS_LAYER_LOWER ||
+               command == GLIMS_LAYER_TO_TOP || command == GLIMS_LAYER_TO_BOTTOM)
+        {
+          g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+          if (!storage) return GLIMS_STATUS_FAILED;
+          if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+            return GLIMS_STATUS_UNSUPPORTED;
+          guint position = 0;
+          for (; position < storage->map.count; position++)
+            if (storage->layers[position].group == layer) break;
+          if (position == storage->map.count) return GLIMS_STATUS_UNSUPPORTED;
+          if (engine->busy || g_hash_table_size (engine->strokes) || g_hash_table_size (engine->filters) ||
+              !gimp_image_undo_is_enabled (image) || gimp_image_get_undo_group_count (image))
+            return GLIMS_STATUS_BUSY;
+          guint target = position;
+          if (command == GLIMS_LAYER_RAISE && position > 0) target--;
+          if (command == GLIMS_LAYER_LOWER && position + 1 < storage->map.count) target++;
+          if (command == GLIMS_LAYER_TO_TOP) target = 0;
+          if (command == GLIMS_LAYER_TO_BOTTOM) target = storage->map.count - 1;
+          if (target == position) return GLIMS_STATUS_OK;
+          engine->busy++;
+          gboolean moved = gimp_image_reorder_item (image, GIMP_ITEM (layer), NULL, target,
+                                                     TRUE, "Reorder Lab Layer");
+          engine->busy--;
+          if (!moved) return glims_fail (error, NULL, "The logical Lab layer could not be reordered.");
+          if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+            return glims_fail (error, NULL, "The reordered Lab storage failed validation; its state may have changed.");
+          gimp_image_flush (image);
+          GeglRectangle full = { 0, 0, gimp_image_get_width (image), gimp_image_get_height (image) };
+          glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &full, NULL);
+          return GLIMS_STATUS_OK;
+        }
       else
         return GLIMS_STATUS_UNSUPPORTED;
       if (status == GLIMS_STATUS_OK)

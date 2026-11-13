@@ -45,6 +45,10 @@ final class ImageStorageTests: XCTestCase {
         let delete = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_DELETE)))
         XCTAssertTrue(delete.allowsLayerDelete)
+        XCTAssertFalse(delete.allowsLayerReorder, "older engines do not advertise reordering")
+        let reorder = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_REORDER)))
+        XCTAssertTrue(reorder.allowsLayerReorder)
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
@@ -67,6 +71,10 @@ final class ImageStorageTests: XCTestCase {
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_DELETE))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_DELETE))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_REORDER))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_REORDER))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)

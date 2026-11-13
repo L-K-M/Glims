@@ -522,6 +522,9 @@ final class ImageDocument {
     var acceptsLayerDelete: Bool {
         acceptsEdits || (acceptsLayerProperties && storage.allowsLayerDelete)
     }
+    var acceptsLayerReorder: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerReorder)
+    }
     var acceptsLayerSelection: Bool {
         acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
     }
@@ -3014,6 +3017,17 @@ final class ImageDocument {
     /// id the interface last saw selected. Palette rows name their
     /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
+        if storage.layout == .layeredLab && [.raise, .lower, .toTop, .toBottom].contains(command) {
+            guard acceptsLayerReorder, selectedLayerIDs.count == 1,
+                  let captured = selectedLayerIDs.first, !refuseWhileTargetPending(),
+                  !refuseWhileFloatingActive() else { return }
+            endPendingUserEdits()
+            guard !isClosing else { return }
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(command, image: image, layer: captured)
+            }
+            return
+        }
         if storage.layout == .layeredLab && command == .delete {
             guard acceptsLayerDelete, selectedLayerIDs.count == 1,
                   let captured = selectedLayerIDs.first, !refuseWhileTargetPending(),

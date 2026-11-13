@@ -1327,6 +1327,7 @@ final class EngineSession: @unchecked Sendable {
         let allowsLayerDuplicate: Bool
         let allowsLayerCreate: Bool
         let allowsLayerDelete: Bool
+        let allowsLayerReorder: Bool
 
         var restrictedEditingMessage: String {
             if allowsLayerDuplicate { return "This layered Lab document supports viewing and limited layer edits." }
@@ -1337,7 +1338,7 @@ final class EngineSession: @unchecked Sendable {
 
         init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false,
              allowsLayerRename: Bool = false, allowsLayerDuplicate: Bool = false, allowsLayerCreate: Bool = false,
-             allowsLayerDelete: Bool = false) {
+             allowsLayerDelete: Bool = false, allowsLayerReorder: Bool = false) {
             self.layout = layout
             self.readOnly = readOnly
             self.allowsLayerProperties = allowsLayerProperties
@@ -1345,11 +1346,12 @@ final class EngineSession: @unchecked Sendable {
             self.allowsLayerDuplicate = allowsLayerDuplicate
             self.allowsLayerCreate = allowsLayerCreate
             self.allowsLayerDelete = allowsLayerDelete
+            self.allowsLayerReorder = allowsLayerReorder
         }
 
         static func decode(_ info: GlimsImageStorageInfo) throws -> ImageStorage {
             guard info.struct_size == UInt32(MemoryLayout<GlimsImageStorageInfo>.size),
-                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE | GLIMS_IMAGE_STORAGE_LAYER_DELETE) == 0 else {
+                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE | GLIMS_IMAGE_STORAGE_LAYER_DELETE | GLIMS_IMAGE_STORAGE_LAYER_REORDER) == 0 else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1368,9 +1370,11 @@ final class EngineSession: @unchecked Sendable {
             let allowsLayerDuplicate = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE) != 0
             let allowsLayerCreate = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_CREATE) != 0
             let allowsLayerDelete = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_DELETE) != 0
-            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate && !allowsLayerCreate && !allowsLayerDelete)) &&
+            let allowsLayerReorder = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_REORDER) != 0
+            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate && !allowsLayerCreate && !allowsLayerDelete && !allowsLayerReorder)) &&
                   (!allowsLayerRename || allowsLayerProperties) && (!allowsLayerDuplicate || allowsLayerProperties) &&
-                  (!allowsLayerCreate || allowsLayerProperties) && (!allowsLayerDelete || allowsLayerProperties) else {
+                  (!allowsLayerCreate || allowsLayerProperties) && (!allowsLayerDelete || allowsLayerProperties) &&
+                  (!allowsLayerReorder || allowsLayerProperties) else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1380,7 +1384,8 @@ final class EngineSession: @unchecked Sendable {
             }
             return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties,
                                 allowsLayerRename: allowsLayerRename, allowsLayerDuplicate: allowsLayerDuplicate,
-                                allowsLayerCreate: allowsLayerCreate, allowsLayerDelete: allowsLayerDelete)
+                                allowsLayerCreate: allowsLayerCreate, allowsLayerDelete: allowsLayerDelete,
+                                allowsLayerReorder: allowsLayerReorder)
         }
     }
 

@@ -253,6 +253,35 @@ extension EngineSmokeTest {
                   "older engines keep logical deletion disabled")
         }
         palette.reload()
+        let backward = NSMenuItem(title: "Send Backward", action: #selector(DocumentWindowController.sendLayerBackward(_:)), keyEquivalent: "")
+        let forward = NSMenuItem(title: "Bring Forward", action: #selector(DocumentWindowController.bringLayerForward(_:)), keyEquivalent: "")
+        if opened.storage.allowsLayerReorder, let selected = opened.selectedLayerIDs.first {
+            let originalIDs = opened.layers.map(\.id)
+            let movingDown = originalIDs.first == selected
+            let item = movingDown ? backward : forward
+            check(windowController.validateMenuItem(item), "Layer menu enables logical reorder")
+            if movingDown { windowController.sendLayerBackward(item) }
+            else { windowController.bringLayerForward(item) }
+            drain("logical reorder")
+            check(opened.layers.map(\.id) == Array(originalIDs.reversed()) && opened.selectedLayerIDs == [selected],
+                  "reorder changes logical order while retaining selection")
+            let undo = EngineUndoManager(document: opened)
+            check(undo.canUndo, "logical reorder offers Undo")
+            undo.undo()
+            drain("logical reorder Undo")
+            check(opened.layers.map(\.id) == originalIDs, "Undo restores logical layer order")
+            check(undo.canRedo, "logical reorder offers Redo")
+            undo.redo()
+            drain("logical reorder Redo")
+            check(opened.layers.map(\.id) == Array(originalIDs.reversed()), "Redo restores logical layer order")
+            undo.undo()
+            drain("restore original layer order")
+            check(opened.layers.map(\.id) == originalIDs, "final Undo restores original layer order")
+        } else {
+            check(!windowController.validateMenuItem(backward) && !windowController.validateMenuItem(forward),
+                  "older engines keep logical reordering disabled")
+        }
+        palette.reload()
         var editedOpacity = -1.0 // No valid layer opacity can satisfy the saved-copy check until an edit runs.
         if let target = opened.activeLayer,
            let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),
