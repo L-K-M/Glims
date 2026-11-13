@@ -16,6 +16,7 @@ enum RecorderFileCodec {
     static let inkCurvesVersion = 12
     static let labVersion = 13
     static let labStrokeVersion = 14
+    static let labSelectionVersion = 15
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -92,7 +93,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...labStrokeVersion)
+        let fileVersion = try integer(root.get("version"), range: version...labSelectionVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -122,6 +123,7 @@ enum RecorderFileCodec {
         var hasInkCurves = false
         var hasLabCommand = false
         var hasLabStrokeCommand = false
+        var hasLabSelectionCommand = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -148,6 +150,7 @@ enum RecorderFileCodec {
                 if case .fillLab = command { hasLabCommand = true }
                 if case .applyLabCurves = command { hasLabCommand = true }
                 if case .completeLabStroke = command { hasLabCommand = true; hasLabStrokeCommand = true }
+                if case .labSelection = command { hasLabSelectionCommand = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 if case .ink(let symbol, let identity) = binding {
@@ -182,6 +185,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == labStrokeVersion, !hasLabStrokeCommand {
             throw RecorderFileError.invalid("Version 14 requires a successful Lab stroke.")
+        }
+        if fileVersion == labSelectionVersion, !hasLabSelectionCommand {
+            throw RecorderFileError.invalid("Version 15 requires a successful Lab selection command.")
         }
         // Each extended version requires its own successful command, exactly
         // as version 2 always required a complete stroke.
@@ -316,6 +322,48 @@ enum RecorderFileCodec {
         } catch {
             throw RecorderFileError.invalid("Invalid Lab stroke sample.")
         }
+    }
+
+    private static func labSelectionShape(_ node: RecorderJSON, points: inout Int) throws -> RecorderLabSelectionCommand {
+        let value = try Object(node, required: ["tag", "shape", "options"])
+        let shapeNode = value.get("shape")
+        let shape: RecorderFileCommand.Shape
+        switch try tag(shapeNode) {
+        case "rectangle":
+            let source = try Object(shapeNode, required: ["tag", "rect"])
+            shape = .rectangle(try rect(source.get("rect")))
+        case "ellipse":
+            let source = try Object(shapeNode, required: ["tag", "rect"])
+            shape = .ellipse(try rect(source.get("rect")))
+        case "polygon":
+            let source = try Object(shapeNode, required: ["tag", "points"])
+            // Preflight raw JSON count and remaining whole-file cumulative budget
+            // before mapping to typed points, so oversized input is rejected before allocation.
+            let vertices = try array(source.get("points"), maximum: 65_536)
+            guard vertices.count >= 3, vertices.count <= RecorderFileLimits.points - points else {
+                throw RecorderFileError.invalid("Invalid Lab selection polygon point count.")
+            }
+            points += vertices.count
+            shape = .polygon(try vertices.map(point))
+        default:
+            throw RecorderFileError.invalid("Unknown Lab selection shape.")
+        }
+        let options = try Object(value.get("options"), required: ["operation", "antialias", "feather", "cornerRadius"])
+        guard let operation = RecorderFileCommand.Operation(rawValue: try string(options.get("operation"))) else {
+            throw RecorderFileError.invalid("Unknown selection operation.")
+        }
+        let command = RecorderLabSelectionCommand.shape(shape, .init(operation: operation,
+            antialias: try bool(options.get("antialias")), feather: try number(options.get("feather")),
+            cornerRadius: try number(options.get("cornerRadius"))))
+        return try command.validated()
+    }
+
+    private static func labSelectCommand(_ node: RecorderJSON) throws -> RecorderLabSelectionCommand {
+        let value = try Object(node, required: ["tag", "command"])
+        guard let selection = RecorderLabSelectionCommand.Selection(rawValue: try string(value.get("command"))) else {
+            throw RecorderFileError.invalid("Unknown Lab selection command.")
+        }
+        return try RecorderLabSelectionCommand.command(selection).validated()
     }
 
     private static func labStroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderLabStrokeCommand {
@@ -534,6 +582,12 @@ enum RecorderFileCodec {
         case "completeLabStroke":
             guard version >= labStrokeVersion else { throw RecorderFileError.invalid("A Lab stroke needs recording version 14.") }
             return .completeLabStroke(try labStroke(node, points: &points))
+        case "labSelectionShape":
+            guard version >= labSelectionVersion else { throw RecorderFileError.invalid("A Lab selection needs recording version 15.") }
+            return .labSelection(try labSelectionShape(node, points: &points))
+        case "labSelectCommand":
+            guard version >= labSelectionVersion else { throw RecorderFileError.invalid("A Lab selection needs recording version 15.") }
+            return .labSelection(try labSelectCommand(node))
         case "completeStroke":
             guard version >= strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
             return .completeStroke(try stroke(node, points: &points))
@@ -807,6 +861,7 @@ enum RecorderFileCodec {
             return
         case (.selectColor(_, let options), .context) where !options.sampleMerged: break
         case (.selectCommand(.fromAlpha, _), .context): break
+        case (.labSelection, .none): return
         case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.transformImage, .none), (.scale, .none), (.resizeCanvas, .none), (.crop, .none):
             if case .selectColor(_, let options) = command, !options.sampleMerged { throw RecorderFileError.invalid("Drawable color selection needs a context.") }
             if case .selectCommand(.fromAlpha, _) = command { throw RecorderFileError.invalid("Select Alpha needs a context.") }

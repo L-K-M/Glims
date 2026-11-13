@@ -30,7 +30,14 @@ painting remains available when an older engine or an unsupported brush cannot
 supply replay facts; Recorder marks that row as failed. Cancel restores the
 whole gesture and cannot create a replayable edit. Guarded replay checks brush
 content/configuration before its first dab and cancels if a later native call
-fails. Lab selection changes still produce unsupported Recorder rows.
+fails.
+
+Rectangle, Ellipse and Lasso selections plus All/None/Invert use version 15.
+They own their geometry, operation, antialias, feather and corner radius.
+These are explicit Lab commands, independent of the selected axis, and use
+no layer/axis binding. Native Lab-only replay refuses RGB and ink destinations
+before changing the mask. Existing ordinary selection recordings retain their
+ordinary semantics. Other Lab selection commands remain unavailable.
 
 ## Verification in progress
 
@@ -61,3 +68,18 @@ refuses unavailable capture facts. All 1,714 Swift and 141 Python tests pass.
 Document/replay source review is clear. Codec/fixture review, four-engine
 replay checks and hosted CI remain in progress. This does not qualify an
 installed app or establish complete editor parity.
+
+
+## Selection integration candidate
+
+The pinned native app fixture passes 647 checks across U8/U16/Float, all four
+shape operations, three shapes and All/None/Invert. It checks actual save/load,
+exact command values, root-mask binding, displayed sample/axis preservation,
+Undo/Redo, and replay into a differently selected Lab axis. Independent native
+selection calls supply geometry and physical-Fill coverage oracles; hard
+rectangles also match a literal Boolean grid. These app checks observe coverage
+at display precision, not raw floating-point mask storage. RGB and Multichannel
+replay refusal preserves pixels, mask outline and history. The actual older
+194-slot producer passes three capability-refusal checks. All 1,721 Swift and
+141 Python tests pass; document/value review is clear. Codec/fixture review,
+all-engine acceptance and release qualification remain pending.

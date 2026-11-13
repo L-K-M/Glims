@@ -56,6 +56,7 @@ enum RecorderFileSemanticBridge {
 
     private static func command(_ value: RecorderFileCommand) throws -> SemanticImageCommand {
         switch value {
+        case .labSelection(let command): return .labSelection(try command.validated())
         case .selectionShape(let shape, let settings):
             let frontendShape: EngineSession.SelectShape
             switch shape {

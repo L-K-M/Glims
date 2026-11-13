@@ -25,8 +25,10 @@ Current capture covers these command families:
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
 
-- Physical Lab Fill, Curves Apply and complete Brush gestures, including
-  accepted tablet rotation/tangential samples, with an explicitly bound axis.
+- Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
+  Curves Apply and complete Brush gestures, including
+  accepted tablet rotation/tangential samples. Fill/Curves/Brush bind an axis;
+  Lab selections change only the root mask and need no axis binding.
   See [physical Lab recording](lab-recorder.md).
 - Native CMYK/Multichannel Fill, Clear, Invert, Levels and Curves Apply with
   an explicitly bound ink. See [native ink recording](ink-recorder.md).
@@ -74,7 +76,8 @@ adjustment raises it to version 7, a Color Balance adjustment raises it
 to version 8, a Hue/Saturation adjustment raises it to version 9, and a
 Brightness/Contrast adjustment raises it to version 10. Native ink Fill/Clear/
 Invert and Levels use version 11; native ink Curves uses version 12.
-Physical Lab Fill/Curves use version 13 and Lab Brush uses version 14. Mixed recordings use
+Physical Lab Fill/Curves use version 13, Lab Brush version 14 and Lab selections
+version 15. Mixed recordings use
 the highest required version. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 

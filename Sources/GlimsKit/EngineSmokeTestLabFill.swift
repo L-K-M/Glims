@@ -150,9 +150,13 @@ extension EngineSmokeTest {
         try document.reload()
         check(document.hasUnsavedChanges && document.fileState.nativeURL == nil && document.fileState.revertSource == nil,
               "a recovered clean Lab image requires a new Save destination")
-        do { try document.startRecording(); check(false, "Lab document refuses unsupported recording") }
-        catch { check(!document.recorder.isRecording, "Lab document refuses unsupported recording") }
-        do { try document.startReplay(); check(false, "Lab document refuses unsupported replay") }
-        catch { check(!document.recorder.isReplaying, "Lab document refuses unsupported replay") }
+        try document.startRecording()
+        check(document.recorder.isRecording, "Lab document admits recording")
+        try document.stopRecording()
+        do { try document.startReplay(); check(false, "Lab document refuses an empty recording replay") }
+        catch {
+            check(!document.recorder.isRecording && !document.recorder.isReplaying,
+                  "Lab document refuses an empty recording replay")
+        }
     }
 }

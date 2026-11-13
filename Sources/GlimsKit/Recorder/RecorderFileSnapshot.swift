@@ -19,6 +19,11 @@ extension RecorderFileCodec {
             switch record.resolution {
             case .success(let command):
                 switch command {
+                case .labSelection(let command):
+                    guard command.pointCount <= RecorderFileLimits.points - pointCount else {
+                        throw RecorderFileError.invalid("Invalid Lab polygon point count.")
+                    }
+                    pointCount += command.pointCount
                 case .selectionShape(.polygon(let points), _):
                     guard points.count <= RecorderFileLimits.points - pointCount else { throw RecorderFileError.invalid("Invalid polygon point count.") }
                     pointCount += points.count
@@ -70,6 +75,7 @@ extension RecorderFileCommand {
                 threshold: value.threshold, contiguous: value.contiguous, sampleMerged: value.sampleMerged)
         }
         switch command {
+        case .labSelection(let command): self = .labSelection(try command.validated())
         case .selectionShape(let shape, let settings):
             let result: Shape
             switch shape {
