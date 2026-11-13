@@ -7,27 +7,26 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The installed editor uses qualified source `c13a1c97`, integrated through
-[#258](https://github.com/L-K-M/Glims/pull/258) at `64bfc5dc`. It includes
-CMYK/Multichannel Curves with Freehand/Smooth controls, captured preview,
-Undo and Recorder commands, alongside the previously qualified physical Lab
-Fill/Brush and selections, explicit merged RGB/Lab converted copies, and
-preserving flat raw CMYK PSD import.
+The installed editor uses qualified source `b6840eea`, integrated through
+[#266](https://github.com/L-K-M/Glims/pull/266) at `e1be7354`. It adds physical
+Lab Curves with captured previews and preserving flat PackBits CMYK PSD
+import. It also includes CMYK/Multichannel Curves, physical Lab Fill/Brush
+and selections, explicit merged RGB/Lab converted copies, and ink Recorder
+controls. Lab Recorder extensions are separate pending changes.
 
-All 1,672 Swift and 130 Python tests pass on this source. The combined app
-passes 255 selected-ink Curves, 423 Recorder and 32 ordinary Curves checks on
-each of four engines. Its standalone pinned release bundle passed all 22
-cases with development paths denied, including 2,268 native and 3,355 full
-workflow checks (these two totals are unchanged from the previous
-qualification). Payloads, signatures, release-compiler output and desktop
-evidence are verified. Exact-head CI
-[43322205774](https://github.com/L-K-M/Glims/actions/runs/43322205774) passed.
-Fresh/cached/relocated-fresh launches measured 1.781/1.423/3.052 seconds;
+All 1,682 Swift and 141 Python tests pass on this source. The four-engine
+combined app matrix passes all 20 cases. The standalone pinned release
+bundle passed 23 cases with development paths denied, including 2,268 native,
+3,355 full workflow, 251 Lab Curves, 102 CMYK import and 483 ink Recorder
+checks. Payloads, signatures, release-compiler output and desktop evidence
+are verified. Exact-head CI
+[43338125383](https://github.com/L-K-M/Glims/actions/runs/43338125383) passed.
+Fresh/cached/relocated-fresh launches measured 1.743/1.459/3.305 seconds;
 the installed `/Applications/Glims.app` reached its usable editor in
-3.746 seconds on this Mac. Both the build copy and `/Applications` installation
+3.222 seconds on this Mac. Both the build copy and `/Applications` installation
 have receipts and preserve their previous app. No notarization is requested.
 
-This is not complete Photoshop 4 parity. Physical Lab adjustments, further
+This is not complete Photoshop 4 parity. Further physical Lab adjustments and
 ink adjustments, layered Lab/CMYK editing and interchange, Bitmap/duotone,
 broader Recorder/PSD preservation and physical-tablet/VoiceOver qualification
 remain open. These measurements do not establish every machine's latency.

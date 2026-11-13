@@ -5493,3 +5493,15 @@ all axes/precisions and pending-work cancellation. The four-engine Lab/ink
 panel matrix and independent reviews are running. Lab Recorder replay and
 standalone release qualification remain separate follow-up work. See
 [lab-curves-ui.md](lab-curves-ui.md).
+
+
+### Qualified Lab Curves/CMYK import installed (2026-11-13)
+
+PR #266 merged as `e1be7354` after exact-head CI passed. Qualified source
+`b6840eea` is published to `dist/Glims.app` and `/Applications/Glims.app`,
+with the prior apps and receipts preserved. Its standalone 23-case suite,
+source/payload provenance and fresh/cached/relocated launches passed; the
+installed ordinary launch reached the editor in 3.222 seconds and closed
+cleanly. No notarization was performed. See [completion.md](completion.md)
+for exact coverage. Lab Recorder work in #267–#270 remains a separately
+reviewed and tested candidate, not part of this installed build.
