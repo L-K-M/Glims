@@ -885,6 +885,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     guint8 zero_uuid[16]={0};
     CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,&bad)==GLIMS_STATUS_UNSUPPORTED&&
           !memcmp(bad.uuid,zero_uuid,sizeof zero_uuid),"damaged storage clears and rejects identity");
+    error=NULL;
+    CHECK(api->image_select_layers(engine,id,&rows[0].id,1,&error)==GLIMS_STATUS_UNSUPPORTED && error && *error,
+          "damaged storage selection supplies an actionable error");
+    if(error)api->free_string(error);error=NULL;
    }
    GlimsLayerChange damaged_change={.struct_size=sizeof damaged_change,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
    if(count==2)CHECK(api->layer_change(engine,id,rows[0].id,&damaged_change,&error)==GLIMS_STATUS_UNSUPPORTED,
