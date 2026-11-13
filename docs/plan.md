@@ -5992,3 +5992,10 @@ optional engine capability, so older adapters keep these controls unavailable.
 The four engine conformance suites and real-window sampling checks pass;
 review, CI and integrated application qualification remain in progress. Other
 layered Lab tools and full Photoshop 4 parity are not yet established.
+
+A separate fractional-zoom experiment batched contiguous rows into one Babl
+conversion. Its alpha regression matched padded-row output, but alternating
+runs on the 24 MP fixture did not show a reliable speedup: the two 50% median
+read times were 15.64 and 15.69 ms before, versus 15.35 and 16.23 ms with
+the experiment. The change was not adopted. These are native viewport reads,
+not end-to-end interaction timings.
