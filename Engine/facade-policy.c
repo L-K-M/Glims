@@ -216,7 +216,11 @@ dispatch (GlimsEngine *engine, gpointer data)
           !call->target.sources[0] && !call->target.sources[1])
         {
           GlimsStatus status = layered_lab_admission (open, call->operation);
-          if (status != GLIMS_STATUS_OK) return status;
+          if (status != GLIMS_STATUS_OK)
+            {
+              if (call->error) *call->error = strdup ("The layered Lab storage is damaged or unavailable.");
+              return status;
+            }
           if (call->invoked) *call->invoked = TRUE;
           return call->func (engine, call->data);
         }

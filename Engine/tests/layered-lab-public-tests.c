@@ -208,6 +208,11 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          "render rejects damaged storage without writing output");
    if(count==2)CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_UNSUPPORTED,
                      "selection rejects damaged storage");
+   if(count==2){error=NULL;
+    CHECK(api->image_select_layers(engine,id,&rows[0].id,1,&error)==GLIMS_STATUS_UNSUPPORTED && error && *error,
+          "damaged storage selection supplies an actionable error");
+    if(error)api->free_string(error);error=NULL;
+   }
    gchar *damaged_path=g_build_filename((const gchar*)work,"damaged-copy.xcf",NULL);error=NULL;
    CHECK(api->image_save_copy(engine,id,damaged_path,&error)==GLIMS_STATUS_UNSUPPORTED &&
          !g_file_test(damaged_path,G_FILE_TEST_EXISTS),"save copy rejects damaged storage without creating a file");
