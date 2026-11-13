@@ -10,14 +10,16 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 The installed editor uses qualified source `c13a1c97`, integrated through
 [#258](https://github.com/L-K-M/Glims/pull/258) at `64bfc5dc`. It includes
 CMYK/Multichannel Curves with Freehand/Smooth controls, captured preview,
-Undo and Recorder commands, alongside the previously qualified native Lab
-editing and preserving flat raw CMYK PSD import.
+Undo and Recorder commands, alongside the previously qualified physical Lab
+Fill/Brush and selections, explicit merged RGB/Lab converted copies, and
+preserving flat raw CMYK PSD import.
 
 All 1,672 Swift and 130 Python tests pass on this source. The combined app
 passes 255 selected-ink Curves, 423 Recorder and 32 ordinary Curves checks on
 each of four engines. Its standalone pinned release bundle passed all 22
 cases with development paths denied, including 2,268 native and 3,355 full
-workflow checks. Payloads, signatures, release-compiler output and desktop
+workflow checks (these two totals are unchanged from the previous
+qualification). Payloads, signatures, release-compiler output and desktop
 evidence are verified. Exact-head CI
 [43322205774](https://github.com/L-K-M/Glims/actions/runs/43322205774) passed.
 Fresh/cached/relocated-fresh launches measured 1.781/1.423/3.052 seconds;
