@@ -365,6 +365,14 @@ dynamics still match the recording; unsupported brushes or dynamics
 cannot be recorded. To Selection from the Quick Mask channel still
 applies the live edit but records a failed row.
 
+In CMYK and Multichannel images, Recorder captures complete Brush and Pencil
+gestures on the selected ink channel. Save and Load retain the accepted color,
+opacity, brush settings and mouse or tablet samples. Choose a compatible ink
+channel when loading into another image. Replay checks the recorded brush
+before painting. Escape cancels a captured ink gesture without an Undo step.
+Airbrush painting remains available but cannot yet be recorded. Older image
+engines retain live painting and report unsupported recording explicitly.
+
 In Lab images, Recorder also captures physical Fill, Curves and complete Brush
 strokes. Select the L*, a* or b* channel before recording. A Lab Brush recording
 keeps its physical value and tablet samples. Loading it in another Lab image

@@ -233,6 +233,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (ink Recorder)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink-brush" {
+                try exerciseRecorderInkBrush(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Ink Brush Recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-lab" {
                 try exerciseRecorderLab(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Lab Recorder)" : "FAILED: \(failures) failure(s)")

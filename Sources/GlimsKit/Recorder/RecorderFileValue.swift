@@ -288,6 +288,7 @@ enum RecorderFileCommand: Equatable {
     case editInk(InkEdit)
     case applyInkLevels(InkLevels)
     case applyInkCurves(InkCurves)
+    case completeInkStroke(RecorderInkStrokeCommand)
     case fillLab(LabFill)
     case applyLabCurves(LabCurves)
     case completeLabStroke(RecorderLabStrokeCommand)
@@ -316,7 +317,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .completeLabStroke: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

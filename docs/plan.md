@@ -5551,3 +5551,17 @@ reproducing and fixing selection-buffer retention on cancellation.
 All 1,729 Swift and 141 Python tests pass. Final review and hosted CI remain
 open. Recorder document/file wiring and installed-app qualification are
 subsequent work. See [ink-stroke-capture.md](ink-stroke-capture.md).
+
+### Ink Brush and Pencil Recorder integration (candidate)
+
+The document records complete CMYK/Multichannel Brush and Pencil gestures,
+including accepted colored settings and exact V2 samples, through version 16
+files and explicit ink bindings. Replay validates the same owned target and
+brush before painting; typed cancellation restores the tentative gesture.
+An actual older 207-slot engine still paints and reports a failed recording
+row. The initial pinned app run passes 359 checks across both modes, all three
+precisions, both tools and mouse/tablet input. The subsequent fixture also
+checks exact command equality after actual disk Save/Load. Seven new codec
+tests and seven Lab selection regressions pass. Document and codec reviews
+are clear; final fixture review, four-engine checks and full unit tests are
+pending. No installation or complete Photoshop 4 parity claim is made.
