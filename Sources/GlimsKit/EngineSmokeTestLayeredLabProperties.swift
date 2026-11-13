@@ -429,7 +429,20 @@ extension EngineSmokeTest {
                     catch { refused = true }
                     check(refused && pixel(session, image, x: 1, y: 1) == captureBefore,
                           "recorded layered Brush refuses a changed logical identity")
-                    try command.apply(session: session, image: image, target: target)
+                    var missingBindingRefused = false
+                    do { try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, layer: 0) }
+                    catch { missingBindingRefused = true }
+                    check(missingBindingRefused && pixel(session, image, x: 1, y: 1) == captureBefore,
+                          "semantic layered Brush refuses a missing layer binding")
+                    try session.selectLab(.all, image: image)
+                    var selectionRefused = false
+                    do { try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, layer: target.root) }
+                    catch { selectionRefused = true }
+                    check(selectionRefused && pixel(session, image, x: 1, y: 1) == captureBefore,
+                          "semantic layered Brush refuses an uncaptured selection")
+                    try session.undo(image)
+                    check(try session.selectionBounds(image: image) == nil, "Undo clears the semantic Brush test selection")
+                    try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, layer: target.root)
                     check(pixel(session, image, x: 1, y: 1) == expectedPixel,
                           "recorded layered Brush command reproduces the captured pixel")
                     try session.undo(image)
