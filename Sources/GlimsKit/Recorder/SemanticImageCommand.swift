@@ -192,15 +192,10 @@ enum SemanticImageCommand {
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
         switch self {
-        case .completeLabLayerStroke(let stroke):
-            guard layer > 0 else { throw MissingLayerBinding() }
-            // Version 18 does not capture selection-mask pixels. Refuse a
-            // replay that would silently paint through a different mask.
-            guard try session.selectionBounds(image: image) == nil else {
-                throw RecorderFileError.invalid("Deselect the image before replaying this Lab layer stroke.")
-            }
-            let target = try session.labLayerFillTarget(image, root: layer)
-            try stroke.apply(session: session, image: image, target: target)
+        case .completeLabLayerStroke:
+            // A logical Lab layer needs its captured UUID, not just a
+            // session-local layer number.
+            throw MissingLayerBinding()
         case .layerProperties(let properties):
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.changeLayer(layer, image: image, properties.change)
@@ -290,6 +285,14 @@ enum SemanticImageCommand {
         }
         try session.transformLayer(layer, image: image, matrix: matrix,
                                    expectedBounds: bounds, interpolation: interpolation)
+    }
+
+    /// The document supplies the UUID captured at recording or explicit
+    /// installation. The native begin validates it and the empty selection
+    /// atomically before the first dab.
+    func apply(session: EngineSession, image: Int32, labLayerTarget: EngineSession.LabLayerFillTarget) throws {
+        guard case .completeLabLayerStroke(let stroke) = self else { throw MissingLayerBinding() }
+        try stroke.apply(session: session, image: image, target: labLayerTarget)
     }
 
     /// The document confirms the explicit axis identity and precision on its

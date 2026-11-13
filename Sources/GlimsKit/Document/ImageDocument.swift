@@ -85,6 +85,9 @@ final class ImageDocument {
     private enum RecorderContext {
         case target(RecorderTargetContext)
         case layer(Int32)
+        /// A logical Lab root and its document-scoped native identity.
+        /// Nil exists only until the ordered native capture completes.
+        case labLayer(root: Int32, identity: UUID?)
         /// An explicit source channel (Channel ▸ To Selection). It may differ
         /// from the active paint target, which is never substituted.
         case channel(Int32)
@@ -6882,12 +6885,17 @@ final class ImageDocument {
         var contexts: [Int: RecorderContext] = [:]
         var liveMasks: [Int32: Int32] = [:]
         for row in file.records {
-            guard case .success(_, let binding) = row.outcome else { continue }
+            guard case .success(let command, let binding) = row.outcome else { continue }
             bindings[row.ordinal] = binding
             switch binding {
             case .none: break
             case .unavailable(let reason): throw RecorderFileError.invalid(reason)
-            case .layer(let symbol): contexts[row.ordinal] = .layer(try layer(symbol))
+            case .layer(let symbol):
+                let id = try layer(symbol)
+                if case .completeLabLayerStroke = command {
+                    let target = try session.labLayerFillTarget(image, root: id)
+                    contexts[row.ordinal] = .labLayer(root: id, identity: target.uuid)
+                } else { contexts[row.ordinal] = .layer(id) }
             case .channel(let symbol): contexts[row.ordinal] = .channel(try channel(symbol))
             case .ink(let symbol, let recorded):
                 let id = try channel(symbol)
@@ -7049,6 +7057,11 @@ final class ImageDocument {
                     guard layers.contains(where: { $0.id == layer }) else {
                         throw RecorderReplayError(message: "The recorded layer is no longer in this image.")
                     }
+                case .labLayer(let root, let identity):
+                    guard identity != nil, storage.layout == .layeredLab,
+                          selectedLayerIDs == [root], layers.contains(where: { $0.id == root }) else {
+                        throw RecorderReplayError(message: "Select the bound Lab layer before replaying this stroke.")
+                    }
                 case .channel(let channel):
                     guard channels.contains(where: { $0.id == channel }) else {
                         throw RecorderReplayError(message: "The recorded source channel is no longer in this image.")
@@ -7137,6 +7150,9 @@ final class ImageDocument {
                         }
                     }
                     try step.command.apply(session: session, image: image, layer: layer)
+                } else if case .labLayer(let root, let identity)? = context, let identity {
+                    try step.command.apply(session: session, image: image,
+                        labLayerTarget: .init(root: root, uuid: identity))
                 } else if case .channel(let channel)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
                 } else if case .ink(let channel, let identity)? = context {
@@ -7310,6 +7326,13 @@ final class ImageDocument {
             }
             return
         }
+        if case .labLayer(let root, let expected) = context {
+            guard let expected, root > 0, try session.selectedLayers(image) == [root],
+                  try session.labLayerFillTarget(image, root: root).uuid == expected else {
+                throw RecorderReplayError(message: "The recorded Lab layer identity or selection changed.")
+            }
+            return
+        }
         if case .layer(let layer) = context {
             guard layer > 0, try session.layers(image).contains(where: { $0.id == layer }) else {
                 throw RecorderReplayError(message: "The recorded layer no longer belongs to this native image.")
@@ -7359,7 +7382,7 @@ final class ImageDocument {
         if let context { recorderTargetContexts[reservation.ordinal] = context }
         var targets: [RecorderRuntimeTarget] = []
         switch context {
-        case .layer(let layer)?: targets = [.layer(layer)]
+        case .layer(let layer)?, .labLayer(let layer, _)?: targets = [.layer(layer)]
         case .channel(let channel)?, .ink(let channel, _)?: targets = [.channel(channel)]
         case .lab(let axis, _)?: targets = [.channel(axis.id)]
         case .target(let target)?:
@@ -7385,7 +7408,9 @@ final class ImageDocument {
         guard let context else { return nil }
         do {
             let confirmed: RecorderContext
-            if case .ink(let channel, nil) = context {
+            if case .labLayer(let root, nil) = context {
+                confirmed = .labLayer(root: root, identity: try session.labLayerFillTarget(image, root: root).uuid)
+            } else if case .ink(let channel, nil) = context {
                 confirmed = .ink(channel: channel,
                     identity: try RecorderInkIdentity(session.inkChannelIdentity(image, channel: channel)))
             } else if case .lab(let axis, nil) = context {
@@ -7516,6 +7541,9 @@ final class ImageDocument {
         switch context {
         case .unavailable(let reason): return .unavailable(reason)
         case .layer(let layer): return .layer(try symbol(.layer(layer)))
+        case .labLayer(let root, let identity):
+            guard identity != nil else { throw RecorderReplayError(message: "The original Lab layer identity was unavailable.") }
+            return .layer(try symbol(.layer(root)))
         case .channel(let channel): return .channel(try symbol(.channel(channel)))
         case .ink(let channel, let identity):
             guard let identity else { throw RecorderReplayError(message: "The original ink identity was unavailable.") }

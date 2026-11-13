@@ -440,18 +440,61 @@ extension EngineSmokeTest {
                               "recorded layered Brush refuses a changed logical identity")
                         try session.selectLab(.all, image: image)
                         var selectionRefused = false
-                        do { try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, layer: target.root) }
+                        do { try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, labLayerTarget: target) }
                         catch { selectionRefused = true }
                         check(selectionRefused && pixel(session, image, x: 1, y: 1) == captureBefore,
                               "semantic layered Brush refuses an uncaptured selection")
                         try session.undo(image)
                         check(try session.selectionBounds(image: image) == nil, "Undo clears the semantic Brush test selection")
-                        try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, layer: target.root)
+                        try SemanticImageCommand.completeLabLayerStroke(command).apply(session: session, image: image, labLayerTarget: target)
                         check(pixel(session, image, x: 1, y: 1) == expectedPixel,
                               "recorded layered Brush command reproduces the captured pixel")
                         try session.undo(image)
                         check(pixel(session, image, x: 1, y: 1) == captureBefore,
                               "one Undo restores recorded layered Brush pixels")
+
+                        // Exercise the actual file installation and document
+                        // replay path, not just the semantic operation.
+                        let symbol = UUID()
+                        let description = RecorderTargetDescription(name: "Lab layer", kind: .pixel, ancestors: [],
+                            siblingIndex: 0, bounds: .init(x: 0, y: 0, width: Double(opened.info.width), height: Double(opened.info.height)))
+                        let file = RecorderFileValue(recordingID: UUID(), name: "Lab layer stroke",
+                            origin: .init(imageLabel: "Lab.xcf", initialWidth: Int(opened.info.width), initialHeight: Int(opened.info.height)),
+                            symbols: [.init(id: symbol, description: description)],
+                            records: [.init(ordinal: 0, outcome: .success(.completeLabLayerStroke(command), .layer(symbol)))])
+                        let prepared = try RecorderFileSemanticBridge.prepare(RecorderFileCodec.decode(RecorderFileCodec.encode(file)))
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("before Recorder installation")
+                        var installed: Result<Void, Error>?
+                        opened.installRecording(prepared, checkpoint: try opened.recorderInstallCheckpoint(),
+                                                choices: [symbol: .layer(target.root)]) { installed = $0 }
+                        drain("Lab layer recording installation")
+                        guard let installed else { throw NSError(domain: "LayeredLabSmoke", code: 3) }
+                        try installed.get()
+                        check(true, "recorded Lab layer file installs with an explicit root binding")
+                        let savedError = opened.onError
+                        var replayErrors: [String] = []
+                        opened.onError = { replayErrors.append($0) }
+                        if let other = opened.layers.first(where: { $0.id != target.root }) {
+                            opened.selectLayer(other.id); drain("change Recorder layer selection")
+                            try opened.startReplay(); drain("refused Recorder replay")
+                            if case .failed = opened.replayStatus {
+                                check(pixel(session, image, x: 1, y: 1) == captureBefore,
+                                      "document replay refuses a different selected Lab layer")
+                            } else { check(false, "document replay refuses a different selected Lab layer") }
+                            opened.selectLayer(target.root); drain("restore Recorder layer selection")
+                        }
+                        try opened.startReplay(); drain("Lab layer Recorder replay")
+                        let replayDeadline = Date().addingTimeInterval(15)
+                        while opened.recorder.isReplaying && Date() < replayDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                        if case .finished = opened.replayStatus {
+                            check(pixel(session, image, x: 1, y: 1) == expectedPixel,
+                                  "installed Lab layer recording replays through the document")
+                        } else { check(false, "installed Lab layer recording replays through the document") }
+                        opened.undo(); drain("Lab layer Recorder replay Undo")
+                        check(pixel(session, image, x: 1, y: 1) == captureBefore,
+                              "one document Undo restores the installed recording's pixels")
+                        opened.onError = savedError
+                        _ = opened.clearRecording()
                     } else {
                         var unavailable = false
                         do { try command.apply(session: session, image: image, target: target) }
