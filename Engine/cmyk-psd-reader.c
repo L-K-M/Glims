@@ -48,6 +48,58 @@ read_u32 (const PsdInput *input, uint64_t *offset, uint32_t *value)
   return GLIMS_CMYK_PSD_INPUT_OK;
 }
 
+/* PSD v1 stores a big-endian uint16 byte count for each planar scanline.
+ * A signed control byte means literal n+1 (0..127), no-op (-128), or repeat
+ * 1-n (-127..-1). Process unsigned bytes to avoid signed-char assumptions.
+ * Optional output is private row scratch; no pixel callback occurs here. */
+static GlimsCmykPsdInputStatus
+read_rle_row (const PsdInput *input, uint64_t offset, uint16_t packed_size,
+              size_t row_size, uint8_t *output)
+{
+  uint8_t packed[UINT16_MAX];
+  if (!packed_size) return GLIMS_CMYK_PSD_INPUT_MALFORMED;
+  GlimsCmykPsdInputStatus status = read_bytes (input, offset, packed, packed_size);
+  if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
+  size_t consumed = 0, produced = 0;
+  while (consumed < packed_size)
+    {
+      unsigned control = packed[consumed++];
+      if (control == 128) continue;
+      size_t count = control < 128 ? control + 1 : 257 - control;
+      size_t bytes = control < 128 ? count : 1;
+      if (bytes > packed_size - consumed || count > row_size - produced)
+        return GLIMS_CMYK_PSD_INPUT_MALFORMED;
+      if (output)
+        {
+          if (control < 128) memcpy (output + produced, packed + consumed, count);
+          else memset (output + produced, packed[consumed], count);
+        }
+      consumed += bytes;
+      produced += count;
+    }
+  return produced == row_size ? GLIMS_CMYK_PSD_INPUT_OK : GLIMS_CMYK_PSD_INPUT_MALFORMED;
+}
+
+static GlimsCmykPsdInputStatus
+inspect_rle (const PsdInput *input, const GlimsCmykPsdInput *layout)
+{
+  uint64_t offset = layout->pixel_offset;
+  uint32_t rows = layout->height * 4;
+  size_t row_size = (size_t) layout->width * (layout->depth / 8);
+  for (uint32_t row = 0; row < rows; row++)
+    {
+      uint8_t bytes[2];
+      GlimsCmykPsdInputStatus status = read_bytes (input,
+          layout->row_lengths_offset + (uint64_t) row * 2, bytes, sizeof bytes);
+      if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
+      uint16_t length = read_be16 (bytes);
+      status = read_rle_row (input, offset, length, row_size, NULL);
+      if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
+      offset += length; /* read_rle_row checked the complete span. */
+    }
+  return offset == input->size ? GLIMS_CMYK_PSD_INPUT_OK : GLIMS_CMYK_PSD_INPUT_MALFORMED;
+}
+
 static GlimsCmykPsdInputStatus
 inspect_resources (const PsdInput *input, uint64_t start, uint32_t length,
                    GlimsCmykPsdInput *layout)
@@ -184,16 +236,31 @@ glims_cmyk_psd_inspect (GlimsCmykPsdReadAt read_at, void *context,
   if (length) return GLIMS_CMYK_PSD_INPUT_UNSUPPORTED;
   status = read_bytes (&input, offset, compression, sizeof compression);
   if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
-  if (read_be16 (compression) != 0)
+  layout.compression = read_be16 (compression);
+  if (layout.compression > 1)
     return GLIMS_CMYK_PSD_INPUT_UNSUPPORTED;
   offset += sizeof compression;
 
   /* Validated dimensions are at most 30,000 and the depth at most 16, so
    * this widened product cannot overflow uint64_t. No row padding exists. */
   pixel_bytes = (uint64_t) layout.width * layout.height * 4 * (layout.depth / 8);
-  if (!contains (size, offset, pixel_bytes) || size - offset != pixel_bytes)
-    return GLIMS_CMYK_PSD_INPUT_MALFORMED;
-  layout.pixel_offset = offset;
+  if (pixel_bytes > GLIMS_CMYK_PSD_MAX_FILE)
+    return GLIMS_CMYK_PSD_INPUT_UNSUPPORTED;
+  if (layout.compression == 0)
+    {
+      if (!contains (size, offset, pixel_bytes) || size - offset != pixel_bytes)
+        return GLIMS_CMYK_PSD_INPUT_MALFORMED;
+      layout.pixel_offset = offset;
+    }
+  else
+    {
+      uint64_t table_size = (uint64_t) layout.height * 4 * 2;
+      if (!contains (size, offset, table_size)) return GLIMS_CMYK_PSD_INPUT_MALFORMED;
+      layout.row_lengths_offset = offset;
+      layout.pixel_offset = offset + table_size;
+      status = inspect_rle (&input, &layout);
+      if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
+    }
   memcpy (out, &layout, sizeof layout);
   return GLIMS_CMYK_PSD_INPUT_OK;
 }
@@ -203,6 +270,7 @@ same_layout (const GlimsCmykPsdInput *a, const GlimsCmykPsdInput *b)
 {
   /* Do not compare structure padding supplied by a caller. */
   return a->width == b->width && a->height == b->height && a->depth == b->depth &&
+         a->compression == b->compression && a->row_lengths_offset == b->row_lengths_offset &&
          a->icc_offset == b->icc_offset && a->pixel_offset == b->pixel_offset &&
          a->file_size == b->file_size && a->icc_size == b->icc_size;
 }
@@ -224,6 +292,38 @@ glims_cmyk_psd_decode (GlimsCmykPsdReadAt read_at, void *read_context,
   if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
   if (!same_layout (&supplied, &checked)) return GLIMS_CMYK_PSD_INPUT_MALFORMED;
   offset = checked.pixel_offset;
+
+  if (checked.compression == 1)
+    {
+      PsdInput source = { read_at, read_context, checked.file_size };
+      uint8_t row[GLIMS_CMYK_PSD_MAX_DIMENSION * 2];
+      size_t width = checked.depth / 8;
+      for (uint32_t channel = 0; channel < 4; channel++)
+        for (uint32_t y = 0; y < checked.height; y++)
+          {
+            uint8_t length_bytes[2];
+            uint64_t entry = ((uint64_t) channel * checked.height + y) * 2;
+            status = read_bytes (&source, checked.row_lengths_offset + entry,
+                                  length_bytes, sizeof length_bytes);
+            if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
+            uint16_t packed_size = read_be16 (length_bytes);
+            status = read_rle_row (&source, offset, packed_size, checked.width * width, row);
+            if (status != GLIMS_CMYK_PSD_INPUT_OK) return status;
+            offset += packed_size;
+            for (uint32_t x = 0; x < checked.width; )
+              {
+                uint32_t count = checked.width - x;
+                if (count > GLIMS_CMYK_PSD_CHUNK_SAMPLES) count = GLIMS_CMYK_PSD_CHUNK_SAMPLES;
+                if (checked.depth == 16)
+                  for (uint32_t i = 0; i < count; i++) samples[i] = read_be16 (row + 2 * (x + i));
+                else memcpy (bytes, row + x, count);
+                if (!emit (emit_context, channel, y, x, count, samples))
+                  return GLIMS_CMYK_PSD_INPUT_EMIT_FAILED;
+                x += count;
+              }
+          }
+      return offset == checked.file_size ? GLIMS_CMYK_PSD_INPUT_OK : GLIMS_CMYK_PSD_INPUT_MALFORMED;
+    }
 
   for (uint32_t channel = 0; channel < 4; channel++)
     for (uint32_t y = 0; y < checked.height; y++)

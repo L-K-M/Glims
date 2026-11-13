@@ -38,11 +38,16 @@ unadopted result. Older adapters disable the explicit preserving command.
 `cmyk-psd-reader.h` accepts an immutable input length and exact read-at callback.
 Inspection returns values and offsets, allocating no image or file-sized
 buffer. It accepts PSD version 1, four planar CMYK channels, unsigned 8/16-bit
-samples, RAW compression, empty color-mode and layer/mask sections, and exactly
+samples, RAW or PackBits/RLE compression, empty color-mode and layer/mask sections, and exactly
 one ICC image resource. Other resources refuse rather than silently losing
 metadata. Nonempty Pascal names and arbitrary present padding bytes are valid.
 The existing 30,000-pixel dimension, 4 MiB profile and 2 GiB-minus-one file
-limits apply. Complete bounds and exact final payload size are checked.
+limits apply. Expanded sample bytes also stay below 2 GiB. Complete bounds
+and exact final payload size are checked. RLE inspection validates every
+16-bit row extent and PackBits packet before allocating native image storage.
+Rows decode independently into bounded scratch (at most 60,000 bytes), then
+emit the same sample chunks. No-op packets are permitted at row boundaries;
+extra data packets and unexplained bytes refuse.
 
 ICC inspection checks declared length, CMYK color space, supported profile
 class and signature. A native caller must still validate profile usability
@@ -53,7 +58,7 @@ unsigned maximum remains paper. It performs no ICC, RGB or transfer-curve
 conversion. Failure stops both callback families immediately. Earlier emitted
 chunks may exist in a private destination; callers must not publish them.
 
-## Checked scope
+## Original RAW validation
 
 An independently written literal producer covers 8/16-bit endpoints and byte
 patterns, named/odd-sized resources, widths 1, 7 and 4,097, multiple rows and
@@ -92,6 +97,22 @@ precisions. It also exercises malformed/unsupported input, cancellation
 and reentrant BUSY refusal; it does not establish maximum-size performance or
 disk-full, Stop-during-import and adversarial concurrent-write behavior.
 
-Layered/RLE/ZIP PSDs, general PSD metadata preservation and Photoshop numeric
+Layered/ZIP PSDs, general PSD metadata preservation and Photoshop numeric
 parity are not provided here. The initial ICC-only resource policy also
 refuses otherwise flat files with resolution, paths or other resource blocks.
+
+## RLE validation in progress
+
+The extension retains the original RAW path and all existing format restrictions.
+The standalone suite passes 1,011 optimized checks and the same 1,011 checks
+with AddressSanitizer and UndefinedBehaviorSanitizer. It covers literal/repeat
+packet boundaries, legal no-ops, 8/16-bit sample order, multiple rows, maximum
+packed row length, malformed or truncated rows/tables, expansion limits,
+forged layouts, and every read/emit failure position in a complete decode.
+Expected bytes are constructed independently of the product reader.
+
+The pinned native fixture passes 1,328 checks, including the RAW cases and
+new RLE import, exact sample/profile preservation, independent preview color,
+editing and Undo, XCF persistence, malformed final-row refusal, cancellation
+before publication and ownership cleanup. Other engines and independent
+review remain in progress. No release qualification is claimed yet.
