@@ -54,6 +54,7 @@ layered_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_layer_select:
     case GLIMS_FACADE_OP_image_select_layers:
     case GLIMS_FACADE_OP_layer_change:
+    case GLIMS_FACADE_OP_layer_command:
       return TRUE;
     default:
       return FALSE;
@@ -216,7 +217,8 @@ dispatch (GlimsEngine *engine, gpointer data)
       if (open && open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB &&
           (call->operation == GLIMS_FACADE_OP_layer_select ||
            call->operation == GLIMS_FACADE_OP_image_select_layers ||
-           call->operation == GLIMS_FACADE_OP_layer_change) &&
+           call->operation == GLIMS_FACADE_OP_layer_change ||
+           call->operation == GLIMS_FACADE_OP_layer_command) &&
           !call->target.sources[0] && !call->target.sources[1])
         {
           GlimsStatus status = layered_lab_admission (open, call->operation);

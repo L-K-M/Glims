@@ -140,7 +140,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     private func bind(_ command: Command) -> ClassicPaletteButtonBar.Item {
         ClassicPaletteButtonBar.Item(id: command.id, title: command.title, image: command.image) { [weak self] in
-            guard let document = self?.document, !document.colorInfo.mode.usesNativeChannels else { return }
+            guard let document = self?.document,
+                  !document.colorInfo.mode.usesNativeChannels ||
+                    (command.id == "duplicate" && document.storage.layout == .layeredLab && document.acceptsLayerDuplicate) else { return }
             command.run(document)
         }
     }
@@ -429,8 +431,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
-        guard document?.colorInfo.mode.usesNativeChannels != true else { return }
         guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
+        guard document?.colorInfo.mode.usesNativeChannels != true ||
+              (command == .duplicate && document?.storage.layout == .layeredLab && document?.acceptsLayerDuplicate == true) else { return }
         if command == .duplicate, document?.hasMultipleSelectedLayers == true {
             document?.duplicateSelectedLayers()
         } else {
@@ -628,8 +631,20 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 && ids.allSatisfy { document.layerSources[$0]?.kind == .pixel }))
     }
 
+    private func duplicateAdmission(_ document: ImageDocument) -> Bool {
+        if document.storage.layout == .layeredLab {
+            return document.acceptsLayerDuplicate && document.selectedLayerIDs.count == 1 &&
+                !document.targetCommandIsPending && !document.floatingState.isActive
+        }
+        return layerBatchAdmission(document)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard document?.colorInfo.mode.usesNativeChannels != true else { return false }
+        if document?.colorInfo.mode.usesNativeChannels == true {
+            guard menuItem.action == #selector(runLayerCommand(_:)),
+                  menuItem.tag == Int(EngineSession.LayerCommand.duplicate.rawValue),
+                  document?.storage.layout == .layeredLab else { return false }
+        }
         if let item = menuItem.representedObject as? EffectItem {
             return validateEffectItem(menuItem, item)
         }
@@ -657,15 +672,21 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 : readiness.reason
             return readiness.allowed
         case #selector(runLayerCommand(_:)):
-            guard let document, document.acceptsEdits,
+            guard let document,
                   let command = EngineSession.LayerCommand(rawValue: UInt32(menuItem.tag)) else { return false }
             if command == .duplicate || command == .delete {
                 let verb = command == .duplicate ? "Duplicate" : "Delete"
                 menuItem.title = "\(verb) \(document.hasMultipleSelectedLayers ? "Layers" : "Layer")"
-                menuItem.toolTip = layerBatchAdmission(document) ? nil
-                    : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
-                return layerBatchAdmission(document)
+                let admitted = command == .duplicate ? duplicateAdmission(document) : layerBatchAdmission(document)
+                if document.storage.layout == .layeredLab && command == .duplicate {
+                    menuItem.toolTip = admitted ? nil : "Select one logical layer to duplicate."
+                } else {
+                    menuItem.toolTip = admitted ? nil
+                        : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
+                }
+                return admitted
             }
+            guard document.acceptsEdits else { return false }
             if command == .fitToImage {
                 menuItem.title = document.hasMultipleSelectedLayers ? "Layers to Image Size" : "Layer to Image Size"
                 if document.hasMultipleSelectedLayers {
@@ -787,7 +808,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // Duplicate and Delete admit bounded ordinary-pixel batches.
         buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
-        buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "duplicate")
+        buttonBar.setEnabled(document.map(duplicateAdmission) == true, forItem: "duplicate")
         buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "delete")
         // The floating-selection footer appears only while the shown
         // document's cached floating state is active; its buttons read

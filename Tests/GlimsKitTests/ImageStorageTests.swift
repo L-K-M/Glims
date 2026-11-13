@@ -32,6 +32,11 @@ final class ImageStorageTests: XCTestCase {
         let rename = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME)))
         XCTAssertTrue(rename.allowsLayerRename)
+        XCTAssertFalse(rename.allowsLayerDuplicate, "older engines do not advertise duplication")
+        let duplicate = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)))
+        XCTAssertTrue(duplicate.allowsLayerDuplicate)
+        XCTAssertEqual(duplicate.restrictedEditingMessage, "This layered Lab document supports viewing and limited layer edits.")
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
@@ -42,6 +47,10 @@ final class ImageStorageTests: XCTestCase {
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)
