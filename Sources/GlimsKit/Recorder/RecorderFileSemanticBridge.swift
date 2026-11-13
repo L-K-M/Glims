@@ -173,6 +173,13 @@ enum RecorderFileSemanticBridge {
         case .completeLabStroke(let value): return .completeLabStroke(try value.validated())
         case .completeInkStroke(let value): return .completeInkStroke(try value.validated())
         case .fillLab(let value): return .fillLab(value: value.value, opacity: value.opacity)
+        case .applyLabLevels(let value):
+            let settings = EngineSession.LabLevelsSettings(
+                value: .init(lowInput: value.lowInput, highInput: value.highInput, gamma: value.gamma,
+                             lowOutput: value.lowOutput, highOutput: value.highOutput),
+                clampInput: value.clampInput, clampOutput: value.clampOutput)
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded Lab Levels adjustment has invalid settings.") }
+            return .applyLabLevels(settings)
         case .applyLabCurves(let value):
             let settings = EngineSession.LabCurvesSettings(samples: value.samples)
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded Lab Curves adjustment has invalid settings.") }

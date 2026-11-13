@@ -55,6 +55,8 @@ jobs:
         run: python3 scripts/test-lab-fill.py
       - name: Check optimized and sanitized physical Lab curves
         run: python3 scripts/test-lab-curves.py
+      - name: Check optimized and sanitized physical Lab Levels
+        run: python3 scripts/test-lab-levels.py
       - name: Check optimized and sanitized Lab brush coverage
         run: python3 scripts/test-lab-brush-coverage.py
 
@@ -138,6 +140,10 @@ jobs:
       - name: Check Lab brush coverage
         timeout-minutes: 5
         run: python3 scripts/test-lab-brush-coverage.py optimized
+
+      - name: Check physical Lab Levels
+        timeout-minutes: 5
+        run: python3 scripts/test-lab-levels.py optimized
 
       - name: Build
         run: swift build

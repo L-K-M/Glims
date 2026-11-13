@@ -239,6 +239,24 @@ enum RecorderFileCommand: Equatable {
         }
     }
 
+    /// One Lab axis' Levels mapping: nominal normalized endpoints/gamma and
+    /// both clamp states. Distinct from ink Levels (no ink/paper polarity or
+    /// RGB/TRC). Equal/inverted endpoints are valid native mappings.
+    struct LabLevels: Equatable {
+        let lowInput: Double
+        let highInput: Double
+        let gamma: Double
+        let lowOutput: Double
+        let highOutput: Double
+        let clampInput: Bool
+        let clampOutput: Bool
+
+        var isValid: Bool {
+            [lowInput, highInput, lowOutput, highOutput].allSatisfy({ $0.isFinite && (0...1).contains($0) }) &&
+                gamma.isFinite && (0.1...10).contains(gamma)
+        }
+    }
+
     /// Complete committed Levels values: an owned TRC tag, both clamps and
     /// all five named channels, each with the five native fields. Equal or
     /// inverted endpoints are valid native mappings.
@@ -290,6 +308,7 @@ enum RecorderFileCommand: Equatable {
     case applyInkCurves(InkCurves)
     case completeInkStroke(RecorderInkStrokeCommand)
     case fillLab(LabFill)
+    case applyLabLevels(LabLevels)
     case applyLabCurves(LabCurves)
     case completeLabStroke(RecorderLabStrokeCommand)
     /// A newly applied Curves adjustment with its whole accepted settings:
@@ -317,7 +336,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .completeLabStroke: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

@@ -7,6 +7,7 @@
 #include "component-levels.h"
 #include "lab-fill.h"
 #include "lab-curves.h"
+#include "lab-levels.h"
 
 #include <math.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "core/gimpdrawable.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-duplicate.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
 #include "core/gimpprogress.h"
 
@@ -22,7 +24,8 @@
 typedef enum {
   INK_SNAPSHOT_CALC_LEVELS,
   INK_SNAPSHOT_CALC_CURVES,
-  INK_SNAPSHOT_CALC_LAB_CURVES
+  INK_SNAPSHOT_CALC_LAB_CURVES,
+  INK_SNAPSHOT_CALC_LAB_LEVELS
 } InkSnapshotCalc;
 
 typedef struct _GlimsInkSnapshot {
@@ -206,6 +209,9 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
   GlimsStatus status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;
   if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  if (!gimp_image_undo_is_enabled (open->image) ||
+      gimp_image_get_undo_group_count (open->image))
+    return GLIMS_STATUS_BUSY;
 
   GlimsPlateStorage storage;
   if (!glims_plate_storage_read_open (open, &storage) ||
@@ -342,6 +348,14 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
         }
       status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
       if (status != GLIMS_STATUS_OK) goto finish;
+      /* Progress dispatch may have changed native Undo admission. Never
+       * publish into a foreign group or consume a snapshot without Undo. */
+      if (!gimp_image_undo_is_enabled (image) ||
+          gimp_image_get_undo_group_count (image))
+        {
+          status = GLIMS_STATUS_BUSY;
+          goto finish;
+        }
       if (changed)
         {
           gimp_drawable_push_undo (target, title, NULL, damage.x, damage.y, damage.width, damage.height);
@@ -1038,4 +1052,151 @@ glims_image_lab_snapshot_end (GlimsEngine *engine, GlimsImageID id, uint64_t tok
   open->lab_snapshot = NULL;
   glims_lab_snapshot_free (snapshot);
   return GLIMS_STATUS_OK;
+}
+
+typedef struct {
+  GlimsLabFillSettings identity;
+  GlimsLabLevels values;
+} LabLevelsEdit;
+
+static gboolean
+read_lab_levels (const GlimsLabLevelsSettings *settings, LabLevelsEdit *edit)
+{
+  if (!settings || settings->struct_size < sizeof *settings || settings->axis <= 0 ||
+      settings->role > GLIMS_LAB_AXIS_B) return FALSE;
+  *edit = (LabLevelsEdit) {
+    .identity = { .struct_size = sizeof edit->identity,
+      .axis = settings->axis, .role = settings->role,
+      .value = settings->role == GLIMS_LAB_AXIS_LIGHTNESS ? 0 : -128, .opacity = 1 },
+    .values = { settings->value.low_input, settings->value.high_input, settings->value.gamma,
+      settings->value.low_output, settings->value.high_output,
+      settings->clamp_input, settings->clamp_output }
+  };
+  memcpy (edit->identity.uuid, settings->uuid, sizeof edit->identity.uuid);
+  bool changed;
+  return glims_lab_levels_row (GLIMS_LAB_ROLE_L, GLIMS_LAB_FORMAT_U8,
+                                &edit->values, 0, NULL, NULL, NULL, &changed);
+}
+
+static bool
+lab_levels_row (GlimsComponentScalarFormat format, const void *settings,
+                size_t count, const void *source, const float *mask,
+                void *destination, bool *changed)
+{
+  const LabLevelsEdit *edit = settings;
+  GlimsLabFormat lab_format;
+  switch (format)
+    {
+    case GLIMS_COMPONENT_SCALAR_U8: lab_format = GLIMS_LAB_FORMAT_U8; break;
+    case GLIMS_COMPONENT_SCALAR_U16: lab_format = GLIMS_LAB_FORMAT_U16; break;
+    case GLIMS_COMPONENT_SCALAR_FLOAT: lab_format = GLIMS_LAB_FORMAT_FLOAT; break;
+    default: return false;
+    }
+  if (edit->identity.role > GLIMS_LAB_AXIS_B) return false;
+  const GlimsLabRole roles[] = { GLIMS_LAB_ROLE_L, GLIMS_LAB_ROLE_A, GLIMS_LAB_ROLE_B };
+  return glims_lab_levels_row (roles[edit->identity.role], lab_format, &edit->values,
+                                count, source, mask, destination, changed);
+}
+
+GlimsStatus
+glims_image_levels_lab (GlimsEngine *engine, GlimsImageID id,
+                        const GlimsLabLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLevelsEdit edit;
+  if (!read_lab_levels (settings, &edit)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return apply_component (engine, id, edit.identity.axis, "Levels Lab", FALSE,
+                           lab_levels_row, &edit, NULL, &edit.identity, error);
+}
+
+static gboolean
+lab_levels_match_snapshot (const GlimsLabSnapshot *snapshot, const LabLevelsEdit *edit)
+{
+  return snapshot && edit->identity.axis == snapshot->base.target &&
+         edit->identity.role == snapshot->base.target_index &&
+         !memcmp (edit->identity.uuid, snapshot->base.target_uuid, sizeof edit->identity.uuid);
+}
+
+GlimsStatus
+glims_image_lab_snapshot_levels (GlimsEngine *engine, GlimsImageID id, uint64_t token,
+                                 const GlimsLabLevelsSettings *settings,
+                                 GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  LabLevelsEdit edit;
+  if (!result || !read_lab_levels (settings, &edit)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsLabSnapshot *snapshot = find_lab_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  if (!lab_levels_match_snapshot (snapshot, &edit)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+
+  gboolean cached = snapshot->base.calculated &&
+    snapshot->base.calculated_kind == INK_SNAPSHOT_CALC_LAB_LEVELS &&
+    same_levels (&snapshot->base.calculated_levels, &edit.values);
+  engine->busy++;
+  GimpImage *copy = gimp_image_duplicate (cached ? snapshot->base.calculated : snapshot->base.frozen);
+  engine->busy--;
+  if (!copy) return glims_fail (error, NULL, "The adjustment preview could not be rendered.");
+  GlimsImageID copy_id = 0;
+  status = glims_adopt_image (engine, copy, &copy_id);
+  if (status != GLIMS_STATUS_OK) { g_object_unref (copy); return status; }
+  GlimsPlateStorage storage;
+  GlimsOpenImage *copy_open = glims_lookup_image (engine, copy_id);
+  if (!copy_open || !glims_plate_storage_read_open (copy_open, &storage) ||
+      storage.map.mode != GLIMS_PLATE_MODE_LAB || storage.map.count != 3 ||
+      snapshot->base.target_index >= storage.map.count ||
+      memcmp (storage.map.entries[snapshot->base.target_index].uuid, snapshot->base.target_uuid, 16))
+    status = GLIMS_STATUS_UNSUPPORTED;
+  else if (!cached)
+    {
+      /* A returned copy has its own native IDs, but keeps the captured role and
+       * durable UUID. Only this verified private handle is substituted. */
+      edit.identity.axis = gimp_item_get_id (GIMP_ITEM (storage.planes[snapshot->base.target_index]));
+      status = apply_component (engine, copy_id, edit.identity.axis, "Preview Levels Lab", FALSE,
+                                lab_levels_row, &edit, NULL, &edit.identity, error);
+    }
+  if (status != GLIMS_STATUS_OK) glims_release_image (engine, copy_id);
+  else
+    {
+      if (!cached)
+        {
+          engine->busy++;
+          GimpImage *calculated = gimp_image_duplicate (copy);
+          engine->busy--;
+          if (calculated)
+            {
+              g_clear_object (&snapshot->base.calculated);
+              snapshot->base.calculated = calculated;
+              snapshot->base.calculated_kind = INK_SNAPSHOT_CALC_LAB_LEVELS;
+              snapshot->base.calculated_levels = edit.values;
+            }
+        }
+      *result = copy_id;
+    }
+  return status;
+}
+
+GlimsStatus
+glims_image_lab_snapshot_apply_levels (GlimsEngine *engine, GlimsImageID id, uint64_t token,
+                                       const GlimsLabLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLevelsEdit edit;
+  if (!read_lab_levels (settings, &edit)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsLabSnapshot *snapshot = find_lab_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  if (!lab_levels_match_snapshot (snapshot, &edit)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStatus status = apply_component (engine, id, edit.identity.axis, "Levels Lab", FALSE,
+                                       lab_levels_row, &edit, &snapshot->base, &edit.identity, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      open->lab_snapshot = NULL;
+      glims_lab_snapshot_free (snapshot);
+    }
+  return status;
 }

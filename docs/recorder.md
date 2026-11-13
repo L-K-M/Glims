@@ -26,8 +26,8 @@ Current capture covers these command families:
   accepted settings.
 
 - Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
-  Curves Apply and complete Brush gestures, including
-  accepted tablet rotation/tangential samples. Fill/Curves/Brush bind an axis;
+  Levels/Curves Apply and complete Brush gestures, including
+  accepted tablet rotation/tangential samples. Fill/Levels/Curves/Brush bind an axis;
   Lab selections change only the root mask and need no axis binding.
   See [physical Lab recording](lab-recorder.md).
 - Native CMYK/Multichannel Fill, Clear, Invert, Levels and Curves Apply with

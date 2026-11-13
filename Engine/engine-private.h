@@ -243,6 +243,16 @@ GlimsStatus glims_image_fill_lab (GlimsEngine *engine, GlimsImageID image,
                                   const GlimsLabFillSettings *settings, char **error);
 GlimsStatus glims_image_curves_lab (GlimsEngine *engine, GlimsImageID image,
                                     const GlimsLabCurvesSettings *settings, char **error);
+GlimsStatus glims_image_levels_lab (GlimsEngine *engine, GlimsImageID image,
+                                    const GlimsLabLevelsSettings *settings, char **error);
+GlimsStatus glims_image_lab_snapshot_levels (GlimsEngine *engine, GlimsImageID image,
+                                             uint64_t token,
+                                             const GlimsLabLevelsSettings *settings,
+                                             GlimsImageID *copy, char **error);
+GlimsStatus glims_image_lab_snapshot_apply_levels (GlimsEngine *engine, GlimsImageID image,
+                                                   uint64_t token,
+                                                   const GlimsLabLevelsSettings *settings,
+                                                   char **error);
 GlimsStatus glims_image_lab_snapshot_begin (GlimsEngine *engine, GlimsImageID image,
                                             const GlimsLabSnapshotTarget *target,
                                             uint64_t *token, char **error);

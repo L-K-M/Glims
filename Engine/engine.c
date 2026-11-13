@@ -4786,6 +4786,87 @@ api_stroke_cancel_ink (GlimsEngine *engine, GlimsStrokeID stroke)
     stroke_cancel_ink_on_engine, &stroke, NULL);
 }
 
+typedef struct {
+  GlimsImageID image;
+  uint64_t token;
+  GlimsLabLevelsSettings settings;
+  GlimsImageID *result;
+  char **error;
+} LabLevelsArgs;
+
+static gboolean
+copy_lab_levels_settings (const GlimsLabLevelsSettings *source, GlimsLabLevelsSettings *copy)
+{
+  if (!source) return FALSE;
+  uint32_t size;
+  const unsigned char *bytes = (const unsigned char *) (const void *) source;
+  memcpy (&size, bytes, sizeof size);
+  if (size < sizeof *copy) return FALSE;
+  memcpy (copy, bytes, sizeof *copy);
+  copy->struct_size = sizeof *copy;
+  return TRUE;
+}
+
+static GlimsStatus
+image_levels_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLevelsArgs *a = data;
+  return glims_image_levels_lab (engine, a->image, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_levels_lab (GlimsEngine *engine, GlimsImageID image,
+                      const GlimsLabLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLevelsArgs a = { .image = image, .error = error };
+  if (!copy_lab_levels_settings (settings, &a.settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_levels_lab,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_levels_lab_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_levels_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLevelsArgs *a = data;
+  return glims_image_lab_snapshot_levels (engine, a->image, a->token, &a->settings,
+                                          a->result, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_levels (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                               const GlimsLabLevelsSettings *settings,
+                               GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  LabLevelsArgs a = { .image = image, .token = token, .result = result, .error = error };
+  if (!result || !copy_lab_levels_settings (settings, &a.settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_levels,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_snapshot_levels_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_apply_levels_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLevelsArgs *a = data;
+  return glims_image_lab_snapshot_apply_levels (engine, a->image, a->token, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_apply_levels (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                                     const GlimsLabLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLevelsArgs a = { .image = image, .token = token, .error = error };
+  if (!copy_lab_levels_settings (settings, &a.settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_apply_levels,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_snapshot_apply_levels_on_engine, &a, error);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

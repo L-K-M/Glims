@@ -165,16 +165,16 @@ final class EngineActivity {
         }
     }
 
-    func endLabSnapshot(_ token: UInt64, image: Int32, session: EngineSession,
+    func endLabSnapshot(_ token: UInt64, image: Int32, session: EngineSession, kind: LabAdjustmentKind = .curves,
                         completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         queue.async {
-            let result = Result { try session.endLabCurvesSnapshot(image, token: token) }
+            let result = Result { try kind.end(session, image: image, token: token) }
             DispatchQueue.main.async {
                 if case .failure(let error) = result,
                    let native = error as? EngineSession.EngineError {
                     if native.isBusy {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            self.endLabSnapshot(token, image: image, session: session, completion: completion)
+                            self.endLabSnapshot(token, image: image, session: session, kind: kind, completion: completion)
                         }
                         return
                     }

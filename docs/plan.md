@@ -5591,3 +5591,18 @@ fixture passes 38 checks across CMYK and Multichannel, including preserved
 drafts, invalid text, independent opacity and stale callbacks. Independent
 production review found no important issue. Latest-head CI and the remaining
 engine checks are pending; this has not changed the installed app.
+
+
+### Physical Lab Levels (candidate)
+
+Levels now has typed physical Lab row/native services and selected-axis
+preview/document routing. The shared Levels panel displays L* 0–100 and
+a*/b* −128–127, preserves exact untouched normalized settings, and refuses
+invalid drafts. Pinned native checks pass 1,576, including XCF/Undo and
+progress-time Undo admission; 7,442 optimized/sanitized and 23,064 independent
+rational checks pass. Source reviews found and closed native Undo admission
+and row alias/alignment gaps. All four engines pass 1,576 native Levels checks and surrounding
+conformance/Ink/Lab regressions. All 1,755 Swift tests and 375 pinned actual-app
+checks pass, including bound loaded-file replay and Undo. Native, lifecycle,
+Recorder and app-fixture source reviews are complete. Four-engine app checks
+and latest-head CI remain pending. See [lab-levels.md](lab-levels.md).
