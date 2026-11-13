@@ -84,6 +84,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
       GimpDrawable *copy_plane=GIMP_DRAWABLE(dup_storage.layers[0].planes[role]);
       GimpDrawable *source_plane=GIMP_DRAWABLE(dup_storage.layers[1].planes[role]);
       guint8 copy_samples[16],source_samples[16];
+      gboolean one_byte=babl_format_get_bytes_per_pixel(gimp_drawable_get_format(copy_plane))==1&&
+                        babl_format_get_bytes_per_pixel(gimp_drawable_get_format(source_plane))==1;
+      CHECK(one_byte,"logical duplicate planes retain one-byte samples");
+      if(!one_byte)continue;
       gegl_buffer_get(gimp_drawable_get_buffer(copy_plane),GEGL_RECTANGLE(0,0,4,4),1,
                       gimp_drawable_get_format(copy_plane),copy_samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
       gegl_buffer_get(gimp_drawable_get_buffer(source_plane),GEGL_RECTANGLE(0,0,4,4),1,
@@ -158,6 +162,42 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     }
     g_free(new_path);
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"creation test restores the original fixture");
+   }
+   error=NULL;
+   GlimsStatus cleared=api->image_select_layers(engine,id,NULL,0,&error);
+   CHECK(cleared==GLIMS_STATUS_OK,"logical selection can be cleared");
+   if(error)api->free_string(error);error=NULL;
+   if(cleared==GLIMS_STATUS_OK){
+    GlimsItemID empty_new=0;GlimsStatus empty_made=api->layer_command(engine,id,0,GLIMS_LAYER_NEW,&empty_new,&error);
+    CHECK(empty_made==GLIMS_STATUS_OK&&empty_new,"creation without selection succeeds");
+    if(error)api->free_string(error);error=NULL;
+    if(empty_made==GLIMS_STATUS_OK&&empty_new){
+     GlimsLayerInfo empty_rows[8];int32_t n=0;GlimsItemID selected[8]={0};int32_t selected_count=0;
+     CHECK(api->image_layers(engine,id,empty_rows,8,&n)==GLIMS_STATUS_OK&&n==3&&empty_rows[0].id==empty_new,
+           "creation without selection inserts at the top");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+           api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&selected_count==0,
+           "Undo restores an empty layer selection");
+     CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+           api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&
+           selected_count==1&&selected[0]==empty_new,"Redo selects the same created layer");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"empty-selection test removes the new layer");
+    }
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"original logical selection restored");
+   }
+   GlimsItemID stale=123;error=NULL;
+   CHECK(api->layer_command(engine,id,2147483647,GLIMS_LAYER_NEW,&stale,&error)==GLIMS_STATUS_NOT_FOUND&&stale==0,
+         "creation with a stale explicit anchor is refused");
+   if(error)api->free_string(error);error=NULL;
+   GlimsItemID implicit_copy=0;error=NULL;
+   GlimsStatus implicit_status=api->layer_command(engine,id,0,GLIMS_LAYER_DUPLICATE,&implicit_copy,&error);
+   CHECK(implicit_status==GLIMS_STATUS_OK&&implicit_copy,"implicit single-selection duplication succeeds");
+   if(error)api->free_string(error);error=NULL;
+   if(implicit_status==GLIMS_STATUS_OK&&implicit_copy){
+    GlimsItemID selected[8]={0};int32_t n=0;
+    CHECK(api->image_selected_layers(engine,id,selected,8,&n)==GLIMS_STATUS_OK&&n==1&&selected[0]==implicit_copy,
+          "implicit duplication selects its logical copy");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"implicit duplicate is undone");
    }
    GlimsLayerChange rename={.struct_size=sizeof rename,.properties=GLIMS_LAYER_NAME,.name="Retouched Lab"};
    error=NULL;GlimsStatus renamed=api->layer_change(engine,id,rows[0].id,&rename,&error);
