@@ -8,6 +8,9 @@
 #define GLIMS_LAB_LAYER_PAINT_MAX_WIDTH 4096u
 
 /* Blend a constant physical Lab color over four straight-alpha U8 planes.
+ * Returns true on success, including an unchanged row; false rejects the
+ * input without publishing destination bytes. Width is at most
+ * GLIMS_LAB_LAYER_PAINT_MAX_WIDTH; zero-length data ranges do not overlap.
  * coverage is an optional row of unaligned floats in [0,1]; NULL means full
  * coverage. A zero effective opacity preserves all original bytes, including
  * hidden color under zero alpha. The output is staged: invalid input leaves
