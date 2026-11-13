@@ -142,6 +142,9 @@ extension EngineSmokeTest {
         let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
               "Fill menu follows the layered Lab color capability")
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COLOR_FILL"] == "1" {
+            check(opened.storage.allowsLabLayerColorFill, "test adapter advertises layered Lab color Fill")
+        }
         if opened.storage.allowsLabLayerColorFill, let window = windowController.window,
            let originalRoot = opened.selectedLayerIDs.first {
             let oldForeground = ToolState.shared.foreground
@@ -151,6 +154,7 @@ extension EngineSmokeTest {
             let previousError = opened.onError
             var recordingErrors: [String] = []
             opened.onError = { recordingErrors.append($0) }
+            defer { opened.onError = previousError }
             try opened.startRecording()
             check(!windowController.validateMenuItem(fillMenu), "Lab Fill is disabled while recording")
             windowController.fill(nil)
@@ -189,6 +193,34 @@ extension EngineSmokeTest {
                 undo.undo(); drain("restore selection after Lab color fill")
                 check(opened.selectionBounds == nil, "fill fixture restores its empty selection")
             } else { check(false, "captured Lab layer Fill sheet opens") }
+            let beforeCustom = pixel(session, image, x: 1, y: 1)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap { descendants($0) }
+                }
+                let controls = sheet.contentView.map { descendants($0) } ?? []
+                if let choice = controls.compactMap({ $0 as? NSPopUpButton }).first(where: { $0.itemTitles.contains("Custom") }),
+                   let well = controls.compactMap({ $0 as? NSColorWell }).first,
+                   let action = choice.action {
+                    choice.selectItem(withTitle: "Custom")
+                    NSApp.sendAction(action, to: choice.target, from: choice)
+                    check(well.isEnabled, "Custom Fill enables the color well")
+                    well.color = .blue
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("custom Lab color fill")
+                    let result = pixel(session, image, x: 1, y: 1)
+                    check(result?.count == 4 && (result?[0] ?? 255) < 20 &&
+                          (result?[1] ?? 255) < 20 && (result?[2] ?? 0) > 245,
+                          "Custom Fill uses the selected blue rather than the red foreground")
+                    opened.undo(); drain("custom Lab color fill Undo")
+                    check(pixel(session, image, x: 1, y: 1) == beforeCustom,
+                          "Undo restores pixels before Custom Fill")
+                } else {
+                    check(false, "Custom Fill exposes its choice and color well")
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+            } else { check(false, "Lab Fill sheet opens for custom color") }
             let beforeCancel = pixel(session, image, x: 1, y: 1)
             windowController.fill(nil)
             if let sheet = waitForSheet() {
@@ -200,10 +232,13 @@ extension EngineSmokeTest {
                 var errors: [String] = []
                 let oldError = opened.onError
                 opened.onError = { errors.append($0) }
+                defer { opened.onError = oldError }
                 windowController.fill(nil)
                 if let sheet = waitForSheet() {
                     opened.selectLayer(other.id); drain("retarget while Fill is open")
-                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    if window.attachedSheet === sheet {
+                        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    }
                     EngineSmokeTestHost.pumpEvents(for: 0.1); drain("refuse retargeted Lab Fill")
                     check(!errors.isEmpty && pixel(session, image, x: 1, y: 1) == beforeCancel,
                           "Fill refuses a layer changed while its sheet was open")
@@ -211,6 +246,8 @@ extension EngineSmokeTest {
                 } else { check(false, "Lab Fill sheet opens for retarget test") }
                 opened.onError = oldError
             }
+        } else if opened.storage.allowsLabLayerColorFill {
+            check(false, "layered Lab Fill fixture has a window and selected root")
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }
