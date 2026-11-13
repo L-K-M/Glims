@@ -56,6 +56,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var inkPreviewToken: UInt64?
     private var inkPreviewKind: InkAdjustmentKind?
     private(set) var inkCurvesPanel: InkCurvesPanel?
+    private(set) var labCurvesPanel: InkCurvesPanel?
+    private var labPreviewToken: UInt64?
     /// Image ▸ Guides…'s sheet, retained by this window for its lifetime;
     /// nil while none is open. Two documents keep independent sheets
     /// through their own controllers — no global binding or singleton.
@@ -133,7 +135,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var filterSourceChooser: FilterSourceChooserController?
     private var filterSourceRequest = 0
     /// An open panel or a start still queued on the input queue.
-    private var previewBusy: Bool { previewPanel != nil || inkLevelsPanel != nil || inkCurvesPanel != nil || previewStartIsPending }
+    private var previewBusy: Bool { previewPanel != nil || inkLevelsPanel != nil || inkCurvesPanel != nil || labCurvesPanel != nil || previewStartIsPending }
     /// A print job anywhere between Print… and the end of the run: a
     /// second Print is refused, and a close asked for during the engine
     /// render drops the snapshot instead of attaching a sheet.
@@ -608,6 +610,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let previewPanel { previewPanel.cancel() }
         else if let inkLevelsPanel { inkLevelsPanel.cancel() }
         else if let inkCurvesPanel { inkCurvesPanel.cancel() }
+        else if let labCurvesPanel { labCurvesPanel.cancel() }
         else if previewStartIsPending { cancelPendingPreview() }
         else if screenMode != .windowed { setScreenMode(.windowed) }
         // NSWindowController's superclass does not implement this optional
@@ -1070,8 +1073,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// start then queues the session's begin and initial reads behind
     /// pending input, and the panel builds when they land.
     func openNativeFilter(_ operation: EngineSession.FilterOperation) {
-        guard imageDocument.colorInfo.mode != .lab else {
-            imageDocument.onError?("Lab adjustments are not available. Use Edit > Fill for a physical channel value.")
+        if imageDocument.colorInfo.mode == .lab {
+            if operation.name == "gimp:curves" { openLabCurves() }
+            else { imageDocument.onError?("This adjustment is unavailable for Lab documents.") }
             return
         }
         if imageDocument.colorInfo.mode.usesInkChannels {
@@ -2375,6 +2379,85 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    private func openLabCurves() {
+        guard !closeStarted, !previewBusy, window?.attachedSheet == nil,
+              imageDocument.session.supportsLabCurveSnapshots else { return }
+        endPendingEdits()
+        guard let axis = imageDocument.selectedLabAxis else {
+            imageDocument.onError?("Select one Lab channel in the Channels palette."); return
+        }
+        if let reason = imageDocument.labCurvesRefusal(axis: axis) {
+            imageDocument.onError?(reason); return
+        }
+        previewRequest += 1
+        let request = previewRequest
+        previewStartIsPending = true
+        imageDocument.filterPreviewIsOpen = true
+        statusBar.message = "Preparing Lab Curves preview…"
+        imageDocument.beginLabCurvesPreview(axis: axis) { [weak self, imageDocument] result in
+            guard let self, !self.closeStarted, self.previewStartIsPending, self.previewRequest == request else {
+                if case .success(let token) = result { imageDocument.endLabCurvesPreview(token) }
+                return
+            }
+            self.previewStartIsPending = false
+            switch result {
+            case .failure(let error):
+                imageDocument.filterPreviewIsOpen = false
+                self.statusBar.message = error.localizedDescription
+            case .success(let token):
+                self.labPreviewToken = token
+                let panel = InkCurvesPanel(labAxis: axis, changed: { [weak self] settings in
+                    guard let self, self.labPreviewToken == token else { return }
+                    self.canvas.setLabCurvesPreview(token: token, settings: settings)
+                }, apply: { [weak self] settings in
+                    self?.applyLabCurves(token: token, settings: settings)
+                }, cancel: { [weak self] in self?.cancelLabCurves(token: token) })
+                self.labCurvesPanel = panel
+                self.canvas.onLabCurvesPreviewChange = { [weak panel] current, error in
+                    panel?.setPreviewState(current: current, error: error)
+                }
+                panel.showWindow(nil)
+                self.canvas.setLabCurvesPreview(token: token)
+                self.statusBar.message = "Adjust the selected Lab channel. Apply keeps the change; Cancel keeps the original."
+            }
+        }
+    }
+
+    private func dismissLabCurves(token: UInt64) {
+        guard labPreviewToken == token else { return }
+        labPreviewToken = nil
+        canvas.onLabCurvesPreviewChange = nil
+        canvas.setLabCurvesPreview(token: nil)
+        labCurvesPanel?.finish()
+        labCurvesPanel = nil
+        imageDocument.filterPreviewIsOpen = false
+        stateDidChange()
+    }
+
+    private func cancelLabCurves(token: UInt64) {
+        guard labPreviewToken == token else { return }
+        imageDocument.endLabCurvesPreview(token) { [weak self] result in
+            if case .failure(let error) = result, self?.closeStarted == false {
+                self?.imageDocument.onError?(error.localizedDescription)
+            }
+        }
+        dismissLabCurves(token: token)
+    }
+
+    private func applyLabCurves(token: UInt64, settings: EngineSession.LabCurvesSettings) {
+        guard labPreviewToken == token else { return }
+        labCurvesPanel?.setApplying(true)
+        imageDocument.applyLabCurvesPreview(token, settings: settings) { [weak self] result in
+            guard let self, self.labPreviewToken == token else { return }
+            switch result {
+            case .success: self.dismissLabCurves(token: token)
+            case .failure(let error):
+                self.labCurvesPanel?.setApplying(false)
+                self.labCurvesPanel?.setPreviewState(current: false, error: error.localizedDescription)
+            }
+        }
+    }
+
     /// Component documents expose only commands with qualified native routes.
     /// The engine independently enforces the same boundary for direct callers.
     private func permitsMultichannelMenu(_ item: NSMenuItem) -> Bool {
@@ -2409,6 +2492,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(runNativeFilter(_:)):
+            return (item.representedObject as? NativeFilterCommand)?.operation.name == "gimp:curves"
+                && imageDocument.session.supportsLabCurveSnapshots
         case #selector(createConvertedLabCopy(_:)):
             return imageDocument.session.supportsLabConvertedCopy
         case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
@@ -2434,6 +2520,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard permitsLabMenu(menuItem) else {
                 menuItem.toolTip = "This command is unavailable for Lab documents."
                 return false
+            }
+            if menuItem.action == #selector(runNativeFilter(_:)) {
+                let reason = imageDocument.selectedLabAxis.map { imageDocument.labCurvesRefusal(axis: $0) }
+                    ?? "Select one Lab channel in the Channels palette."
+                menuItem.toolTip = reason
+                return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
             }
             if menuItem.action == #selector(fill(_:)) {
                 let reason: String?
@@ -3367,6 +3459,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // Closing the source must dismiss even an Apply-disabled panel. The
         // accepted transaction and token cleanup remain in the close drain.
         if let token = inkPreviewToken { cancelInkAdjustment(token: token) }
+        if let token = labPreviewToken { cancelLabCurves(token: token) }
         cancelPendingPreview()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         guard approveRecordingCloseIfNeeded(sender) else { return false }
@@ -3534,6 +3627,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         previewPanel?.cancel()
         if let token = inkPreviewToken { cancelInkAdjustment(token: token) }
+        if let token = labPreviewToken { cancelLabCurves(token: token) }
         cancelPendingPreview()
         canvas.stopRendering { [self] in
             imageDocument.closeImageWhenDrained {

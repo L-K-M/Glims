@@ -5472,3 +5472,13 @@ and fixing a token collision; all 1,677 Swift tests pass with the new transport.
 The remaining engine regression run and independent reviews are in progress.
 The Lab panel and Recorder route remain subsequent work. See
 [lab-curves-preview.md](lab-curves-preview.md).
+
+### Physical Lab Curves panel (candidate)
+
+The shared sampled-curve panel now has a typed Lab route with physical L/a/b
+numeric coordinates, immutable native previews and ordered Apply/Cancel/close
+cleanup. All 1,682 Swift tests and 251 pinned-engine GUI checks pass, including
+all axes/precisions and pending-work cancellation. The four-engine Lab/ink
+panel matrix and independent reviews are running. Lab Recorder replay and
+standalone release qualification remain separate follow-up work. See
+[lab-curves-ui.md](lab-curves-ui.md).

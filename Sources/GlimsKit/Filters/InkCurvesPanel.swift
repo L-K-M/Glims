@@ -1,8 +1,77 @@
 import AppKit
 
 @MainActor
-final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
-    typealias Settings = EngineSession.InkCurvesSettings
+final class SampledCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
+    typealias InkSettings = EngineSession.InkCurvesSettings
+
+    private enum Domain {
+        case ink(name: String)
+        case lab(axis: EngineSession.LabAxis)
+
+        var title: String {
+            switch self {
+            case .ink: return "Ink Curves"
+            case .lab: return "Lab Curves"
+            }
+        }
+
+        var heading: String {
+            switch self {
+            case .ink(let name): return name
+            case .lab(let axis): return axis.name
+            }
+        }
+
+        var headingAccessibilityLabel: String {
+            switch self {
+            case .ink: return "Ink"
+            case .lab: return "Lab axis"
+            }
+        }
+
+        var xRange: (Double, Double) {
+            switch self {
+            case .ink: return (0, 1)
+            case .lab(let axis):
+                let r = axis.role.nominalRange
+                return (r.lowerBound, r.upperBound)
+            }
+        }
+
+        var yRange: (Double, Double) { xRange }
+
+        var hint: String {
+            switch self {
+            case .ink:
+                return "Intensity: 0 = full ink; 1 = paper. Index and Output edit freehand sample values."
+            case .lab(let axis):
+                switch axis.role {
+                case .lightness:
+                    return "L*: 0 = black, 100 = white. Index and Output edit sample values."
+                case .a:
+                    return "a*: -128 = green, 127 = red. Index and Output edit sample values."
+                case .b:
+                    return "b*: -128 = blue, 127 = yellow. Index and Output edit sample values."
+                }
+            }
+        }
+
+        var smoothHint: String {
+            switch self {
+            case .ink:
+                return "Intensity: 0 = full ink; 1 = paper. Click or drag points; arrow keys move them and Delete removes them."
+            case .lab(let axis):
+                switch axis.role {
+                case .lightness:
+                    return "L*: 0 = black, 100 = white. Click or drag points; arrow keys move them and Delete removes them."
+                case .a:
+                    return "a*: -128 = green, 127 = red. Click or drag points; arrow keys move them and Delete removes them."
+                case .b:
+                    return "b*: -128 = blue, 127 = yellow. Click or drag points; arrow keys move them and Delete removes them."
+                }
+            }
+        }
+    }
 
     private struct NumericEntry: Equatable {
         var text: String
@@ -22,6 +91,22 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         case smooth, freehand
     }
 
+    private struct NeutralSettings: Equatable {
+        var samples: [Double]
+
+        static let identitySamples = (0..<256).map { Double($0) / 255 }
+
+        init(samples: [Double] = NeutralSettings.identitySamples) {
+            self.samples = samples
+        }
+
+        var isValid: Bool {
+            samples.count == 256 && samples.allSatisfy { $0.isFinite && (0.0...1.0).contains($0) }
+        }
+
+        static func identity() -> NeutralSettings { NeutralSettings(samples: identitySamples) }
+    }
+
     let graph = CurvesGraphView()
     let resetButton = NSButton(title: "Reset", target: nil, action: nil)
     let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
@@ -32,7 +117,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let modePopup = NSPopUpButton()
     let pointTypePopup = NSPopUpButton()
 
-    private let inkNameField = NSTextField(wrappingLabelWithString: "")
+    private let headingField = NSTextField(wrappingLabelWithString: "")
     private let hintField = NSTextField(wrappingLabelWithString: "")
     private let statusField = NSTextField(wrappingLabelWithString: "")
     private let indexFormatter = NumberFormatter()
@@ -41,12 +126,13 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     private let countLabel = NSTextField(labelWithString: "")
     private var contentStack: NSStackView?
 
-    private let changed: (Settings) -> Void
-    private let applyAction: (Settings) -> Void
+    private let domain: Domain
+    private let changedNeutral: (NeutralSettings) -> Void
+    private let applyNeutral: (NeutralSettings) -> Void
     private let cancelAction: () -> Void
 
     private var curveState: EngineSession.CurveState
-    private var lastValidSettings: Settings
+    private var lastValidSettings: NeutralSettings
     private var displayedIndex = NumericEntry(text: "0", value: 0)
     private var selectedIndex = 0
     private var displayedSampleOutputText = "0"
@@ -65,18 +151,46 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     private var pendingGestureError: String?
     private var gestureSelection: Int?
 
-    init(inkName: String,
-         settings: Settings = .init(),
-         changed: @escaping (Settings) -> Void,
-         apply: @escaping (Settings) -> Void,
-         cancel: @escaping () -> Void) {
-        self.changed = changed
-        self.applyAction = apply
+    convenience init(inkName: String,
+                     settings: InkSettings = .init(),
+                     changed: @escaping (InkSettings) -> Void,
+                     apply: @escaping (InkSettings) -> Void,
+                     cancel: @escaping () -> Void) {
+        self.init(domain: .ink(name: inkName),
+                  initial: NeutralSettings(samples: settings.samples),
+                  initialValid: settings.isValid,
+                  changed: { changed(InkSettings(samples: $0.samples)) },
+                  apply: { apply(InkSettings(samples: $0.samples)) },
+                  cancel: cancel)
+    }
+
+    convenience init(labAxis: EngineSession.LabAxis,
+                     settings: EngineSession.LabCurvesSettings = .init(),
+                     changed: @escaping (EngineSession.LabCurvesSettings) -> Void,
+                     apply: @escaping (EngineSession.LabCurvesSettings) -> Void,
+                     cancel: @escaping () -> Void) {
+        self.init(domain: .lab(axis: labAxis),
+                  initial: NeutralSettings(samples: settings.samples),
+                  initialValid: settings.isValid,
+                  changed: { changed(EngineSession.LabCurvesSettings(samples: $0.samples)) },
+                  apply: { apply(EngineSession.LabCurvesSettings(samples: $0.samples)) },
+                  cancel: cancel)
+    }
+
+    private init(domain: Domain,
+                 initial: NeutralSettings,
+                 initialValid: Bool,
+                 changed: @escaping (NeutralSettings) -> Void,
+                 apply: @escaping (NeutralSettings) -> Void,
+                 cancel: @escaping () -> Void) {
+        self.domain = domain
+        self.changedNeutral = changed
+        self.applyNeutral = apply
         self.cancelAction = cancel
-        let initialLast = settings.isValid ? settings : .init()
+        let initialLast = initialValid ? initial : .identity()
         self.lastValidSettings = initialLast
         self.curveState = EngineSession.CurveState(kind: .free, points: [], samples: initialLast.samples)
-        self.numericValidationError = settings.isValid ? nil : "Enter sample index from 0 to 255 and output from 0 to 1."
+        self.numericValidationError = nil
 
         indexFormatter.locale = .current
         indexFormatter.numberStyle = .decimal
@@ -100,11 +214,12 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
         panel.isFloatingPanel = true
-        panel.title = "Ink Curves"
+        panel.title = domain.title
 
         super.init(window: panel)
+        numericValidationError = initialValid ? nil : validationMessageForDomain()
         panel.delegate = self
-        buildContent(in: panel, inkName: inkName)
+        buildContent(in: panel)
         displayState()
         updateState()
         panel.center()
@@ -171,11 +286,69 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         return false
     }
 
-    private func buildContent(in panel: NSPanel, inkName: String) {
-        inkNameField.stringValue = inkName
-        inkNameField.font = NSFont.systemFont(ofSize: NSFont.labelFontSize)
-        inkNameField.setAccessibilityLabel("Ink")
-        inkNameField.lineBreakMode = .byWordWrapping
+    private func physicalToNormalized(_ value: Double, range: (Double, Double)) -> Double {
+        let span = range.1 - range.0
+        if span == 0 { return 0 }
+        return min(1, max(0, (value - range.0) / span))
+    }
+
+    private func normalizedToPhysical(_ value: Double, range: (Double, Double)) -> Double {
+        range.0 + (range.1 - range.0) * min(1, max(0, value))
+    }
+
+    private func formatPhysical(_ value: Double) -> String {
+        pointFormatter.string(from: NSNumber(value: value)) ?? "0"
+    }
+
+    private func validationMessageForDomain() -> String {
+        switch domain {
+        case .ink:
+            return "Enter sample index from 0 to 255 and output from 0 to 1."
+        case .lab(let axis):
+            let r = axis.role.nominalRange
+            return "Enter sample index from 0 to 255 and output from \(formatPhysical(r.lowerBound)) to \(formatPhysical(r.upperBound))."
+        }
+    }
+
+    private func invalidIndexMessage() -> String {
+        "Enter sample index from 0 to 255."
+    }
+
+    private func invalidOutputMessage() -> String {
+        switch domain {
+        case .ink:
+            return "Enter output from 0 to 1."
+        case .lab(let axis):
+            let r = axis.role.nominalRange
+            return "Enter output from \(formatPhysical(r.lowerBound)) to \(formatPhysical(r.upperBound))."
+        }
+    }
+
+    private func invalidPointIndexMessage() -> String { "Enter an existing point index." }
+    private func invalidPointXMessage() -> String {
+        switch domain {
+        case .ink:
+            return "Enter input X from 0 to 1 between neighboring points."
+        case .lab(let axis):
+            let r = axis.role.nominalRange
+            return "Enter input X from \(formatPhysical(r.lowerBound)) to \(formatPhysical(r.upperBound)) between neighboring points."
+        }
+    }
+    private func invalidPointYMessage() -> String {
+        switch domain {
+        case .ink:
+            return "Enter output Y from 0 to 1."
+        case .lab(let axis):
+            let r = axis.role.nominalRange
+            return "Enter output Y from \(formatPhysical(r.lowerBound)) to \(formatPhysical(r.upperBound))."
+        }
+    }
+
+    private func buildContent(in panel: NSPanel) {
+        headingField.stringValue = domain.heading
+        headingField.font = NSFont.systemFont(ofSize: NSFont.labelFontSize)
+        headingField.setAccessibilityLabel(domain.headingAccessibilityLabel)
+        headingField.lineBreakMode = .byWordWrapping
 
         hintField.font = NSFont.systemFont(ofSize: max(11, NSFont.smallSystemFontSize))
         hintField.textColor = .secondaryLabelColor
@@ -306,7 +479,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         buttons.alignment = .centerY
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [inkNameField, hintField, controls, graph, numeric, statusField, buttons])
+        let stack = NSStackView(views: [headingField, hintField, controls, graph, numeric, statusField, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -314,7 +487,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         stack.translatesAutoresizingMaskIntoConstraints = false
         contentStack = stack
 
-        for label in [inkNameField, hintField, statusField] {
+        for label in [headingField, hintField, statusField] {
             label.preferredMaxLayoutWidth = 528
         }
 
@@ -328,7 +501,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.topAnchor.constraint(equalTo: content.topAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            inkNameField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
+            headingField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             hintField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             statusField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             statusField.heightAnchor.constraint(equalToConstant: 36),
@@ -352,7 +525,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             let calculated = try InkCurveSampler.samples(points: points, previousSamples: curveState.samples)
             return EngineSession.CurveState(kind: .smooth, points: points, samples: calculated)
         }
-        guard Settings(samples: samples).isValid else {
+        guard NeutralSettings(samples: samples).isValid else {
             throw ParseError(message: "Enter 256 sample values from 0 to 1.")
         }
         return EngineSession.CurveState(kind: .free, points: [], samples: samples)
@@ -367,7 +540,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             return
         }
         if curveMode == .freehand {
-            hintField.stringValue = "Intensity: 0 = full ink; 1 = paper. Index and Output edit freehand sample values."
+            hintField.stringValue = domain.hint
             let index = min(255, max(0, displayedIndex.value))
             selectedIndex = index
             displayedIndex = NumericEntry(text: indexFormatter.string(from: NSNumber(value: index)) ?? "\(index)", value: index)
@@ -375,13 +548,14 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 sampleIndexField.stringValue = displayedIndex.text
             }
             refreshFreehandOutputField(for: curveState.samples, index: index, preserveInvalidEditor: preserveInvalidEditors)
-            inputField.stringValue = inputFormatterString(for: Double(index) / 255.0)
+            let xNorm = Double(index) / 255.0
+            inputField.stringValue = formatPhysical(normalizedToPhysical(xNorm, range: domain.xRange))
             inputField.isEditable = false
             inputDraft = DraftString(displayed: inputField.stringValue)
             pointTypePopup.isEnabled = false
             countLabel.stringValue = "256 samples"
         } else {
-            hintField.stringValue = "Intensity: 0 = full ink; 1 = paper. Click or drag points; arrow keys move them and Delete removes them."
+            hintField.stringValue = domain.smoothHint
             let count = curveState.points.count
             if count == 0 {
                 selectedIndex = 0
@@ -400,12 +574,12 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 }
                 let point = curveState.points[selectedIndex]
                 if !(preserveInvalidEditors && inputField.currentEditor() != nil && numericValidationError != nil) {
-                    let text = pointFormatter.string(from: NSNumber(value: point.x)) ?? "0"
+                    let text = formatPhysical(normalizedToPhysical(point.x, range: domain.xRange))
                     inputField.stringValue = text
                     inputDraft = DraftString(displayed: text)
                 }
                 if !(preserveInvalidEditors && outputField.currentEditor() != nil && numericValidationError != nil) {
-                    let text = pointFormatter.string(from: NSNumber(value: point.y)) ?? "0"
+                    let text = formatPhysical(normalizedToPhysical(point.y, range: domain.yRange))
                     outputField.stringValue = text
                     pointOutputDraft = DraftString(displayed: text)
                 }
@@ -424,14 +598,11 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     private func refreshFreehandOutputField(for samples: [Double], index: Int, preserveInvalidEditor: Bool) {
         let safeIndex = min(max(index, 0), max(samples.count - 1, 0))
         let value = samples.indices.contains(safeIndex) ? samples[safeIndex] : 0
-        displayedSampleOutputText = sampleOutputFormatter.string(from: NSNumber(value: value)) ?? "0"
+        let physical = normalizedToPhysical(value, range: domain.yRange)
+        displayedSampleOutputText = sampleOutputFormatter.string(from: NSNumber(value: physical)) ?? "0"
         if !(preserveInvalidEditor && outputField.currentEditor() != nil && numericValidationError != nil) {
             outputField.stringValue = displayedSampleOutputText
         }
-    }
-
-    private func inputFormatterString(for value: Double) -> String {
-        pointFormatter.string(from: NSNumber(value: value)) ?? "0"
     }
 
     @objc private func fieldAction(_ sender: NSTextField) {
@@ -444,7 +615,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         _ = endEditingIfNeeded(blocking: false)
         actionPending = true
         defer { actionPending = false; updateState() }
-        let identity = Settings()
+        let identity = NeutralSettings.identity()
         numericValidationError = nil
         previewCurrent = false
         previewError = nil
@@ -454,9 +625,11 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         selectedIndex = 0
         lastValidSettings = identity
         displayedIndex = NumericEntry(text: "0", value: 0)
-        displayedSampleOutputText = "0"
-        inputDraft = DraftString(displayed: "0")
-        pointOutputDraft = DraftString(displayed: "0")
+        displayedSampleOutputText = formatPhysical(normalizedToPhysical(0, range: domain.yRange))
+        let defaultX = formatPhysical(normalizedToPhysical(0, range: domain.xRange))
+        let defaultY = formatPhysical(normalizedToPhysical(0, range: domain.yRange))
+        inputDraft = DraftString(displayed: defaultX)
+        pointOutputDraft = DraftString(displayed: defaultY)
         if curveMode == .smooth {
             curveState = EngineSession.CurveState(kind: .smooth,
                                                   points: [.init(x: 0, y: 0), .init(x: 1, y: 1)],
@@ -466,7 +639,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         }
         displayState()
         updateState()
-        changed(identity)
+        changedNeutral(identity)
     }
 
     @objc private func modeChanged(_ sender: NSPopUpButton) {
@@ -495,7 +668,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         pendingGestureError = nil
         gestureOwnedByGraph = false
         let needsPreview = lastValidSettings.samples != curveState.samples
-        lastValidSettings = Settings(samples: curveState.samples)
+        lastValidSettings = NeutralSettings(samples: curveState.samples)
         displayState()
         updateState()
         publishSettings(lastValidSettings, needsPreview: needsPreview)
@@ -519,7 +692,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         curveState = EngineSession.CurveState(kind: .smooth, points: points, samples: samples)
         numericValidationError = nil
         let needsPreview = lastValidSettings.samples != samples
-        lastValidSettings = Settings(samples: samples)
+        lastValidSettings = NeutralSettings(samples: samples)
         displayState()
         publishSettings(lastValidSettings, needsPreview: needsPreview)
     }
@@ -537,7 +710,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         applying = true
         defer { actionPending = false; updateState() }
         updateState()
-        applyAction(lastValidSettings)
+        applyNeutral(lastValidSettings)
     }
 
     @discardableResult
@@ -563,9 +736,9 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             displayedIndex = parsed.indexEntry
             selectedIndex = parsed.indexEntry.value
             if let state = parsed.state {
-                let needsPreview = Settings(samples: state.samples) != lastValidSettings
+                let needsPreview = NeutralSettings(samples: state.samples) != lastValidSettings
                 curveState = state
-                lastValidSettings = Settings(samples: state.samples)
+                lastValidSettings = NeutralSettings(samples: state.samples)
                 displayState(preserveInvalidEditors: false)
                 if needsPreview {
                     publishSettings(lastValidSettings, needsPreview: true)
@@ -573,7 +746,6 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
                     updateState()
                 }
             } else {
-                // Selection-only change: never modify points/samples and never invalidate current preview.
                 displayState(preserveInvalidEditors: false)
                 updateState()
             }
@@ -591,9 +763,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     }
 
     private func parseFields() -> Result<ParsedFields, ParseError> {
-        if curveMode == .freehand {
-            return parseFreehandFields()
-        }
+        if curveMode == .freehand { return parseFreehandFields() }
         return parseSmoothFields()
     }
 
@@ -608,27 +778,27 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             index = displayedIndex.value
         } else {
             guard let parsedIndex = parseWholeIndex(indexText, range: 0...255) else {
-                return .failure(ParseError(message: "Enter sample index from 0 to 255."))
+                return .failure(ParseError(message: invalidIndexMessage()))
             }
             index = parsedIndex
         }
 
         let currentSamples = curveState.samples
         guard currentSamples.indices.contains(index) else {
-            return .failure(ParseError(message: "Enter sample index from 0 to 255."))
+            return .failure(ParseError(message: invalidIndexMessage()))
         }
 
         var samples = currentSamples
         if outputText != displayedSampleOutputText {
-            guard let value = parseUnit(outputText, locale: sampleOutputFormatter.locale ?? .current) else {
-                return .failure(ParseError(message: "Enter output from 0 to 1."))
+            guard let physical = parsePhysical(outputText, range: domain.yRange) else {
+                return .failure(ParseError(message: invalidOutputMessage()))
             }
-            samples[index] = value
+            samples[index] = physicalToNormalized(physical, range: domain.yRange)
         }
 
-        let settings = Settings(samples: samples)
+        let settings = NeutralSettings(samples: samples)
         guard settings.isValid else {
-            return .failure(ParseError(message: "Enter sample index from 0 to 255 and output from 0 to 1."))
+            return .failure(ParseError(message: validationMessageForDomain()))
         }
         let entry = NumericEntry(text: indexFormatter.string(from: NSNumber(value: index)) ?? "\(index)", value: index)
         let state = samples == currentSamples && index == selectedIndex ? nil : EngineSession.CurveState(kind: .free, points: [], samples: samples)
@@ -638,7 +808,6 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     private func parseSmoothFields() -> Result<ParsedFields, ParseError> {
         let count = curveState.points.count
         guard count > 0 else {
-            // No valid selection/points state: keep transport table, but index/output inputs are not meaningful.
             let entry = displayedIndex
             return .success(ParsedFields(indexEntry: entry, state: nil))
         }
@@ -650,40 +819,37 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             index = selectedIndex
         } else {
             guard let parsedIndex = parseWholeIndex(indexText, range: 0...(count - 1)) else {
-                return .failure(ParseError(message: "Enter an existing point index."))
+                return .failure(ParseError(message: invalidPointIndexMessage()))
             }
             index = parsedIndex
         }
         guard curveState.points.indices.contains(index) else {
-            return .failure(ParseError(message: "Enter an existing point index."))
+            return .failure(ParseError(message: invalidPointIndexMessage()))
         }
 
         var points = curveState.points
-        var changedPoint = false
         let xText = (inputField.currentEditor()?.string ?? inputField.stringValue).trimmingCharacters(in: .whitespacesAndNewlines)
         let yText = (outputField.currentEditor()?.string ?? outputField.stringValue).trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // X/Y always describe the previously selected point, even when the
-        // index field has just changed. Validate that draft before browsing.
         let editedIndex = selectedIndex
         if xText != inputDraft.displayed {
-            guard let x = parseUnit(xText, locale: pointFormatter.locale ?? .current) else {
-                return .failure(ParseError(message: "Enter input X from 0 to 1 between neighboring points."))
+            guard let xPhysical = parsePhysical(xText, range: domain.xRange) else {
+                return .failure(ParseError(message: invalidPointXMessage()))
             }
-            points[editedIndex].x = x
+            points[editedIndex].x = physicalToNormalized(xPhysical, range: domain.xRange)
         }
         if yText != pointOutputDraft.displayed {
-            guard let y = parseUnit(yText, locale: pointFormatter.locale ?? .current) else {
-                return .failure(ParseError(message: "Enter output Y from 0 to 1."))
+            guard let yPhysical = parsePhysical(yText, range: domain.yRange) else {
+                return .failure(ParseError(message: invalidPointYMessage()))
             }
-            points[editedIndex].y = y
+            points[editedIndex].y = physicalToNormalized(yPhysical, range: domain.yRange)
         }
-        changedPoint = points != curveState.points
+        let changedPoint = points != curveState.points
         let entry = NumericEntry(text: indexFormatter.string(from: NSNumber(value: index)) ?? "\(index)", value: index)
         if !changedPoint { return .success(ParsedFields(indexEntry: entry, state: nil)) }
 
         guard EngineSession.CurveState.validPoints(points) else {
-            return .failure(ParseError(message: "Enter input X from 0 to 1 between neighboring points."))
+            return .failure(ParseError(message: invalidPointXMessage()))
         }
         let previous = curveState.samples
         guard let samples = try? InkCurveSampler.samples(points: points, previousSamples: previous) else {
@@ -703,11 +869,14 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         return Int(value)
     }
 
-    private func parseUnit(_ text: String, locale: Locale) -> Double? {
+    private func parsePhysical(_ text: String, range: (Double, Double)) -> Double? {
         let scanner = Scanner(string: text)
-        scanner.locale = locale
+        scanner.locale = pointFormatter.locale ?? .current
         var value: Double = 0
-        guard scanner.scanDouble(&value), scanner.isAtEnd, value.isFinite, (0.0...1.0).contains(value) else { return nil }
+        guard scanner.scanDouble(&value), scanner.isAtEnd, value.isFinite else { return nil }
+        let lo = min(range.0, range.1)
+        let hi = max(range.0, range.1)
+        guard value >= lo, value <= hi else { return nil }
         return value
     }
 
@@ -732,18 +901,18 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         }
         numericValidationError = nil
         let needsPreview = lastValidSettings.samples != curveState.samples
-        lastValidSettings = Settings(samples: curveState.samples)
+        lastValidSettings = NeutralSettings(samples: curveState.samples)
         displayState()
         publishSettings(lastValidSettings, needsPreview: needsPreview)
     }
 
-    private func publishSettings(_ settings: Settings, needsPreview: Bool) {
+    private func publishSettings(_ settings: NeutralSettings, needsPreview: Bool) {
         guard needsPreview else { updateState(); return }
         previewCurrent = false
         previewError = nil
         actionPending = true
         updateState()
-        changed(settings)
+        changedNeutral(settings)
         actionPending = false
         updateState()
     }
@@ -777,7 +946,7 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             statusField.stringValue = previewError
             statusField.textColor = .systemRed
         } else if applying {
-            statusField.stringValue = "Applying ink curves…"
+            statusField.stringValue = applyingStatusText()
             statusField.textColor = .secondaryLabelColor
         } else if !previewCurrent || isInteracting {
             statusField.stringValue = "Updating preview…"
@@ -789,4 +958,13 @@ final class InkCurvesPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
 
         window?.standardWindowButton(.closeButton)?.isEnabled = !applying && !finished && !actionPending
     }
+
+    private func applyingStatusText() -> String {
+        switch domain {
+        case .ink: return "Applying ink curves…"
+        case .lab: return "Applying Lab curves…"
+        }
+    }
 }
+
+typealias InkCurvesPanel = SampledCurvesPanel
