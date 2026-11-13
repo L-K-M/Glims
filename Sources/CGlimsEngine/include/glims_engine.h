@@ -1233,7 +1233,9 @@ enum {
   /* Logical layer roots may also be renamed separately, with Undo/Redo. */
   GLIMS_IMAGE_STORAGE_LAYER_RENAME = 1u << 2,
   /* A single logical root can be duplicated with Undo/Redo. */
-  GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE = 1u << 3
+  GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE = 1u << 3,
+  /* A transparent logical root can be created with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_CREATE = 1u << 4
 };
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */

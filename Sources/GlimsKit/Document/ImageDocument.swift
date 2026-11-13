@@ -516,6 +516,9 @@ final class ImageDocument {
     var acceptsLayerDuplicate: Bool {
         acceptsEdits || (acceptsLayerProperties && storage.allowsLayerDuplicate)
     }
+    var acceptsLayerCreate: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerCreate)
+    }
     var acceptsLayerSelection: Bool {
         acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
     }
@@ -3000,6 +3003,17 @@ final class ImageDocument {
     /// id the interface last saw selected. Palette rows name their
     /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
+        if storage.layout == .layeredLab && command == .new {
+            guard acceptsLayerCreate, selectedLayerIDs.count <= 1,
+                  !refuseWhileTargetPending(), !refuseWhileFloatingActive() else { return }
+            let captured = selectedLayerIDs.first ?? 0
+            endPendingUserEdits()
+            guard !isClosing else { return }
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(.new, image: image, layer: captured)
+            }
+            return
+        }
         if storage.layout == .layeredLab && command == .duplicate {
             guard acceptsLayerDuplicate, selectedLayerIDs.count == 1,
                   let captured = selectedLayerIDs.first, !refuseWhileTargetPending(),

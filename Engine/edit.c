@@ -11,6 +11,7 @@
 #include "engine-private.h"
 #include "lab-layer-storage.h"
 #include "lab-layer-duplicate.h"
+#include "lab-layer-create.h"
 
 #include <math.h>
 #include <string.h>
@@ -820,13 +821,32 @@ glims_layer_command (GlimsEngine  *engine,
     {
       /* Never let a generic layer command mutate the physical scalar tree. */
       if (result) *result = 0;
-      if (command != GLIMS_LAYER_DUPLICATE)
+      if (command != GLIMS_LAYER_DUPLICATE && command != GLIMS_LAYER_NEW)
         return GLIMS_STATUS_UNSUPPORTED;
       if (!layer_id && g_list_length (gimp_image_get_selected_layers (image)) != 1)
-        return GLIMS_STATUS_UNSUPPORTED;
+        {
+          if (command != GLIMS_LAYER_NEW || gimp_image_get_selected_layers (image))
+            return GLIMS_STATUS_UNSUPPORTED;
+        }
       layer = find_layer (image, layer_id);
-      if (!layer) return GLIMS_STATUS_NOT_FOUND;
-      status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
+      if (!layer && (layer_id || command != GLIMS_LAYER_NEW)) return GLIMS_STATUS_NOT_FOUND;
+      if (command == GLIMS_LAYER_NEW)
+        {
+          g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+          if (!storage) return GLIMS_STATUS_FAILED;
+          if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+            return GLIMS_STATUS_UNSUPPORTED;
+          guint position = 0;
+          if (layer)
+            {
+              for (; position < storage->map.count; position++)
+                if (storage->layers[position].group == layer) break;
+              if (position == storage->map.count) return GLIMS_STATUS_UNSUPPORTED;
+            }
+          status = glims_lab_layer_create (engine, image, position, NULL, &created, error);
+        }
+      else
+        status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
       if (status == GLIMS_STATUS_OK)
         {
           if (result) *result = gimp_item_get_id (GIMP_ITEM (created));
