@@ -163,3 +163,18 @@ All 697 unit/build checks pass at the final Root acceptance source. The four
 engine suites pass all 29 display checks and 1,917 / 1,703 / 1,917 / 1,917
 general checks. The accepted scale/coordinate policy and narrow-column caps
 address the relay's remaining sampling issue; Root owns those final fixes.
+
+## Fractional profile sampling
+
+For fractional scales below 2×, profile and proof renders let the
+alpha-aware sampler validate its full source footprint and mip halo before
+reading. The separate preliminary projection-area validation is unnecessary
+for this path. Unit and direct magnification reads retain their original
+validation, including the single-pixel freshness guard. Tests exercise
+profile and proof output after projection edits and Undo at several scales,
+including requests around a native tile boundary.
+
+On this Mac, two paired native runs on the 24 MP, 20-layer fixture measured
+mean first-time 256×256 profile tiles at 22.5% zoom: 215 and 181 ms before,
+164 and 163 ms with this change. These are individual native tile timings,
+not application input-to-display latency or a guarantee on another machine.
