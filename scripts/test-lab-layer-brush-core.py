@@ -36,14 +36,16 @@ HEADERS.append(ROOT / "Sources/CGlimsEngine/include/glims_engine.h")
 
 def run(args, work: Path) -> int:
     producer = (args.adapter_root / args.ref).resolve()
-    objects = sorted((producer / "obj").glob("*.o"))
-    names = {path.name for path in objects}
+    producer_objects = sorted((producer / "obj").glob("*.o"))
+    names = {path.name for path in producer_objects}
     required = {"engine.o", "lab-layer-paint.o", "lab-brush-coverage.o", "lab-layer-storage.o"}
     if not required.issubset(names):
         raise RuntimeError(f"Producer lacks required existing objects: {producer}")
-    if "lab-layer-brush-core.o" in names:
-        raise RuntimeError("Producer must not already contain the private brush core")
-    inputs = set(objects)
+    # Compile the current source under test. An adapter built from a newer
+    # checkout may already contain the same core; keep that object in the
+    # immutable-input audit but omit it from the link to avoid duplicates.
+    objects = [path for path in producer_objects if path.name != "lab-layer-brush-core.o"]
+    inputs = set(producer_objects)
     responses = runner.checked_responses(producer, inputs)
     inputs.update(SOURCES + HEADERS + [Path(__file__), FRAMEWORK, runner.RESPONSE_HELPER])
     inputs = {path.resolve() for path in inputs}
@@ -96,7 +98,7 @@ def run(args, work: Path) -> int:
     finally:
         changed = [name for name, expected in before.items()
                    if not Path(name).is_file() or runner.digest(Path(name)) != expected]
-        if sorted((producer / "obj").glob("*.o")) != objects:
+        if sorted((producer / "obj").glob("*.o")) != producer_objects:
             changed.append("producer object membership")
         (work / "result.json").write_text(json.dumps(
             {"ref": args.ref, "exit_code": result, "changed_inputs": changed}, indent=2) + "\n")
