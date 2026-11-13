@@ -663,9 +663,35 @@ check_engine_interface (Gimp    *gimp,
 
 /* ---- Start-up and shut-down (engine thread) --------------------------- */
 
-/* The packager queries the signed bundled plug-ins once, in a throwaway
- * home. Seed a missing per-user registry only for that exact engine and
- * language. GIMP still checks every executable's path/mtime and runs init
+/* Never seed a user-selected alternate registry. A missing default file is
+ * checked only as an optimization; the later exclusive create is the actual
+ * race and symlink guard. */
+static gboolean
+default_plugin_cache_missing (Gimp *gimp)
+{
+  gchar *path = NULL;
+  gchar *expanded = NULL;
+  GFile *configured = NULL;
+  GFile *standard = gimp_directory_file ("pluginrc", NULL);
+  gboolean missing = FALSE;
+  g_object_get (gimp->config, "pluginrc-path", &path, NULL);
+  if (!path)
+    configured = g_object_ref (standard);
+  else if ((expanded = gimp_config_path_expand (path, TRUE, NULL)))
+    configured = g_path_is_absolute (expanded) ? g_file_new_for_path (expanded)
+                                                : gimp_directory_file (expanded, NULL);
+  if (configured && g_file_equal (configured, standard))
+    missing = !g_file_query_exists (standard, NULL);
+  g_clear_object (&configured);
+  g_object_unref (standard);
+  g_free (expanded);
+  g_free (path);
+  return missing;
+}
+
+/* The bundle contains a registry captured for one engine and language.
+ * Seed a missing default per-user registry when that identity matches. GIMP
+ * still checks every executable's path/mtime and runs init
  * procedures, so changed and user-installed plug-ins are discovered normally.
  * Existing registries and preferences always belong to the user. */
 static gboolean
@@ -719,8 +745,9 @@ seed_bundle_plugin_cache (const gchar *contents,
               if (! g_output_stream_close (G_OUTPUT_STREAM (output), NULL, NULL))
                 seeded = FALSE;
               g_object_unref (output);
-              if (! seeded)
-                g_file_delete (destination, NULL, NULL);
+              /* If writing failed, do not unlink by name: another process
+               * may already have replaced the file we created. GIMP can
+               * reject a partial cache and query missing plug-ins normally. */
             }
           g_string_free (expanded, TRUE);
           g_free (quoted_uri);
@@ -919,8 +946,14 @@ engine_initialize (GlimsEngine  *engine,
   g_object_get (gimp->edit_config, "prev-language", &prev_language, NULL);
   gimp->query_all = (prev_language == NULL ||
                      g_strcmp0 (prev_language, current_language) != 0);
-  if (! prev_language && seed_bundle_plugin_cache (contents, current_language))
-    gimp->query_all = FALSE;
+  if ((!prev_language || g_strcmp0 (prev_language, current_language) == 0) &&
+      default_plugin_cache_missing (gimp) &&
+      seed_bundle_plugin_cache (contents, current_language))
+    {
+      gimp->query_all = FALSE;
+      if (g_getenv ("GLIMS_STARTUP_TRACE"))
+        g_printerr ("Glims: seeded bundled command cache\n");
+    }
   g_free (prev_language);
   g_free (contents);
 

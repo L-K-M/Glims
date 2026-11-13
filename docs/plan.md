@@ -5891,3 +5891,14 @@ not improve the cached 24 MP viewport: nine-read means were 16.18 ms versus
 15.49 ms for this candidate at 50%, and 23.34 versus 23.01 ms at 130%. The
 prototype was not adopted; pursue a faster color-correct path and measure it
 with interactive panning and alpha/profile regressions before claiming a fix.
+
+### Missing command-cache recovery (experimental)
+
+When the default per-user command cache is missing and the language matches,
+seed it exclusively from the bundled registry. GIMP still discovers custom or
+changed plug-ins. An alternate user-configured registry is not replaced or
+seeded. On this Mac, isolated engine readiness after cache deletion fell from
+10.4 to 0.94 seconds (11.0 to 1.30 seconds with a test user plug-in), with
+catalogs unchanged; one ordinary launch showed its document window at 1.51
+seconds. Corrupt caches, language changes and incompatible packaged registries
+still fall back to a slower scan. Review and release qualification remain open.
