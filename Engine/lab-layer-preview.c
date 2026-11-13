@@ -1,7 +1,9 @@
 #include "lab-layer-preview.h"
 #include "lab-layer-storage.h"
 #include "lab-layer-render.h"
+#include "display-sample.h"
 #include <cairo.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 #include "core/gimpdrawable.h"
@@ -30,6 +32,7 @@ struct _GlimsLabLayerPreview {
   gulong changed[GLIMS_LAB_LAYER_LIMIT][4];
   GeglBuffer *buffer;
   GimpTileHandlerValidate *validate;
+  GlimsDisplaySample *sample;
   GMutex dirty_lock;
   gboolean dirty;
   GeglRectangle dirty_rect;
@@ -191,6 +194,7 @@ glims_lab_layer_preview_free (GlimsLabLayerPreview *preview)
   if (!preview) return;
   /* Caller has completed every synchronous read/validation and source write.
    * Disconnect/unassign never acts as a substitute for that quiescence. */
+  glims_display_sample_free (preview->sample);
   for (guint i = 0; i < preview->map.count; i++)
     for (guint role = 0; role < 4; role++)
       if (preview->planes[i][role])
@@ -318,4 +322,30 @@ gboolean
 glims_lab_layer_preview_succeeded (GlimsLabLayerPreview *preview)
 {
   return !preview || !g_atomic_int_get (&((GlimsLabLayerValidate *) preview->validate)->failed);
+}
+
+GlimsStatus
+glims_lab_layer_preview_sample (GlimsLabLayerPreview *preview, double scale,
+                                GlimsRect area, void *rgba, size_t stride)
+{
+  if (!preview || !preview->buffer) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!glims_lab_layer_preview_succeeded (preview)) return GLIMS_STATUS_FAILED;
+  GlimsStatus status = glims_display_sample_prepare (preview->buffer,
+                                                      babl_format ("RGBA float"),
+                                                      &preview->sample);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = glims_display_sample_read (preview->sample, scale, area, rgba, stride);
+  if (status != GLIMS_STATUS_OK || !glims_lab_layer_preview_succeeded (preview))
+    return status == GLIMS_STATUS_OK ? GLIMS_STATUS_FAILED : status;
+  /* The sampler checks all components for finiteness during unassociation
+   * and canonicalizes all four to positive zero for transparent pixels.
+   * Check the preview's additional alpha range contract, including unaligned rows. */
+  for (gint y = 0; y < area.height; y++)
+    for (gint x = 0; x < area.width; x++)
+      {
+        gfloat alpha;
+        memcpy (&alpha, (guint8 *) rgba + (size_t) y * stride + (size_t) x * 16 + 12, sizeof alpha);
+        if (!isfinite (alpha) || alpha < 0.0f || alpha > 1.0f) return GLIMS_STATUS_FAILED;
+      }
+  return GLIMS_STATUS_OK;
 }

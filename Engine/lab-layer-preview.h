@@ -6,6 +6,11 @@
 typedef struct _GlimsLabLayerPreview GlimsLabLayerPreview;
 void glims_lab_layer_preview_free (GlimsLabLayerPreview *preview);
 gboolean glims_lab_layer_preview_succeeded (GlimsLabLayerPreview *preview);
+/* Sample the prepared associated source in a serialized read epoch. The
+ * result is straight linear RGBA; failures may leave partial scratch output. */
+GlimsStatus glims_lab_layer_preview_sample (GlimsLabLayerPreview *preview,
+                                           double scale, GlimsRect area,
+                                           void *rgba, size_t stride);
 /* Engine thread only. Freshly validates storage and recaptures changed map,
  * root order, attributes, dimensions or buffer identities. Invalid storage
  * clears/frees the cache and returns UNSUPPORTED; buffer is cleared on refusal.

@@ -34,25 +34,30 @@ canonical positive-zero RGBA. No gamut clipping, transfer curve or ICC
 conversion occurs in this helper. Display conversion must consume its
 straight result and premultiply only after the destination transform.
 
-Between 1x and 2x, an adapter-owned bilinear sampler uses global pixel
-centers: source position `(output + 0.5) / scale - 0.5`. It reads a bounded
-pair of level-zero rows and interpolates the four associated samples before
-unassociation. Outside-image samples are transparent. Other scales retain
-GEGL's ordinary reduction/mipmap and nearest magnification policy.
+Below 1x and between 1x and 2x, the shared display sampler uses global pixel
+centers: source position `(output + 0.5) / scale - 0.5`. It interpolates
+associated mip samples before unassociation. Native mip levels through four
+are reused; deeper levels average intersecting level-four cells in double
+precision over the complete footprint, including transparent abyss. Unit
+scale and nearest magnification at 2x or greater retain their direct paths.
 
 This bounded sampler avoids two reproduced native magnification defects:
 AUTO/BOX can discard a contributing bottom-right neighbor, and forcing the
 native BILINEAR path on a wide magnified read returned invalid values.
 Native BOX also changes low-alpha rounding with request partitioning.
 No upstream source is patched. Literal rational corner/seam controls and an
-independently structured bilinear reference qualify the adapter behavior.
+independently structured bilinear reference qualify the adapter behavior. At
+the minimum supported scale, a small Lab carrier previously caused an enormous
+native allocation and process abort; the sparse deeper-level path avoids that
+native traversal. Integer mip coordinates also avoid native float ROI rounding.
 
-Scaled reads validate complete source mip blocks plus a conservative halo.
-One-column reads explicitly validate level zero to avoid a stale hot tile;
-other unit-scale chunks avoid a final one-pixel request. Scratch storage is
-bounded independently of image dimensions. Invalid arguments preserve the
-output; any runtime failure requires the caller to discard the entire
-output, including already completed chunks.
+The preview owns a second lazy associated-linear sampling cache, freed before
+the preview buffer. Its source-validator and buffer damage signals invalidate
+the derived tiles between serialized read epochs. One-column unit reads still
+explicitly validate level zero to avoid a stale hot tile; other unit chunks
+avoid a final one-pixel request. Scratch storage is bounded independently of
+image dimensions; lazy GEGL caches may retain source-sized tiles. Invalid
+arguments preserve the output; callers discard all output on runtime failure.
 
 ## Evidence
 
@@ -63,7 +68,9 @@ and seam values, source damage, hidden layers, attribute/order changes,
 replaced buffers, malformed metadata, empty stacks and source-state
 preservation. Runtime results and retained failing probes are under
 `/tmp/glims-lab-layer-preview`; timing experiments are separate under
-`/tmp/glims-lab-layer-preview-perf`.
+`/tmp/glims-lab-layer-preview-perf`. The linked-producer runner
+`scripts/test-lab-layer-preview-linked.py` runs the current fixture against
+attested adapter objects that already contain the preview implementation.
 
 No public document adoption, editing, export, display-profile integration or
 whole-editor qualification is claimed by this private module.
