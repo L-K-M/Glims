@@ -25,7 +25,7 @@ def main():
         subprocess.run(['cp', '-cpR', str(args.app.resolve()), str(clone)], check=True)
         contents = clone / 'Contents'
         startup = contents / 'Resources/Engine-Startup'
-        version = (startup / 'identity').read_text().splitlines()[0]
+        version, host_language = (startup / 'identity').read_text().splitlines()[:2]
         probe = work / 'startup-tests'
         subprocess.run(['xcrun', 'clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I', str(ROOT / 'Sources/CGlimsEngine/include'),
@@ -77,7 +77,11 @@ def main():
 
         # Verify real packaged seeds also discover newly installed plug-ins.
         packaged_labels = {}
-        for language in ('fr', 'de'):
+        # The host language uses the host seed, not a localized seed. Select
+        # two other packaged languages even on French or German build hosts.
+        packaged_languages = tuple(language for language in ('fr', 'de', 'en')
+                                   if language != host_language)[:2]
+        for language in packaged_languages:
             profile, label = run(f'{language}-packaged', language, f'new {language} plug-in', True)
             assert label == f'new {language} plug-in'
             packaged_labels[language] = {line for line in (profile / 'labels').read_text().splitlines()
@@ -85,12 +89,13 @@ def main():
         shutil.rmtree(startup / 'localized', ignore_errors=True)
         (startup / 'identity').write_text('0.0.0\nincompatible-language\n')
 
-        for language in ('fr', 'de'):
+        for language in dict.fromkeys((*packaged_languages, 'fr', 'de')):
             profile, label = run(f'{language}-discovery', language, f'{language} oracle', False)
             assert label == f'{language} oracle'
             discovered_labels = {line for line in (profile / 'labels').read_text().splitlines()
                                  if not line.startswith('plug-in-glims-meta-oracle\t')}
-            assert packaged_labels[language] == discovered_labels, f'{language}: cached labels differ from discovery'
+            if language in packaged_labels:
+                assert packaged_labels[language] == discovered_labels, f'{language}: cached labels differ from discovery'
             seed = startup / 'localized' / hashlib.sha256(language.encode()).hexdigest()
             seed.mkdir(parents=True)
             (seed / 'identity').write_text(f'{version}\n{language}\n')
