@@ -3,6 +3,8 @@
 #include "core/gimpcurve.h"
 #include "core/gimpdata.h"
 #include "libgimpbase/gimpbase.h"
+#include <errno.h>
+#include <string.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +15,11 @@ static FILE *output;
 static int failed;
 static void dump(const char *name, const Point *points, size_t count, int first) {
  GimpCurve *curve=GIMP_CURVE(gimp_curve_new("oracle"));
+ /* Refuse before seeding or reading a table with an unexpected native size. */
+ if(curve->n_samples!=256 || !curve->samples) {
+  fprintf(stderr,"oracle case %s: expected 256 native samples, got %d\n",name,curve->n_samples);
+  failed=1;g_object_unref(curve);return;
+ }
  GimpValueArray *coords=gimp_value_array_new((int)count*2), *types=gimp_value_array_new((int)count);
  GValue coord=G_VALUE_INIT, type=G_VALUE_INIT;
  g_value_init(&coord,G_TYPE_DOUBLE);g_value_init(&type,GIMP_TYPE_CURVE_POINT_TYPE);
@@ -26,9 +33,13 @@ static void dump(const char *name, const Point *points, size_t count, int first)
  g_object_set(curve,"points",coords,"point-types",types,NULL);
  gimp_data_dirty(GIMP_DATA(curve));gimp_data_thaw(GIMP_DATA(curve));
  fprintf(output,"%s{\"name\":\"%s\",\"samples\":[",first?"":",",name);
- if(curve->n_samples!=256)failed=1;
+ if(curve->n_samples!=256 || !curve->samples) {
+  fprintf(stderr,"oracle case %s: sample storage changed during calculation\n",name);
+  failed=1;goto done;
+ }
  for(int i=0;i<256;i++) { if(!isfinite(curve->samples[i]))failed=1;fprintf(output,"%s%.17g",i?",":"",curve->samples[i]); }
  fputs("]}",output);
+done:
  g_value_unset(&coord);g_value_unset(&type);gimp_value_array_unref(coords);gimp_value_array_unref(types);g_object_unref(curve);
 }
 static GlimsStatus run(GlimsEngine *engine, gpointer unused) {
@@ -58,7 +69,9 @@ static GlimsStatus run(GlimsEngine *engine, gpointer unused) {
 }
 int main(int argc,char **argv) {
  if(argc!=2)return 2;
- char *path=g_build_filename(argv[1],"oracles.json",NULL);output=fopen(path,"wx");g_free(path);if(!output)return 2;
+ char *path=g_build_filename(argv[1],"oracles.json",NULL);output=fopen(path,"wx");
+ if(!output){fprintf(stderr,"cannot create %s: %s\n",path,strerror(errno));g_free(path);return 2;}
+ g_free(path);
  const GlimsEngineAPI *api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);GlimsEngine *engine=NULL;char *error=NULL;
  char *user=g_build_filename(argv[1],"user",NULL),*cache=g_build_filename(argv[1],"cache",NULL);
  GlimsEngineConfig config={.struct_size=sizeof config,.user_directory=user,.cache_directory=cache};
