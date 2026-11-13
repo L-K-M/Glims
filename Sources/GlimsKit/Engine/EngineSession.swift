@@ -667,7 +667,7 @@ final class EngineSession: @unchecked Sendable {
             do { try cancelLabLayerStroke(stroke) }
             catch {
                 throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
-                                  message: "The recorded Lab layer brush could not be verified, and its partial stroke could not be cancelled.")
+                                  message: "The recorded Lab layer brush could not be verified, and its partial stroke could not be cancelled: \(error.localizedDescription)")
             }
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
                               message: "The recorded Lab layer brush could not be verified.")
