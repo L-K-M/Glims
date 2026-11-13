@@ -88,24 +88,37 @@ def run(args, work: Path) -> int:
     try:
         with (work / "build.log").open("w") as log:
             for command in commands:
+                # A launch exception must not inherit the preceding success.
+                result = 1
                 result = runner.bounded_process(command, log, args.compile_timeout, work, env)
                 if result:
                     print((work / "build.log").read_text(), end="")
                     return result
+        result = 1
         with (work / "run.log").open("w") as log:
             command = [str(binary), str(work)]
-            result = runner.bounded_process(command, log, args.timeout, work, env)
+            run_result = runner.bounded_process(command, log, args.timeout, work, env)
         print((work / "run.log").read_text(), end="")
+        result = run_result
         return result
     finally:
         changed = [name for name, expected in before.items()
                    if not Path(name).is_file() or runner.digest(Path(name)) != expected]
         if sorted((producer / "obj").glob("*.o")) != producer_objects:
             changed.append("producer object membership")
+        if changed and result == 0:
+            result = 1
         (work / "result.json").write_text(json.dumps(
             {"ref": args.ref, "exit_code": result, "changed_inputs": changed}, indent=2) + "\n")
         if changed:
-            raise RuntimeError("Immutable inputs changed: " + ", ".join(changed))
+            message = "Immutable inputs changed: " + ", ".join(changed)
+            active_error = sys.exc_info()[1]
+            if active_error is None:
+                raise RuntimeError(message)
+            if hasattr(active_error, "add_note"):
+                active_error.add_note(message)
+            else:
+                print(message, file=sys.stderr)
 
 
 def main() -> int:
