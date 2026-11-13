@@ -5915,3 +5915,15 @@ plug-in catalog with a temporary path containing both a variable token and a
 tilde, including a trailing slash; local engine readiness was about 1.4
 seconds. Full package qualification, review and CI remain open. Language
 changes and an incompatible bundled registry still require native discovery.
+
+### Language-change command discovery (candidate)
+
+When the bundle registry matches the current language, it can seed a missing
+registry or provide a private temporary registry after a language change.
+GIMP still queries user-installed plug-ins. If an existing registry is kept,
+its previous-language tag is kept with it so later launches cannot reuse
+stale labels. In a diagnostic bundle, existing, alternate and missing cache
+cases reached engine readiness in about 1.4 seconds on this Mac, with a
+changed user plug-in label observed on restart. An incompatible bundle keeps
+native discovery, which took about 10.5 seconds. Final package checks,
+review and CI remain open.
