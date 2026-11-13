@@ -5758,10 +5758,12 @@ Undo starts. One Undo restores the original map, tree and ordered selection;
 Redo retains the copied identities. Ordinary refusals preserve existing
 Redo and all recorded state.
 
-All four engines pass 109 checks each, including plural selection, a partial
+All four engines pass 120 checks each, including plural and empty selection, a partial
 selection mask, a real Redo branch, permuted storage, raw-plane independence
-and XCF reopening. Producer inputs remain unchanged. Independent source
-review has no important findings under the documented serialized caller
+and XCF reopening. Review caught native Undo choosing a surviving root for
+an originally empty selection. Two failing assertions reproduced this;
+the final selection companion fixes it. Producer inputs remain unchanged.
+Repeated independent source review has no remaining important findings under the documented serialized caller
 contract. Hosted CI and public layered editing remain pending. See
 [lab-layer-duplicate.md](lab-layer-duplicate.md). The installed app remains
 qualified #277; no notarization is requested.

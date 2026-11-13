@@ -1,6 +1,7 @@
 #include "lab-layer-duplicate.h"
 #include "lab-layer-storage.h"
 #include "plate-storage.h"
+#include "layer-duplicate-selection-undo.h"
 #include <string.h>
 #include "core/gimpcontainer.h"
 #include "core/gimpdrawable.h"
@@ -208,6 +209,17 @@ glims_lab_layer_duplicate (GlimsEngine *engine, GimpImage *image, GimpLayer *sou
   copy = g_object_ref_sink (copy);
   GimpLayer *planes[4];
   GimpParasite *mapping = NULL;
+  GPtrArray *before = g_ptr_array_new_with_free_func (g_object_unref);
+  GPtrArray *after = g_ptr_array_new_with_free_func (g_object_unref);
+  for (GList *it = gimp_image_get_selected_layers (image); it; it = it->next)
+    {
+      GimpItem *item = it->data;
+      if (!GIMP_IS_LAYER (item) || gimp_item_get_image (item) != image ||
+          !gimp_item_is_attached (item) || g_ptr_array_find (before, item, NULL))
+        { status = refuse (error, GLIMS_STATUS_UNSUPPORTED, "The current layer selection cannot be preserved."); goto done; }
+      g_ptr_array_add (before, g_object_ref (item));
+    }
+  g_ptr_array_add (after, g_object_ref (copy));
   if (!check_detached (image, copy, &storage.layers[source_index], &storage.map,
                         &storage.map.entries[map_index], planes)) goto invalid_copy;
   /* All five items were proved detached before changing the first identity. */
@@ -247,10 +259,14 @@ glims_lab_layer_duplicate (GlimsEngine *engine, GimpImage *image, GimpLayer *sou
         status = refuse (error, GLIMS_STATUS_FAILED, "The native layer insertion failed after preflight; history may have changed.");
       else
         {
-          /* Native layer-add captures old ordered selection and selects this
-           * one copy; its retained object carries the same UUIDs through Redo. */
+          /* Native layer-add selects the copy and retains it for Redo. The
+           * LAST companion runs FIRST on Undo: restoring even an empty prior
+           * selection before removing the copy prevents Core's NULL-list
+           * fallback from selecting an unrelated surviving root. */
           gimp_image_parasite_attach (image, mapping, TRUE);
-          status = GLIMS_STATUS_OK;
+          if (!glims_layer_selection_undo_push (image, before, after))
+            status = refuse (error, GLIMS_STATUS_FAILED, "The duplication selection Undo could not be recorded; history may have changed.");
+          else status = GLIMS_STATUS_OK;
         }
       if (!gimp_image_undo_group_end (image) && status == GLIMS_STATUS_OK)
         status = refuse (error, GLIMS_STATUS_FAILED, "The native duplication Undo group could not finish; history may have changed.");
@@ -269,6 +285,8 @@ invalid_copy:
   status = refuse (error, GLIMS_STATUS_FAILED, "The staged Lab layer copy did not preserve its scalar structure.");
 done:
   if (mapping) gimp_parasite_free (mapping);
+  g_ptr_array_unref (before);
+  g_ptr_array_unref (after);
   g_object_unref (copy); /* owned staging ref; image/Undo own attached copies */
   return status;
 }

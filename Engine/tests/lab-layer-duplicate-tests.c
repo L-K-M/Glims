@@ -185,5 +185,26 @@ done:
  g_object_unref(foreign);g_object_unref(im);
  im=make(engine,256);if(im){GlimsLabLayerStorage max;gboolean ok=glims_lab_layer_storage_read(im,&max)==GLIMS_LAB_LAYER_STORAGE_VALID;CHECK(ok,"maximum carrier validates before refusal");if(ok)refusal(engine,im,max.layers[0].group,GLIMS_STATUS_UNSUPPORTED,"256 logical layer limit refuses");g_object_unref(im);}
 }
-static GlimsStatus worker(GlimsEngine *engine,gpointer work){success_case(engine,work);refusal_cases(engine);return GLIMS_STATUS_OK;}
+static void empty_selection_case(GlimsEngine *engine) {
+ GimpImage *im=make(engine,2);if(!im)return;GlimsLabLayerStorage st;
+ gboolean valid=glims_lab_layer_storage_read(im,&st)==GLIMS_LAB_LAYER_STORAGE_VALID;
+ CHECK(valid,"empty-selection fixture carrier validates");if(!valid){g_object_unref(im);return;}
+ guint8 bytes[2][4][N];seed(&st,bytes);gimp_image_set_selected_layers(im,NULL);gimp_image_clean_all(im);
+ gboolean empty=gimp_image_get_selected_layers(im)==NULL;CHECK(empty,"nonempty carrier positively admits empty native selection");if(!empty){g_object_unref(im);return;}
+ Snapshot *before=g_new0(Snapshot,1),*created=g_new0(Snapshot,1),*after=g_new0(Snapshot,1);
+ CHECK(snapshot(im,before)&&before->count==10&&before->selected_count==0,"exact nonempty-tree/empty-selection baseline snapshotted");
+ GimpLayer *copy=NULL;char *error=NULL;GlimsStatus status=glims_lab_layer_duplicate(engine,im,st.layers[0].group,&copy,&error);
+ CHECK(status==GLIMS_STATUS_OK&&copy&&error==NULL,"explicit-source duplicate accepts empty prior selection");if(error)api->free_string(error);
+ if(status==GLIMS_STATUS_OK&&copy){
+  CHECK(snapshot(im,created),"empty-before duplicate state captured");
+  CHECK(gimp_image_undo(im),"empty-before duplicate Undo succeeds");
+  gboolean captured=snapshot(im,after);printf("EMPTY_SELECTION undo selected_count=%u first=%d expected=0\n",after->selected_count,after->selected_count?after->selected[0]:0);
+  CHECK(captured&&same_state(before,after,FALSE),"empty-before Undo restores exact original tree/map/raw/mask/EMPTY selection");
+  CHECK(gimp_image_get_selected_layers(im)==NULL,"duplicate Undo preserves empty prior native selection rather than root fallback");
+  CHECK(gimp_image_redo(im),"empty-before duplicate Redo succeeds");
+  CHECK(snapshot(im,after)&&same_state(created,after,FALSE),"empty-before Redo restores same copy/UUID/selection");
+ }
+ g_free(after);g_free(created);g_free(before);g_object_unref(im);
+}
+static GlimsStatus worker(GlimsEngine *engine,gpointer work){success_case(engine,work);empty_selection_case(engine);refusal_cases(engine);return GLIMS_STATUS_OK;}
 int main(int argc,char **argv){if(argc!=2)return 2;api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);if(!api)return 2;gchar *user=g_build_filename(argv[1],"user",NULL),*cache=g_build_filename(argv[1],"cache",NULL);GlimsEngineConfig config={.struct_size=sizeof config,.user_directory=user,.cache_directory=cache};GlimsEngine *engine=NULL;char *error=NULL;GlimsStatus status=api->start(&config,&engine,&error);g_free(user);g_free(cache);if(status!=GLIMS_STATUS_OK||!engine){fprintf(stderr,"start %s\n",error?error:"");api->free_string(error);return 2;}api->free_string(error);status=glims_engine_call(engine,worker,argv[1]);api->stop(engine);printf("checks=%u failures=%u\n",checks,failures);return status==GLIMS_STATUS_OK&&!failures?0:1;}
