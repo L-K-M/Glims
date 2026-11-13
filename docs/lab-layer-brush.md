@@ -21,7 +21,8 @@ and end revalidate the root and plane identities; a changed target cancels and
 restores the full stroke. Native painting runs under a reentrancy guard, and
 closing a document with an active typed stroke guards its rollback. A changed
 stroke has one native Undo step; cancellation and no-op strokes preserve
-history. This candidate does not enable the canvas tool or Recorder, and its
+history. Changed dabs invalidate their bounded canvas area; cancellation
+invalidates the restored stroke bounds. This candidate does not enable the canvas tool or Recorder, and its
 brush dynamics are disabled, including pressure effects. Engine compatibility,
 review and full application qualification remain required.
 

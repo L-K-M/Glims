@@ -24,9 +24,14 @@ static GlimsItemID brush_retarget_root;
 static gboolean brush_retargeted;
 static GlimsStrokeID brush_reentrant_stroke;
 static GlimsStatus brush_close_status,brush_cancel_status,brush_end_status,brush_continue_status;
+static GlimsImageID brush_event_image;
+static unsigned brush_projection_events;
+static GlimsRect brush_projection_rect;
 #define CHECK(c,n) do{gboolean b=!!(c);checks++;if(!b)failures++;printf("%s %s\n",b?"ok":"FAIL",n);fflush(stdout);}while(0)
 static gboolean cancel_fill_on_engine(gpointer unused){(void)unused;fill_cancel_source=0;if(request_fill_cancel)fill_cancelled=running_engine&&api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;return G_SOURCE_REMOVE;}
-static void on_event(void *context,const GlimsEvent *event){(void)context;if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}}
+static void on_event(void *context,const GlimsEvent *event){(void)context;
+ if(event->kind==GLIMS_EVENT_PROJECTION_CHANGED&&event->image==brush_event_image){brush_projection_events++;brush_projection_rect=event->rect;}
+ if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}}
 static void retarget_on_brush_update(GimpDrawable *drawable,gint x,gint y,gint width,gint height,gpointer data){
  (void)drawable;(void)x;(void)y;(void)width;(void)height;(void)data;
  if(!brush_retargeted){
@@ -241,10 +246,14 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
          "refused public strokes preserve pixels and history");
    guint8 unaligned_brush[sizeof brush+2];memset(unaligned_brush,0xa5,sizeof unaligned_brush);memcpy(unaligned_brush+1,&brush,sizeof brush);
+   brush_event_image=id;brush_projection_events=0;
    brush_id=0;GlimsStatus brush_status=api->stroke_begin_lab_layer(engine,id,0,(const GlimsLabLayerBrushSettings*)(unaligned_brush+1),&brush_packet,&brush_id,&error);
    CHECK(brush_status==GLIMS_STATUS_OK&&brush_id&&unaligned_brush[0]==0xa5&&unaligned_brush[sizeof unaligned_brush-1]==0xa5,
          "public brush accepts a captured unaligned request");if(error)api->free_string(error);error=NULL;
    if(brush_status==GLIMS_STATUS_OK&&brush_id){
+    CHECK(brush_projection_events>0&&brush_projection_rect.x<=1&&brush_projection_rect.y<=1&&
+          brush_projection_rect.x+brush_projection_rect.width>1&&brush_projection_rect.y+brush_projection_rect.height>1,
+          "first brush dab emits bounded canvas damage containing the painted pixel");
     brush_point.x=2.5;brush_point.time_ms=2;
     CHECK(api->stroke_continue_v2(engine,brush_id,&brush_packet,&error)==GLIMS_STATUS_OK,"public brush accepts V2 continuation");
     if(error)api->free_string(error);error=NULL;
@@ -264,11 +273,13 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    brush_point.x=1.5;brush_point.time_ms=1;brush_id=0;
    CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
          "public cancel witness begins");if(error)api->free_string(error);error=NULL;
-   if(brush_id){CHECK(api->stroke_cancel_lab(engine,brush_id)==GLIMS_STATUS_UNSUPPORTED,
+   if(brush_id){unsigned events_before_cancel=brush_projection_events;
+    CHECK(api->stroke_cancel_lab(engine,brush_id)==GLIMS_STATUS_UNSUPPORTED,
       "flat Lab cancel cannot consume a layered Lab stroke");
     CHECK(api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_OK&&
-      brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
-      "public cancellation restores all planes");}
+      brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before)&&
+      brush_projection_events>events_before_cancel,
+      "public cancellation restores all planes and invalidates the canvas");}
    brush_id=0;
    CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
          "public stale-target witness begins");if(error)api->free_string(error);error=NULL;
@@ -315,13 +326,15 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"public brush root is reselected after stale end");
    }
    GlimsLabLayerBrushSettings transparent_brush=brush;transparent_brush.color.alpha=0;brush_id=0;brush_point.time_ms=1;
+   unsigned events_before_transparent=brush_projection_events;
    CHECK(api->image_undo_info(engine,id,&brush_history_before)==GLIMS_STATUS_OK&&
          api->stroke_begin_lab_layer(engine,id,0,&transparent_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
          "transparent public brush begins");if(error)api->free_string(error);error=NULL;
    if(brush_id)CHECK(api->stroke_end(engine,brush_id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
          !memcmp(brush_before,brush_after,sizeof brush_before)&&api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
-         brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
-         "transparent public brush preserves pixels, Undo and Redo");
+         brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count&&
+         brush_projection_events==events_before_transparent,
+         "transparent public brush preserves pixels, history and canvas damage");
    GlimsLabSelectOptions brush_selection={.struct_size=sizeof brush_selection,.operation=GLIMS_SELECT_REPLACE};
    GlimsPoint brush_points[2]={{1,1},{3,3}};
    CHECK(api->image_select_lab_shape(engine,id,GLIMS_SHAPE_RECTANGLE,brush_points,2,&brush_selection,&error)==GLIMS_STATUS_OK,

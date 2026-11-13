@@ -1035,6 +1035,14 @@ changed:
   return GLIMS_STATUS_INVALID_ARGUMENT;
 }
 
+static void
+emit_lab_layer_brush_damage (GlimsEngine *engine, GlimsStroke *stroke)
+{
+  GeglRectangle damage;
+  if (glims_lab_layer_brush_core_take_damage (stroke->core, &damage))
+    glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, stroke->image, &damage, NULL);
+}
+
 GlimsStatus
 glims_stroke_cancel_lab_layer (GlimsEngine *engine, GlimsStrokeID id)
 {
@@ -1043,10 +1051,15 @@ glims_stroke_cancel_lab_layer (GlimsEngine *engine, GlimsStrokeID id)
   if (!stroke->lab_layer_stroke) return GLIMS_STATUS_UNSUPPORTED;
   if (stroke->lab_layer_dispatching) return GLIMS_STATUS_BUSY;
   GimpImage *image = g_object_ref (stroke->image);
+  GeglRectangle damage = { stroke->core->x1, stroke->core->y1,
+                           stroke->core->x2 - stroke->core->x1,
+                           stroke->core->y2 - stroke->core->y1 };
   stroke->lab_layer_dispatching = TRUE;
   engine->busy++;
   g_hash_table_remove (engine->strokes, GINT_TO_POINTER (id));
   gimp_image_flush (image);
+  if (damage.width > 0 && damage.height > 0)
+    glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &damage, NULL);
   engine->busy--;
   g_object_unref (image);
   return GLIMS_STATUS_OK;
@@ -1189,6 +1202,7 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
   stroke->lab_layer_dispatching = TRUE;
   engine->busy++;
   gimp_image_flush (open->image);
+  emit_lab_layer_brush_damage (engine, stroke);
   engine->busy--;
   stroke->lab_layer_dispatching = FALSE;
   status = lab_layer_stroke_target_ready (engine, stroke, error);
@@ -1662,6 +1676,7 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
   gimp_image_flush (stroke->image);
   if (stroke->lab_layer_stroke)
     {
+      emit_lab_layer_brush_damage (engine, stroke);
       engine->busy--;
       stroke->lab_layer_dispatching = FALSE;
       status = lab_layer_stroke_target_ready (engine, stroke, error);
