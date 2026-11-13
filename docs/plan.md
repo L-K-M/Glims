@@ -5976,3 +5976,19 @@ cases reached engine readiness in about 1.4 seconds on this Mac, with a
 changed user plug-in label observed on restart. An incompatible bundle keeps
 native discovery, which took about 10.5 seconds. Final package checks,
 review and CI remain open.
+
+### Layered Lab Fill validation and color sampling (candidates)
+
+The Fill sheet keeps the chosen color and invalid opacity text visible when
+validation fails, explains the error inline and returns focus to the field.
+Correcting the value allows the captured Fill to proceed; Undo and Cancel are
+covered by a real-window test. Spoken VoiceOver behavior still needs a manual
+accessibility check.
+
+A capable engine can sample the composited layered Lab image as an sRGB
+foreground color, both with the Eyedropper and with Option while using the
+Brush. Sampling leaves pixels and history untouched. The app checks the
+optional engine capability, so older adapters keep these controls unavailable.
+The four engine conformance suites and real-window sampling checks pass;
+review, CI and integrated application qualification remain in progress. Other
+layered Lab tools and full Photoshop 4 parity are not yet established.
