@@ -124,7 +124,7 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  CHECK(status==GLIMS_STATUS_OK,"wide padded viewport renders across both chunk boundaries");
  const int xs[]={4095,4096}, ys[]={255,256};
  for(unsigned yi=0;yi<2;yi++)for(unsigned xi=0;xi<2;xi++){
-  guint8 single[4]={0};int x=xs[xi],y=ys[yi];
+  guint8 single[4]={0x5a,0x5a,0x5a,0x5a};int x=xs[xi],y=ys[yi];
   status=glims_image_render(engine,id,1.25,(GlimsRect){x,y,1,1},single,4);
   CHECK(status==GLIMS_STATUS_OK && !memcmp(single,wide+(size_t)y*wide_stride+x*4,4),
         "wide render matches a single pixel across chunk seams");
