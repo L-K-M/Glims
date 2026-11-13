@@ -255,7 +255,7 @@ static GlimsBrushSettings brush_for_tool(uint32_t tool) {
   return b;
 }
 /* Forward declarations for case helpers will be added below as needed. */
-static void run_matrix_and_guards(GlimsEngine *engine, const char *workdir); 
+static void run_matrix_and_guards(GlimsEngine *engine, const char *workdir);
 
 int main(int argc, char **argv) {
   if (argc != 2) { fprintf(stderr, "usage: %s WORKDIR\n", argv[0]); return 2; }

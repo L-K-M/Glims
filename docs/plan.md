@@ -5545,9 +5545,9 @@ separate.
 ### Typed ink brush capture foundation (candidate)
 
 Slots 208–209 add captured CMYK/Multichannel Brush/Pencil begin and rollback,
-using the existing scalar painter and complete V2 input. The pinned fixture
-passes 921 checks after reproducing and fixing selection-buffer retention
-on cancellation; general conformance and 1,268 Lab brush checks also pass.
-All 1,729 Swift and 141 Python tests pass. Four-engine validation, final review
-and hosted CI remain open. Recorder document/file wiring and installed-app
-qualification are subsequent work. See [ink-stroke-capture.md](ink-stroke-capture.md).
+using the existing scalar painter and complete V2 input. All four engines
+pass general conformance, 921 Ink capture and 1,268 Lab brush checks after
+reproducing and fixing selection-buffer retention on cancellation.
+All 1,729 Swift and 141 Python tests pass. Final review and hosted CI remain
+open. Recorder document/file wiring and installed-app qualification are
+subsequent work. See [ink-stroke-capture.md](ink-stroke-capture.md).

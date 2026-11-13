@@ -40,11 +40,14 @@ partially wired engines are explicitly unsupported by this typed service.
   cancellation. GIMP's finish path releases that reference, but its cancel,
   cleanup and finalization paths do not. Adapter teardown now releases it;
   the final focused run has no leaked-buffer warning. Upstream is unchanged.
-- The pinned general conformance suite and 1,268 Lab brush regressions pass.
+- All four engines pass the general conformance suite, 921 Ink capture
+  checks and 1,268 Lab brush regressions. The GIMP 3.0.8 general suite retains
+  its independently confirmed baseline warning about two leaked buffers;
+  all focused Ink and Lab runs have no leaked-buffer warnings.
   All 1,729 Swift tests and 141 Python tests pass, including eight typed
   transport tests. The desktop test wrapper released its lease.
-- The other three engine runs, final delta/fixture review and hosted CI are
-  still in progress. This foundation is not installed yet.
+- Final delta/fixture review and hosted CI are still in progress.
+  This foundation is not installed yet.
 
 The fixture does not establish physical tablet fidelity or every possible
 foreign metadata mutation. Cross-precision replay intentionally uses the
