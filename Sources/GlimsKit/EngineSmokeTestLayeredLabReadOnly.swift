@@ -50,6 +50,45 @@ extension EngineSmokeTest {
         check(!windowController.validateMenuItem(selectAll), "editing menu commands are disabled")
         let saveCopy = NSMenuItem(title: "Save a Copy", action: #selector(DocumentWindowController.saveDocumentCopy(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(saveCopy), "Save a Copy stays available")
+        // Exercise AppKit's actual target resolution, not a direct call to
+        // the document controller for selectors it does not implement.
+        let previousDelegate = NSApp.delegate
+        let previousMenu = NSApp.mainMenu
+        let appOwner = AppController(session: session)
+        NSApp.delegate = appOwner
+        NSApp.mainMenu = MainMenu.make()
+        defer { NSApp.delegate = previousDelegate; NSApp.mainMenu = previousMenu }
+        NSApp.activate(ignoringOtherApps: true)
+        windowController.window?.makeKeyAndOrderFront(nil)
+        windowController.window?.makeMain()
+        EngineSmokeTestHost.pumpEvents(for: 0.3)
+        func menuItem(_ action: Selector, in menu: NSMenu?) -> NSMenuItem? {
+            guard let menu else { return nil }
+            for item in menu.items {
+                if item.action == action { return item }
+                if let found = menuItem(action, in: item.submenu) { return found }
+            }
+            return nil
+        }
+        for (label, action) in [("New", #selector(AppController.newDocument(_:))),
+                                ("Open", #selector(AppController.openDocument(_:))),
+                                ("Preferences", #selector(AppController.showPreferences(_:)))] {
+            if let item = menuItem(action, in: NSApp.mainMenu) {
+                let target = NSApp.target(forAction: action, to: item.target, from: item)
+                let validation = (target as? NSMenuItemValidation)?.validateMenuItem(item) ?? true
+                check((target as AnyObject?) === appOwner && validation,
+                      "read-only document leaves application \(label) available")
+            } else { check(false, "application \(label) menu item exists") }
+        }
+        if let item = menuItem(#selector(NSWindow.performMiniaturize(_:)), in: NSApp.mainMenu) {
+            let target = NSApp.target(forAction: #selector(NSWindow.performMiniaturize(_:)), to: item.target, from: item)
+            let validation = (target as? NSMenuItemValidation)?.validateMenuItem(item) ?? true
+            if (target as AnyObject?) !== windowController.window || !validation {
+                print("MINIMIZE_DIAGNOSTIC target=\(String(describing: target)) validation=\(validation) itemTarget=\(String(describing: item.target)) key=\(String(describing: NSApp.keyWindow)) main=\(String(describing: NSApp.mainWindow)) document=\(String(describing: windowController.window))")
+            }
+            check((target as AnyObject?) === windowController.window && validation,
+                  "read-only document leaves window Minimize available")
+        } else { check(false, "window Minimize menu item exists") }
         check(opened.storage.layout == .layeredLab && opened.storage.readOnly,
               "document recognizes read-only layered Lab storage")
         check(!opened.acceptsEdits && opened.acceptsLayerSelection,
