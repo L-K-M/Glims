@@ -457,7 +457,8 @@ extension EngineSmokeTest {
                 while opened.recorder.pendingCount != 0 && Date() < cancelDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
                 check(opened.recorder.pendingCount == 0, "Recorder settles the cancelled Brush before the deadline")
                 if let row = opened.recorder.records.first, case .failure = row.resolution {
-                    check(pixel(session, image, x: 1, y: 1) == before && (try session.undoInfo(image)) == beforeCancel,
+                    let afterCancel = try session.undoInfo(image)
+                    check(pixel(session, image, x: 1, y: 1) == before && afterCancel == beforeCancel,
                           "cancelled recorded layered Brush restores pixels and history")
                 } else { check(false, "cancelled recorded layered Brush settles as a failure") }
                 _ = opened.clearRecording()
