@@ -5940,6 +5940,18 @@ map and scalar samples. A hosted palette test drives visibility and opacity,
 Undo/Redo and Save Copy. This is still under review and needs final CI and
 integration; pixel editing, other layer changes and soft proof remain open.
 
+### Layered Lab color Fill (candidate)
+
+The candidate fills one captured logical Lab layer using a chosen sRGB color
+and opacity, respecting the image selection and grouping changed pixels into
+one undoable operation. The sheet captures a durable root identity and refuses
+the operation if the target changes. Older engines leave Fill unavailable, and
+Recorder does not yet support this operation. Four-engine public and conformance
+checks and real-window tests cover Fill, selection, Undo/Redo, cancellation,
+target changes and Recorder refusal. Review, CI and complete application
+qualification remain pending; paintbrush and other layered Lab editing are
+separate work.
+
 ### Special temporary paths during cache recovery (candidate)
 
 When a private recovery registry's temporary path contains GIMP config-path
