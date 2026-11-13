@@ -226,8 +226,7 @@ extension EngineSmokeTest {
                    let submit = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Fill" }),
                    let action = choice.action {
                     let oldError = opened.onError
-                    var errors: [String] = []
-                    opened.onError = { errors.append($0) }
+                    opened.onError = { _ in }
                     defer { opened.onError = oldError }
                     choice.selectItem(withTitle: "Custom")
                     NSApp.sendAction(action, to: choice.target, from: choice)
@@ -236,9 +235,11 @@ extension EngineSmokeTest {
                     submit.performClick(nil)
                     EngineSmokeTestHost.pumpEvents(for: 0.1); drain("invalid Lab Fill opacity")
                     let stillOpen = window.attachedSheet === sheet
+                    sheet.contentView?.layoutSubtreeIfNeeded()
+                    let message = controls.compactMap({ $0 as? NSTextField }).first { $0.stringValue == "Enter an opacity from 0 to 100%." }
+                    let messageFits = message.map { !$0.isHiddenOrHasHiddenAncestor && $0.bounds.width + 0.5 >= $0.fittingSize.width } ?? false
                     check(stillOpen && choice.titleOfSelectedItem == "Custom" && well.color == .blue &&
-                          field.stringValue == "not a number" &&
-                          controls.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "Enter an opacity from 0 to 100%." }) &&
+                          field.stringValue == "not a number" && messageFits &&
                           pixel(session, image, x: 1, y: 1) == beforeInvalidFill,
                           "invalid Fill opacity keeps the sheet and its choices without changing pixels")
                     if stillOpen {
@@ -246,9 +247,15 @@ extension EngineSmokeTest {
                         submit.performClick(nil)
                         EngineSmokeTestHost.pumpEvents(for: 0.1); drain("corrected Lab Fill opacity")
                         let result = pixel(session, image, x: 1, y: 1)
-                        check(window.attachedSheet == nil && result?.count == 4 && (result?[2] ?? 0) > 245,
+                        let applied = window.attachedSheet == nil && result?.count == 4 && (result?[2] ?? 0) > 245
+                        check(applied,
                               "correcting Fill opacity applies the retained custom color")
-                        opened.undo(); drain("corrected Lab Fill Undo")
+                        if window.attachedSheet === sheet { window.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+                        if applied {
+                            opened.undo(); drain("corrected Lab Fill Undo")
+                            check(pixel(session, image, x: 1, y: 1) == beforeInvalidFill,
+                                  "corrected Lab Fill Undo restores prior pixels")
+                        } else { check(false, "corrected Lab Fill Undo restores prior pixels") }
                     } else {
                         check(false, "correcting Fill opacity applies the retained custom color")
                     }

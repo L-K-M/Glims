@@ -1,5 +1,7 @@
 import AppKit
 
+private let opacityValidationMessage = "Enter an opacity from 0 to 100%."
+
 @MainActor
 enum LayeredLabFillForm {
     static func present(in document: ImageDocument, on window: NSWindow) {
@@ -42,7 +44,7 @@ enum LayeredLabFillForm {
                                      [NSTextField(labelWithString: "Opacity (%):"), opacity]])
         grid.rowSpacing = 8; grid.columnSpacing = 12
         choice.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-        let validation = NSTextField(labelWithString: "")
+        let validation = NSTextField(labelWithString: opacityValidationMessage)
         validation.textColor = .systemRed
         validation.heightAnchor.constraint(greaterThanOrEqualToConstant: 16).isActive = true
         let content = NSStackView(views: [grid, validation])
@@ -50,6 +52,7 @@ enum LayeredLabFillForm {
         content.alignment = .leading
         content.spacing = 8
         content.setFrameSize(content.fittingSize)
+        validation.stringValue = ""
         let alert = NSAlert()
         alert.messageText = "Fill"
         alert.informativeText = "Fill the selection, or the entire active layer if there is no selection."
@@ -106,9 +109,12 @@ private final class LayeredLabFillSubmit: NSObject {
         guard let parent, let sheet, let field, parent.attachedSheet === sheet else { return }
         sheet.endEditing(for: nil)
         guard ChannelForms.opacityValue(field.stringValue) != nil else {
-            validation?.stringValue = "Enter an opacity from 0 to 100%."
+            validation?.stringValue = opacityValidationMessage
             sheet.makeFirstResponder(field)
             NSSound.beep()
+            NSAccessibility.post(element: NSApp, notification: .announcementRequested,
+                                 userInfo: [.announcement: opacityValidationMessage,
+                                            .priority: NSAccessibilityPriorityLevel.high.rawValue])
             return
         }
         parent.endSheet(sheet, returnCode: .alertFirstButtonReturn)
