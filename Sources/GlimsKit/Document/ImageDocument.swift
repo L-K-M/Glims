@@ -891,7 +891,15 @@ final class ImageDocument {
     func selectLayers(_ ids: [Int32]) {
         guard !isClosing else { return }
         if storage.layout == .layeredLab {
-            guard acceptsImageReads, !recorder.isReplaying else { return }
+            guard acceptsImageReads, !recorder.isReplaying else {
+                let reason: String
+                if recorder.isReplaying { reason = "Cancel Recorder replay before choosing a layer." }
+                else if let activity = EngineActivity.shared.label { reason = "\(activity)… Wait for it to finish before choosing a layer." }
+                else { reason = "Wait for the current operation to finish before choosing a layer." }
+                onUserCommand?()
+                onError?(reason)
+                return
+            }
         } else {
             guard !refuseWhileEditingUnavailable() else { return }
         }
