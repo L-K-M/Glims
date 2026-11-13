@@ -84,6 +84,13 @@ plug-in run. Two of the 27 `GimpGui` hooks are set (`show_message`,
 `get_icon_theme_dir`); no `GimpDisplay` subclass was needed yet. GIMP treats
 the unset hooks as "no window" or "not available".
 
+GIMP 3.2.0's first-run migration scan calls `g_file_test()` on an absent
+`SNAP`. The adapter temporarily supplies an empty value only around that
+version's user-install constructor, then restores absence; existing values
+are preserved. Upstream remains unmodified. Run
+`scripts/test-engine-first-start.py ADAPTER` for missing-config startup,
+visible GLib diagnostics and exact absent/empty/present `SNAP` preservation.
+
 Known things to rebuild in the adapter or app, because GIMP keeps them in GTK
 code:
 
