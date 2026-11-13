@@ -159,6 +159,32 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     g_free(new_path);
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"creation test restores the original fixture");
    }
+   error=NULL;
+   GlimsStatus cleared=api->image_select_layers(engine,id,NULL,0,&error);
+   CHECK(cleared==GLIMS_STATUS_OK,"logical selection can be cleared");
+   if(error)api->free_string(error);error=NULL;
+   if(cleared==GLIMS_STATUS_OK){
+    GlimsItemID empty_new=0;GlimsStatus empty_made=api->layer_command(engine,id,0,GLIMS_LAYER_NEW,&empty_new,&error);
+    CHECK(empty_made==GLIMS_STATUS_OK&&empty_new,"creation without selection succeeds");
+    if(error)api->free_string(error);error=NULL;
+    if(empty_made==GLIMS_STATUS_OK&&empty_new){
+     GlimsLayerInfo empty_rows[8];int32_t n=0;GlimsItemID selected[8]={0};int32_t selected_count=0;
+     CHECK(api->image_layers(engine,id,empty_rows,8,&n)==GLIMS_STATUS_OK&&n==3&&empty_rows[0].id==empty_new,
+           "creation without selection inserts at the top");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+           api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&selected_count==0,
+           "Undo restores an empty layer selection");
+     CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+           api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&
+           selected_count==1&&selected[0]==empty_new,"Redo selects the same created layer");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"empty-selection test removes the new layer");
+    }
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"original logical selection restored");
+   }
+   GlimsItemID stale=123;error=NULL;
+   CHECK(api->layer_command(engine,id,2147483647,GLIMS_LAYER_NEW,&stale,&error)==GLIMS_STATUS_NOT_FOUND&&stale==0,
+         "creation with a stale explicit anchor is refused");
+   if(error)api->free_string(error);error=NULL;
    GlimsLayerChange rename={.struct_size=sizeof rename,.properties=GLIMS_LAYER_NAME,.name="Retouched Lab"};
    error=NULL;GlimsStatus renamed=api->layer_change(engine,id,rows[0].id,&rename,&error);
    CHECK(renamed==GLIMS_STATUS_OK,"logical Lab layer can be renamed");if(error)api->free_string(error);error=NULL;
