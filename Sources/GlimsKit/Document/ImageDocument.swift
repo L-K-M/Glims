@@ -1502,10 +1502,10 @@ final class ImageDocument {
         case shape(EngineSession.SelectShape, EngineSession.SelectOptions)
         case command(EngineSession.SelectCommand)
 
-        func apply(session: EngineSession, image: Int32) throws {
+        func recordedCommand() throws -> RecorderLabSelectionCommand {
             switch self {
-            case .shape(let shape, let options): try session.selectLab(shape, image: image, options: options)
-            case .command(let command): try session.selectLab(command, image: image)
+            case .shape(let shape, let options): return try .init(shape: shape, options: options)
+            case .command(let command): return try .init(command: command)
             }
         }
     }
@@ -1524,18 +1524,18 @@ final class ImageDocument {
             onError?("This engine cannot change selections in Lab documents.")
             return
         }
-        let unsupported = "Lab selections cannot be replayed by Recorder yet."
         let capture: RecorderCapture?
-        do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil }
+        do { capture = recorder.isRecording ? try reserveRecording(context: nil) : nil }
         catch { onError?("Recorder could not accept this selection: \(error.localizedDescription)"); return }
         enqueue(on: inputQueue, input: true) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            do { try request.apply(session: session, image: image) }
-            catch { self.report(error) }
-            if let capture {
-                self.settleRecording(capture,
-                    result: .failure(RecorderReplayError(message: unsupported)), confirmed: confirmed)
+            let result = Result<SemanticImageCommand, Error> {
+                let command = try request.recordedCommand()
+                try command.apply(session: session, image: image)
+                return .labSelection(command)
             }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture { self.settleRecording(capture, result: result, confirmed: confirmed) }
         }
         if capture != nil { notifyRecorderChanged() }
     }

@@ -7,14 +7,42 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked
 
+The current installed release is qualified source `9f3d0c5`, integrated through
+[#272](https://github.com/L-K-M/Glims/pull/272) at `80f3c0ba` on 2026-11-13.
+It includes typed Lab Fill/Curves, Brush and selection Recorder commands,
+with explicit Lab identity/precision bindings and exact file values. Versions
+through 15 are supported. Ink Brush/Pencil recording and direct Ink coverage
+controls remain candidates in #273–#276; Lab Levels is still being implemented.
+
+All 1,721 Swift and 141 Python tests pass. The self-contained pinned release
+passed 26 standalone cases with development paths denied, including 2,268
+native, 3,355 full workflow, 355 Lab Recorder, 325 Lab Brush Recorder and 647
+Lab Selection Recorder checks. The four-engine selection matrix passed 647
+checks per engine; native Lab Brush checks passed 1,268 per engine. Historical
+Curves/import matrices retain their original tested source and are separately
+identified in the qualification receipt.
+
+[CI 43356390197](https://github.com/L-K-M/Glims/actions/runs/43356390197)
+passed on `4345e136`. Its only difference from qualified `9f3d0c5` is the
+reviewed Xcode 26 JSON-expression fix in one test file; release sources match.
+Fresh/cached/relocated-fresh launches took 1.694/1.406/3.070 seconds. A separate
+ordinary launch of the installed `/Applications/Glims.app` reached its ready
+document window in **3.088 seconds**, without arguments or an engine override.
+Both installed copies retain their prior app and an installation receipt.
+No notarization was performed or requested. Qualification and installation
+records are under `/tmp/glims-recorder-integration-v2`; the installed receipt
+is `/Applications/.Glims-recorder-402274e2e3ca4b79b30524aa1ce0baa3/installation.json`.
+
+### Previous installed qualification
+
 Qualified source `b6840eea` was installed on 2026-11-13 through
 [#266](https://github.com/L-K-M/Glims/pull/266) at `e1be7354`. It adds physical
 Lab Curves with captured previews and preserving flat PackBits CMYK PSD
 import. It also includes CMYK/Multichannel Curves (Freehand/Smooth controls,
 captured preview, Undo and Recorder commands), physical Lab Fill/Brush and
 selections, explicit merged RGB/Lab converted copies, and ink Recorder controls.
-Lab Recorder extensions (#267–#270) are separately reviewed and tested work;
-they are not part of this installed `b6840eea` build.
+Lab Recorder extensions (#267–#270) were separate at this qualification;
+they are not part of this previous `b6840eea` build.
 
 All 1,682 Swift and 141 Python tests pass on this source. The combined app
 matrix passed five cases on each of four engines (20 engine/case runs), with
@@ -36,7 +64,7 @@ are verified. Exact-head CI
 [43338125383](https://github.com/L-K-M/Glims/actions/runs/43338125383) passed.
 Fresh/cached/relocated-fresh launches measured 1.743/1.459/3.305 seconds;
 the installed `/Applications/Glims.app` reached its usable editor in
-3.222 seconds on this Mac. Both the build copy and `/Applications` installation
+3.222 seconds on this Mac at that qualification. Both installations
 have receipts and preserve their previous app. No notarization is requested.
 
 This is not complete Photoshop 4 parity. Further physical Lab adjustments and
