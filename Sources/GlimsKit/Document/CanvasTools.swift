@@ -295,7 +295,8 @@ final class CanvasToolController {
         else if tool == .transform, transformSession?.isIdentity == false { phase = .transformReady }
         else { phase = .idle }
         return ToolHintPolicy.hint(tool: tool, phase: phase, flags: flags,
-                                   mode: document.colorInfo.mode)
+                                   mode: document.colorInfo.mode, layout: document.storage.layout,
+                                   canSampleLayeredLab: document.session.supportsLayeredLabSampling)
     }
 
     private func hintChanged(_ reason: ToolHintPolicy.Refresh) {
@@ -413,10 +414,12 @@ final class CanvasToolController {
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
+        let canSampleLabBrush = document.storage.layout == .layeredLab && tool == .paintbrush &&
+            document.session.supportsLayeredLabSampling
         guard document.toolIsAvailable(tool),
-              !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil) else {
+              !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil && !canSampleLabBrush) else {
             onStatus?(document.colorInfo.mode == .lab
-                ? "Choose an available Brush, selection, Hand or Zoom tool for Lab."
+                ? "Choose an available Lab editing or navigation tool."
                 : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
             return
         }
@@ -1245,8 +1248,13 @@ final class CanvasToolController {
             return
         }
         do {
-            let sample = try document.session.sampleColor(document.image,
-                x: Int(floor(point.x)), y: Int(floor(point.y)))
+            let x = Int(floor(point.x)), y = Int(floor(point.y))
+            let sample: EngineSession.SampledColor
+            if document.storage.layout == .layeredLab {
+                sample = try document.session.sampleLayeredLabColor(document.image, x: x, y: y)
+            } else {
+                sample = try document.session.sampleColor(document.image, x: x, y: y)
+            }
             // Editing colors use bounded sRGB and opaque alpha. Keep the
             // native fraction; clipping is separate from display quantization.
             let components = sample.alpha > 0 ? [sample.red, sample.green, sample.blue] : [0, 0, 0]

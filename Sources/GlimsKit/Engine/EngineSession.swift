@@ -565,6 +565,12 @@ final class EngineSession: @unchecked Sendable {
         return api.stroke_begin_lab_layer_empty_selection != nil
     }
 
+    var supportsLayeredLabSampling: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_sample_layered_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_sample_layered_lab) else { return false }
+        return api.image_sample_layered_lab != nil
+    }
+
     func beginLabLayerStroke(image: Int32, target: LabLayerFillTarget,
                              brush: Brush, first: StrokeSampleV2) throws -> Int32 {
         guard supportsLabLayerBrush, let fixedSizeBegin = api.stroke_begin_lab_layer else {
@@ -3376,6 +3382,21 @@ final class EngineSession: @unchecked Sendable {
         var sample = GlimsSampledColor()
         var error: UnsafeMutablePointer<CChar>?
         try check(api.image_sample_color(engine, image, px, py, &sample, &error), error)
+        return SampledColor(red: sample.red, green: sample.green, blue: sample.blue, alpha: sample.alpha)
+    }
+
+    func sampleLayeredLabColor(_ image: Int32, x: Int, y: Int) throws -> SampledColor {
+        guard supportsLayeredLabSampling, let sampleLayer = api.image_sample_layered_lab else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot sample a layered Lab image.")
+        }
+        guard let px = Int32(exactly: x), let py = Int32(exactly: y) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The sample position is outside the supported pixel range.")
+        }
+        var sample = GlimsSampledColor()
+        var error: UnsafeMutablePointer<CChar>?
+        try check(sampleLayer(engine, image, px, py, &sample, &error), error)
         return SampledColor(red: sample.red, green: sample.green, blue: sample.blue, alpha: sample.alpha)
     }
 
