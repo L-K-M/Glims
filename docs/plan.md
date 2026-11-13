@@ -5613,3 +5613,14 @@ conformance/Ink/Lab regressions. All 1,755 Swift tests and 375 pinned actual-app
 checks pass, including bound loaded-file replay and Undo. Native, lifecycle,
 Recorder and app-fixture source reviews are complete. Four-engine app checks
 and latest-head CI remain pending. See [lab-levels.md](lab-levels.md).
+
+### Layered Lab storage and composition foundation (candidate)
+
+The raw carrier probe passes 116 checks per engine (464 total across all four),
+covering ordinary YA/RGBA storage, duplication, Undo/Redo and XCF, plus Gray
+scalar-child group storage and parentage. The private v2 membership map passes
+1,511 checks in each optimized and ASan/UBSan mode. The pure compositor passes
+49,383 checks in each mode plus 1,888 independent Fraction-oracle component
+comparisons. CI now runs both pure foundations with sanitizers on Linux and
+optimized on macOS; hosted results remain pending. This foundation adds no
+production layered-Lab admission, native document adoption or UI.
