@@ -64,8 +64,8 @@ extension EngineSmokeTest {
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,
               "document does not expose private Lab planes as channels")
         check(opened.layers.count == 2, "document shows two logical layers")
-        check(!opened.toolIsAvailable(.paintbrush) && opened.toolIsAvailable(.zoom),
-              "editing tools are unavailable while zoom remains available")
+        check(opened.toolIsAvailable(.paintbrush) == opened.storage.allowsLabLayerBrush && opened.toolIsAvailable(.zoom),
+              "Brush follows its layered Lab capability while zoom remains available")
         let originalTool = ToolState.shared.current
         defer { ToolState.shared.select(originalTool) }
         let toolPalette = ToolsPaletteController()
@@ -89,6 +89,9 @@ extension EngineSmokeTest {
             let enabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.rectangleSelect.rawValue }?.isEnabled
             check(enabled == opened.storage.allowsLabSelections,
                   "Tools palette updates selection availability when switching between Lab layouts")
+            let brushEnabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.paintbrush.rawValue }?.isEnabled
+            check(brushEnabled == opened.storage.allowsLabLayerBrush,
+                  "Tools palette updates Brush availability for the layered Lab layout")
         } else { check(false, "Tools palette contains its tool grid") }
         func drain(_ step: String) {
             let deadline = Date().addingTimeInterval(15)
@@ -211,6 +214,67 @@ extension EngineSmokeTest {
                 } else { check(false, "Lab Fill sheet opens for retarget test") }
                 opened.onError = oldError
             }
+        }
+        if opened.storage.allowsLabLayerBrush, let window = windowController.window {
+            let state = ToolState.shared
+            let oldTool = state.current, oldForeground = state.foreground, oldBrush = state.brush(for: .paintbrush)
+            defer { state.foreground = oldForeground; state.update(.paintbrush) { $0 = oldBrush }; state.select(oldTool) }
+            state.foreground = .red
+            state.update(.paintbrush) { $0.size = 4; $0.opacity = 1; $0.hardness = 1; $0.resource = nil }
+            state.select(.paintbrush)
+            let oldError = opened.onError
+            var errors: [String] = []
+            opened.onError = { errors.append($0) }
+            defer { opened.onError = oldError }
+            let before = pixel(session, image, x: 1, y: 1)
+            try opened.startRecording()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            check(!opened.strokeIsActive && !errors.isEmpty && opened.recorder.records.isEmpty,
+                  "layered Lab Brush refuses recording without starting a gesture")
+            try opened.stopRecording(); errors.removeAll()
+            opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
+            drain("brush selection")
+            let outside = pixel(session, image, x: 0, y: 0)
+            let canvas = windowController.canvas
+            func mouse(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+                NSEvent.mouseEvent(with: type,
+                    location: canvas.convert(CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale), to: nil),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
+               let drag = mouse(.leftMouseDragged, CGPoint(x: 2.5, y: 1.5)),
+               let up = mouse(.leftMouseUp, CGPoint(x: 2.5, y: 1.5)) {
+                canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
+                drain("layered Lab canvas Brush gesture")
+                let painted = pixel(session, image, x: 1, y: 1)
+                check(errors.isEmpty && painted != before && pixel(session, image, x: 0, y: 0) == outside,
+                      "canvas Brush paints selected pixels and preserves outside pixels")
+                let undo = EngineUndoManager(document: opened)
+                check(undo.canUndo, "layered Lab Brush offers Undo")
+                undo.undo(); drain("layered Lab Brush Undo")
+                check(pixel(session, image, x: 1, y: 1) == before, "Undo restores the canvas Brush stroke")
+                undo.redo(); drain("layered Lab Brush Redo")
+                check(pixel(session, image, x: 1, y: 1) == painted, "Redo restores the canvas Brush stroke")
+                undo.undo(); drain("restore canvas Brush pixels")
+                undo.undo(); drain("restore canvas Brush selection")
+            } else { check(false, "layered Lab Brush events can be created") }
+            if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
+               let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53) {
+                let undoBefore = try? session.undoInfo(image)
+                canvas.mouseDown(with: down); drain("begin canvas Brush cancellation")
+                check(opened.labBrushStrokeIsActive && pixel(session, image, x: 1, y: 1) != before,
+                      "cancellation fixture begins a visible Brush stroke")
+                window.makeFirstResponder(canvas); canvas.keyDown(with: escape)
+                drain("cancel canvas Brush with Escape")
+                let undoAfter = try? session.undoInfo(image)
+                check(undoBefore != nil && undoAfter != nil && !opened.strokeIsActive && pixel(session, image, x: 1, y: 1) == before &&
+                      undoBefore?.undoCount == undoAfter?.undoCount && undoBefore?.redoCount == undoAfter?.redoCount,
+                      "Escape restores the canvas Brush pixels and history")
+            } else { check(false, "canvas Brush cancellation events can be created") }
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }

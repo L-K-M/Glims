@@ -35,6 +35,7 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private var shownLabSelections = false
     private var shownLayeredLab = false
     private var shownLayeredLabSelections = false
+    private var shownLayeredLabBrush = false
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
     private var colorEditor: ToolColorEditorController { .shared }
@@ -92,13 +93,16 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         let labSelections = target?.session.supportsLabSelections == true
         let layeredLab = target?.storage.layout == .layeredLab
         let layeredLabSelections = target?.storage.allowsLabSelections == true
+        let layeredLabBrush = target?.storage.allowsLabLayerBrush == true && target?.session.supportsLabLayerBrush == true
         if shownMode != mode || shownLabBrush != labBrush || shownLabSelections != labSelections ||
-            shownLayeredLab != layeredLab || shownLayeredLabSelections != layeredLabSelections {
+            shownLayeredLab != layeredLab || shownLayeredLabSelections != layeredLabSelections ||
+            shownLayeredLabBrush != layeredLabBrush {
             shownMode = mode
             shownLabBrush = labBrush
             shownLabSelections = labSelections
             shownLayeredLab = layeredLab
             shownLayeredLabSelections = layeredLabSelections
+            shownLayeredLabBrush = layeredLabBrush
             grid.slots = ToolID.paletteSlots.map { group in
                 ClassicToolGrid.Slot(tools: group.map {
                     ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,
@@ -416,7 +420,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         stack.addArrangedSubview(title)
 
         if tool.paintTool != nil {
-            if document?.colorInfo.mode == .lab { addLabBrushValueRow() }
+            if document?.colorInfo.mode == .lab && document?.storage.layout != .layeredLab { addLabBrushValueRow() }
+            if document?.storage.layout == .layeredLab {
+                stack.addArrangedSubview(hint("Paint the selected Lab layer with the foreground color. Escape cancels a stroke."))
+            }
             if document?.colorInfo.mode.usesInkChannels == true,
                [.paintbrush, .pencil, .airbrush].contains(tool) { addInkCoverageRow(for: tool) }
             addPaintRows(for: tool, brush: state.brush(for: tool))

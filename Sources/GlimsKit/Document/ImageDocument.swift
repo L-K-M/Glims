@@ -284,7 +284,8 @@ final class ImageDocument {
     }
     func toolIsAvailable(_ tool: ToolID) -> Bool {
         if storage.layout == .layeredLab {
-            return [.hand, .zoom].contains(tool) || (storage.allowsLabSelections && session.supportsLabSelections &&
+            return [.hand, .zoom].contains(tool) || (tool == .paintbrush && storage.allowsLabLayerBrush && session.supportsLabLayerBrush) ||
+                (storage.allowsLabSelections && session.supportsLabSelections &&
                 [.rectangleSelect, .ellipseSelect, .lasso].contains(tool))
         }
         if storage.readOnly { return [.hand, .zoom].contains(tool) }
@@ -544,7 +545,7 @@ final class ImageDocument {
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
     private nonisolated(unsafe) var currentStrokeUsesV2 = false
-    private enum CapturedStrokeKind { case lab, ink }
+    private enum CapturedStrokeKind { case lab, labLayer, ink }
     private nonisolated(unsafe) var currentCapturedStrokeKind: CapturedStrokeKind?
     private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
@@ -1245,6 +1246,10 @@ final class ImageDocument {
     }
 
     private func beginStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        if storage.layout == .layeredLab {
+            beginLabLayerBrushStroke(input: input, brush: brush)
+            return
+        }
         if colorInfo.mode == .lab {
             beginLabBrushStroke(input: input, brush: brush)
             return
@@ -1327,6 +1332,53 @@ final class ImageDocument {
         // A notification can close the owning document reentrantly. The
         // accepted begin must already be counted before that can queue End.
         if capture != nil { notifyRecorderChanged() }
+    }
+
+    private func labLayerBrushRefusal() -> String? {
+        guard storage.layout == .layeredLab, storage.allowsLabLayerBrush, session.supportsLabLayerBrush else {
+            return "This image engine cannot paint a Lab layer."
+        }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        if recorder.isRecording || recorder.isReplaying { return "Stop Recorder before painting this layer." }
+        guard acceptsImageReads, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
+              !floatingState.isActive, !labLayerFillPreparationPending else {
+            return "Finish the current operation before painting this layer."
+        }
+        guard selectedLayerIDs.count == 1, let root = selectedLayerIDs.first,
+              layers.contains(where: { $0.id == root }) else { return "Select one layer before painting it." }
+        return nil
+    }
+
+    private func beginLabLayerBrushStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        onUserCommand?()
+        guard brush.tool == .paintbrush else { onError?("Choose the Brush tool to paint a Lab layer."); return }
+        if let reason = labLayerBrushRefusal() { onError?(reason); return }
+        endPendingUserEdits()
+        if let reason = labLayerBrushRefusal() { onError?(reason); return }
+        guard let root = selectedLayerIDs.first else { onError?(DocumentError.targetChanged.localizedDescription); return }
+        // No earlier input is queued. Capture the native identity and begin
+        // on the same serial queue before any later layer command can run.
+        strokeIsActive = true
+        labBrushStrokeIsActive = true
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            let sample: EngineSession.StrokeSampleV2
+            switch input {
+            case .tablet(let point): sample = point
+            case .v1(let point): sample = .init(point: point, rotationTurns: nil, tangentialPressure: nil)
+            }
+            do {
+                let target = try session.labLayerFillTarget(image, root: root)
+                self.currentStrokeUsesV2 = true
+                self.currentCapturedStrokeKind = .labLayer
+                self.currentStroke = try session.beginLabLayerStroke(image: image, target: target, brush: brush, first: sample)
+            } catch {
+                self.currentStroke = nil
+                self.currentStrokeUsesV2 = false
+                self.currentCapturedStrokeKind = nil
+                self.report(error)
+            }
+        }
     }
 
     private func beginInkBrushStroke(input: StrokeInput, brush: EngineSession.Brush, channel: Int32) {
@@ -1484,6 +1536,7 @@ final class ImageDocument {
                 do {
                     switch kind {
                     case .lab: try session.cancelLabStroke(stroke)
+                    case .labLayer: try session.cancelLabLayerStroke(stroke)
                     case .ink: try session.cancelInkStroke(stroke)
                     }
                 }
@@ -1515,6 +1568,7 @@ final class ImageDocument {
                 if let kind = self.currentCapturedStrokeKind {
                     switch kind {
                     case .lab: try? session.cancelLabStroke(stroke)
+                    case .labLayer: try? session.cancelLabLayerStroke(stroke)
                     case .ink: try? session.cancelInkStroke(stroke)
                     }
                     self.currentStroke = nil
@@ -1548,6 +1602,7 @@ final class ImageDocument {
                 if let kind = self.currentCapturedStrokeKind {
                     switch kind {
                     case .lab: try? session.cancelLabStroke(stroke)
+                    case .labLayer: try? session.cancelLabLayerStroke(stroke)
                     case .ink: try? session.cancelInkStroke(stroke)
                     }
                     self.currentStroke = nil
@@ -1586,6 +1641,7 @@ final class ImageDocument {
                     if let kind {
                         switch kind {
                         case .lab: try? session.cancelLabStroke(stroke)
+                        case .labLayer: try? session.cancelLabLayerStroke(stroke)
                         case .ink: try? session.cancelInkStroke(stroke)
                         }
                     }
