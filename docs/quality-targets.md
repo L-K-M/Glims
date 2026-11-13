@@ -51,8 +51,9 @@ On this Mac's engine probe, corrupt, truncated, alternate and symlinked cache
 recovery measured about one second. Default-cache recovery preserved a user
 plug-in across two concurrent launches. A single earlier candidate opened a document
 window in 1.52 seconds; this follow-on has not been qualified for release.
-Language changes and incompatible bundled registries still use the slower
-native scan, so the five-second target remains open for those cases.
+Language changes, incompatible bundled registries and temporary paths that
+GIMP cannot resolve unchanged still use the slower native scan, so the
+five-second target remains open for those cases.
 
 
 ## Functional baseline
