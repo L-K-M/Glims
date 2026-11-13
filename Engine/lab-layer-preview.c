@@ -329,6 +329,7 @@ glims_lab_layer_preview_sample (GlimsLabLayerPreview *preview, double scale,
                                 GlimsRect area, void *rgba, size_t stride)
 {
   if (!preview || !preview->buffer) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!glims_lab_layer_preview_succeeded (preview)) return GLIMS_STATUS_FAILED;
   GlimsStatus status = glims_display_sample_prepare (preview->buffer,
                                                       babl_format ("RGBA float"),
                                                       &preview->sample);
@@ -336,7 +337,9 @@ glims_lab_layer_preview_sample (GlimsLabLayerPreview *preview, double scale,
   status = glims_display_sample_read (preview->sample, scale, area, rgba, stride);
   if (status != GLIMS_STATUS_OK || !glims_lab_layer_preview_succeeded (preview))
     return status == GLIMS_STATUS_OK ? GLIMS_STATUS_FAILED : status;
-  /* Preserve the preview's existing alpha contract, including unaligned rows. */
+  /* The sampler checks all components for finiteness during unassociation
+   * and canonicalizes all four to positive zero for transparent pixels.
+   * Check the preview's additional alpha range contract, including unaligned rows. */
   for (gint y = 0; y < area.height; y++)
     for (gint x = 0; x < area.width; x++)
       {
