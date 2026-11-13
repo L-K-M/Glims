@@ -5541,3 +5541,13 @@ refusal. All 1,721 Swift and 141 Python tests pass; document/value review is
 clear. Codec/fixture review, four-engine checks and hosted CI are pending.
 See [lab-recorder.md](lab-recorder.md); installed-app qualification is
 separate.
+
+### Typed ink brush capture foundation (candidate)
+
+Slots 208–209 add captured CMYK/Multichannel Brush/Pencil begin and rollback,
+using the existing scalar painter and complete V2 input. The pinned fixture
+passes 921 checks after reproducing and fixing selection-buffer retention
+on cancellation; general conformance and 1,268 Lab brush checks also pass.
+All 1,729 Swift and 141 Python tests pass. Four-engine validation, final review
+and hosted CI remain open. Recorder document/file wiring and installed-app
+qualification are subsequent work. See [ink-stroke-capture.md](ink-stroke-capture.md).

@@ -1686,6 +1686,152 @@ final class EngineSession: @unchecked Sendable {
         let fingerprint: String
     }
 
+    // MARK: Ink brush capture (typed transport)
+
+    var supportsInkBrushCapture: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_ink),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_ink) else { return false }
+        return api.stroke_continue_v2 != nil && api.stroke_end != nil
+            && api.stroke_begin_ink_with_capture_facts != nil && api.stroke_cancel_ink != nil
+    }
+
+    /// Captures the actual brush and effective ink settings before the first dab.
+    /// Older or partially wired engines must refuse as unsupported, even when live.
+    func beginInkStrokeCapturing(image: Int32, channel: Int32, identity: InkChannelIdentity,
+                                 brush: Brush, first: StrokeSampleV2,
+                                 expected: StrokeCaptureFacts? = nil) throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        guard supportsInkBrushCapture, let begin = api.stroke_begin_ink_with_capture_facts else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support captured ink brush strokes.")
+        }
+        try validateInkBrushCaptureRequest(image: image, channel: channel, identity: identity, brush: brush, first: first)
+        if let expected {
+            try validateStrokeCaptureFingerprint(expected.fingerprint)
+        }
+
+        let resourceIdentity = expected?.brush ?? brush.resource
+        let resource: ResourceID
+        if let resourceIdentity {
+            resource = try resolveResource(resourceIdentity, kind: .brush)
+            if resource == 0 {
+                throw EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                                  message: "The brush could not be found for the captured ink stroke.")
+            }
+        } else {
+            // Live current brush is allowed only when there is no expected replay identity.
+            resource = 0
+        }
+
+        var target = inkStrokeTarget(channel: channel, identity: identity)
+        var settings = Self.nativeBrush(brush)
+        var facts = GlimsStrokeCaptureFacts()
+        facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        defer {
+            for pointer in [facts.brush_name, facts.brush_collection, facts.fingerprint].compactMap({ $0 }) {
+                api.free_string(pointer)
+            }
+        }
+
+        try withTabletPacket([first]) { packet in
+            let status: GlimsStatus
+            if let expected {
+                status = expected.fingerprint.withCString { fingerprint in
+                    begin(engine, image, resource, &target, &settings, packet, fingerprint, &stroke, &facts, &error)
+                }
+            } else {
+                status = begin(engine, image, resource, &target, &settings, packet, nil, &stroke, &facts, &error)
+            }
+            try check(status, error)
+        }
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The ink brush stroke did not start.")
+        }
+        guard let name = facts.brush_name, let digest = facts.fingerprint else { return (stroke, nil) }
+        return (stroke, StrokeCaptureFacts(brush: .init(name: String(cString: name),
+            collection: facts.brush_collection.map { String(cString: $0) }, isInternal: facts.brush_internal),
+            fingerprint: String(cString: digest)))
+    }
+
+    /// Cancels an active typed ink capture stroke on a 209-capable engine.
+    func cancelInkStroke(_ stroke: Int32) throws {
+        guard supportsInkBrushCapture, let cancel = api.stroke_cancel_ink else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot cancel a captured ink stroke.")
+        }
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid ink stroke to cancel.")
+        }
+        try check(cancel(engine, stroke), nil)
+    }
+
+    private func validateInkBrushCaptureRequest(image: Int32, channel: Int32, identity: InkChannelIdentity,
+                                                brush: Brush, first: StrokeSampleV2) throws {
+        guard image > 0, channel > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid image and ink channel.")
+        }
+        guard first.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The first ink stroke sample is invalid.")
+        }
+        guard inkBrushSettingsAreValid(brush) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose valid ink brush settings.")
+        }
+        guard inkIdentityIsValid(identity) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid ink channel identity.")
+        }
+    }
+
+    private func inkBrushSettingsAreValid(_ brush: Brush) -> Bool {
+        guard brush.tool == .paintbrush || brush.tool == .pencil else { return false }
+        guard brush.size.isFinite, brush.size >= 1, brush.size <= 10_000 else { return false }
+        guard brush.opacity.isFinite, (0...1).contains(brush.opacity) else { return false }
+        guard [brush.red, brush.green, brush.blue].allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return false }
+        if let hardness = brush.hardness {
+            guard hardness.isFinite, (0...1).contains(hardness) else { return false }
+        }
+        return true
+    }
+
+    private func inkIdentityIsValid(_ identity: InkChannelIdentity) -> Bool {
+        guard identity.colorMode.usesInkChannels else { return false }
+        guard withUnsafeBytes(of: identity.uuid.uuid, { $0.contains(where: { $0 != 0 }) }) else { return false }
+        switch identity.colorMode {
+        case .cmyk:
+            guard identity.count == 4, identity.ordinal < 4 else { return false }
+            guard let role = InkRole(rawValue: identity.ordinal + 1), role == identity.role else { return false }
+            return [.cyan, .magenta, .yellow, .black].contains(identity.role)
+        case .multichannel:
+            guard identity.role == .unspecified, identity.count >= 1, identity.count <= 32, identity.ordinal < identity.count else { return false }
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func inkStrokeTarget(channel: Int32, identity: InkChannelIdentity) -> GlimsInkStrokeTarget {
+        var target = GlimsInkStrokeTarget()
+        target.struct_size = UInt32(MemoryLayout<GlimsInkStrokeTarget>.size)
+        target.channel = channel
+        target.color_mode = identity.colorMode.rawValue
+        target.role = identity.role.rawValue
+        target.uuid = identity.uuid.uuid
+        return target
+    }
+
+    private func validateStrokeCaptureFingerprint(_ fingerprint: String) throws {
+        let bytes = Array(fingerprint.utf8)
+        guard bytes.count == 64, bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The recorded brush fingerprint is invalid.")
+        }
+    }
+
     /// Starts a stroke on `drawable` — a layer or a layer mask's drawable
     /// id — and returns the stroke session `continueStroke`/`endStroke`
     /// take.
