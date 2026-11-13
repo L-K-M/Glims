@@ -32,6 +32,7 @@ enum SemanticImageCommand {
         var errorDescription: String? { "This recorded edit has no explicit channel binding." }
     }
 
+    case labSelection(RecorderLabSelectionCommand)
     case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
     case selectColor(CGPoint, options: EngineSession.SelectOptions)
     case selectCommand(EngineSession.SelectCommand, radius: Double)
@@ -83,6 +84,7 @@ enum SemanticImageCommand {
     case applyInkCurves(EngineSession.InkCurvesSettings)
     case fillLab(value: Double, opacity: Double)
     case applyLabCurves(EngineSession.LabCurvesSettings)
+    case completeLabStroke(RecorderLabStrokeCommand)
     case completeStroke(RecorderStrokeCommand)
 
     var isLayerAdjustment: Bool {
@@ -95,13 +97,14 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .scale, .resizeCanvas, .crop, .completeStroke: return true
-        case .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .labSelection, .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
 
     var title: String {
         switch self {
+        case .labSelection(let command): return command.title
         case .selectionShape(let shape, _):
             switch shape {
             case .rectangle: return "Rectangle Selection"
@@ -146,6 +149,7 @@ enum SemanticImageCommand {
         case .applyInkCurves: return "Ink Curves"
         case .fillLab: return "Lab Fill"
         case .applyLabCurves: return "Lab Curves"
+        case .completeLabStroke(let stroke): return stroke.title
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -154,6 +158,7 @@ enum SemanticImageCommand {
     /// for this execution and is never retained in the semantic command.
     func apply(session: EngineSession, image: Int32) throws {
         switch self {
+        case .labSelection(let command): try command.apply(session: session, image: image)
         case .selectionShape(let shape, let options):
             try session.select(shape, image: image, options: options)
         case .selectColor(let point, let options):
@@ -170,7 +175,7 @@ enum SemanticImageCommand {
             try session.crop(image: image, to: rect)
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke:
             throw MissingLayerBinding()
-        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves:
+        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
         }
     }
@@ -278,6 +283,8 @@ enum SemanticImageCommand {
             try session.fillLab(image, axis: labAxis, value: value, opacity: opacity)
         case .applyLabCurves(let settings):
             try session.applyLabCurves(image, axis: labAxis, settings: settings)
+        case .completeLabStroke(let stroke):
+            try stroke.apply(session: session, image: image, labAxis: labAxis)
         default: throw MissingChannelBinding()
         }
     }

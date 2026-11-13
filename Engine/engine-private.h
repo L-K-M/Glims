@@ -340,6 +340,13 @@ GlimsStatus glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image,
                                     const GlimsStrokePacketV2 *first,
                                     GlimsStrokeID *result, char **error);
 GlimsStatus glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID stroke);
+GlimsStatus glims_stroke_begin_lab_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsResourceID brush,
+                                    const GlimsLabBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *first,
+                                    const char *expected_fingerprint,
+                                    GlimsStrokeID *result,
+                                    GlimsStrokeCaptureFacts *facts, char **error);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);

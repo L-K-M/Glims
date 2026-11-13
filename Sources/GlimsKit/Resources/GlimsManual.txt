@@ -365,6 +365,16 @@ dynamics still match the recording; unsupported brushes or dynamics
 cannot be recorded. To Selection from the Quick Mask channel still
 applies the live edit but records a failed row.
 
+In Lab images, Recorder also captures physical Fill, Curves and complete Brush
+strokes. Select the L*, a* or b* channel before recording. A Lab Brush recording
+keeps its physical value and tablet samples. Loading it in another Lab image
+requires choosing the same kind of axis and precision; Replay requires that
+axis to remain selected. Changed brushes refuse replay before painting.
+An engine or brush without capture support still paints but adds a failed
+recording row. Lab Rectangle, Ellipse, Lasso, Select All, Select None and
+Invert Selection are also recordable. These root-mask commands require a Lab
+destination but do not depend on its selected axis.
+
 Not every edit is recorded: other layer changes, other effects and file
 operations stay outside the capture. Editing an existing adjustment effect or
 applying a recorded adjustment to a mask/channel adds an explicit unsupported row;

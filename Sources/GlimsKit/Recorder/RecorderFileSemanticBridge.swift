@@ -56,6 +56,7 @@ enum RecorderFileSemanticBridge {
 
     private static func command(_ value: RecorderFileCommand) throws -> SemanticImageCommand {
         switch value {
+        case .labSelection(let command): return .labSelection(try command.validated())
         case .selectionShape(let shape, let settings):
             let frontendShape: EngineSession.SelectShape
             switch shape {
@@ -169,6 +170,7 @@ enum RecorderFileSemanticBridge {
                 clampInput: value.clampInput, clampOutput: value.clampOutput)
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Levels adjustment has invalid settings.") }
             return .applyInkLevels(settings)
+        case .completeLabStroke(let value): return .completeLabStroke(try value.validated())
         case .fillLab(let value): return .fillLab(value: value.value, opacity: value.opacity)
         case .applyLabCurves(let value):
             let settings = EngineSession.LabCurvesSettings(samples: value.samples)

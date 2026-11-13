@@ -262,6 +262,7 @@ enum RecorderFileCommand: Equatable {
         let alpha: Channel
     }
 
+    case labSelection(RecorderLabSelectionCommand)
     case selectionShape(Shape, Options)
     case selectColor(Point, Options)
     case selectCommand(Selection, radius: Double)
@@ -289,6 +290,7 @@ enum RecorderFileCommand: Equatable {
     case applyInkCurves(InkCurves)
     case fillLab(LabFill)
     case applyLabCurves(LabCurves)
+    case completeLabStroke(RecorderLabStrokeCommand)
     /// A newly applied Curves adjustment with its whole accepted settings:
     /// the owned TRC tag and all five named channels, each preserving both
     /// curve representations and the HDR bypass flag. The explicit layer is
@@ -314,10 +316,10 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
         }
     }
 }
@@ -363,6 +365,24 @@ enum RecorderFileLimits {
     static let depth = 64
     static let values = 1_000_000
     static let numberBytes = 128
+
+    static func tabletStrokePointCount(_ trace: RecorderTabletStrokeTrace, remaining: Int) throws -> Int {
+        var count = 1
+        guard remaining >= 1 else { throw RecorderFileError.invalid("Invalid tablet stroke point count.") }
+        var accepted = RecorderTabletStrokeAccumulator(first: trace.first)
+        for batch in trace.batches {
+            guard !batch.isEmpty, batch.count <= 4096, batch.count <= remaining - count else {
+                throw RecorderFileError.invalid("Invalid tablet stroke batch or point count.")
+            }
+            count += batch.count
+            accepted.appendAccepted(batch)
+        }
+        guard count <= RecorderTabletStrokeAccumulator.maximumPoints else {
+            throw RecorderFileError.invalid("Invalid tablet stroke point count.")
+        }
+        _ = try accepted.finish()?.get()
+        return count
+    }
 
     static func strokePointCount(_ trace: RecorderStrokeTrace, remaining: Int) throws -> Int {
         let maximum = min(remaining, RecorderStrokeAccumulator.maximumPoints)
