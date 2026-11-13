@@ -45,6 +45,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_CREATE)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DELETE)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_REORDER)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
@@ -189,6 +190,55 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->layer_command(engine,id,2147483647,GLIMS_LAYER_NEW,&stale,&error)==GLIMS_STATUS_NOT_FOUND&&stale==0,
          "creation with a stale explicit anchor is refused");
    if(error)api->free_string(error);error=NULL;
+   guint8 order_before[4]={0},order_after[4]={0};
+   CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},order_before,4)==GLIMS_STATUS_OK,
+         "logical composite renders before reorder");
+   GlimsUndoInfo before_edge={0},after_edge={0};
+   CHECK(api->image_undo_info(engine,id,&before_edge)==GLIMS_STATUS_OK&&
+         api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_TO_TOP,NULL,&error)==GLIMS_STATUS_OK&&
+         api->image_undo_info(engine,id,&after_edge)==GLIMS_STATUS_OK&&
+         before_edge.undo_count==after_edge.undo_count&&before_edge.redo_count==after_edge.redo_count,
+         "moving an already-top layer to top is a history-preserving no-op");
+   if(error)api->free_string(error);error=NULL;
+   GlimsStatus lowered=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_LOWER,NULL,&error);
+   CHECK(lowered==GLIMS_STATUS_OK,"public command lowers one logical Lab layer");
+   if(error)api->free_string(error);error=NULL;
+   if(lowered==GLIMS_STATUS_OK){
+    GlimsLayerInfo ordered[8];int32_t n=0;
+    CHECK(api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&n==2&&ordered[0].id==rows[1].id&&ordered[1].id==rows[0].id,
+          "lowering swaps logical roots without exposing scalar planes");
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},order_after,4)==GLIMS_STATUS_OK&&
+          order_after[0]>order_before[0]+20,"reorder changes the visible composite");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&
+          n==2&&ordered[0].id==rows[0].id,"Undo restores the original logical order");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&
+          n==2&&ordered[0].id==rows[1].id,"Redo restores the reordered roots");
+    gchar *ordered_path=g_build_filename((const gchar*)work,"layered-lab-reordered.xcf",NULL);
+    GlimsStatus saved_order=api->image_save_copy(engine,id,ordered_path,&error);
+    CHECK(saved_order==GLIMS_STATUS_OK,"reordered logical layers save");if(error)api->free_string(error);error=NULL;
+    if(saved_order==GLIMS_STATUS_OK){
+     GlimsImageID reordered_copy=0;GlimsStatus opened_order=api->image_open(engine,ordered_path,&reordered_copy,&error);
+     CHECK(opened_order==GLIMS_STATUS_OK&&reordered_copy,"reordered logical XCF reopens");if(error)api->free_string(error);error=NULL;
+     if(opened_order==GLIMS_STATUS_OK&&reordered_copy){
+      guint8 reopened_pixel[4]={0};
+      CHECK(api->image_render(engine,reordered_copy,1,(GlimsRect){1,1,1,1},reopened_pixel,4)==GLIMS_STATUS_OK&&
+            !memcmp(reopened_pixel,order_after,4),"saved XCF retains reordered composite");
+      CHECK(api->image_close(engine,reordered_copy)==GLIMS_STATUS_OK,"reordered copy closes");
+     }
+    }
+    g_free(ordered_path);
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"reorder test restores the original layer order");
+    CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_TO_BOTTOM,NULL,&error)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&n==2&&ordered[1].id==rows[0].id,
+          "send to bottom moves the logical root");if(error)api->free_string(error);error=NULL;
+    CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_RAISE,NULL,&error)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&n==2&&ordered[0].id==rows[0].id,
+          "raise moves the logical root forward");if(error)api->free_string(error);error=NULL;
+    CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_TO_BOTTOM,NULL,&error)==GLIMS_STATUS_OK&&
+          api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_TO_TOP,NULL,&error)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&n==2&&ordered[0].id==rows[0].id,
+          "bring to front restores the logical root at the top");if(error)api->free_string(error);error=NULL;
+   }
    GlimsItemID implicit_copy=0;error=NULL;
    GlimsStatus implicit_status=api->layer_command(engine,id,0,GLIMS_LAYER_DUPLICATE,&implicit_copy,&error);
    CHECK(implicit_status==GLIMS_STATUS_OK&&implicit_copy,"implicit single-selection duplication succeeds");
@@ -249,6 +299,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    ambiguous=123;
    CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_DELETE,&ambiguous,&error)==GLIMS_STATUS_UNSUPPORTED&&ambiguous==0,
          "implicit deletion refuses an ambiguous multi-selection");
+   if(error)api->free_string(error);error=NULL;
+   CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_LOWER,NULL,&error)==GLIMS_STATUS_UNSUPPORTED,
+         "implicit reorder refuses an ambiguous multi-selection");
    if(error)api->free_string(error);error=NULL;
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"single logical selection restored");
    GlimsLayerChange visibility={.struct_size=sizeof visibility,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};
@@ -332,6 +385,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     hidden_copy=123;
     CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_DELETE,&hidden_copy,&error)==GLIMS_STATUS_UNSUPPORTED&&hidden_copy==0,
           "a private scalar plane cannot be deleted through the public layer command");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_LOWER,NULL,&error)==GLIMS_STATUS_UNSUPPORTED,
+          "a private scalar plane cannot be reordered through the public layer command");
     if(error)api->free_string(error);error=NULL;
     GimpLayer *locked_root=current.layers[0].group;GimpItem *locked_item=GIMP_ITEM(locked_root);
     gboolean old_visible=gimp_item_get_visible(locked_item);gdouble old_opacity=gimp_layer_get_opacity(locked_root);

@@ -2541,6 +2541,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+             #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerReorder
         case #selector(deleteLayer(_:)):
             return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerDelete
         case #selector(newLayer(_:)):
@@ -2574,6 +2577,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
+            case #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+                 #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)):
+                guard imageDocument.acceptsLayerReorder else { return false }
             case #selector(deleteLayer(_:)) where imageDocument.acceptsLayerDelete:
                 break
             case #selector(newLayer(_:)) where imageDocument.acceptsLayerCreate:
@@ -2635,6 +2641,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
+        if imageDocument.storage.layout == .layeredLab, let action = menuItem.action,
+            [#selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+             #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:))].contains(action) {
+            return imageDocument.acceptsLayerReorder && imageDocument.selectedLayerIDs.count == 1 &&
+                !editingBlocked && !previewBusy && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+        }
         if menuItem.action == #selector(newLayer(_:)), imageDocument.storage.layout == .layeredLab {
             return imageDocument.acceptsLayerCreate && imageDocument.selectedLayerIDs.count <= 1 &&
                 !editingBlocked && !previewBusy && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
