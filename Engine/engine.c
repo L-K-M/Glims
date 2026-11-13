@@ -5234,6 +5234,7 @@ typedef struct {
   GlimsLabLayerBrushSettings settings;
   const GlimsStrokePacketV2 *packet;
   GlimsStrokeID stroke;
+  gboolean pressure_size;
   char **error;
 } LabLayerStrokeArgs;
 
@@ -5242,7 +5243,8 @@ stroke_begin_lab_layer_on_engine (GlimsEngine *engine, gpointer data)
 {
   LabLayerStrokeArgs *args = data;
   return glims_stroke_begin_lab_layer (engine, args->image, args->brush,
-                                      &args->settings, args->packet, &args->stroke, args->error);
+                                      &args->settings, args->packet, &args->stroke,
+                                      args->pressure_size, args->error);
 }
 
 static GlimsStatus
@@ -5259,6 +5261,27 @@ api_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image, GlimsResour
   LabLayerStrokeArgs args = { .image = image, .brush = brush, .packet = packet, .error = error };
   memcpy (&args.settings, settings, sizeof args.settings);
   GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_lab_layer,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    stroke_begin_lab_layer_on_engine, &args, error);
+  if (status == GLIMS_STATUS_OK) *out = args.stroke;
+  return status;
+}
+
+static GlimsStatus
+api_stroke_begin_lab_layer_pressure (GlimsEngine *engine, GlimsImageID image, GlimsResourceID brush,
+                                    const GlimsLabLayerBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out || !settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint32_t size;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabLayerStrokeArgs args = { .image = image, .brush = brush, .packet = packet,
+                              .pressure_size = TRUE, .error = error };
+  memcpy (&args.settings, settings, sizeof args.settings);
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_lab_layer_pressure,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     stroke_begin_lab_layer_on_engine, &args, error);
   if (status == GLIMS_STATUS_OK) *out = args.stroke;

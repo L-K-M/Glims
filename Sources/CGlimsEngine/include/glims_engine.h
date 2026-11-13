@@ -4245,6 +4245,13 @@ typedef struct GlimsEngineAPI {
                                          GlimsStrokeID *result, char **error);
   /* Slot218: cancel only a live layered Lab stroke, restoring all planes. */
   GlimsStatus (*stroke_cancel_lab_layer) (GlimsEngine *engine, GlimsStrokeID stroke);
+  /* Slot219: the slot217 contract with pressure controlling brush size via
+   * a private linear pressure curve. No other dynamics are enabled. */
+  GlimsStatus (*stroke_begin_lab_layer_pressure) (GlimsEngine *engine, GlimsImageID image,
+                                                  GlimsResourceID brush,
+                                                  const GlimsLabLayerBrushSettings *settings,
+                                                  const GlimsStrokePacketV2 *first,
+                                                  GlimsStrokeID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
