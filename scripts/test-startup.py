@@ -395,6 +395,14 @@ def main():
         profile_env['GLIMS_SCRIPT_TILDE_PREEXISTING'] = 'keep-tilde'
         profile_env.pop('GLIMS_TEST_UNDEFINED_PATH_TOKEN', None)
         def check_special_profile(label, script_dir):
+            # Each launch must produce its own observations. In particular, a
+            # missing script on a later restart must not pass using an earlier
+            # run's output when the expected script path is unchanged.
+            for report in (profile_catalog, special_profile / 'observed-path.txt',
+                           special_profile / 'script-observed-path.txt',
+                           special_profile / 'script-observed-directory.txt',
+                           special_profile / 'environment-after-stop.txt'):
+                report.unlink(missing_ok=True)
             process = subprocess.Popen([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                                         str(special_profile / 'user'), str(special_profile / 'cache')],
                                        env=profile_env, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
