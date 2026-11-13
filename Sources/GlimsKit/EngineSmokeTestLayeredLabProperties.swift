@@ -269,6 +269,10 @@ extension EngineSmokeTest {
         } else if opened.storage.allowsLabLayerColorFill {
             check(false, "layered Lab Fill fixture has a window and selected root")
         }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_RECORDING"] == "1" {
+            check(opened.storage.allowsLabLayerBrush && session.supportsLabLayerBrushEmptySelection,
+                  "test adapter advertises guarded layered Lab Brush recording")
+        }
         if opened.storage.allowsLabLayerBrush, let window = windowController.window {
             let state = ToolState.shared
             let oldTool = state.current, oldForeground = state.foreground, oldBrush = state.brush(for: .paintbrush)
