@@ -349,6 +349,12 @@ static void preview_damage(GlimsEngine *engine) {
   CHECK(api->image_channels(engine,id,channels,4,&count)==GLIMS_STATUS_OK && count==4,"preview damage obtains native ink targets");
   CHECK(api->image_render(engine,id,1,(GlimsRect){0,0,512,512},pixels,512*4)==GLIMS_STATUS_OK &&
         api->image_render(engine,id,.25,(GlimsRect){0,0,128,128},pixels,128*4)==GLIMS_STATUS_OK,"preview caches full and quarter-scale paper");
+  GimpColorProfile *profile=gimp_color_profile_new_rgb_srgb();gsize icc_length=0;
+  const guint8 *icc=profile?gimp_color_profile_get_icc_profile(profile,&icc_length):NULL;
+  guint8 profile_before[4]={0},profile_edited[4]={0},profile_after[4]={0};char *profile_error=NULL;
+  CHECK(icc && api->image_render_to_profile(engine,id,.25,(GlimsRect){100,100,1,1},icc,icc_length,
+        profile_before,4,&profile_error)==GLIMS_STATUS_OK,"component profile warm read succeeds");
+  api->free_string(profile_error);profile_error=NULL;
   GlimsBrushSettings brush={.struct_size=sizeof brush,.tool=GLIMS_PAINT_PENCIL,.size=31,.opacity=1,.hardness=1,.rate=0,.flow=100,.exposure=-1};
   GlimsStrokePoint point={20.5,20.5,1,0,0,100};GlimsStrokeID stroke=0;
   CHECK(api->stroke_begin(engine,id,channels[0].id,&brush,&point,&stroke,&error)==GLIMS_STATUS_OK &&
@@ -362,11 +368,25 @@ static void preview_damage(GlimsEngine *engine) {
           api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,"preview accumulates a separated ink stroke before reading");
   }
   damage=(DamageCheck){id,200,400};CHECK(glims_engine_call(engine,inspect_damage,&damage)==GLIMS_STATUS_OK,"separated damage is consumed safely");
+  CHECK(icc && api->image_render_to_profile(engine,id,.25,(GlimsRect){100,100,1,1},icc,icc_length,
+        profile_edited,4,&profile_error)==GLIMS_STATUS_OK && memcmp(profile_before,profile_edited,4)!=0 && profile_edited[3]==255,
+        "fractional component profile read sees freshly edited ink");
+  api->free_string(profile_error);profile_error=NULL;
   CHECK(api->image_render(engine,id,.25,(GlimsRect){0,0,128,128},pixels,128*4)==GLIMS_STATUS_OK,"quarter-scale cached view refreshes all pending ink damage");
   const guint8 cyan[]={0,255,255,255},magenta[]={255,0,255,255},white[]={255,255,255,255};
   CHECK(!memcmp(pixels+(5*128+5)*4,cyan,4) && !memcmp(pixels+(50*128+50)*4,cyan,4) &&
         !memcmp(pixels+(100*128+100)*4,magenta,4) && !memcmp(pixels+(125*128+125)*4,white,4),
         "scaled reads retain all separated edits and untouched paper exactly");
+  CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"component profile fixture Undo succeeds");
+  CHECK(icc && api->image_render_to_profile(engine,id,.25,(GlimsRect){100,100,1,1},icc,icc_length,
+        profile_after,4,&profile_error)==GLIMS_STATUS_OK && !memcmp(profile_before,profile_after,4),
+        "fractional component profile read sees Undo");
+  api->free_string(profile_error);profile_error=NULL;
+  CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK,"component profile fixture Redo succeeds");
+  CHECK(icc && api->image_render_to_profile(engine,id,.25,(GlimsRect){100,100,1,1},icc,icc_length,
+        profile_after,4,&profile_error)==GLIMS_STATUS_OK && !memcmp(profile_edited,profile_after,4),
+        "fractional component profile read sees Redo");
+  api->free_string(profile_error);if(profile)g_object_unref(profile);
   CHECK(api->image_close(engine,id)==GLIMS_STATUS_OK,"preview damage fixture closes");g_free(pixels);api->free_string(error);
 }
 

@@ -244,5 +244,52 @@ static void deepest_scale_checks(void)
  }
 }
 
-static GlimsStatus worker(GlimsEngine *e,gpointer unused){(void)unused;const float rgb[3]={.8f,.2f,.1f},g[3]={.25f,0,0};for(guint kind=0;kind<3;kind++)for(guint pattern=0;pattern<2;pattern++){Fixture f;CHECK(fixture_new(e,&f,kind==2,kind==0?&srgb:kind==1?&linear:&gray,4,4,FALSE,pattern,kind==2?g:rgb),"RGB/Gray profile sampling fixture creates");if(f.id){constant_checks(e,&f,pattern);CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"profile fixture closes");}}wide_checks(e);hdr_checks(e);freshness_and_guards(e);private_tiny();persistent_checks();large_coordinate_checks();deepest_scale_checks();return GLIMS_STATUS_OK;}
+/* A source edit after warm reads must invalidate every profile/proof mip
+ * footprint, including a request crossing the native 256-pixel boundary. */
+static void profile_damage_scales(GlimsEngine *e)
+{
+ const float color[3]={.8f,.2f,.1f}; Fixture f;
+ CHECK(fixture_new(e,&f,FALSE,&srgb,270,270,FALSE,2,color),"multi-scale damage fixture creates");
+ if(!f.id)return;
+ GlimsOpenImage *open=glims_lookup_image(e,f.id); GeglBuffer *buffer=NULL;
+ CHECK(open!=NULL,"multi-scale damage fixture resolves image");
+ if(!open){api->image_close(e,f.id);return;}
+ CHECK(glims_projection_prepare_sample(open,1,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT,
+       "sampling-only preparation refuses unit scale");
+ CHECK(glims_projection_prepare_sample(open,2,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT,
+       "sampling-only preparation refuses direct magnification");
+ CHECK(glims_projection_prepare_sample(open,0,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT &&
+       glims_projection_prepare_sample(open,-.5,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT,
+       "sampling-only preparation refuses nonpositive scales");
+ const double scales[]={.225,.5,.75,1.25}; guint8 before[4][2][36]={0},after[36]={0};
+ GlimsLayerInfo layer={0}; int32_t count=0;
+ GlimsStatus status=api->image_layers(e,f.id,&layer,1,&count);
+ CHECK(status==GLIMS_STATUS_OK&&count==1,"damage fixture resolves layer");
+ if(status!=GLIMS_STATUS_OK||count!=1){api->image_close(e,f.id);return;}
+ for(guint i=0;i<4;i++)for(guint route=1;route<=2;route++){
+  GlimsRect area={(gint)floor(255*scales[i]),(gint)floor(255*scales[i]),3,3};
+  CHECK(render(e,&f,route,&srgb,scales[i],area,before[i][route-1],12)==GLIMS_STATUS_OK,"profile or proof warm read succeeds");
+  CHECK(before[i][route-1][3]>0,"warm footprint includes visible source pixels");
+ }
+ GlimsLayerChange change={.struct_size=sizeof change,.properties=GLIMS_LAYER_OPACITY,.opacity=0}; char *error=NULL;
+ status=api->layer_change(e,f.id,layer.id,&change,&error);
+ CHECK(status==GLIMS_STATUS_OK,"opacity edit invalidates projection"); api->free_string(error);
+ for(guint i=0;i<4;i++)for(guint route=1;route<=2;route++){
+  GlimsRect area={(gint)floor(255*scales[i]),(gint)floor(255*scales[i]),3,3}; memset(after,0xa5,sizeof after);
+  CHECK(render(e,&f,route,&srgb,scales[i],area,after,12)==GLIMS_STATUS_OK,"profile or proof read after damage succeeds");
+  /* Both public routes promise premultiplied RGBA: zero alpha clears RGB. */
+  gboolean clear=TRUE;for(guint n=0;n<sizeof after;n++)if(after[n])clear=FALSE;
+  CHECK(clear,"profile or proof read sees transparent edited projection");
+ }
+ CHECK(api->image_undo(e,f.id)==GLIMS_STATUS_OK,"damage fixture Undo succeeds");
+ for(guint i=0;i<4;i++)for(guint route=1;route<=2;route++){
+  GlimsRect area={(gint)floor(255*scales[i]),(gint)floor(255*scales[i]),3,3};
+  memset(after,0xa5,sizeof after);
+  CHECK(render(e,&f,route,&srgb,scales[i],area,after,12)==GLIMS_STATUS_OK,"profile or proof read after Undo succeeds");
+  CHECK(!memcmp(before[i][route-1],after,sizeof after),"Undo restores exact profile or proof pixels");
+ }
+ CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"multi-scale damage fixture closes");
+}
+
+static GlimsStatus worker(GlimsEngine *e,gpointer unused){(void)unused;const float rgb[3]={.8f,.2f,.1f},g[3]={.25f,0,0};for(guint kind=0;kind<3;kind++)for(guint pattern=0;pattern<2;pattern++){Fixture f;CHECK(fixture_new(e,&f,kind==2,kind==0?&srgb:kind==1?&linear:&gray,4,4,FALSE,pattern,kind==2?g:rgb),"RGB/Gray profile sampling fixture creates");if(f.id){constant_checks(e,&f,pattern);CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"profile fixture closes");}}wide_checks(e);hdr_checks(e);freshness_and_guards(e);profile_damage_scales(e);private_tiny();persistent_checks();large_coordinate_checks();deepest_scale_checks();return GLIMS_STATUS_OK;}
 int main(int argc,char **argv){if(argc!=2)return 2;const char *fixtures=g_getenv("GLIMS_DISPLAY_FIXTURES");if(!fixtures||!g_path_is_absolute(fixtures))return 2;if(!srgb_new()||!load_icc(fixtures,"linear-rgb.icc",&linear)||!load_icc(fixtures,"gray.icc",&gray)){icc_free(&gray);icc_free(&linear);icc_free(&srgb);return 2;}api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);if(!api||api->struct_size<offsetof(GlimsEngineAPI,image_render_proofed)+sizeof api->image_render_proofed||!api->image_render_proofed)return 2;gchar *user=g_build_filename(argv[1],"user",NULL),*cache=g_build_filename(argv[1],"cache",NULL);GlimsEngineConfig config={.struct_size=sizeof config,.user_directory=user,.cache_directory=cache};GlimsEngine *engine=NULL;char *error=NULL;GlimsStatus status=api->start(&config,&engine,&error);g_free(user);g_free(cache);if(status!=GLIMS_STATUS_OK||!engine){fprintf(stderr,"start %s\n",error?error:"");api->free_string(error);icc_free(&gray);icc_free(&linear);icc_free(&srgb);return 2;}api->free_string(error);status=glims_engine_call(engine,worker,NULL);api->stop(engine);icc_free(&gray);icc_free(&linear);icc_free(&srgb);printf("checks=%u failures=%u\n",checks,failures);return status==GLIMS_STATUS_OK&&!failures?0:1;}
