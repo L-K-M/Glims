@@ -134,11 +134,6 @@ struct RecorderPalettePresentation {
                 gates[.saveRecording] = "Record a command or name this recording first."
             }
         }
-        if document.colorInfo.mode == .lab {
-            gates[.record] = "Recording physical Lab edits is not available."
-            gates[.replay] = "Replay is not available for Lab documents."
-            gates[.loadRecording] = "Recorder files cannot be loaded into Lab documents."
-        }
         refusals = gates
     }
 

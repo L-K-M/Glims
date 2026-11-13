@@ -113,6 +113,8 @@ enum RecorderBindingDescription: Equatable {
     /// Only native ink commands accept this binding. The symbol remains a
     /// channel-kind description; the identity contains no runtime channel ID.
     case ink(symbol: UUID, identity: RecorderInkIdentity)
+    /// Physical Lab identity is distinct from paper-intensity ink identity.
+    case lab(symbol: UUID, identity: RecorderLabIdentity)
     case context(Context)
     case unavailable(String)
 }

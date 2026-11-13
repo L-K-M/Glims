@@ -51,6 +51,8 @@ extension RecorderFileCodec {
                     }
                     inkIdentities[symbol] = identity
                 }
+            case .success(.fillLab, _), .success(.applyLabCurves, _):
+                fileVersion = max(fileVersion, labVersion)
             case .success(.applyInkCurves, let binding):
                 fileVersion = max(fileVersion, inkCurvesVersion)
                 hasInkCurves = true
@@ -220,6 +222,11 @@ extension RecorderFileCodec {
                 "highInput": try d(levels.highInput), "gamma": try d(levels.gamma),
                 "lowOutput": try d(levels.lowOutput), "highOutput": try d(levels.highOutput),
                 "clampInput": .bool(levels.clampInput), "clampOutput": .bool(levels.clampOutput)])
+        case .fillLab(let fill):
+            return .object(["tag": .string("fillLab"), "value": try d(fill.value), "opacity": try d(fill.opacity)])
+        case .applyLabCurves(let curves):
+            guard curves.isValid else { throw RecorderFileError.invalid("Invalid Lab Curves values.") }
+            return .object(["tag": .string("applyLabCurves"), "samples": .array(try curves.samples.map { try d($0) })])
         case .applyInkCurves(let curves):
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
             return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
@@ -251,6 +258,10 @@ extension RecorderFileCodec {
             guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
             return .object(["kind": .string("ink"), "symbol": id(symbol), "mode": .string(identity.mode.rawValue),
                 "role": .string(identity.role.rawValue), "uuid": id(identity.uuid)])
+        case .lab(let symbol, let identity):
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid Lab identity.") }
+            return .object(["kind": .string("lab"), "symbol": id(symbol), "role": .string(identity.role.rawValue),
+                "precision": .string(identity.precision.rawValue), "uuid": id(identity.uuid)])
         case .unavailable(let reason): throw RecorderFileError.invalid("The original target description is unavailable: \(reason)")
         case .context(let context):
             let target: RecorderJSON
