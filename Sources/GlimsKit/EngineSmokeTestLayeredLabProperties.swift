@@ -176,8 +176,11 @@ extension EngineSmokeTest {
             let originalIDs = opened.layers.map(\.id)
             duplicateButton?.performClick(nil)
             drain("logical layer duplicate")
-            check(opened.layers.count == 3 && Set(originalIDs).isSubset(of: Set(opened.layers.map(\.id))),
+            let copiedIDs = Set(opened.layers.map(\.id)).subtracting(originalIDs)
+            check(opened.layers.count == originalIDs.count + 1 && Set(originalIDs).isSubset(of: Set(opened.layers.map(\.id))),
                   "palette duplicates one logical layer")
+            check(copiedIDs.count == 1 && Set(opened.selectedLayerIDs) == copiedIDs,
+                  "the palette follows the newly duplicated logical layer")
             let undo = EngineUndoManager(document: opened)
             check(undo.canUndo, "logical duplication offers Undo")
             undo.undo()
@@ -186,7 +189,8 @@ extension EngineSmokeTest {
             check(undo.canRedo, "logical duplication offers Redo")
             undo.redo()
             drain("logical duplication Redo")
-            check(opened.layers.count == 3, "Redo restores the logical copy")
+            check(opened.layers.count == originalIDs.count + 1 && Set(originalIDs).isSubset(of: Set(opened.layers.map(\.id))) &&
+                  Set(opened.selectedLayerIDs) == copiedIDs, "Redo restores and selects the logical copy")
             undo.undo()
             drain("restore original layers")
             check(opened.layers.map(\.id) == originalIDs, "final Undo restores the original layer tree")

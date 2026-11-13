@@ -83,6 +83,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
       GimpDrawable *copy_plane=GIMP_DRAWABLE(dup_storage.layers[0].planes[role]);
       GimpDrawable *source_plane=GIMP_DRAWABLE(dup_storage.layers[1].planes[role]);
       guint8 copy_samples[16],source_samples[16];
+      gboolean one_byte=babl_format_get_bytes_per_pixel(gimp_drawable_get_format(copy_plane))==1&&
+                        babl_format_get_bytes_per_pixel(gimp_drawable_get_format(source_plane))==1;
+      CHECK(one_byte,"logical duplicate planes retain one-byte samples");
+      if(!one_byte)continue;
       gegl_buffer_get(gimp_drawable_get_buffer(copy_plane),GEGL_RECTANGLE(0,0,4,4),1,
                       gimp_drawable_get_format(copy_plane),copy_samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
       gegl_buffer_get(gimp_drawable_get_buffer(source_plane),GEGL_RECTANGLE(0,0,4,4),1,
@@ -110,6 +114,16 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     }
     g_free(dup_path);
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"duplicate test restores the original fixture");
+   }
+   GlimsItemID implicit_copy=0;error=NULL;
+   GlimsStatus implicit_status=api->layer_command(engine,id,0,GLIMS_LAYER_DUPLICATE,&implicit_copy,&error);
+   CHECK(implicit_status==GLIMS_STATUS_OK&&implicit_copy,"implicit single-selection duplication succeeds");
+   if(error)api->free_string(error);error=NULL;
+   if(implicit_status==GLIMS_STATUS_OK&&implicit_copy){
+    GlimsItemID selected[8]={0};int32_t n=0;
+    CHECK(api->image_selected_layers(engine,id,selected,8,&n)==GLIMS_STATUS_OK&&n==1&&selected[0]==implicit_copy,
+          "implicit duplication selects its logical copy");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"implicit duplicate is undone");
    }
    GlimsLayerChange rename={.struct_size=sizeof rename,.properties=GLIMS_LAYER_NAME,.name="Retouched Lab"};
    error=NULL;GlimsStatus renamed=api->layer_change(engine,id,rows[0].id,&rename,&error);
