@@ -306,7 +306,8 @@ GlimsStatus glims_image_sample_color (GlimsEngine *e, GlimsImageID id, int32_t x
 GlimsStatus glims_projection_prepare_read (GlimsOpenImage *open, double scale, GlimsRect area,
                                            GeglBuffer **buffer_out);
 /* Only for a caller that next uses glims_display_sample_read: its sampler
- * explicitly validates the complete source footprint, including mip halos. */
+ * explicitly validates the complete source footprint, including mip halos.
+ * A direct buffer read after this call can return stale projection pixels. */
 GlimsStatus glims_projection_prepare_sample (GlimsOpenImage *open, double scale, GlimsRect area,
                                              GeglBuffer **buffer_out);
 

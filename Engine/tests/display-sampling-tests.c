@@ -277,6 +277,7 @@ static void profile_damage_scales(GlimsEngine *e)
  for(guint i=0;i<4;i++)for(guint route=1;route<=2;route++){
   GlimsRect area={(gint)floor(255*scales[i]),(gint)floor(255*scales[i]),3,3}; memset(after,0xa5,sizeof after);
   CHECK(render(e,&f,route,&srgb,scales[i],area,after,12)==GLIMS_STATUS_OK,"profile or proof read after damage succeeds");
+  /* Both public routes promise premultiplied RGBA: zero alpha clears RGB. */
   gboolean clear=TRUE;for(guint n=0;n<sizeof after;n++)if(after[n])clear=FALSE;
   CHECK(clear,"profile or proof read sees transparent edited projection");
  }
