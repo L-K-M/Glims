@@ -1056,7 +1056,8 @@ final class EngineSession: @unchecked Sendable {
         var mode: String?
 
         var isLimitedLayerPropertyChange: Bool {
-            name == nil && mode == nil && (isVisible != nil || opacity != nil)
+            mode == nil && ((name != nil && isVisible == nil && opacity == nil)
+                || (name == nil && (isVisible != nil || opacity != nil)))
         }
     }
 
@@ -1322,6 +1323,7 @@ final class EngineSession: @unchecked Sendable {
         let layout: ImageStorageLayout
         let readOnly: Bool
         let allowsLayerProperties: Bool
+        let allowsLayerRename: Bool
 
         var restrictedEditingMessage: String {
             allowsLayerProperties
@@ -1329,15 +1331,17 @@ final class EngineSession: @unchecked Sendable {
                 : "This document is read-only. You can view it and save an XCF copy."
         }
 
-        init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false) {
+        init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false,
+             allowsLayerRename: Bool = false) {
             self.layout = layout
             self.readOnly = readOnly
             self.allowsLayerProperties = allowsLayerProperties
+            self.allowsLayerRename = allowsLayerRename
         }
 
         static func decode(_ info: GlimsImageStorageInfo) throws -> ImageStorage {
             guard info.struct_size == UInt32(MemoryLayout<GlimsImageStorageInfo>.size),
-                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) == 0 else {
+                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME) == 0 else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1352,7 +1356,9 @@ final class EngineSession: @unchecked Sendable {
             }
             let readOnly = info.flags & UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY) != 0
             let allowsLayerProperties = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) != 0
-            guard layout == .layeredLab || !allowsLayerProperties else {
+            let allowsLayerRename = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME) != 0
+            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename)) &&
+                  (!allowsLayerRename || allowsLayerProperties) else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1360,7 +1366,8 @@ final class EngineSession: @unchecked Sendable {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This engine cannot safely open layered Lab documents.")
             }
-            return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties)
+            return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties,
+                                allowsLayerRename: allowsLayerRename)
         }
     }
 

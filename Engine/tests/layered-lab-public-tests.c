@@ -43,6 +43,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsImageStorageInfo layout;memcpy(&layout,info_bytes+1,sizeof layout);
   CHECK(s==GLIMS_STATUS_OK&&layout.layout==GLIMS_IMAGE_LAYOUT_LAYERED_LAB&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
@@ -64,6 +65,32 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsLayerInfo rows[8];int32_t count=0;CHECK(api->image_layers(engine,id,rows,8,&count)==GLIMS_STATUS_OK&&count==2,"only two logical layer roots are exposed");
   if(count==2){
    CHECK(rows[0].depth==0&&rows[1].depth==0&&rows[0].parent==0&&rows[1].parent==0,"logical rows are top-level");
+   GlimsLayerChange rename={.struct_size=sizeof rename,.properties=GLIMS_LAYER_NAME,.name="Retouched Lab"};
+   error=NULL;GlimsStatus renamed=api->layer_change(engine,id,rows[0].id,&rename,&error);
+   CHECK(renamed==GLIMS_STATUS_OK,"logical Lab layer can be renamed");if(error)api->free_string(error);error=NULL;
+   if(renamed==GLIMS_STATUS_OK){
+    GlimsLayerInfo named[8];int32_t named_count=0;
+    CHECK(api->image_layers(engine,id,named,8,&named_count)==GLIMS_STATUS_OK&&named_count==2&&
+          !strcmp(named[0].name,"Retouched Lab"),"renamed logical layer is visible to clients");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,named,8,&named_count)==GLIMS_STATUS_OK&&
+          !strcmp(named[0].name,rows[0].name),"undo restores logical layer name");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,named,8,&named_count)==GLIMS_STATUS_OK&&
+          !strcmp(named[0].name,"Retouched Lab"),"redo restores renamed logical layer");
+    gchar *renamed_path=g_build_filename((const gchar*)work,"layered-lab-renamed.xcf",NULL);
+    GlimsStatus name_saved=api->image_save_copy(engine,id,renamed_path,&error);
+    CHECK(name_saved==GLIMS_STATUS_OK,"renamed layered Lab saves");if(error)api->free_string(error);error=NULL;
+    if(name_saved==GLIMS_STATUS_OK){
+     GlimsImageID name_copy=0;GlimsStatus name_opened=api->image_open(engine,renamed_path,&name_copy,&error);
+     CHECK(name_opened==GLIMS_STATUS_OK&&name_copy,"renamed layered Lab reopens");if(error)api->free_string(error);error=NULL;
+     if(name_opened==GLIMS_STATUS_OK&&name_copy){
+      CHECK(api->image_layers(engine,name_copy,named,8,&named_count)==GLIMS_STATUS_OK&&named_count==2&&
+            !strcmp(named[0].name,"Retouched Lab"),"XCF preserves logical layer name");
+      CHECK(api->image_close(engine,name_copy)==GLIMS_STATUS_OK,"renamed copy closes");
+     }
+    }
+    g_free(renamed_path);
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"original logical layer name restored");
+   }
    int32_t initial_count=0;GlimsItemID initial[8]={0};
    CHECK(api->image_selected_layers(engine,id,initial,8,&initial_count)==GLIMS_STATUS_OK&&
          initial_count==1&&initial[0]==rows[0].id,
@@ -167,6 +194,31 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->layer_change(engine,id,rows[0].id,&bad,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
           "unsupported Lab blend-mode edits are refused before mutation");
     if(error)api->free_string(error);error=NULL;
+    GlimsLayerChange invalid_name={.struct_size=sizeof invalid_name,.properties=GLIMS_LAYER_NAME};
+    CHECK(api->layer_change(engine,id,rows[0].id,&invalid_name,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "empty logical layer name is refused");
+    if(error)api->free_string(error);error=NULL;
+    strcpy(invalid_name.name,"Private plane");
+    CHECK(api->layer_change(engine,id,hidden,&invalid_name,&error)==GLIMS_STATUS_UNSUPPORTED,
+          "private scalar plane cannot be renamed");
+    if(error)api->free_string(error);error=NULL;
+    memset(invalid_name.name,'x',sizeof invalid_name.name);
+    CHECK(api->layer_change(engine,id,rows[0].id,&invalid_name,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "unterminated logical layer name is refused");
+    if(error)api->free_string(error);error=NULL;
+    invalid_name.name[0]=(char)0xff;invalid_name.name[1]='\0';
+    CHECK(api->layer_change(engine,id,rows[0].id,&invalid_name,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "invalid UTF-8 logical layer name is refused");
+    if(error)api->free_string(error);error=NULL;
+    invalid_name.properties=GLIMS_LAYER_NAME|GLIMS_LAYER_VISIBLE;
+    strcpy(invalid_name.name,"Changed");invalid_name.visible=FALSE;
+    CHECK(api->layer_change(engine,id,rows[0].id,&invalid_name,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "mixed name and visibility edit is refused before mutation");
+    if(error)api->free_string(error);error=NULL;
+    GlimsLayerInfo unchanged_names[8];int32_t unchanged_count=0;
+    CHECK(api->image_layers(engine,id,unchanged_names,8,&unchanged_count)==GLIMS_STATUS_OK&&
+          unchanged_count==2&&!strcmp(unchanged_names[0].name,rows[0].name)&&unchanged_names[0].visible,
+          "invalid names and mixed edits leave layer name and visibility intact");
     CHECK(api->image_undo_info(engine,id,&undo_after)==GLIMS_STATUS_OK&&
           undo_after.undo_count==undo_before.undo_count&&undo_after.redo_count==undo_before.redo_count,
           "invalid property edits leave Undo and Redo unchanged");
