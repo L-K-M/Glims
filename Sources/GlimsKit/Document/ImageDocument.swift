@@ -169,6 +169,7 @@ final class ImageDocument {
         let settings: RecorderStrokeCommand.Settings?
         var trace: RecorderStrokeAccumulator?
         var labSettings: RecorderLabStrokeCommand.Settings?
+        var labLayerSettings: RecorderStrokeCommand.Settings?
         var inkSettings: RecorderStrokeCommand.Settings?
         var tabletTrace: RecorderTabletStrokeAccumulator?
         var facts: EngineSession.StrokeCaptureFacts?
@@ -185,6 +186,15 @@ final class ImageDocument {
             if let failure { return .failure(failure) }
             if interleaved {
                 return .failure(RecorderReplayError(message: "Another edit was accepted before the stroke ended."))
+            }
+            if let labLayerSettings {
+                return Result {
+                    guard let facts, let result = tabletTrace?.finish() else {
+                        throw RecorderReplayError(message: "This Lab layer brush or stroke could not be recorded.")
+                    }
+                    return .completeLabLayerStroke(try RecorderLabLayerStrokeCommand(settings: labLayerSettings,
+                        trace: result.get(), facts: facts).validated())
+                }
             }
             if let labSettings {
                 return Result {
@@ -1342,7 +1352,13 @@ final class ImageDocument {
             return "This image engine cannot paint a Lab layer."
         }
         if isClosing { return DocumentError.closed.localizedDescription }
-        if recorder.isRecording || recorder.isReplaying { return "Stop Recorder before painting this layer." }
+        if recorder.isReplaying { return "Cancel Recorder replay before painting this layer." }
+        if recorder.isRecording && !session.supportsLabLayerBrushEmptySelection {
+            return "This engine cannot verify the selection for a recorded Lab layer stroke."
+        }
+        if recorder.isRecording && selectionBounds != nil {
+            return "Deselect the image before recording a Lab layer stroke."
+        }
         guard acceptsImageReads, !strokeIsActive, pendingInput == 0, !targetCommandIsPending,
               !floatingState.isActive, !labLayerFillPreparationPending else {
             return "Finish the current operation before painting this layer."
@@ -1359,6 +1375,13 @@ final class ImageDocument {
         endPendingUserEdits()
         if let reason = labLayerBrushRefusal() { onError?(reason); return }
         guard let root = selectedLayerIDs.first else { onError?(DocumentError.targetChanged.localizedDescription); return }
+        let capture: RecorderCapture?
+        do {
+            capture = recorder.isRecording ? try reserveRecording(context: .labLayer(root: root, identity: nil)) : nil
+        } catch {
+            onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
+            return
+        }
         // No earlier input is queued. Capture the native identity and begin
         // on the same serial queue before any later layer command can run.
         strokeIsActive = true
@@ -1372,16 +1395,47 @@ final class ImageDocument {
             }
             do {
                 let target = try session.labLayerFillTarget(image, root: root)
+                if let capture {
+                    let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image,
+                        confirmedContext: .labLayer(root: root, identity: target.uuid))
+                    var draft = StrokeRecordingDraft(capture: capture, confirmed: confirmed, settings: nil, trace: nil)
+                    var effective = brush
+                    effective.pressureSize = brush.pressureSize && session.supportsLabLayerBrushPressure
+                    draft.labLayerSettings = RecorderStrokeCommand.Settings(effective)
+                    do { draft.tabletTrace = .init(first: try .init(native: sample)) }
+                    catch { draft.refuse(error) }
+                    if case .layer = confirmed.binding {} else {
+                        draft.refuse(RecorderReplayError(message: "The Lab layer stroke's target could not be recorded."))
+                    }
+                    self.strokeRecordingDraft = draft
+                }
                 self.currentStrokeUsesV2 = true
                 self.currentCapturedStrokeKind = .labLayer
-                self.currentStroke = try session.beginLabLayerStroke(image: image, target: target, brush: brush, first: sample)
+                if capture != nil {
+                    let started = try session.beginLabLayerStrokeCapturing(image: image, target: target, brush: brush,
+                        first: sample, requireEmptySelection: true)
+                    self.currentStroke = started.stroke
+                    self.strokeRecordingDraft?.facts = started.facts
+                    if started.facts == nil {
+                        self.strokeRecordingDraft?.refuse(RecorderReplayError(message:
+                            "This brush's content or configuration cannot be replayed by Recorder."))
+                    }
+                } else {
+                    self.currentStroke = try session.beginLabLayerStroke(image: image, target: target, brush: brush, first: sample)
+                }
             } catch {
                 self.currentStroke = nil
                 self.currentStrokeUsesV2 = false
                 self.currentCapturedStrokeKind = nil
+                if self.strokeRecordingDraft == nil, let capture {
+                    let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                    self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed, settings: nil, trace: nil)
+                }
+                self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
         }
+        if capture != nil { notifyRecorderChanged() }
     }
 
     private func beginInkBrushStroke(input: StrokeInput, brush: EngineSession.Brush, channel: Int32) {
