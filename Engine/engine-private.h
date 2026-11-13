@@ -373,7 +373,7 @@ GlimsStatus glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID imag
                                     GlimsResourceID brush, const GlimsLabLayerBrushSettings *settings,
                                     const GlimsStrokePacketV2 *first,
                                     GlimsStrokeID *result, gboolean pressure_size,
-                                    const char *expected_fingerprint,
+                                    gboolean require_empty_selection, const char *expected_fingerprint,
                                     GlimsStrokeCaptureFacts *facts, char **error);
 GlimsStatus glims_stroke_cancel_lab_layer (GlimsEngine *engine, GlimsStrokeID stroke);
 GlimsStatus glims_stroke_begin_lab_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
