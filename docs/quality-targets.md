@@ -100,3 +100,12 @@ workflow list. The historical 4.0 PDF could not be retrieved during this audit.
 Use the established classic, neutral Rigi design. Completion requires both
 behavioral verification and a coherent visible interface, not another count
 of passing tests.
+
+A separate corrupt-cache recovery prototype preserves an unusable default
+registry and uses a private bundled registry for that launch; native discovery
+still checks user plug-ins. On this Mac's engine probe, corrupt and truncated
+default-cache recovery measured about one second, including two concurrent
+launches and a user plug-in. This is not a launch-to-window measurement or a
+release qualification. Corrupt alternate and symlinked registries, language
+changes and incompatible bundled registries still use the slower native scan;
+the five-second target remains open for those cases.
