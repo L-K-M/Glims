@@ -33,6 +33,7 @@
 #include "filter-histogram.h"
 #include "filter-input.h"
 #include "startup-helper.h"
+#include "script-fu-path-fix.h"
 
 #include <dlfcn.h>
 #include <math.h>
@@ -1063,6 +1064,8 @@ engine_initialize (GlimsEngine  *engine,
   current_language = language_init (NULL, NULL);
 
   gimp_initialize (gimp, init_status);
+
+  glims_script_fu_path_fix_install (gimp, contents);
 
   g_object_get (gimp->edit_config, "prev-language", &prev_language, NULL);
   gimp->query_all = (prev_language == NULL ||
