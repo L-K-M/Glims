@@ -134,7 +134,6 @@ struct RecorderPalettePresentation {
                 gates[.saveRecording] = "Record a command or name this recording first."
             }
         }
-        }
         refusals = gates
     }
 
