@@ -7,7 +7,7 @@
  * engine work, which is gated by engine busy ownership.
  * Four candidate planes are staged before one native Undo group publishes
  * them; cancellation, ordinary failures and zero coverage do not change history.
- * No public facade or UI capability is enabled by this helper. */
+ * The caller is responsible for facade identity checks and UI admission. */
 GlimsStatus glims_lab_layer_fill (GlimsEngine *engine, GimpImage *image,
                                   GimpLayer *root, double lightness,
                                   double a, double b, double opacity,

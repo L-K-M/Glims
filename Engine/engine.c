@@ -17,6 +17,7 @@
 #include "plate-preview.h"
 #include "lab-layer-preview.h"
 #include "lab-layer-storage.h"
+#include "lab-layer-fill.h"
 #include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
@@ -5104,6 +5105,67 @@ api_image_lab_layer_identity (GlimsEngine *engine, GlimsImageID image,
     image_lab_layer_identity_on_engine, &args, NULL);
   if (status == GLIMS_STATUS_OK) memcpy (out, &result, sizeof result);
   return status;
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsLabLayerFillSettings settings;
+  char **error;
+} LabLayerFillArgs;
+
+static GlimsStatus
+image_fill_lab_layer_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLayerFillArgs *args = data;
+  GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    return GLIMS_STATUS_UNSUPPORTED;
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  if (!storage) return GLIMS_STATUS_FAILED;
+  if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  for (guint i = 0; i < storage->map.count; i++)
+    if (gimp_item_get_id (GIMP_ITEM (storage->layers[i].group)) == args->settings.root)
+      {
+        guint map_index = storage->layers[i].map_index;
+        if (map_index >= storage->map.count ||
+            memcmp (storage->map.entries[map_index].group, args->settings.uuid, 16))
+          {
+            if (args->error) *args->error = g_strdup ("The captured Lab layer has changed. Select it again.");
+            return GLIMS_STATUS_INVALID_ARGUMENT;
+          }
+        gboolean changed = FALSE;
+        GlimsStatus status = glims_lab_layer_fill (engine, open->image, storage->layers[i].group,
+          args->settings.lightness, args->settings.a, args->settings.b,
+          args->settings.opacity, &changed, args->error);
+        if (args->error && !*args->error && status == GLIMS_STATUS_INVALID_ARGUMENT)
+          *args->error = g_strdup ("The Lab color or selected layer changed. Check the values and select the layer again.");
+        else if (args->error && !*args->error && status == GLIMS_STATUS_BUSY)
+          *args->error = g_strdup ("Finish the current operation before filling this layer.");
+        return status;
+      }
+  if (args->error) *args->error = g_strdup ("The captured Lab layer no longer exists.");
+  return GLIMS_STATUS_NOT_FOUND;
+}
+
+static GlimsStatus
+api_image_fill_lab_layer (GlimsEngine *engine, GlimsImageID image,
+                          const GlimsLabLayerFillSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  uint32_t size;
+  if (!settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof (GlimsLabLayerFillSettings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabLayerFillArgs args = { .image = image, .error = error };
+  memcpy (&args.settings, settings, sizeof args.settings);
+  guint8 zero_uuid[16] = { 0 };
+  if (args.settings.root <= 0 || !memcmp (args.settings.uuid, zero_uuid, sizeof zero_uuid))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab_layer,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_fill_lab_layer_on_engine, &args, error);
 }
 
 static const GlimsEngineAPI api_v1 = {

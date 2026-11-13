@@ -1254,6 +1254,15 @@ typedef struct GlimsLabLayerIdentity {
   uint8_t uuid[16]; /* Durable root identity within this document. */
 } GlimsLabLayerIdentity;
 
+typedef struct GlimsLabLayerFillSettings {
+  uint32_t struct_size;
+  GlimsItemID root;       /* Explicit captured logical root. */
+  uint8_t uuid[16];       /* Its captured document-scoped identity. */
+  double lightness;       /* Finite physical L* in [0,100]. */
+  double a, b;            /* Finite physical a*, b* in [-128,127]. */
+  double opacity;         /* Finite [0,1]. */
+} GlimsLabLayerFillSettings;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -4184,6 +4193,17 @@ typedef struct GlimsEngineAPI {
    * failure clears the known UUID payload. */
   GlimsStatus (*image_lab_layer_identity) (GlimsEngine *engine, GlimsImageID image,
                                            GlimsItemID root, GlimsLabLayerIdentity *out);
+  /* Slot215: fill one explicitly captured and solely selected layered Lab
+   * root, using the current image selection as coverage. Stages four planes
+   * and publishes one Undo group. Invalid/stale target, cancellation before
+   * publication and ordinary preflight failures leave pixels and history
+   * unchanged; no-change results make no Undo step. Settings may be unaligned,
+   * require the complete known prefix, and are copied before dispatch. Their
+   * storage must remain readable through the call. Cancels through
+   * procedure_cancel. Clears *error on entry; strings use free_string. */
+  GlimsStatus (*image_fill_lab_layer) (GlimsEngine *engine, GlimsImageID image,
+                                       const GlimsLabLayerFillSettings *settings,
+                                       char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
