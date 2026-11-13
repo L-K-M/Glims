@@ -5902,3 +5902,16 @@ seeded. On this Mac, isolated engine readiness after cache deletion fell from
 catalogs unchanged; one ordinary launch showed its document window at 1.51
 seconds. Corrupt caches, language changes and incompatible packaged registries
 still fall back to a slower scan. Review and release qualification remain open.
+
+### Special temporary paths during cache recovery (candidate)
+
+When a private recovery registry's temporary path contains GIMP config-path
+metacharacters, the adapter can refer to it through the existing TMPDIR
+variable. It still requires the expanded path to equal the created path
+exactly before use; otherwise it falls back to native discovery. The corrupt
+user registry remains untouched and user plug-ins are still discovered.
+Four engine conformance suites pass. A diagnostic bundle preserved the custom
+plug-in catalog with a temporary path containing both a variable token and a
+tilde, including a trailing slash; local engine readiness was about 1.4
+seconds. Full package qualification, review and CI remain open. Language
+changes and an incompatible bundled registry still require native discovery.
