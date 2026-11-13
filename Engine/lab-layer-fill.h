@@ -7,6 +7,9 @@
  * engine work, which is gated by engine busy ownership.
  * Four candidate planes are staged before one native Undo group publishes
  * them; cancellation, ordinary failures and zero coverage do not change history.
+ * If publication succeeds but the native Undo group cannot close, failure
+ * still reports *changed and emits canvas damage; its error explains that
+ * the Undo group did not finish.
  * No public facade or UI capability is enabled by this helper. */
 GlimsStatus glims_lab_layer_fill (GlimsEngine *engine, GimpImage *image,
                                   GimpLayer *root, double lightness,
