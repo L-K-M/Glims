@@ -303,6 +303,20 @@ extension EngineSmokeTest {
                       "Escape restores the canvas Brush pixels and history")
                 check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
                       "Escape invalidates the restored canvas pixels")
+                let rapidUndo = try? session.undoInfo(image)
+                let entered = DispatchSemaphore(value: 0)
+                let release = DispatchSemaphore(value: 0)
+                opened.inputQueue.async { entered.signal(); _ = release.wait(timeout: .now() + 20) }
+                let held = entered.wait(timeout: .now() + 3) == .success
+                canvas.mouseDown(with: down)
+                let accepted = opened.labBrushStrokeIsActive
+                canvas.keyDown(with: escape)
+                release.signal()
+                drain("cancel queued canvas Brush immediately")
+                let rapidAfter = try? session.undoInfo(image)
+                check(held && accepted && rapidUndo != nil && rapidAfter != nil && !opened.strokeIsActive &&
+                      pixel(session, image, x: 1, y: 1) == before && rapidUndo == rapidAfter,
+                      "immediate Escape cancels a queued Brush begin without a history change")
             } else { check(false, "canvas Brush cancellation events can be created") }
         }
         func outline(in view: NSView) -> NSOutlineView? {
