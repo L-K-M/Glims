@@ -551,6 +551,13 @@ final class EngineSession: @unchecked Sendable {
         return api.stroke_begin_lab_layer_pressure != nil
     }
 
+    var supportsLabLayerBrushCapture: Bool {
+        guard supportsLabLayerBrush,
+              let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_begin_lab_layer_with_capture_facts),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_begin_lab_layer_with_capture_facts) else { return false }
+        return api.stroke_begin_lab_layer_with_capture_facts != nil
+    }
+
     func beginLabLayerStroke(image: Int32, target: LabLayerFillTarget,
                              brush: Brush, first: StrokeSampleV2) throws -> Int32 {
         guard supportsLabLayerBrush, let fixedSizeBegin = api.stroke_begin_lab_layer else {
@@ -558,6 +565,21 @@ final class EngineSession: @unchecked Sendable {
         }
         let begin = brush.pressureSize && supportsLabLayerBrushPressure
             ? (api.stroke_begin_lab_layer_pressure ?? fixedSizeBegin) : fixedSizeBegin
+        var settings = try labLayerBrushSettings(image: image, target: target, brush: brush, first: first)
+        let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try withTabletPacket([first]) { packet in
+            try check(begin(engine, image, resource, &settings, packet, &stroke, &error), error)
+        }
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab layer brush did not start.")
+        }
+        return stroke
+    }
+
+    private func labLayerBrushSettings(image: Int32, target: LabLayerFillTarget,
+                                       brush: Brush, first: StrokeSampleV2) throws -> GlimsLabLayerBrushSettings {
         let hardness = brush.hardness ?? 0.5
         let colors = [brush.red, brush.green, brush.blue, brush.opacity, hardness]
         guard image > 0, target.root > 0, brush.tool == .paintbrush, first.isValid,
@@ -570,16 +592,69 @@ final class EngineSession: @unchecked Sendable {
         settings.root = target.root; settings.uuid = target.uuid.uuid
         settings.color = GlimsColor(red: brush.red, green: brush.green, blue: brush.blue, alpha: 1)
         settings.opacity = brush.opacity; settings.size = brush.size; settings.hardness = hardness
-        let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
+        return settings
+    }
+
+    /// Capture actual brush facts with the first dab. On an older adapter a
+    /// live stroke still works, but replay must refuse before it paints.
+    func beginLabLayerStrokeCapturing(image: Int32, target: LabLayerFillTarget, brush: Brush,
+                                      first: StrokeSampleV2, expected: StrokeCaptureFacts? = nil)
+        throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        guard supportsLabLayerBrushCapture, let begin = api.stroke_begin_lab_layer_with_capture_facts else {
+            guard expected == nil else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This engine cannot replay recorded Lab layer strokes.")
+            }
+            return (try beginLabLayerStroke(image: image, target: target, brush: brush, first: first), nil)
+        }
+        var settings = try labLayerBrushSettings(image: image, target: target, brush: brush, first: first)
+        if let expected { try validateStrokeCaptureFingerprint(expected.fingerprint) }
+        let identity = expected?.brush ?? brush.resource
+        let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
+        if identity != nil && resource == 0 {
+            throw EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                              message: "The Lab layer brush could not be found.")
+        }
+        var facts = GlimsStrokeCaptureFacts()
+        facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
+        defer {
+            for pointer in [facts.brush_name, facts.brush_collection, facts.fingerprint].compactMap({ $0 }) {
+                api.free_string(pointer)
+            }
+        }
+        let pressure = brush.pressureSize && supportsLabLayerBrushPressure
         try withTabletPacket([first]) { packet in
-            try check(begin(engine, image, resource, &settings, packet, &stroke, &error), error)
+            let status: GlimsStatus
+            if let expected {
+                status = expected.fingerprint.withCString {
+                    begin(engine, image, resource, &settings, pressure, packet, $0, &stroke, &facts, &error)
+                }
+            } else {
+                status = begin(engine, image, resource, &settings, pressure, packet, nil, &stroke, &facts, &error)
+            }
+            try check(status, error)
         }
         guard stroke > 0 else {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab layer brush did not start.")
         }
-        return stroke
+        let captured: StrokeCaptureFacts?
+        if let name = facts.brush_name, let digest = facts.fingerprint,
+           let nameString = String(validatingUTF8: name), let digestString = String(validatingUTF8: digest),
+           !nameString.isEmpty, (try? validateStrokeCaptureFingerprint(digestString)) != nil {
+            let collection = facts.brush_collection.flatMap { String(validatingUTF8: $0) }
+            if facts.brush_collection == nil || collection != nil {
+                captured = StrokeCaptureFacts(brush: .init(name: nameString, collection: collection,
+                                                            isInternal: facts.brush_internal), fingerprint: digestString)
+            } else { captured = nil }
+        } else { captured = nil }
+        if let expected, captured != expected {
+            try? cancelLabLayerStroke(stroke)
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The recorded Lab layer brush could not be verified.")
+        }
+        return (stroke, captured)
     }
 
     func cancelLabLayerStroke(_ stroke: Int32) throws {

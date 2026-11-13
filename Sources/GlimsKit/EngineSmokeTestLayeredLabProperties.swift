@@ -353,6 +353,66 @@ extension EngineSmokeTest {
                 undo.undo(); drain("fixed-size Brush Undo")
                 state.update(.paintbrush) { $0.pressureSize = true }
             }
+            guard opened.selectedLayerIDs.count == 1, let brushRoot = opened.selectedLayerIDs.first else {
+                throw NSError(domain: "LayeredLabSmoke", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "Missing selected Lab brush root"])
+            }
+            let target = try session.labLayerFillTarget(image, root: brushRoot)
+            let sample = EngineSession.StrokeSampleV2(point: .init(x: 1.5, y: 1.5, pressure: 0.75,
+                                                                  timeMilliseconds: 1),
+                                                      rotationTurns: nil, tangentialPressure: nil)
+            let captureBefore = pixel(session, image, x: 1, y: 1)
+            let captureHistory = try session.undoInfo(image)
+            if session.supportsLabLayerBrushCapture {
+                for pressure in [false, true] where !pressure || session.supportsLabLayerBrushPressure {
+                    var brush = state.brush(for: .paintbrush); brush.pressureSize = pressure
+                    let live = try session.beginLabLayerStrokeCapturing(image: image, target: target,
+                                                                        brush: brush, first: sample)
+                    let painted = pixel(session, image, x: 1, y: 1)
+                    try session.cancelLabLayerStroke(live.stroke)
+                    check(live.facts != nil && painted != captureBefore &&
+                          pixel(session, image, x: 1, y: 1) == captureBefore,
+                          "captured layered Brush returns facts and cancels cleanly")
+                    if let facts = live.facts {
+                        let badDigest = facts.fingerprint == String(repeating: "0", count: 64)
+                            ? String(repeating: "1", count: 64) : String(repeating: "0", count: 64)
+                        let changed = EngineSession.StrokeCaptureFacts(brush: facts.brush, fingerprint: badDigest)
+                        var refused = false
+                        do {
+                            let unexpected = try session.beginLabLayerStrokeCapturing(image: image, target: target,
+                                brush: brush, first: sample, expected: changed)
+                            try? session.cancelLabLayerStroke(unexpected.stroke)
+                        } catch { refused = true }
+                        check(refused && pixel(session, image, x: 1, y: 1) == captureBefore,
+                              "changed layered Brush fingerprint refuses before painting")
+                        let replay = try session.beginLabLayerStrokeCapturing(image: image, target: target,
+                            brush: brush, first: sample, expected: facts)
+                        check(replay.facts == facts && pixel(session, image, x: 1, y: 1) == painted,
+                              "verified layered Brush reproduces captured pixels")
+                        try session.cancelLabLayerStroke(replay.stroke)
+                    }
+                }
+            } else {
+                let brush = state.brush(for: .paintbrush)
+                let live = try session.beginLabLayerStrokeCapturing(image: image, target: target,
+                                                                    brush: brush, first: sample)
+                try session.cancelLabLayerStroke(live.stroke)
+                check(live.facts == nil && pixel(session, image, x: 1, y: 1) == captureBefore,
+                      "older engine paints live without pretending to capture facts")
+                let missing = EngineSession.StrokeCaptureFacts(brush: .init(name: "Unavailable", collection: nil,
+                                                                            isInternal: false),
+                                                               fingerprint: String(repeating: "0", count: 64))
+                var refused = false
+                do {
+                    let unexpected = try session.beginLabLayerStrokeCapturing(image: image, target: target,
+                        brush: brush, first: sample, expected: missing)
+                    try? session.cancelLabLayerStroke(unexpected.stroke)
+                } catch { refused = true }
+                check(refused && pixel(session, image, x: 1, y: 1) == captureBefore,
+                      "older engine refuses guarded replay before painting")
+            }
+            check(try session.undoInfo(image) == captureHistory,
+                  "captured and refused Brush fixtures preserve Undo and Redo")
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }
