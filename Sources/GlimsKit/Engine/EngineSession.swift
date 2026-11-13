@@ -1317,10 +1317,17 @@ final class EngineSession: @unchecked Sendable {
     struct ImageStorage: Equatable {
         let layout: ImageStorageLayout
         let readOnly: Bool
+        let allowsLayerProperties: Bool
+
+        init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false) {
+            self.layout = layout
+            self.readOnly = readOnly
+            self.allowsLayerProperties = allowsLayerProperties
+        }
 
         static func decode(_ info: GlimsImageStorageInfo) throws -> ImageStorage {
             guard info.struct_size == UInt32(MemoryLayout<GlimsImageStorageInfo>.size),
-                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY) == 0 else {
+                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) == 0 else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1334,11 +1341,13 @@ final class EngineSession: @unchecked Sendable {
                                   message: "This image uses an unsupported storage layout.")
             }
             let readOnly = info.flags & UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY) != 0
-            guard layout != .layeredLab || readOnly else {
+            let allowsLayerProperties = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) != 0
+            guard (layout == .layeredLab && readOnly != allowsLayerProperties) ||
+                  (layout != .layeredLab && !allowsLayerProperties) else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This engine cannot safely open layered Lab documents.")
             }
-            return ImageStorage(layout: layout, readOnly: readOnly)
+            return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties)
         }
     }
 

@@ -1,7 +1,8 @@
 import AppKit
+import RigiUI
 
 extension EngineSmokeTest {
-    static func exerciseLayeredLabReadOnly(session: EngineSession, work: URL,
+    static func exerciseLayeredLabProperties(session: EngineSession, work: URL,
                                            documents: DocumentList) throws {
         guard let path = ProcessInfo.processInfo.environment["GLIMS_LAYERED_LAB_FIXTURE"],
               !path.isEmpty else {
@@ -44,16 +45,17 @@ extension EngineSmokeTest {
         palette.retarget(to: opened)
         paletteWindow.orderFront(nil)
         EngineSmokeTestHost.pumpEvents(for: 0.2)
-        check(windowController.window?.title.contains("Read-only") == true,
-              "document window identifies the read-only state")
+        check(windowController.window?.title.contains("Limited editing") == true,
+              "document window identifies limited editing")
         let selectAll = NSMenuItem(title: "Select All", action: #selector(DocumentWindowController.selectAll(_:)), keyEquivalent: "")
         check(!windowController.validateMenuItem(selectAll), "editing menu commands are disabled")
         let saveCopy = NSMenuItem(title: "Save a Copy", action: #selector(DocumentWindowController.saveDocumentCopy(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(saveCopy), "Save a Copy stays available")
-        check(opened.storage.layout == .layeredLab && opened.storage.readOnly,
-              "document recognizes read-only layered Lab storage")
+        check(opened.storage.layout == .layeredLab && opened.storage.allowsLayerProperties,
+              "document recognizes limited layered Lab editing")
         check(!opened.acceptsEdits && opened.acceptsLayerSelection,
               "layer selection remains available while editing is disabled")
+        check(opened.acceptsLayerProperties, "layer properties are available")
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,
               "document does not expose private Lab planes as channels")
         check(opened.layers.count == 2, "document shows two logical layers")
@@ -80,6 +82,57 @@ extension EngineSmokeTest {
         } else {
             check(false, "fixture has a second selectable layer")
         }
+        if let list = outline(in: palette.view), let first = opened.layers.first,
+           let index = (0..<list.numberOfRows).first(where: { index in
+               (list.item(atRow: index) as? LayerTree.Node)?.layer.id == first.id
+           }), let row = list.view(atColumn: 0, row: index, makeIfNecessary: true) as? LayerRowView {
+            check(row.checkbox.isEnabled, "logical layer visibility control is enabled")
+            row.checkbox.performClick(nil)
+            let deadline = Date().addingTimeInterval(15)
+            while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == false,
+                  "visibility control changes the captured logical layer")
+            let manager = EngineUndoManager(document: opened)
+            check(manager.canUndo, "window Undo is available after the layer edit")
+            manager.undo()
+            let undoDeadline = Date().addingTimeInterval(15)
+            while opened.pendingWork > 0 && Date() < undoDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == true,
+                  "Undo restores logical visibility")
+        } else {
+            check(false, "logical layer visibility control exists")
+        }
+        // This standalone palette is not registered with PaletteCenter, so
+        // mirror the normal retarget/reload after the selection and undo.
+        palette.reload()
+        EngineSmokeTestHost.pumpEvents(for: 0.05)
+        func descendants<T: NSView>(_ view: NSView, as type: T.Type) -> [T] {
+            ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants($0, as: type) }
+        }
+        if let target = opened.activeLayer,
+           let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),
+           let field = descendants(opacity, as: NSTextField.self).first(where: { $0.isEditable }) {
+            check(opacity.isEnabled, "logical layer opacity control is enabled")
+            field.stringValue = "50"
+            _ = field.sendAction(field.action, to: field.target)
+            let deadline = Date().addingTimeInterval(15)
+            while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - 0.5) < 0.0001,
+                  "opacity field changes the captured logical layer")
+            let manager = EngineUndoManager(document: opened)
+            manager.undo()
+            let undoDeadline = Date().addingTimeInterval(15)
+            while opened.pendingWork > 0 && Date() < undoDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - 1) < 0.0001,
+                  "Undo restores logical layer opacity")
+            manager.redo()
+            let redoDeadline = Date().addingTimeInterval(15)
+            while opened.pendingWork > 0 && Date() < redoDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - 0.5) < 0.0001,
+                  "Redo reapplies logical layer opacity")
+        } else {
+            check(false, "logical layer opacity field exists")
+        }
         let rendered = try session.render(image, scale: 1, area: CGRect(x: 0, y: 0, width: 1, height: 1))
         check(rendered.width == 1 && rendered.height == 1, "layered Lab canvas renders")
         let copy = work.appendingPathComponent("layered-copy.xcf")
@@ -97,5 +150,7 @@ extension EngineSmokeTest {
         defer { try? session.closeImage(reopened) }
         check(try session.imageStorage(reopened).layout == .layeredLab,
               "saved XCF copy reopens as layered Lab")
+        check(try session.layers(reopened).contains(where: { abs($0.opacity - 0.5) < 0.0001 }),
+              "saved XCF copy retains the edited opacity")
     }
 }

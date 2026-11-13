@@ -46,7 +46,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         var isAvailable: Bool {
             guard let document else { return false }
-            return document.acceptsEdits && !document.targetCommandIsPending
+            return document.acceptsLayerProperties && !document.targetCommandIsPending
                 && document.layers.contains { $0.id == layer }
         }
     }
@@ -979,7 +979,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// when the change was refused, so the row shows the layer's
     /// authoritative state again.
     private func commitLayerChange(_ context: LayerRowView.Context, _ change: EngineSession.LayerChange) -> Bool {
-        guard let document, document.acceptsEdits,
+        guard let document, document.acceptsLayerProperties,
+              (document.acceptsEdits || (change.name == nil && change.mode == nil)),
               LayerRowView.canChange(context, document: document, layers: document.layers) else { return false }
         document.changeLayer(context.layerID, change)
         return true
@@ -1057,7 +1058,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                                    locks: locks, mask: mask, activeTarget: target) { [weak self] context, change in
             self?.commitLayerChange(context, change) ?? false
         }
-        rowView.checkbox.isEnabled = document.acceptsEdits
+        rowView.checkbox.isEnabled = document.acceptsLayerProperties
         rowView.nameField.isEditable = document.acceptsEdits
         rowView.layerThumb.isEnabled = document.acceptsLayerSelection
         rowView.maskThumb?.isEnabled = document.acceptsEdits

@@ -41,8 +41,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   s=api->image_storage_info(engine,id,(GlimsImageStorageInfo*)(info_bytes+1));
   GlimsImageStorageInfo layout;memcpy(&layout,info_bytes+1,sizeof layout);
   CHECK(s==GLIMS_STATUS_OK&&layout.layout==GLIMS_IMAGE_LAYOUT_LAYERED_LAB&&
-        (layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
-        "size-versioned unaligned layout reports read-only layered Lab");
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
+        info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
+        "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
   memset(short_info,0xa5,sizeof short_info);info_size=sizeof(GlimsImageStorageInfo)-1;
   memcpy(short_info+1,&info_size,sizeof info_size);memcpy(saved_short,short_info,sizeof short_info);
@@ -71,12 +72,92 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          item_count==1&&items[0]==rows[0].id,
          "generic selected-items query exposes only the logical root");
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"selecting a logical root succeeds");
+   GlimsLayerChange visibility={.struct_size=sizeof visibility,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};
+   error=NULL;GlimsStatus changed=api->layer_change(engine,id,rows[0].id,&visibility,&error);
+   CHECK(changed==GLIMS_STATUS_OK,"logical Lab layer visibility can be edited");
+   if(error)api->free_string(error);error=NULL;
+   if(changed==GLIMS_STATUS_OK){
+    GlimsLayerInfo after_change[8];int32_t n=0;
+    CHECK(api->image_layers(engine,id,after_change,8,&n)==GLIMS_STATUS_OK&&n==2&&!after_change[0].visible,
+          "visibility edit updates the logical root");
+    guint8 visible_pixel[4]={0};
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},visible_pixel,4)==GLIMS_STATUS_OK&&visible_pixel[0]>=250&&visible_pixel[3]==255,
+          "visibility edit reveals the white lower layer");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"visibility change can be undone");
+    CHECK(api->image_layers(engine,id,after_change,8,&n)==GLIMS_STATUS_OK&&n==2&&after_change[0].visible,
+          "undo restores logical visibility");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK,"visibility change can be redone");
+    CHECK(api->image_layers(engine,id,after_change,8,&n)==GLIMS_STATUS_OK&&n==2&&!after_change[0].visible,
+          "redo restores the visibility edit");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"fixture visibility restored");
+    GlimsLayerChange combined={.struct_size=sizeof combined,.properties=GLIMS_LAYER_VISIBLE|GLIMS_LAYER_OPACITY,.visible=FALSE,.opacity=.5};
+    error=NULL;GlimsStatus both=api->layer_change(engine,id,rows[0].id,&combined,&error);
+    CHECK(both==GLIMS_STATUS_OK,"visibility and opacity can change together");if(error)api->free_string(error);
+    if(both==GLIMS_STATUS_OK){
+     CHECK(api->image_layers(engine,id,after_change,8,&n)==GLIMS_STATUS_OK&&!after_change[0].visible&&fabs(after_change[0].opacity-.5)<1e-6,
+           "combined layer properties are applied");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,after_change,8,&n)==GLIMS_STATUS_OK&&
+           after_change[0].visible&&fabs(after_change[0].opacity-1)<1e-6,
+           "one undo restores both layer properties");
+    }
+    GlimsLayerChange opacity={.struct_size=sizeof opacity,.properties=GLIMS_LAYER_OPACITY,.opacity=.5};
+    error=NULL;GlimsStatus adjusted=api->layer_change(engine,id,rows[0].id,&opacity,&error);
+    CHECK(adjusted==GLIMS_STATUS_OK,"logical Lab layer opacity can be edited");if(error)api->free_string(error);
+    if(adjusted==GLIMS_STATUS_OK){
+     guint8 blended[4]={0};
+     CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},blended,4)==GLIMS_STATUS_OK&&blended[0]>180&&blended[0]<250&&blended[3]==255,
+           "opacity edit changes the composite while retaining opaque output");
+     gchar *property_path=g_build_filename((const gchar*)work,"layered-lab-properties.xcf",NULL);error=NULL;
+     GlimsStatus persisted=api->image_save_copy(engine,id,property_path,&error);
+     CHECK(persisted==GLIMS_STATUS_OK,"edited Lab layer properties save as XCF");if(error)api->free_string(error);
+     if(persisted==GLIMS_STATUS_OK){
+      GlimsImageID reopened=0;error=NULL;GlimsStatus opened=api->image_open(engine,property_path,&reopened,&error);
+      CHECK(opened==GLIMS_STATUS_OK&&reopened,"edited Lab layer properties reopen");if(error)api->free_string(error);
+      if(opened==GLIMS_STATUS_OK&&reopened){
+       GlimsLayerInfo persisted_rows[8];int32_t persisted_count=0;
+       CHECK(api->image_layers(engine,reopened,persisted_rows,8,&persisted_count)==GLIMS_STATUS_OK&&persisted_count==2&&
+             persisted_rows[0].visible&&fabs(persisted_rows[0].opacity-.5)<1e-6,
+             "XCF retains edited opacity and visibility");
+       GlimsOpenImage *reopened_image=glims_lookup_image(engine,reopened);GlimsLabLayerStorage persisted_storage;
+       gboolean persisted_valid=reopened_image&&glims_lab_layer_storage_read(reopened_image->image,&persisted_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+       CHECK(persisted_valid&&!memcmp(&persisted_storage.map,&m,sizeof m),"edited XCF retains the Lab identity map");
+       if(persisted_valid)for(guint li=0;li<2;li++)for(guint role=0;role<4;role++){
+        GimpDrawable *plane=GIMP_DRAWABLE(persisted_storage.layers[li].planes[role]);guint8 raw[16];
+        gegl_buffer_get(gimp_drawable_get_buffer(plane),GEGL_RECTANGLE(0,0,4,4),1,gimp_drawable_get_format(plane),raw,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+        guint8 expected=role==3?255:role==0?(li?255:128):128;gboolean matches=TRUE;
+        for(guint px=0;px<16;px++)if(raw[px]!=expected)matches=FALSE;
+        CHECK(matches,"edited XCF preserves scalar samples");
+       }
+       CHECK(api->image_close(engine,reopened)==GLIMS_STATUS_OK,"edited XCF copy closes");
+      }
+     }
+     g_free(property_path);
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"opacity edit can be undone");
+    }
+   }
    GlimsOpenImage *open=glims_lookup_image(engine,id);GlimsLabLayerStorage current;
    gboolean intact=open&&glims_lab_layer_storage_read(open->image,&current)==GLIMS_LAB_LAYER_STORAGE_VALID;
    CHECK(intact,"adopted storage remains strictly valid");
    if(intact){
     GlimsItemID hidden=gimp_item_get_id(GIMP_ITEM(current.layers[0].planes[0]));
+    GlimsUndoInfo undo_before={0},undo_after={0};
+    CHECK(api->image_undo_info(engine,id,&undo_before)==GLIMS_STATUS_OK,"history captured before invalid property edits");
     CHECK(api->layer_select(engine,id,hidden)!=GLIMS_STATUS_OK,"private scalar plane cannot be selected as a public layer");
+    GlimsLayerChange bad={.struct_size=sizeof bad,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
+    CHECK(api->layer_change(engine,id,hidden,&bad,&error)==GLIMS_STATUS_UNSUPPORTED,
+          "private scalar plane properties cannot be edited");
+    if(error)api->free_string(error);error=NULL;
+    bad.properties=GLIMS_LAYER_OPACITY;bad.opacity=NAN;
+    CHECK(api->layer_change(engine,id,rows[0].id,&bad,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "non-finite opacity is refused before mutation");
+    if(error)api->free_string(error);error=NULL;
+    bad.properties=GLIMS_LAYER_MODE;
+    CHECK(api->layer_change(engine,id,rows[0].id,&bad,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "unsupported Lab blend-mode edits are refused before mutation");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo_info(engine,id,&undo_after)==GLIMS_STATUS_OK&&
+          undo_after.undo_count==undo_before.undo_count&&undo_after.redo_count==undo_before.redo_count,
+          "invalid property edits leave Undo and Redo unchanged");
     GlimsItemID mixed[]={rows[0].id,hidden};error=NULL;
     CHECK(api->image_select_layers(engine,id,mixed,2,&error)!=GLIMS_STATUS_OK,
           "mixed logical and private selection is refused atomically");
@@ -100,8 +181,6 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   CHECK(api->image_copy_pixels(engine,id,TRUE,&copied,&error)==GLIMS_STATUS_UNSUPPORTED,
         "ordinary merged clipboard copy is quarantined");
   if(error)api->free_string(error);if(copied.pixels)api->free_pixels(copied.pixels);
-  CHECK(api->image_undo(engine,id)==GLIMS_STATUS_UNSUPPORTED && api->image_redo(engine,id)==GLIMS_STATUS_UNSUPPORTED,
-        "history mutation is quarantined");
   cmsHPROFILE lab=cmsCreateLab4Profile(NULL),rgb=cmsCreate_sRGBProfile();cmsHTRANSFORM transform=lab&&rgb?cmsCreateTransform(lab,TYPE_Lab_DBL,rgb,TYPE_RGB_DBL,INTENT_RELATIVE_COLORIMETRIC,cmsFLAGS_NOOPTIMIZE|cmsFLAGS_NOCACHE):NULL;
   double input[3]={100.0*128/255,0,0},expected[3]={0};CHECK(transform!=NULL,"independent Lab to sRGB oracle creates");if(transform)cmsDoTransform(transform,input,expected,1);
   const double scales[]={1,.75,1.3};for(unsigned i=0;i<3;i++){guint8 pixel[4]={0};s=api->image_render(engine,id,scales[i],(GlimsRect){1,1,1,1},pixel,4);CHECK(s==GLIMS_STATUS_OK,"public layered Lab render succeeds");if(transform&&s==GLIMS_STATUS_OK){for(unsigned c=0;c<3;c++)CHECK(abs((int)pixel[c]-(int)floor(fmin(1,fmax(0,expected[c]))*255+.5))<=3,"rendered Lab color matches independent LCMS");CHECK(pixel[3]==255,"opaque logical layer remains opaque");}}
@@ -208,6 +287,12 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          "render rejects damaged storage without writing output");
    if(count==2)CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_UNSUPPORTED,
                      "selection rejects damaged storage");
+   GlimsLayerChange damaged_change={.struct_size=sizeof damaged_change,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
+   if(count==2)CHECK(api->layer_change(engine,id,rows[0].id,&damaged_change,&error)==GLIMS_STATUS_UNSUPPORTED,
+                     "layer edits reject damaged storage");
+   if(error)api->free_string(error);error=NULL;
+   CHECK(api->image_undo(engine,id)==GLIMS_STATUS_UNSUPPORTED&&api->image_redo(engine,id)==GLIMS_STATUS_UNSUPPORTED,
+         "Undo and Redo reject damaged storage");
    gchar *damaged_path=g_build_filename((const gchar*)work,"damaged-copy.xcf",NULL);error=NULL;
    CHECK(api->image_save_copy(engine,id,damaged_path,&error)==GLIMS_STATUS_UNSUPPORTED &&
          !g_file_test(damaged_path,G_FILE_TEST_EXISTS),"save copy rejects damaged storage without creating a file");

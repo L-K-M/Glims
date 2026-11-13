@@ -21,12 +21,18 @@ final class ImageStorageTests: XCTestCase {
                                                                  flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY)))
         XCTAssertEqual(layered.layout, .layeredLab)
         XCTAssertTrue(layered.readOnly)
+        XCTAssertFalse(layered.allowsLayerProperties)
+        let editable = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)))
+        XCTAssertFalse(editable.readOnly)
+        XCTAssertTrue(editable.allowsLayerProperties)
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(UInt32.max)))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue, flags: 2)))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue)))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue, flags: 3)))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)
         short.struct_size -= 1
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(short))
