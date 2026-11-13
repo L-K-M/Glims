@@ -52,8 +52,10 @@ Creation, physical Fill and Brush retain their separate capability gates.
 queues it as counted input. It rechecks readiness after admission callbacks
 and refuses a live stroke. The general Lab mutation gate stays closed.
 Rectangle/Ellipse/Lasso and All/None/Invert have matching tool/menu gates;
-ordinary documents retain their existing selection routes. Recorder replay
-of Lab selections remains unsupported.
+ordinary documents retain their existing selection routes. Recorder captures
+these shapes and All/None/Invert as explicit Lab-only version 15 commands.
+Their root-mask target is independent of axis selection or precision; wrong
+document modes refuse before editing. See [lab-recorder.md](lab-recorder.md).
 
 Feather is available as a shape option. This slice does not enable the
 separate Feather, Grow, Shrink, Border or Sharpen commands, selection from

@@ -906,21 +906,138 @@ glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID id)
   return GLIMS_STATUS_OK;
 }
 
-GlimsStatus
-glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
-                        GlimsResourceID brush_id, const GlimsLabBrushSettings *settings,
-                        const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+static gboolean
+clear_lab_stroke_facts (GlimsStrokeCaptureFacts *facts)
 {
+  if (!facts)
+    return FALSE;
+  size_t size = facts->struct_size;
+  if (size >= offsetof (GlimsStrokeCaptureFacts, brush_internal) + sizeof facts->brush_internal)
+    facts->brush_internal = FALSE;
+  if (size >= offsetof (GlimsStrokeCaptureFacts, brush_name) + sizeof facts->brush_name)
+    facts->brush_name = NULL;
+  if (size >= offsetof (GlimsStrokeCaptureFacts, brush_collection) + sizeof facts->brush_collection)
+    facts->brush_collection = NULL;
+  if (size < offsetof (GlimsStrokeCaptureFacts, fingerprint) + sizeof facts->fingerprint)
+    return FALSE;
+  facts->fingerprint = NULL;
+  return TRUE;
+}
+
+static gboolean
+valid_lab_expected_fingerprint (const gchar *fingerprint)
+{
+  if (strnlen (fingerprint, 65) != 64)
+    return FALSE;
+  for (gsize i = 0; i < 64; i++)
+    if (!g_ascii_isxdigit (fingerprint[i]) || g_ascii_isupper (fingerprint[i]))
+      return FALSE;
+  return TRUE;
+}
+
+static void
+hash_lab_double (GChecksum *hash, gdouble value)
+{
+  gchar number[G_ASCII_DTOSTR_BUF_SIZE];
+  /* Preserve physical signed zero in the captured configuration. */
+  g_ascii_dtostr (number, sizeof number, value);
+  g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+}
+
+static gboolean
+capture_lab_stroke_facts (GlimsEngine            *engine,
+                          GimpImage              *image,
+                          GimpPaintOptions       *options,
+                          const GlimsLabBrushSettings *lab,
+                          guint32                 storage,
+                          GlimsStrokeCaptureFacts *facts)
+{
+  GimpContext *context = GIMP_CONTEXT (options);
+  GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
+  GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
+  if (!symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
+      paint_mode != GIMP_LAYER_MODE_NORMAL ||
+      options->expand_use || options->jitter_options->use_jitter ||
+      options->smoothing_options->use_smoothing ||
+      options->application_mode != GIMP_PAINT_CONSTANT ||
+      options->use_applicator || options->brush_lock_to_view ||
+      gimp_paint_options_are_dynamics_enabled (options))
+    return FALSE;
+
+  GimpBrush *brush = gimp_context_get_brush (context);
+  if (!brush)
+    return FALSE;
+  gint id = gimp_data_get_id (GIMP_DATA (brush));
+  GimpBrush *member = NULL;
+  if (id <= 0 ||
+      glims_lookup_brush (engine, (GlimsResourceID) id, &member) != GLIMS_STATUS_OK ||
+      member != brush)
+    return FALSE;
+  g_autofree gchar *content = glims_brush_fingerprint (brush);
+  if (!content ||
+      glims_resource_identifiers (engine, (GlimsResourceID) id, &facts->brush_name,
+                                  &facts->brush_collection, &facts->brush_internal,
+                                  NULL) != GLIMS_STATUS_OK)
+    return FALSE;
+
+  static const gchar domain[] = "glims-lab-stroke-configuration-v1";
+  g_autoptr(GChecksum) hash = g_checksum_new (G_CHECKSUM_SHA256);
+  g_checksum_update (hash, (const guchar *) domain, sizeof domain);
+  g_checksum_update (hash, (const guchar *) content, strlen (content) + 1);
+  const gdouble values[] = {
+    options->brush_size, gimp_context_get_opacity (context),
+    options->brush_hardness, options->brush_spacing,
+    options->brush_angle, options->brush_aspect_ratio,
+    options->brush_force, lab->value, lab->opacity
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (values); i++)
+    {
+      if (!isfinite (values[i]))
+        return FALSE;
+      hash_lab_double (hash, values[i]);
+    }
+  const guint8 flags[] = {
+    options->hard != FALSE, options->use_applicator != FALSE,
+    options->brush_lock_to_view != FALSE, options->expand_use != FALSE,
+    paint_mode == GIMP_LAYER_MODE_NORMAL_LEGACY,
+    options->application_mode != GIMP_PAINT_CONSTANT
+  };
+  g_checksum_update (hash, flags, sizeof flags);
+  const guint8 lab_fields[] = { (guint8) lab->role, (guint8) storage };
+  g_checksum_update (hash, lab_fields, sizeof lab_fields);
+
+  facts->fingerprint = g_strdup (g_checksum_get_string (hash));
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_BRUSH, TRUE);
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
+  return TRUE;
+}
+
+static GlimsStatus
+stroke_begin_lab_common (GlimsEngine *engine, GlimsImageID image_id,
+                         GlimsResourceID brush_id, const GlimsLabBrushSettings *settings,
+                         const GlimsStrokePacketV2 *packet,
+                         const char *expected_fingerprint,
+                         GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error)
+{
+  gboolean facts_ready = clear_lab_stroke_facts (facts);
+  GlimsStrokeCaptureFacts captured = { .struct_size = sizeof captured };
+
   if (out) *out = 0;
   if (error) *error = NULL;
+  if ((facts && !facts_ready) || (expected_fingerprint && !facts))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (expected_fingerprint && (!brush_id || !valid_lab_expected_fingerprint (expected_fingerprint)))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
   if (!out || !settings || settings->struct_size < sizeof *settings)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
   const GlimsLabBrushSettings lab = *settings;
   if (lab.axis <= 0 || lab.role > GLIMS_LAB_AXIS_B ||
       !isfinite (lab.value) || !isfinite (lab.opacity) || lab.opacity < 0 || lab.opacity > 1 ||
       !isfinite (lab.size) || lab.size < 1 || lab.size > 10000 ||
       !isfinite (lab.hardness) || lab.hardness < 0 || lab.hardness > 1)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
   GlimsOpenImage *open = glims_lookup_image (engine, image_id);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   GlimsStatus status = glims_edit_ready (engine, open, error);
@@ -956,13 +1073,17 @@ glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
   if (!glims_lab_fill_row (roles[lab.role], format, lab.value, lab.opacity,
                             0, NULL, NULL, NULL, &ignored))
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
   GlimsStrokeSampleV2 *samples = NULL;
   gsize count = 0;
   status = read_stroke_packet_v2 (packet, TRUE, 0, &samples, &count, error);
   if (status != GLIMS_STATUS_OK) return status;
+
   GimpBrush *brush = NULL;
-  if (brush_id) status = glims_lookup_brush (engine, brush_id, &brush);
-  else brush = gimp_context_get_brush (gimp_get_user_context (engine->gimp));
+  if (brush_id)
+    status = glims_lookup_brush (engine, brush_id, &brush);
+  else
+    brush = gimp_context_get_brush (gimp_get_user_context (engine->gimp));
   GimpPaintInfo *info = glims_paint_info_for_tool (engine->gimp, GLIMS_PAINT_PAINTBRUSH);
   if (status != GLIMS_STATUS_OK || !brush || !info)
     {
@@ -970,6 +1091,7 @@ glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
       return status != GLIMS_STATUS_OK ? status :
         glims_fail (error, NULL, "Choose an available mask brush before painting.");
     }
+
   GlimsBrushSettings geometry = { .struct_size = sizeof geometry,
     .size = lab.size, .opacity = lab.opacity, .tool = GLIMS_PAINT_PAINTBRUSH,
     .hardness = lab.hardness, .rate = -1, .flow = -1, .exposure = -1 };
@@ -993,6 +1115,18 @@ glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
   gimp_paint_options_enable_dynamics (stroke->options, FALSE);
   gimp_context_define_property (GIMP_CONTEXT (stroke->options), GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
   gimp_context_set_paint_mode (GIMP_CONTEXT (stroke->options), GIMP_LAYER_MODE_NORMAL);
+
+  if (facts && !capture_lab_stroke_facts (engine, open->image, stroke->options,
+                                          &lab, storage.map.storage, &captured))
+    drop_stroke_facts (&captured);
+  if (expected_fingerprint && g_strcmp0 (expected_fingerprint, captured.fingerprint))
+    {
+      drop_stroke_facts (&captured);
+      g_free (samples);
+      glims_strokes_free (stroke);
+      return glims_fail (error, NULL, "The recorded Lab brush or configuration changed.");
+    }
+
   stroke->core = glims_lab_brush_core_new (roles[lab.role], format, lab.value, lab.opacity);
   stroke->drawables = g_list_prepend (NULL, drawable);
   GimpCoords coords = to_coords_v2 (&samples[0]);
@@ -1001,6 +1135,7 @@ glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
   if (!gimp_paint_core_start (stroke->core, stroke->drawables, stroke->options, &coords, &native_error))
     {
       /* Start did not reach native preview freeze. Cleanup without a thaw. */
+      drop_stroke_facts (&captured);
       g_list_free (stroke->drawables);
       stroke->drawables = NULL;
       gimp_paint_core_cleanup (stroke->core);
@@ -1015,16 +1150,51 @@ glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
   const char *failure = glims_lab_brush_core_error (stroke->core);
   if (failure)
     {
+      drop_stroke_facts (&captured);
       if (error) *error = g_strdup (failure);
       glims_strokes_free (stroke);
       gimp_image_flush (open->image);
       return GLIMS_STATUS_FAILED;
     }
+
   gint id = glims_next_session_id (engine);
   g_hash_table_insert (engine->strokes, GINT_TO_POINTER (id), stroke);
   *out = id;
+  if (facts && captured.fingerprint)
+    {
+      facts->brush_internal = captured.brush_internal;
+      facts->brush_name = captured.brush_name;
+      facts->brush_collection = captured.brush_collection;
+      facts->fingerprint = captured.fingerprint;
+    }
+  else
+    {
+      drop_stroke_facts (&captured);
+    }
   gimp_image_flush (open->image);
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image_id,
+                        GlimsResourceID brush_id, const GlimsLabBrushSettings *settings,
+                        const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  return stroke_begin_lab_common (engine, image_id, brush_id, settings, packet,
+                                  NULL, out, NULL, error);
+}
+
+GlimsStatus
+glims_stroke_begin_lab_with_capture_facts (GlimsEngine *engine, GlimsImageID image_id,
+                        GlimsResourceID brush_id, const GlimsLabBrushSettings *settings,
+                        const GlimsStrokePacketV2 *packet, const char *expected_fingerprint,
+                        GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!facts) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return stroke_begin_lab_common (engine, image_id, brush_id, settings, packet,
+                                  expected_fingerprint, out, facts, error);
 }
 
 GlimsStatus

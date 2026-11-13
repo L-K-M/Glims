@@ -40,6 +40,7 @@ component_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_lab_snapshot_apply_curves:
     case GLIMS_FACADE_OP_image_lab_snapshot_end:
     case GLIMS_FACADE_OP_stroke_begin_lab:
+    case GLIMS_FACADE_OP_stroke_begin_lab_with_capture_facts:
     case GLIMS_FACADE_OP_image_select_lab_shape:
     case GLIMS_FACADE_OP_image_select_lab_command:
     case GLIMS_FACADE_OP_image_convert_lab_copy:

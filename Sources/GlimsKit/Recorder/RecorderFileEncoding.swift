@@ -16,6 +16,18 @@ extension RecorderFileCodec {
                     throw RecorderFileError.invalid("Invalid polygon point count.")
                 }
                 pointCount += points.count
+            case .success(.labSelection(let command), _):
+                if case .shape(.polygon(let points), _) = command {
+                    guard points.count >= 3, points.count <= RecorderFileLimits.points - pointCount else {
+                        throw RecorderFileError.invalid("Invalid Lab selection polygon point count.")
+                    }
+                    pointCount += points.count
+                }
+                fileVersion = max(fileVersion, labSelectionVersion)
+            case .success(.completeLabStroke(let stroke), _):
+                let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                pointCount += count
+                fileVersion = max(fileVersion, labStrokeVersion)
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -80,6 +92,18 @@ extension RecorderFileCodec {
         if fileVersion == inkCurvesVersion, !hasInkCurves {
             throw RecorderFileError.invalid("Version 12 requires a successful ink Curves command.")
         }
+        if fileVersion == labStrokeVersion, !value.records.contains(where: {
+            if case .success(.completeLabStroke, _) = $0.outcome { return true }
+            return false
+        }) {
+            throw RecorderFileError.invalid("Version 14 requires a successful Lab stroke.")
+        }
+        if fileVersion == labSelectionVersion, !value.records.contains(where: {
+            if case .success(.labSelection, _) = $0.outcome { return true }
+            return false
+        }) {
+            throw RecorderFileError.invalid("Version 15 requires a successful Lab selection command.")
+        }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
         }
@@ -111,6 +135,31 @@ extension RecorderFileCodec {
         .object(["x": try d(value.x), "y": try d(value.y), "pressure": try d(value.pressure),
             "xTilt": try d(value.xTilt), "yTilt": try d(value.yTilt), "timeMilliseconds": j(Int(value.timeMilliseconds))])
     }
+    private static func labStrokePointJSON(_ value: RecorderTabletStrokeTrace.Point) throws -> RecorderJSON {
+        var fields: [String: RecorderJSON] = [
+            "x": try d(value.x), "y": try d(value.y), "pressure": try d(value.pressure),
+            "xTilt": try d(value.xTilt), "yTilt": try d(value.yTilt), "timeMilliseconds": j(Int(value.timeMilliseconds)),
+        ]
+        if let rotationTurns = value.rotationTurns { fields["rotationTurns"] = try d(rotationTurns) }
+        if let tangentialPressure = value.tangentialPressure { fields["tangentialPressure"] = try d(tangentialPressure) }
+        return .object(fields)
+    }
+    private static func labStrokeJSON(_ value: RecorderLabStrokeCommand) throws -> RecorderJSON {
+        let stroke = try value.validated()
+        _ = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points)
+        let settings = stroke.settings
+        let brushSettings: [String: RecorderJSON] = [
+            "value": try d(settings.value), "size": try d(settings.size),
+            "opacity": try d(settings.opacity), "hardness": try d(settings.hardness),
+        ]
+        let identity = stroke.facts.brush
+        var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
+        if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
+        let facts = RecorderJSON.object(["brush": .object(brushIdentity), "fingerprint": .string(stroke.facts.fingerprint)])
+        let batches = try stroke.trace.batches.map { RecorderJSON.array(try $0.map(labStrokePointJSON)) }
+        return .object(["tag": .string("completeLabStroke"), "settings": .object(brushSettings), "facts": facts,
+                        "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
+    }
     private static func strokeJSON(_ value: RecorderStrokeCommand) throws -> RecorderJSON {
         let brush = value.settings
         var settings: [String: RecorderJSON] = [
@@ -128,8 +177,29 @@ extension RecorderFileCodec {
                         "first": try strokePointJSON(value.trace.first), "batches": .array(batches)])
     }
 
+    private static func labSelectionJSON(_ command: RecorderLabSelectionCommand) throws -> RecorderJSON {
+        let command = try command.validated()
+        switch command {
+        case .shape(let shape, let options):
+            let source: RecorderJSON
+            switch shape {
+            case .rectangle(let rect): source = .object(["tag": .string("rectangle"), "rect": try rectJSON(rect)])
+            case .ellipse(let rect): source = .object(["tag": .string("ellipse"), "rect": try rectJSON(rect)])
+            case .polygon(let points): source = .object(["tag": .string("polygon"), "points": .array(try points.map { try pointJSON($0) })])
+            }
+            let optionsJSON = RecorderJSON.object(["operation": .string(options.operation.rawValue),
+                "antialias": .bool(options.antialias), "feather": try d(options.feather),
+                "cornerRadius": try d(options.cornerRadius)])
+            return .object(["tag": .string("labSelectionShape"), "shape": source, "options": optionsJSON])
+        case .command(let selection):
+            return .object(["tag": .string("labSelectCommand"), "command": .string(selection.rawValue)])
+        }
+    }
+
     private static func commandJSON(_ command: RecorderFileCommand) throws -> RecorderJSON {
         switch command {
+        case .labSelection(let command):
+            return try labSelectionJSON(command)
         case .selectionShape(let shape, let options):
             let source: RecorderJSON
             switch shape {
@@ -230,6 +300,7 @@ extension RecorderFileCodec {
         case .applyInkCurves(let curves):
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
             return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
+        case .completeLabStroke(let stroke): return try labStrokeJSON(stroke)
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

@@ -165,6 +165,8 @@ final class ImageDocument {
         let confirmed: ConfirmedRecorderCapture
         let settings: RecorderStrokeCommand.Settings?
         var trace: RecorderStrokeAccumulator?
+        var labSettings: RecorderLabStrokeCommand.Settings?
+        var tabletTrace: RecorderTabletStrokeAccumulator?
         var facts: EngineSession.StrokeCaptureFacts?
         var failure: Error?
 
@@ -172,12 +174,22 @@ final class ImageDocument {
             guard failure == nil else { return }
             failure = error
             trace = nil
+            tabletTrace = nil
         }
 
         mutating func finish(interleaved: Bool) -> Result<SemanticImageCommand, Error> {
             if let failure { return .failure(failure) }
             if interleaved {
                 return .failure(RecorderReplayError(message: "Another edit was accepted before the stroke ended."))
+            }
+            if let labSettings {
+                return Result {
+                    guard let facts, let result = tabletTrace?.finish() else {
+                        throw RecorderReplayError(message: "This Lab brush or stroke could not be recorded.")
+                    }
+                    let command = try RecorderLabStrokeCommand(settings: labSettings, trace: result.get(), facts: facts).validated()
+                    return .completeLabStroke(command)
+                }
             }
             guard let settings, let facts, let result = trace?.finish() else {
                 return .failure(RecorderReplayError(message: "This stroke's brush, paint settings or target cannot be recorded."))
@@ -1257,10 +1269,9 @@ final class ImageDocument {
         case .success(let physical): value = physical
         case .failure(let rejection): onError?(rejection.message); return
         }
-        let unsupported = "Physical Lab brush strokes cannot be replayed by Recorder yet."
         let capture: RecorderCapture?
         do {
-            capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil
+            capture = recorder.isRecording ? try reserveRecording(context: .lab(axis: axis, identity: nil)) : nil
         } catch {
             onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
             return
@@ -1271,22 +1282,36 @@ final class ImageDocument {
         labBrushStrokeIsActive = true
         strokeRecordingInterleaved = false
         enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            let sample: EngineSession.StrokeSampleV2
+            switch input {
+            case .tablet(let point): sample = point
+            case .v1(let point): sample = .init(point: point, rotationTurns: nil, tangentialPressure: nil)
+            }
             if let capture {
                 let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-                self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
-                    settings: .init(brush), trace: nil)
-                self.strokeRecordingDraft?.refuse(RecorderReplayError(message: unsupported))
+                var draft = StrokeRecordingDraft(capture: capture, confirmed: confirmed, settings: nil, trace: nil)
+                draft.labSettings = .init(value: value, size: brush.size,
+                                          opacity: brush.opacity, hardness: brush.hardness ?? 0.5)
+                do { draft.tabletTrace = .init(first: try .init(native: sample)) }
+                catch { draft.refuse(error) }
+                self.strokeRecordingDraft = draft
             }
             do {
-                let sample: EngineSession.StrokeSampleV2
-                switch input {
-                case .tablet(let point): sample = point
-                case .v1(let point): sample = .init(point: point, rotationTurns: nil, tangentialPressure: nil)
-                }
                 self.currentStrokeUsesV2 = true
                 self.currentStrokeIsLab = true
-                self.currentStroke = try session.beginLabStroke(image: image, axis: axis,
-                    value: value, brush: brush, first: sample)
+                if capture != nil {
+                    let started = try session.beginLabStrokeCapturing(image: image, axis: axis,
+                        value: value, brush: brush, first: sample)
+                    self.currentStroke = started.stroke
+                    self.strokeRecordingDraft?.facts = started.facts
+                    if started.facts == nil {
+                        self.strokeRecordingDraft?.refuse(RecorderReplayError(message:
+                            "This brush's content or configuration cannot be replayed by Recorder."))
+                    }
+                } else {
+                    self.currentStroke = try session.beginLabStroke(image: image, axis: axis,
+                        value: value, brush: brush, first: sample)
+                }
             } catch {
                 self.currentStroke = nil
                 self.currentStrokeUsesV2 = false
@@ -1347,9 +1372,16 @@ final class ImageDocument {
                 self.report(error)
                 return
             }
-            if self.strokeRecordingDraft?.facts != nil, self.strokeRecordingDraft?.trace != nil {
-                do { self.strokeRecordingDraft?.trace?.appendAccepted(try points.map(RecorderStrokeTrace.Point.init)) }
-                catch { self.strokeRecordingDraft?.refuse(RecorderReplayError(message: error.localizedDescription)) }
+            if self.strokeRecordingDraft?.facts != nil {
+                do {
+                    if self.currentStrokeIsLab {
+                        let samples = try points.map { try RecorderTabletStrokeTrace.Point(native:
+                            .init(point: $0, rotationTurns: nil, tangentialPressure: nil)) }
+                        self.strokeRecordingDraft?.tabletTrace?.appendAccepted(samples)
+                    } else if self.strokeRecordingDraft?.trace != nil {
+                        self.strokeRecordingDraft?.trace?.appendAccepted(try points.map(RecorderStrokeTrace.Point.init))
+                    }
+                } catch { self.strokeRecordingDraft?.refuse(RecorderReplayError(message: error.localizedDescription)) }
             }
         }
     }
@@ -1368,6 +1400,13 @@ final class ImageDocument {
                 }
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
+                return
+            }
+            if self.currentStrokeIsLab, self.strokeRecordingDraft?.facts != nil {
+                do {
+                    let samples = try points.map { try RecorderTabletStrokeTrace.Point(native: $0) }
+                    self.strokeRecordingDraft?.tabletTrace?.appendAccepted(samples)
+                } catch { self.strokeRecordingDraft?.refuse(RecorderReplayError(message: error.localizedDescription)) }
             }
         }
     }
@@ -1463,10 +1502,10 @@ final class ImageDocument {
         case shape(EngineSession.SelectShape, EngineSession.SelectOptions)
         case command(EngineSession.SelectCommand)
 
-        func apply(session: EngineSession, image: Int32) throws {
+        func recordedCommand() throws -> RecorderLabSelectionCommand {
             switch self {
-            case .shape(let shape, let options): try session.selectLab(shape, image: image, options: options)
-            case .command(let command): try session.selectLab(command, image: image)
+            case .shape(let shape, let options): return try .init(shape: shape, options: options)
+            case .command(let command): return try .init(command: command)
             }
         }
     }
@@ -1485,18 +1524,18 @@ final class ImageDocument {
             onError?("This engine cannot change selections in Lab documents.")
             return
         }
-        let unsupported = "Lab selections cannot be replayed by Recorder yet."
         let capture: RecorderCapture?
-        do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(unsupported)) : nil }
+        do { capture = recorder.isRecording ? try reserveRecording(context: nil) : nil }
         catch { onError?("Recorder could not accept this selection: \(error.localizedDescription)"); return }
         enqueue(on: inputQueue, input: true) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            do { try request.apply(session: session, image: image) }
-            catch { self.report(error) }
-            if let capture {
-                self.settleRecording(capture,
-                    result: .failure(RecorderReplayError(message: unsupported)), confirmed: confirmed)
+            let result = Result<SemanticImageCommand, Error> {
+                let command = try request.recordedCommand()
+                try command.apply(session: session, image: image)
+                return .labSelection(command)
             }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture { self.settleRecording(capture, result: result, confirmed: confirmed) }
         }
         if capture != nil { notifyRecorderChanged() }
     }
@@ -6724,7 +6763,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves: return true
+        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke: return true
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke: return true
         default: return false
         }
@@ -6734,7 +6773,7 @@ final class ImageDocument {
                                         explicitChannel: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
         switch command {
-        case .fillLab, .applyLabCurves:
+        case .fillLab, .applyLabCurves, .completeLabStroke:
             // Live Lab admission supplies its captured axis explicitly. Never
             // infer a Lab target from the current selection in this fallback.
             return .unavailable("The explicit Lab axis was unavailable when this edit was recorded.")

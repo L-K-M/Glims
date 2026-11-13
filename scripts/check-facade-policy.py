@@ -38,6 +38,7 @@ def check(root=ROOT):
     component.add('image_fill_lab')
     component.add('image_convert_lab_copy')
     component.add('stroke_begin_lab')
+    component.add('stroke_begin_lab_with_capture_facts')
     component.update({'image_select_lab_shape', 'image_select_lab_command'})
     component_stroke = {'stroke_continue', 'stroke_continue_v2'}
     for name, wrapper, kind, policy in entries:
