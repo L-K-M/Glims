@@ -13,7 +13,7 @@ It adds physical Lab Levels with selected-axis previews, Cancel/Apply/Undo,
 physical L*/a*/b* fields and version 17 Recorder files with explicit Lab
 bindings and loaded-file replay. It also includes the GIMP 3.2.0 first-start
 compatibility fix. Layered Lab/CMYK remains unfinished; the layered-storage
-foundation in #278 is not part of this installed build.
+foundations in #278–#280 are not part of this installed build.
 
 All 1,755 Swift and 141 Python tests pass. The current native matrix covers
 seven cases on each of four engines (28 runs), including 1,576 Lab Levels

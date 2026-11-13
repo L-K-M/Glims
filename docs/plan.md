@@ -5667,3 +5667,59 @@ scope rather than being relabeled as ordinary hosted app workflows.
 Layered Lab/CMYK and full editor parity remain open; foundation #278 is not
 included in this installation. See [completion.md](completion.md) for exact
 evidence and historical checkpoints.
+
+### Layered Lab storage and composition foundation (candidate)
+
+The raw carrier probe passes 116 checks per engine (464 total across all four),
+covering ordinary YA/RGBA storage, duplication, Undo/Redo and XCF, plus Gray
+scalar-child group storage and parentage. The private v2 membership map passes
+1,511 checks in each optimized and ASan/UBSan mode. The pure compositor passes
+49,383 checks in each mode plus 1,888 independent Fraction-oracle component
+comparisons. CI now runs both pure foundations with sanitizers on Linux and
+optimized on macOS; hosted results remain pending. This foundation adds no
+production layered-Lab admission, native document adoption or UI.
+
+### Private native Lab layer carrier (candidate)
+
+A private factory and validator now bind the v2 map to Gray U8 storage:
+one native group per logical layer, with separate scalar L/a/b/alpha children.
+The factory starts transparent; native group order, visibility and opacity
+remain distinct from the preserved sample bytes. No document adoption,
+renderer, layer command or UI is enabled by this slice.
+
+All four engines pass 146 checks each for raw bytes, duplicate independence,
+reorder/removal Undo, empty and maximum stacks, XCF, and malformed carriers.
+Independent review identified reserved UUIDs on paths escaping quarantine;
+native controls reproduced it and now pass after marked/unmarked path checks.
+The pinned run has no warnings. Older-engine tag-cache/plug-in EOF messages
+and master's missing cached-XML cleanup messages remain recorded, as in the
+earlier raw-storage probe. Native producer objects and matching facade/private
+headers are attested before compilation and remain unchanged. This is private
+storage evidence, not layered Lab editing or whole-editor qualification.
+
+### Private Lab layer row rendering (candidate)
+
+A bounded private renderer captures validated layer order, visibility and
+opacity, owns the live native buffers, and composites physical Lab before
+converting to straight linear RGB. Derived alpha is retained, with canonical
+transparent output after float narrowing; authoritative samples are untouched.
+Rows use fixed heap scratch and explicitly serialized access. This primitive
+does not add document adoption, a canvas cache, editing commands or UI.
+
+An independent native fixture passes 1,246 checks on each of four engines,
+using literal physical blends, a separate LittleCMS RGB oracle, exact alpha,
+permuted layer/child order, bounds/canaries, live writes and explicit recapture.
+Source bytes, map, selection, history and dirty state remain unchanged by the
+tested renders. Source review found no important issue under the documented
+lifetime and nonaliasing contract. Existing older-engine/master diagnostics
+remain recorded; no final compiler warning, critical or failed check occurred.
+
+### Private layered Lab foundations merged (2026-11-13)
+
+PR #278 merged the map/compositor foundation. PR #280 integrated the exact
+#279 storage tip and the row renderer at `7dc70835`, after both jobs in
+CI `43374607164` passed on source `1d3602b`. Native evidence is 584 storage
+checks and 4,984 row-render checks across the four engines, with independent
+reviews and unchanged producer inputs. These private modules are not part of
+the installed #277 build and do not yet enable layered document adoption or
+editing. The tiled preview and its alpha-aware sampling remain in progress.
