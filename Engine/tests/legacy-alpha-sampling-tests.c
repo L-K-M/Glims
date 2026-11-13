@@ -81,6 +81,15 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  status=glims_image_render(engine,id,.5,(GlimsRect){1,1,1,1},pixel,3);
  CHECK(status==GLIMS_STATUS_INVALID_ARGUMENT && pixel[0]==0xa5 && pixel[3]==0xa5,
        "legacy fractional read refuses a short stride without writing");
+ GlimsIndexedSettings indexed={.struct_size=sizeof indexed,.palette=GLIMS_INDEXED_PALETTE_GENERATED,
+   .max_colors=64,.dither=GLIMS_INDEXED_DITHER_NONE,.preservation=GLIMS_INDEXED_PRESERVE_EDITABLE};
+ status=glims_image_convert_indexed(engine,id,&indexed,NULL,0,NULL);
+ CHECK(status==GLIMS_STATUS_OK,"legacy indexed fixture converts");
+ if(status==GLIMS_STATUS_OK){
+  memset(pixel,0,sizeof pixel);status=glims_image_render(engine,id,.5,(GlimsRect){1,1,1,1},pixel,4);
+  CHECK(status==GLIMS_STATUS_OK&&pixel[0]==0&&pixel[1]==0&&abs((int)pixel[2]-64)<=1&&abs((int)pixel[3]-64)<=1,
+        "indexed projection retains alpha-aware fractional rendering");
+ }
  CHECK(glims_image_close(engine,id)==GLIMS_STATUS_OK,"ordinary probe closes owned image");
 
  /* A gray source uses two linear components but still produces RGBA. */

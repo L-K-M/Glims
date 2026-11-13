@@ -5868,10 +5868,13 @@ zoom before converting to premultiplied sRGB. It reuses the per-image cache,
 preserves viewing during unrelated plug-in activity, and refuses sampler
 reentry. Unit and 200% or greater paths remain direct. A 4-by-4 transparent
 red-corner fixture reproduced wrong coverage or color at 50%, 75% and 125%
-before the fix. The candidate passes 350 checks on each engine, including
-RGB/gray, edits, padded rows and both chunk boundaries. An independent ICC and
+before the fix. The candidate passes 352 checks on each engine, including
+RGB/gray/indexed, edits, padded rows and both chunk boundaries. An independent ICC and
 spatial fixture passes 6,197 checks per engine, and the existing component
 editor fixture passes 4,060 per engine. Producer inputs remained unchanged.
+GIMP's RGB and indexed projections expose alpha-bearing RGB, gray projections
+expose alpha-bearing gray, and the component preview is RGBA float; the sampler
+checks those formats rather than silently falling back to incorrect filtering.
 
 A facade-only 24 MP timing run measured cached 22.5%, 50%, 100% and 130%
 viewports at 22.6, 15.3, 1.1 and 22.8 ms respectively, versus 5.3, 1.1,
