@@ -422,7 +422,11 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         if tool.paintTool != nil {
             if document?.colorInfo.mode == .lab && document?.storage.layout != .layeredLab { addLabBrushValueRow() }
             if document?.storage.layout == .layeredLab {
-                stack.addArrangedSubview(hint("Paint the selected Lab layer with the foreground color. Escape cancels a stroke."))
+                if tool == .paintbrush && document?.toolIsAvailable(.paintbrush) == true {
+                    stack.addArrangedSubview(hint("Paint the selected Lab layer with the foreground color. Escape cancels a stroke."))
+                } else {
+                    stack.addArrangedSubview(hint("This tool is unavailable for this layered Lab document."))
+                }
             }
             if document?.colorInfo.mode.usesInkChannels == true,
                [.paintbrush, .pencil, .airbrush].contains(tool) { addInkCoverageRow(for: tool) }
