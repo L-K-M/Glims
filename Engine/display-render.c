@@ -4,11 +4,12 @@
  * caller's exact RGB destination ICC profile instead of sRGB, and written
  * as premultiplied 8-bit RGBA in that profile's own RGB space.
  *
- * Source correctness: the projection is read through the shared lazy
- * preparation (glims_projection_prepare_read) into a STRAIGHT (unassociated)
- * float encoding in the projection's OWN babl space, so the read changes
- * only the encoding (premultiplied -> straight, source precision -> float)
- * and never the color space. The effective source profile is the image's
+ * Source correctness: projection preparation keeps native level zero current.
+ * Reductions and fractional magnification use an image-owned associated-linear
+ * source in the projection's OWN babl space, preserving true alpha through
+ * spatial filtering. The result is unassociated, then encoded into that same
+ * source space's TRC before ICC processing. Unit/nearest reads retain their
+ * direct straight-float path. The effective source profile is the image's
  * own, or the engine's builtin fallback for its model (as
  * glims_image_color_info reports it); the destination profile is built
  * from the caller's immutable ICC bytes, which
@@ -40,6 +41,7 @@
  */
 #include "engine-private.h"
 #include "plate-preview.h"
+#include "display-sample.h"
 
 #include <string.h>
 
@@ -55,6 +57,16 @@
 
 /* The one documented SDR transform policy of slot 132. */
 #define DISPLAY_RENDER_INTENT GIMP_COLOR_RENDERING_INTENT_RELATIVE_COLORIMETRIC
+
+typedef struct { GlimsEngine *engine; GlimsOpenImage *open; } DisplayReadLease;
+
+static void
+display_read_lease_clear (DisplayReadLease *lease)
+{
+  if (lease->open) lease->open->display_sample_active = FALSE;
+  if (lease->engine) lease->engine->busy--;
+}
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (DisplayReadLease, display_read_lease_clear)
 
 static GlimsStatus
 display_render (GlimsEngine   *engine,
@@ -90,12 +102,18 @@ display_render (GlimsEngine   *engine,
   const Babl         *premul_src;
   const Babl         *premul_dst;
   const Babl         *premul_fish = NULL;
+  const Babl         *linear_format = NULL;
+  const Babl         *encode_fish = NULL;
+  GlimsDisplaySample *sample = NULL;
+  const gboolean      needs_sampling = scale < 2.0 && scale != 1.0;
+  g_auto (DisplayReadLease) read_lease = { NULL, NULL };
   const char         *src_encoding;
   gboolean            gray;
   uint64_t            row_src, row_dst, out_bytes;
   size_t              chunk_rows, rows_done, row;
   uint8_t            *tmp_src = NULL;
   uint8_t            *tmp_dst = NULL;
+  uint8_t            *tmp_linear = NULL;
   GlimsStatus         status;
 
   if (! open)
@@ -106,6 +124,8 @@ display_render (GlimsEngine   *engine,
    * far inside LCMS's 32-bit size domain (never narrowed unchecked). */
   if (! destination_icc || destination_icc_length == 0 ||
       destination_icc_length > GLIMS_MAX_ICC_PROFILE_BYTES)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!(scale >= 1.0 / 1048576.0) || scale > 32.0)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   /* Coordinate, stride and size arithmetic in 64 bits: the area is
@@ -124,8 +144,21 @@ display_render (GlimsEngine   *engine,
   if (out_bytes > GLIMS_MAX_PIXEL_BUFFER_BYTES)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  /* Same scale and area validation and lazy projection preparation as
-   * image_render; a read, allowed whenever image_render is allowed. */
+  /* Refuse reentry into this image's sampler while protecting the read from
+   * writes. Global busy may already be set by a plug-in's nested loop: viewing
+   * must remain available while its dialog is open. Balance both guards on
+   * every return, including profile-validation failures. */
+  if (needs_sampling)
+    {
+      if (open->display_sample_active) return GLIMS_STATUS_BUSY;
+      open->display_sample_active = TRUE;
+      engine->busy++;
+      read_lease.engine = engine;
+      read_lease.open = open;
+    }
+
+  /* Retain native projection stop/flush behavior before creating the derived
+   * source. Its reader validates the additional filter and mip footprints. */
   status = glims_projection_prepare_read (open, scale, area, &buffer);
   if (status != GLIMS_STATUS_OK)
     return status;
@@ -268,18 +301,19 @@ display_render (GlimsEngine   *engine,
       goto out;
     }
 
-  /* Bounded scratch: rows are processed in chunks whose source+destination
+  /* Bounded scratch: rows are processed in chunks whose complete temporary
    * bytes together never exceed the temp cap, and a single row must fit
    * gegl's gint stride. */
   row_src = (uint64_t) area.width * (gray ? 8u : 16u);
   row_dst = (uint64_t) area.width * 16u;
-  if (row_src + row_dst > GLIMS_RENDER_TEMP_CHUNK_BYTES ||
+  const uint64_t row_work = row_dst + row_src * (needs_sampling ? 2u : 1u);
+  if (row_work > GLIMS_RENDER_TEMP_CHUNK_BYTES ||
       row_src > G_MAXINT32 || row_dst > G_MAXINT32)
     {
       status = GLIMS_STATUS_INVALID_ARGUMENT;
       goto out;
     }
-  chunk_rows = (size_t) (GLIMS_RENDER_TEMP_CHUNK_BYTES / (row_src + row_dst));
+  chunk_rows = (size_t) (GLIMS_RENDER_TEMP_CHUNK_BYTES / row_work);
   if (chunk_rows < 1)
     chunk_rows = 1;
   if (chunk_rows > (size_t) area.height)
@@ -290,6 +324,22 @@ display_render (GlimsEngine   *engine,
     chunk_rows = 256;
   tmp_src = g_malloc (chunk_rows * (size_t) row_src);
   tmp_dst = g_malloc (chunk_rows * (size_t) row_dst);
+  if (needs_sampling)
+    {
+      const char *linear_encoding = gray ? "YA float" : "RGBA float";
+      linear_format = proj_space ? babl_format_with_space (linear_encoding, proj_space)
+                                 : babl_format (linear_encoding);
+      encode_fish = linear_format ? babl_fish (linear_format, src_format) : NULL;
+      if (!linear_format || !encode_fish)
+        {
+          status = glims_fail (error, NULL, "The alpha-aware display source could not be prepared.");
+          goto out;
+        }
+      status = glims_display_sample_prepare (buffer, linear_format, &open->display_sample);
+      if (status != GLIMS_STATUS_OK) goto out;
+      sample = open->display_sample;
+      tmp_linear = g_malloc (chunk_rows * (size_t) row_src);
+    }
 
   rows_done = 0;
   while (rows_done < (size_t) area.height)
@@ -304,9 +354,8 @@ display_render (GlimsEngine   *engine,
       rect.width  = area.width;
       rect.height = (gint) rows;
 
-      /* Read straight float in the projection's own space (encoding-only
-       * conversion), transform straight, then premultiply into the
-       * caller's rows at the caller's stride. */
+      /* Spatial sampling stays associated and linear. Encoding afterward in
+       * the same source space preserves the existing ICC/proof contract. */
       /* A final single-pixel chunk can take GEGL's hot-pixel shortcut
        * even when the whole request was larger. Validate that chunk too. */
       if (scale == 1.0 && rect.width == 1 && rect.height == 1)
@@ -315,8 +364,18 @@ display_render (GlimsEngine   *engine,
           status = glims_projection_prepare_read (open, scale, single, &buffer);
           if (status != GLIMS_STATUS_OK) goto out;
         }
-      gegl_buffer_get (buffer, &rect, scale, src_format,
-                       tmp_src, (gint) row_src, GEGL_ABYSS_NONE);
+      if (needs_sampling)
+        {
+          status = glims_display_sample_read (sample, scale,
+            (GlimsRect) { rect.x, rect.y, rect.width, rect.height }, tmp_linear, (size_t) row_src);
+          if (status != GLIMS_STATUS_OK) goto out;
+          for (row = 0; row < rows; row++)
+            babl_process (encode_fish, tmp_linear + row * (size_t) row_src,
+                           tmp_src + row * (size_t) row_src, (long) area.width);
+        }
+      else
+        gegl_buffer_get (buffer, &rect, scale, src_format,
+                         tmp_src, (gint) row_src, GEGL_ABYSS_NONE);
       if (!glims_plate_preview_succeeded (open->component_preview))
         { status = GLIMS_STATUS_FAILED; goto out; }
       gimp_color_transform_process_pixels (transform, src_format, tmp_src,
@@ -334,6 +393,7 @@ display_render (GlimsEngine   *engine,
   status = GLIMS_STATUS_OK;
 
 out:
+  g_free (tmp_linear);
   g_free (tmp_src);
   g_free (tmp_dst);
   if (transform)
