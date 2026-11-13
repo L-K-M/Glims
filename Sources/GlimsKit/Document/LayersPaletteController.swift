@@ -144,7 +144,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                   !document.colorInfo.mode.usesNativeChannels ||
                     (document.storage.layout == .layeredLab &&
                      ((command.id == "duplicate" && document.acceptsLayerDuplicate) ||
-                      (command.id == "new" && document.acceptsLayerCreate))) else { return }
+                      (command.id == "new" && document.acceptsLayerCreate) ||
+                      (command.id == "delete" && document.acceptsLayerDelete))) else { return }
             command.run(document)
         }
     }
@@ -437,7 +438,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         guard document?.colorInfo.mode.usesNativeChannels != true ||
               (document?.storage.layout == .layeredLab &&
                ((command == .duplicate && document?.acceptsLayerDuplicate == true) ||
-                (command == .new && document?.acceptsLayerCreate == true))) else { return }
+                (command == .new && document?.acceptsLayerCreate == true) ||
+                (command == .delete && document?.acceptsLayerDelete == true))) else { return }
         if command == .duplicate, document?.hasMultipleSelectedLayers == true {
             document?.duplicateSelectedLayers()
         } else {
@@ -651,11 +653,20 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         return document.acceptsEdits && !document.colorInfo.mode.usesNativeChannels && !document.floatingState.isActive
     }
 
+    private func deleteAdmission(_ document: ImageDocument) -> Bool {
+        if document.storage.layout == .layeredLab {
+            return document.acceptsLayerDelete && document.selectedLayerIDs.count == 1 &&
+                !document.targetCommandIsPending && !document.floatingState.isActive
+        }
+        return layerBatchAdmission(document)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if document?.colorInfo.mode.usesNativeChannels == true {
             guard menuItem.action == #selector(runLayerCommand(_:)),
                   (menuItem.tag == Int(EngineSession.LayerCommand.duplicate.rawValue) ||
-                   menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue)),
+                   menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) ||
+                   menuItem.tag == Int(EngineSession.LayerCommand.delete.rawValue)),
                   document?.storage.layout == .layeredLab else { return false }
         }
         if let item = menuItem.representedObject as? EffectItem {
@@ -693,9 +704,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             if command == .duplicate || command == .delete {
                 let verb = command == .duplicate ? "Duplicate" : "Delete"
                 menuItem.title = "\(verb) \(document.hasMultipleSelectedLayers ? "Layers" : "Layer")"
-                let admitted = command == .duplicate ? duplicateAdmission(document) : layerBatchAdmission(document)
-                if document.storage.layout == .layeredLab && command == .duplicate {
-                    menuItem.toolTip = admitted ? nil : "Select one logical layer to duplicate."
+                let admitted = command == .duplicate ? duplicateAdmission(document) : deleteAdmission(document)
+                if document.storage.layout == .layeredLab {
+                    menuItem.toolTip = admitted ? nil : "Select one logical layer to \(verb.lowercased())."
                 } else {
                     menuItem.toolTip = admitted ? nil
                         : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
@@ -825,7 +836,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         buttonBar.setEnabled(document.map(createAdmission) == true, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
         buttonBar.setEnabled(document.map(duplicateAdmission) == true, forItem: "duplicate")
-        buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "delete")
+        buttonBar.setEnabled(document.map(deleteAdmission) == true, forItem: "delete")
         // The floating-selection footer appears only while the shown
         // document's cached floating state is active; its buttons read
         // the cached readiness, never the engine.

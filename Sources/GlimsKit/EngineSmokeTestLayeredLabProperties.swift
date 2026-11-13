@@ -226,6 +226,33 @@ extension EngineSmokeTest {
                   "older engines keep logical layer creation disabled")
         }
         palette.reload()
+        let deleteMenu = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
+        let deleteButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Delete Layers" }
+        if opened.storage.allowsLayerDelete {
+            check(windowController.validateMenuItem(deleteMenu), "Layer menu enables logical layer deletion")
+            check(deleteButton?.isEnabled == true, "palette enables logical layer deletion")
+            let originalIDs = opened.layers.map(\.id)
+            deleteButton?.performClick(nil)
+            drain("delete logical layer")
+            check(opened.layers.count == 1 && Set(opened.layers.map(\.id)).isSubset(of: Set(originalIDs)),
+                  "palette deletes one logical layer")
+            let undo = EngineUndoManager(document: opened)
+            check(undo.canUndo, "logical deletion offers Undo")
+            undo.undo()
+            drain("logical deletion Undo")
+            check(opened.layers.map(\.id) == originalIDs, "Undo restores both logical layers")
+            check(undo.canRedo, "logical deletion offers Redo")
+            undo.redo()
+            drain("logical deletion Redo")
+            check(opened.layers.count == 1, "Redo removes the same logical layer")
+            undo.undo()
+            drain("restore original layers after deletion")
+            check(opened.layers.map(\.id) == originalIDs, "final Undo restores both logical layers")
+        } else {
+            check(!windowController.validateMenuItem(deleteMenu) && deleteButton?.isEnabled == false,
+                  "older engines keep logical deletion disabled")
+        }
+        palette.reload()
         var editedOpacity = -1.0 // No valid layer opacity can satisfy the saved-copy check until an edit runs.
         if let target = opened.activeLayer,
            let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),
