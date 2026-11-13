@@ -3260,7 +3260,7 @@ final class ImageDocument {
         let limited = storage.layout == .layeredLab
         if limited {
             guard acceptsLayerProperties, change.isLimitedLayerPropertyChange else {
-                completion?(.failure(DocumentError.busy)); return
+                completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
             }
         }
         guard !refuseWhileEditingUnavailable(allowingLayerProperties: limited) else {
@@ -4542,9 +4542,7 @@ final class ImageDocument {
                                                allowingLayerProperties: Bool = false) -> Bool {
         onUserCommand?()
         if (storage.readOnly || storage.layout == .layeredLab) && !allowingReplayRead && !allowingLayerProperties {
-            onError?(storage.layout == .layeredLab
-                     ? "This layered Lab document supports viewing and limited layer-property edits."
-                     : "This document is read-only. You can view it and save an XCF copy.")
+            onError?(storage.restrictedEditingMessage)
             return true
         }
         if recorder.isReplaying && !allowingReplayRead {

@@ -22,10 +22,12 @@ final class ImageStorageTests: XCTestCase {
         XCTAssertEqual(layered.layout, .layeredLab)
         XCTAssertTrue(layered.readOnly)
         XCTAssertFalse(layered.allowsLayerProperties)
+        XCTAssertEqual(layered.restrictedEditingMessage, "This document is read-only. You can view it and save an XCF copy.")
         let editable = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)))
         XCTAssertFalse(editable.readOnly)
         XCTAssertTrue(editable.allowsLayerProperties)
+        XCTAssertEqual(editable.restrictedEditingMessage, "This layered Lab document supports viewing and limited layer-property edits.")
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {

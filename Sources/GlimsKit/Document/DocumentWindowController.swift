@@ -2580,7 +2580,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                  #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
                 break
             default:
-                menuItem.toolTip = imageDocument.storage.layout == .layeredLab
+                menuItem.toolTip = imageDocument.storage.allowsLayerProperties
                     ? "This layered Lab document supports limited layer-property edits."
                     : "This document is read-only."
                 return false

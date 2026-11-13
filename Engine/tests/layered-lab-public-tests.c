@@ -11,6 +11,7 @@
 #include "core/gimpimage.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpitem.h"
+#include "core/gimplayer.h"
 #include "file/file-save.h"
 #include "plug-in/gimppluginmanager.h"
 #include "plug-in/gimppluginmanager-file.h"
@@ -142,6 +143,17 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     GlimsItemID hidden=gimp_item_get_id(GIMP_ITEM(current.layers[0].planes[0]));
     GlimsUndoInfo undo_before={0},undo_after={0};
     CHECK(api->image_undo_info(engine,id,&undo_before)==GLIMS_STATUS_OK,"history captured before invalid property edits");
+    GimpLayer *locked_root=current.layers[0].group;GimpItem *locked_item=GIMP_ITEM(locked_root);
+    gboolean old_visible=gimp_item_get_visible(locked_item);gdouble old_opacity=gimp_layer_get_opacity(locked_root);
+    gimp_item_set_lock_visibility(locked_item,TRUE,FALSE);
+    GlimsLayerChange locked={.struct_size=sizeof locked,.properties=GLIMS_LAYER_VISIBLE|GLIMS_LAYER_OPACITY,
+                             .visible=!old_visible,.opacity=.25};error=NULL;
+    CHECK(api->layer_change(engine,id,gimp_item_get_id(locked_item),&locked,&error)==GLIMS_STATUS_UNSUPPORTED,
+          "a locked logical root refuses a combined property edit");
+    if(error)api->free_string(error);error=NULL;
+    gimp_item_set_lock_visibility(locked_item,FALSE,FALSE);
+    CHECK(gimp_item_get_visible(locked_item)==old_visible && gimp_layer_get_opacity(locked_root)==old_opacity,
+          "refused locked-root edit leaves visibility and opacity unchanged");
     CHECK(api->layer_select(engine,id,hidden)!=GLIMS_STATUS_OK,"private scalar plane cannot be selected as a public layer");
     GlimsLayerChange bad={.struct_size=sizeof bad,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
     CHECK(api->layer_change(engine,id,hidden,&bad,&error)==GLIMS_STATUS_UNSUPPORTED,

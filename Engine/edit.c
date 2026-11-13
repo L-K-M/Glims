@@ -1050,8 +1050,12 @@ glims_layer_change (GlimsEngine            *engine,
       if (status != GLIMS_STATUS_OK) return status;
       if (!gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_ITEM_PROPERTIES, "Lab Layer Properties"))
         return GLIMS_STATUS_FAILED;
-      if (change->properties & GLIMS_LAYER_VISIBLE)
-        gimp_item_set_visible (GIMP_ITEM (layer), change->visible, TRUE);
+      if ((change->properties & GLIMS_LAYER_VISIBLE) &&
+          !gimp_item_set_visible (GIMP_ITEM (layer), change->visible, TRUE))
+        {
+          gimp_image_undo_group_end (image);
+          return glims_fail (error, NULL, "The layer visibility could not be changed.");
+        }
       if (change->properties & GLIMS_LAYER_OPACITY)
         gimp_layer_set_opacity (layer, change->opacity, TRUE);
       gimp_image_undo_group_end (image);

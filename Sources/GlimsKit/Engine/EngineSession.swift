@@ -1323,6 +1323,12 @@ final class EngineSession: @unchecked Sendable {
         let readOnly: Bool
         let allowsLayerProperties: Bool
 
+        var restrictedEditingMessage: String {
+            allowsLayerProperties
+                ? "This layered Lab document supports viewing and limited layer-property edits."
+                : "This document is read-only. You can view it and save an XCF copy."
+        }
+
         init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false) {
             self.layout = layout
             self.readOnly = readOnly
