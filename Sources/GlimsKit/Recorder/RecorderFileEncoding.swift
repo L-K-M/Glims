@@ -10,6 +10,7 @@ extension RecorderFileCodec {
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         var hasInkCurves = false
         var hasInkStroke = false
+        var hasLabLevels = false
         for record in value.records {
             switch record.outcome {
             case .success(.selectionShape(.polygon(let points), _), _):
@@ -77,6 +78,9 @@ extension RecorderFileCodec {
                 }
             case .success(.fillLab, _), .success(.applyLabCurves, _):
                 fileVersion = max(fileVersion, labVersion)
+            case .success(.applyLabLevels, _):
+                fileVersion = max(fileVersion, labLevelsVersion)
+                hasLabLevels = true
             case .success(.applyInkCurves, let binding):
                 fileVersion = max(fileVersion, inkCurvesVersion)
                 hasInkCurves = true
@@ -118,6 +122,9 @@ extension RecorderFileCodec {
         }
         if fileVersion == inkStrokeVersion, !hasInkStroke {
             throw RecorderFileError.invalid("Version 16 requires a successful ink stroke.")
+        }
+        if fileVersion == labLevelsVersion, !hasLabLevels {
+            throw RecorderFileError.invalid("Version 17 requires a successful Lab Levels command.")
         }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
@@ -328,6 +335,12 @@ extension RecorderFileCodec {
                 "clampInput": .bool(levels.clampInput), "clampOutput": .bool(levels.clampOutput)])
         case .fillLab(let fill):
             return .object(["tag": .string("fillLab"), "value": try d(fill.value), "opacity": try d(fill.opacity)])
+        case .applyLabLevels(let levels):
+            guard levels.isValid else { throw RecorderFileError.invalid("Invalid Lab Levels values.") }
+            return .object(["tag": .string("applyLabLevels"), "lowInput": try d(levels.lowInput),
+                "highInput": try d(levels.highInput), "gamma": try d(levels.gamma),
+                "lowOutput": try d(levels.lowOutput), "highOutput": try d(levels.highOutput),
+                "clampInput": .bool(levels.clampInput), "clampOutput": .bool(levels.clampOutput)])
         case .applyLabCurves(let curves):
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid Lab Curves values.") }
             return .object(["tag": .string("applyLabCurves"), "samples": .array(try curves.samples.map { try d($0) })])

@@ -104,6 +104,16 @@ final class EngineSession: @unchecked Sendable {
         var isValid: Bool { value.isValid }
     }
 
+    /// Endpoints use the normalized nominal Lab interval, with physical-axis
+    /// presentation handled by the editor. No RGB transfer curve or ink polarity.
+    struct LabLevelsSettings: Equatable {
+        var value: LevelsSettings.Channel = .init()
+        var clampInput = false
+        var clampOutput = false
+
+        var isValid: Bool { value.isValid }
+    }
+
     /// Scalar ink Curves settings: exactly 256 output samples at inputs
     /// i/255. 0 is full ink, 1 is paper, with no RGB/TRC conversion. Samples
     /// may rise or fall; a nonmonotone table is valid. The value owns its
@@ -398,6 +408,107 @@ final class EngineSession: @unchecked Sendable {
         settings.samples.withUnsafeBytes { source in
             withUnsafeMutableBytes(of: &native.samples) { $0.copyMemory(from: source) }
         }
+        return native
+    }
+
+    var supportsLabLevels: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_levels_lab),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_levels_lab) else { return false }
+        return supportsLabAxes && api.image_levels_lab != nil
+    }
+
+    var supportsLabLevelSnapshots: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_snapshot_apply_levels),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_snapshot_apply_levels) else { return false }
+        return supportsLabAxes && api.image_lab_snapshot_begin != nil && api.image_lab_snapshot_end != nil
+            && api.image_lab_snapshot_levels != nil && api.image_lab_snapshot_apply_levels != nil
+    }
+
+    func applyLabLevels(_ image: Int32, axis: LabAxis, settings: LabLevelsSettings) throws {
+        guard supportsLabLevels, let slot = api.image_levels_lab else { throw labLevelsUnavailable() }
+        var native = try labLevels(image, axis: axis, settings: settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &native, &error), error)
+    }
+
+    func beginLabLevelsSnapshot(_ image: Int32, axis: LabAxis) throws -> UInt64 {
+        guard supportsLabLevelSnapshots, let slot = api.image_lab_snapshot_begin else { throw labLevelsUnavailable() }
+        try validateLabCurveTarget(image, axis: axis)
+        var target = GlimsLabSnapshotTarget()
+        target.struct_size = UInt32(MemoryLayout<GlimsLabSnapshotTarget>.size)
+        target.axis = axis.id
+        target.role = axis.role.rawValue
+        target.uuid = axis.uuid.uuid
+        var token: UInt64 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &target, &token, &error), error)
+        guard token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no Lab Levels preview token.")
+        }
+        return token
+    }
+
+    /// Returns an independent owned preview image. The caller must close it.
+    func renderLabLevelsSnapshot(_ image: Int32, token: UInt64, axis: LabAxis,
+                                 settings: LabLevelsSettings) throws -> Int32 {
+        guard supportsLabLevelSnapshots, let slot = api.image_lab_snapshot_levels else { throw labLevelsUnavailable() }
+        try validateLabLevelsToken(image, token: token)
+        var native = try labLevels(image, axis: axis, settings: settings)
+        var copy: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, token, &native, &copy, &error), error)
+        guard copy > 0, copy != image else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The engine returned no separate Lab Levels preview image.")
+        }
+        return copy
+    }
+
+    /// Success consumes the token. A refused or cancelled apply retains it.
+    func applyLabLevelsSnapshot(_ image: Int32, token: UInt64, axis: LabAxis,
+                                settings: LabLevelsSettings) throws {
+        guard supportsLabLevelSnapshots, let slot = api.image_lab_snapshot_apply_levels else { throw labLevelsUnavailable() }
+        try validateLabLevelsToken(image, token: token)
+        var native = try labLevels(image, axis: axis, settings: settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, token, &native, &error), error)
+    }
+
+    func endLabLevelsSnapshot(_ image: Int32, token: UInt64) throws {
+        guard supportsLabLevelSnapshots, let slot = api.image_lab_snapshot_end else { throw labLevelsUnavailable() }
+        try validateLabLevelsToken(image, token: token)
+        try check(slot(engine, image, token), nil)
+    }
+
+    private func labLevelsUnavailable() -> EngineError {
+        EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                    message: "This image engine does not support the requested Lab Levels operation.")
+    }
+
+    private func validateLabLevelsToken(_ image: Int32, token: UInt64) throws {
+        guard image > 0, token != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "A valid Lab Levels preview is required.")
+        }
+    }
+
+    private func labLevels(_ image: Int32, axis: LabAxis, settings: LabLevelsSettings) throws -> GlimsLabLevelsSettings {
+        try validateLabCurveTarget(image, axis: axis)
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Levels endpoints must be between 0 and 1 and gamma between 0.1 and 10.")
+        }
+        var native = GlimsLabLevelsSettings()
+        native.struct_size = UInt32(MemoryLayout<GlimsLabLevelsSettings>.size)
+        native.axis = axis.id
+        native.role = axis.role.rawValue
+        native.uuid = axis.uuid.uuid
+        native.value = GlimsLevelsChannel(low_input: settings.value.lowInput, high_input: settings.value.highInput,
+                                         gamma: settings.value.gamma, low_output: settings.value.lowOutput,
+                                         high_output: settings.value.highOutput)
+        native.clamp_input = settings.clampInput ? 1 : 0
+        native.clamp_output = settings.clampOutput ? 1 : 0
         return native
     }
 

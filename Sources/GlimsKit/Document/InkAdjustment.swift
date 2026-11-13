@@ -69,5 +69,3 @@ extension EngineSession.InkLevelsSettings: InkPreviewSettings {
 extension EngineSession.InkCurvesSettings: InkPreviewSettings {
     var adjustment: InkAdjustmentSettings { .curves(self) }
 }
-
-extension EngineSession.LabCurvesSettings: ComponentPreviewSettings {}

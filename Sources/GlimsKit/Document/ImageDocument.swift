@@ -393,6 +393,7 @@ final class ImageDocument {
     private var inkPreviewStartIsPending = false
     private var inkPreviewCleanups = 0
     private var labPreviewToken: UInt64?
+    private var labPreviewKind: LabAdjustmentKind?
     private var labPreviewAxis: EngineSession.LabAxis?
     private var labPreviewStartIsPending = false
     private var labPreviewCleanups = 0
@@ -5413,8 +5414,16 @@ final class ImageDocument {
     }
 
     func labCurvesRefusal(axis: EngineSession.LabAxis) -> String? {
-        guard colorInfo.mode == .lab, session.supportsLabCurveSnapshots else {
-            return "This engine does not support Lab Curves previews."
+        labAdjustmentRefusal(axis: axis, kind: .curves)
+    }
+
+    func labLevelsRefusal(axis: EngineSession.LabAxis) -> String? {
+        labAdjustmentRefusal(axis: axis, kind: .levels)
+    }
+
+    func labAdjustmentRefusal(axis: EngineSession.LabAxis, kind: LabAdjustmentKind) -> String? {
+        guard colorInfo.mode == .lab, kind.isSupported(by: session) else {
+            return "This engine does not support Lab \(kind.title) previews."
         }
         guard !isClosing else { return DocumentError.closed.localizedDescription }
         guard acceptsEdits, !strokeIsActive, !targetCommandIsPending else {
@@ -5429,10 +5438,20 @@ final class ImageDocument {
 
     func beginLabCurvesPreview(axis: EngineSession.LabAxis,
                                completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
+        beginLabPreview(axis: axis, kind: .curves, completion: completion)
+    }
+
+    func beginLabLevelsPreview(axis: EngineSession.LabAxis,
+                               completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
+        beginLabPreview(axis: axis, kind: .levels, completion: completion)
+    }
+
+    private func beginLabPreview(axis: EngineSession.LabAxis, kind: LabAdjustmentKind,
+                                 completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard filterPreviewIsOpen, labPreviewToken == nil, !labPreviewStartIsPending,
               labPreviewCleanups == 0, inkPreviewToken == nil, !inkPreviewStartIsPending,
-              inkPreviewCleanups == 0, session.supportsLabCurveSnapshots,
+              inkPreviewCleanups == 0, kind.isSupported(by: session),
               colorInfo.mode == .lab, selectedLabAxis == axis, !targetCommandIsPending,
               !recorder.isReplaying, !isSavingForClose, !isTransferringClipboard,
               !PlugInCommands.isRunning, !EngineActivity.shared.isBusy else {
@@ -5441,11 +5460,12 @@ final class ImageDocument {
         labPreviewStartIsPending = true
         EngineActivity.shared.beginTransformPreview()
         enqueue(on: inputQueue) { [session, image] in
-            let result = Result { try session.beginLabCurvesSnapshot(image, axis: axis) }
+            let result = Result { try kind.begin(session, image: image, axis: axis) }
             DispatchQueue.main.async {
                 self.labPreviewStartIsPending = false
                 if case .success(let token) = result {
                     self.labPreviewToken = token
+                    self.labPreviewKind = kind
                     self.labPreviewAxis = axis
                 }
                 EngineActivity.shared.endTransformPreview()
@@ -5456,8 +5476,19 @@ final class ImageDocument {
 
     func renderLabCurvesPreview(_ request: LabCurvesPixelPreview.Request,
                                 completion: @escaping @MainActor (Result<CGImage, Error>) -> Void) {
+        renderLabPreview(request, completion: completion)
+    }
+
+    func renderLabLevelsPreview(_ request: LabLevelsPixelPreview.Request,
+                                completion: @escaping @MainActor (Result<CGImage, Error>) -> Void) {
+        renderLabPreview(request, completion: completion)
+    }
+
+    private func renderLabPreview<Settings: LabPreviewSettings>(_ request: ComponentPixelPreview<Settings>.Request,
+                                completion: @escaping @MainActor (Result<CGImage, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard filterPreviewIsOpen, labPreviewToken == request.token,
+              labPreviewKind == request.settings.adjustment.kind,
               let axis = labPreviewAxis, request.isValid else {
             return completion(.failure(DocumentError.targetChanged))
         }
@@ -5466,7 +5497,7 @@ final class ImageDocument {
         enqueue(on: inputQueue) { [session, image] in
             var copy: Int32?
             let result = Result { () throws -> CGImage in
-                let preview = try session.renderLabCurvesSnapshot(image, token: request.token, axis: axis, settings: request.settings)
+                let preview = try request.settings.adjustment.render(session, image: image, token: request.token, axis: axis)
                 copy = preview
                 return try CanvasDisplayDestination.render(session, image: preview, scale: request.renderScale,
                     area: request.renderArea, destination: request.destination, proof: request.proof)
@@ -5475,7 +5506,8 @@ final class ImageDocument {
                 let finish: @MainActor (Result<Void, Error>) -> Void = { cleanup in
                     defer { self.jobDidFinish(input: false) }
                     EngineActivity.shared.endTransformPreview()
-                    if self.isClosing || self.labPreviewToken != request.token {
+                    if self.isClosing || self.labPreviewToken != request.token
+                        || self.labPreviewKind != request.settings.adjustment.kind {
                         completion(.failure(DocumentError.closed))
                     } else {
                         completion(cleanup.flatMap { result })
@@ -5489,8 +5521,22 @@ final class ImageDocument {
 
     func endLabCurvesPreview(_ token: UInt64,
                               completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
-        if labPreviewToken == token {
+        endLabPreview(token, kind: .curves, completion: completion)
+    }
+
+    func endLabLevelsPreview(_ token: UInt64,
+                              completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        endLabPreview(token, kind: .levels, completion: completion)
+    }
+
+    private func endLabPreview(_ token: UInt64, kind: LabAdjustmentKind,
+                              completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard labPreviewToken != token || labPreviewKind == kind else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        if labPreviewToken == token, labPreviewKind == kind {
             labPreviewToken = nil
+            labPreviewKind = nil
             labPreviewAxis = nil
         }
         labPreviewCleanups += 1
@@ -5499,7 +5545,7 @@ final class ImageDocument {
         // activity will refuse its expired token and discard its stale reply.
         inputQueue.async {
             DispatchQueue.main.async {
-                EngineActivity.shared.endLabSnapshot(token, image: self.image, session: self.session) { result in
+                EngineActivity.shared.endLabSnapshot(token, image: self.image, session: self.session, kind: kind) { result in
                     defer { self.jobDidFinish(input: false) }
                     self.labPreviewCleanups -= 1
                     completion(result)
@@ -5512,16 +5558,28 @@ final class ImageDocument {
     @discardableResult
     func applyLabCurvesPreview(_ token: UInt64, settings: EngineSession.LabCurvesSettings,
                                 completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
+        applyLabPreview(token, settings: .curves(settings), completion: completion)
+    }
+
+    @discardableResult
+    func applyLabLevelsPreview(_ token: UInt64, settings: EngineSession.LabLevelsSettings,
+                                completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
+        applyLabPreview(token, settings: .levels(settings), completion: completion)
+    }
+
+    private func applyLabPreview(_ token: UInt64, settings: LabAdjustmentSettings,
+                                completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
         guard settings.isValid, filterPreviewIsOpen, labPreviewToken == token,
+              labPreviewKind == settings.kind,
               let axis = labPreviewAxis,
               !refuseWhileEditingUnavailable(forPreviewWork: true) else {
             completion(.failure(DocumentError.busy))
             return false
         }
         let admission = InkEditAdmission()
-        let accepted = enqueueExclusive(label: "Applying Lab Curves", admission: {
+        let accepted = enqueueExclusive(label: "Applying Lab \(settings.kind.title)", admission: {
             self.filterPreviewIsOpen && self.labPreviewToken == token
-                && self.labPreviewAxis == axis && !self.isClosing
+                && self.labPreviewAxis == axis && self.labPreviewKind == settings.kind && !self.isClosing
         }, didAdmit: {
             if self.recorder.isRecording {
                 do {
@@ -5533,13 +5591,14 @@ final class ImageDocument {
             let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
             let result = Result<Void, Error> {
                 if let error = admission.error { throw error }
-                try session.applyLabCurvesSnapshot(image, token: token, axis: axis, settings: settings)
+                try settings.apply(session, image: image, token: token, axis: axis)
             }
-            let recording = result.map { SemanticImageCommand.applyLabCurves(settings) }
+            let recording = result.map { settings.command }
             self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
             self.dispatchReadWhenReady {
                 if case .success = result, self.labPreviewToken == token {
                     self.labPreviewToken = nil
+                    self.labPreviewKind = nil
                     self.labPreviewAxis = nil
                 }
                 if !self.isClosing {
@@ -6871,7 +6930,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .completeLabStroke: return true
+        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke: return true
         default: return false
         }
@@ -6881,7 +6940,7 @@ final class ImageDocument {
                                         explicitChannel: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
         switch command {
-        case .fillLab, .applyLabCurves, .completeLabStroke:
+        case .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke:
             // Live Lab admission supplies its captured axis explicitly. Never
             // infer a Lab target from the current selection in this fallback.
             return .unavailable("The explicit Lab axis was unavailable when this edit was recorded.")

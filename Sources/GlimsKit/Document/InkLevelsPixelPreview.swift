@@ -125,3 +125,5 @@ typealias InkLevelsPixelPreview = InkPixelPreview<EngineSession.InkLevelsSetting
 typealias InkCurvesPixelPreview = InkPixelPreview<EngineSession.InkCurvesSettings>
 
 typealias LabCurvesPixelPreview = ComponentPixelPreview<EngineSession.LabCurvesSettings>
+
+typealias LabLevelsPixelPreview = ComponentPixelPreview<EngineSession.LabLevelsSettings>
