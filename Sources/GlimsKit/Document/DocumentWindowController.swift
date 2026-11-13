@@ -474,9 +474,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         let multichannel = imageDocument.colorInfo.mode.usesInkChannels
         let lab = imageDocument.colorInfo.mode == .lab
-        let count = lab ? 3 : multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
-        let item = lab ? "Lab channel" : multichannel ? "ink channel" : "layer"
-        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(undo)"
+        let layeredLab = imageDocument.storage.layout == .layeredLab
+        let count = layeredLab ? imageDocument.layers.count : lab ? 3 : multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
+        let item = lab && !layeredLab ? "Lab channel" : multichannel ? "ink channel" : "layer"
+        let readOnly = imageDocument.storage.readOnly ? " · Read-only" : ""
+        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(readOnly)\(undo)"
         let current = statusBar.message
         let message = ToolHintPolicy.status(current: current, isError: statusIsError,
             progressActive: statusProgressActive, activity: EngineActivity.shared.label,
@@ -567,6 +569,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: ColorForms.precisionLabel(imageDocument.colorInfo),
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
+            + (imageDocument.storage.readOnly ? " — Read-only" : "")
         refreshStatusInformation()
         refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
@@ -2563,6 +2566,24 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if imageDocument.storage.readOnly {
+            switch menuItem.action {
+            case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
+                 #selector(revertDocument(_:)), #selector(imageInformation(_:)),
+                 #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
+                 #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
+                 #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
+                 #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
+                 #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+                 #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
+                 #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
+                 #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
+                break
+            default:
+                menuItem.toolTip = "This layered Lab document is read-only."
+                return false
+            }
+        }
         if imageDocument.colorInfo.mode == .lab {
             guard permitsLabMenu(menuItem) else {
                 menuItem.toolTip = "This command is unavailable for Lab documents."

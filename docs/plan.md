@@ -5902,3 +5902,18 @@ seeded. On this Mac, isolated engine readiness after cache deletion fell from
 catalogs unchanged; one ordinary launch showed its document window at 1.51
 seconds. Corrupt caches, language changes and incompatible packaged registries
 still fall back to a slower scan. Review and release qualification remain open.
+
+### Layered Lab read-only adoption (experimental branch)
+
+The candidate opens a strictly validated v2 layered Lab XCF as logical layer
+roots, renders its derived Lab composite to sRGB or a display profile, and
+allows root selection and XCF saves. It rejects ordinary edits and private
+plane access. The window labels the document read-only and disables editing
+commands; the Layers palette selects roots without showing scalar thumbnails.
+The public native probe passed on all four engine sets, including rejection of
+damaged in-memory storage and private-plane selection. A hosted AppKit test
+also opened the document, selected a logical layer, rendered and saved a copy.
+The prototype is not yet qualified for release: broaden the public rendering
+and facade-bypass tests, complete independent review and latest-head CI before
+merging. Editing, interchange and soft proof for layered Lab remain future
+work; this does not establish Photoshop 4 parity.

@@ -11,6 +11,7 @@
 #include "cmyk-transform.h"
 #include "lab-transform.h"
 #include "lab-layer-storage.h"
+#include "lab-layer-preview-read.h"
 
 #include <math.h>
 #include <string.h>
@@ -257,16 +258,19 @@ glims_adopt_image (GlimsEngine  *engine,
 {
   GlimsPlateStorage storage;
   GlimsPlateStorageState state = glims_plate_storage_read (image, &storage);
+  g_autofree GlimsLabLayerStorage *layered = NULL;
+  gboolean layered_valid = FALSE;
   if (id) *id = 0;
-  if (state == GLIMS_PLATE_STORAGE_INVALID) return GLIMS_STATUS_UNSUPPORTED;
-  if (state == GLIMS_PLATE_STORAGE_NONE)
+  if (state != GLIMS_PLATE_STORAGE_VALID)
     {
-      /* A missing map with remaining layer/path identities is a damaged
-       * layered Lab carrier, not an ordinary grayscale document. The flat
-       * reader only checks channel identities when the map is missing. */
-      g_autofree GlimsLabLayerStorage *layered = g_try_new0 (GlimsLabLayerStorage, 1);
+      /* Both layouts share a marker. A valid v2 is not an invalid v1;
+       * markerless orphan identities still refuse ordinary adoption. */
+      layered = g_try_new0 (GlimsLabLayerStorage, 1);
       if (!layered) return GLIMS_STATUS_FAILED;
-      if (glims_lab_layer_storage_read (image, layered) != GLIMS_LAB_LAYER_STORAGE_NONE)
+      GlimsLabLayerStorageState layered_state = glims_lab_layer_storage_read (image, layered);
+      if (layered_state == GLIMS_LAB_LAYER_STORAGE_VALID)
+        layered_valid = TRUE;
+      else if (state != GLIMS_PLATE_STORAGE_NONE || layered_state != GLIMS_LAB_LAYER_STORAGE_NONE)
         return GLIMS_STATUS_UNSUPPORTED;
     }
   GimpColorProfile *cmyk_profile = NULL;
@@ -278,7 +282,7 @@ glims_adopt_image (GlimsEngine  *engine,
       cmyk_profile = gimp_color_profile_new_from_icc_profile (storage.profile, storage.profile_size, NULL);
       if (!cmyk_profile) return GLIMS_STATUS_UNSUPPORTED;
     }
-  if (state == GLIMS_PLATE_STORAGE_VALID && storage.map.mode == GLIMS_PLATE_MODE_LAB)
+  if (layered_valid || (state == GLIMS_PLATE_STORAGE_VALID && storage.map.mode == GLIMS_PLATE_MODE_LAB))
     {
       GlimsLabTransform *transform = glims_lab_transform_new ();
       if (! transform) return GLIMS_STATUS_UNSUPPORTED;
@@ -292,17 +296,49 @@ glims_adopt_image (GlimsEngine  *engine,
       open->component_profile_label = g_strdup (label && *label ? label : "CMYK Profile");
       g_object_unref (cmyk_profile);
     }
-  open->component_document = state == GLIMS_PLATE_STORAGE_VALID;
-  open->component_mode = open->component_document ? storage.map.mode : 0;
+  open->component_document = state == GLIMS_PLATE_STORAGE_VALID || layered_valid;
+  open->component_layout = layered_valid ? GLIMS_COMPONENT_LAYOUT_LAYERED_LAB :
+    state == GLIMS_PLATE_STORAGE_VALID ? GLIMS_COMPONENT_LAYOUT_FLAT : GLIMS_COMPONENT_LAYOUT_ORDINARY;
+  open->component_mode = layered_valid ? GLIMS_PLATE_MODE_LAB :
+    state == GLIMS_PLATE_STORAGE_VALID ? storage.map.mode : 0;
   if (open->component_mode == GLIMS_PLATE_MODE_LAB)
     open->component_profile_label = g_strdup ("D50 Lab");
-  if (open->component_document)
+  if (state == GLIMS_PLATE_STORAGE_VALID)
     for (guint i = 0; i < storage.map.count; i++)
       {
         open->component_planes[i] = g_object_ref (GIMP_DRAWABLE (storage.planes[i]));
         open->component_updates[i] = g_signal_connect (storage.planes[i], "update",
           G_CALLBACK (component_projection_update), open);
       }
+
+  if (layered_valid)
+    {
+      /* XCF can select a private scalar child. Map each selected child to
+       * its logical root, preserving order and avoiding duplicates. */
+      GList *roots = NULL;
+      for (GList *it = gimp_image_get_selected_layers (image); it; it = it->next)
+        {
+          GimpItem *item = GIMP_ITEM (it->data);
+          while (gimp_item_get_parent (item)) item = gimp_item_get_parent (item);
+          for (guint i = 0; i < layered->map.count; i++)
+            if (item == GIMP_ITEM (layered->layers[i].group) && !g_list_find (roots, item))
+              { roots = g_list_append (roots, item); break; }
+        }
+      if (!roots && layered->map.count) roots = g_list_append (roots, layered->layers[0].group);
+      gimp_image_set_selected_layers (image, roots);
+      GList *selected = gimp_image_get_selected_layers (image);
+      GList *expected = roots;
+      while (selected && expected && selected->data == expected->data)
+        { selected = selected->next; expected = expected->next; }
+      gboolean selection_applied = !selected && !expected;
+      g_list_free (roots);
+      if (!selection_applied)
+        {
+          g_free (open->component_profile_label);
+          g_free (open);
+          return GLIMS_STATUS_FAILED;
+        }
+    }
 
   open->image  = image;
   open->engine = engine;
@@ -685,6 +721,33 @@ glims_image_layers (GlimsEngine    *engine,
   if (! count || capacity < 0)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!storage) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+        return GLIMS_STATUS_UNSUPPORTED;
+      GList *selected = gimp_image_get_selected_layers (open->image);
+      for (guint i = 0; rows && i < storage->map.count && i < (guint) capacity; i++)
+        {
+          GimpLayer *layer = storage->layers[i].group;
+          GimpItem *item = GIMP_ITEM (layer);
+          GlimsLayerInfo *row = &rows[i];
+          memset (row, 0, sizeof *row);
+          row->id = gimp_item_get_id (item);
+          row->kind = GLIMS_LAYER_PIXEL;
+          g_strlcpy (row->name, gimp_object_get_name (GIMP_OBJECT (layer)), sizeof row->name);
+          g_strlcpy (row->mode, "normal", sizeof row->mode);
+          row->visible = gimp_item_get_visible (item);
+          row->selected = g_list_find (selected, layer) != NULL;
+          row->opacity = gimp_layer_get_opacity (layer);
+          row->bounds.width = storage->map.width;
+          row->bounds.height = storage->map.height;
+        }
+      *count = storage->map.count;
+      return GLIMS_STATUS_OK;
+    }
+
   walk.selected = gimp_image_get_selected_layers (open->image);
   walk_layers (gimp_image_get_layers (open->image), 0, 0, &walk);
   *count = walk.count;
@@ -709,7 +772,8 @@ glims_image_info (GlimsEngine    *engine,
   memset (info, 0, sizeof (*info));
   info->width  = gimp_image_get_width (open->image);
   info->height = gimp_image_get_height (open->image);
-  glims_image_layers (engine, id, NULL, 0, &layers);
+  GlimsStatus layer_status = glims_image_layers (engine, id, NULL, 0, &layers);
+  if (layer_status != GLIMS_STATUS_OK) return layer_status;
   info->layer_count = layers;
   info->dirty = gimp_image_is_dirty (open->image) != 0;
   if (gimp_enum_get_value (GIMP_TYPE_PRECISION, gimp_image_get_precision (open->image),
@@ -825,6 +889,63 @@ glims_projection_prepare_read (GlimsOpenImage  *open,
   return GLIMS_STATUS_OK;
 }
 
+/* The private Lab preview returns straight linear sRGB. Convert only after
+ * spatial sampling, keeping the read epoch exclusive to this image. */
+static GlimsStatus
+render_layered_lab_srgb (GlimsEngine *engine, GlimsOpenImage *open, double scale,
+                         GlimsRect area, uint8_t *pixels, size_t stride)
+{
+  if (!(scale >= MIN_RENDER_SCALE) || scale > MAX_RENDER_SCALE ||
+      area.width < 1 || area.height < 1 ||
+      (int64_t) area.x + area.width > G_MAXINT32 ||
+      (int64_t) area.y + area.height > G_MAXINT32 ||
+      stride < (uint64_t) area.width * 4 || stride > G_MAXINT32)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  const double native_scale = (double) (float) scale;
+  if (fabs ((double) area.x / native_scale) > MAX_RENDER_SAMPLE_COORD ||
+      fabs ((double) area.y / native_scale) > MAX_RENDER_SAMPLE_COORD ||
+      fabs (((double) area.x + area.width) / native_scale) > MAX_RENDER_SAMPLE_COORD ||
+      fabs (((double) area.y + area.height) / native_scale) > MAX_RENDER_SAMPLE_COORD)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint64_t span = (uint64_t) stride * (area.height - 1) + (uint64_t) area.width * 4;
+  if (span > GLIMS_MAX_PIXEL_BUFFER_BYTES || (uintptr_t) pixels > UINTPTR_MAX - span)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (open->display_sample_active) return GLIMS_STATUS_BUSY;
+  open->display_sample_active = TRUE;
+  engine->busy++;
+  GlimsStatus status = GLIMS_STATUS_OK;
+  gfloat *samples = NULL;
+  const Babl *fish = babl_fish (babl_format ("RGBA float"), babl_format ("R'aG'aB'aA u8"));
+  if (!fish) { status = GLIMS_STATUS_FAILED; goto out; }
+  const guint columns = MIN (4096u, (guint) area.width);
+  const size_t sample_stride = (size_t) columns * 4 * sizeof (gfloat);
+  const guint rows = MIN (256u, (guint) (GLIMS_RENDER_TEMP_CHUNK_BYTES / sample_stride));
+  samples = g_try_malloc ((size_t) rows * sample_stride);
+  if (!samples) { status = GLIMS_STATUS_FAILED; goto out; }
+  for (gint x = 0; x < area.width; )
+    {
+      guint width = MIN (columns, (guint) (area.width - x));
+      for (gint y = 0; y < area.height; )
+        {
+          guint height = MIN (rows, (guint) (area.height - y));
+          GlimsRect part = { area.x + x, area.y + y, (gint) width, (gint) height };
+          status = glims_lab_layer_preview_read (open->image, &open->layered_lab_preview,
+                                                  scale, part, samples, sample_stride);
+          if (status != GLIMS_STATUS_OK) goto out;
+          for (guint row = 0; row < height; row++)
+            babl_process (fish, (guint8 *) samples + row * sample_stride,
+                          pixels + (size_t) (y + row) * stride + (size_t) x * 4, width);
+          y += height;
+        }
+      x += width;
+    }
+out:
+  g_free (samples);
+  open->display_sample_active = FALSE;
+  engine->busy--;
+  return status;
+}
+
 /* Sample in the source's linear space before Babl converts to the legacy
  * premultiplied sRGB output. Bounded chunks amortize validation across rows.
  * The engine thread owns the cache during this read. */
@@ -918,6 +1039,8 @@ glims_image_render (GlimsEngine  *engine,
   if (! pixels)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    return render_layered_lab_srgb (engine, open, scale, area, pixels, stride);
   if (scale >= MIN_RENDER_SCALE && scale < 2.0 && scale != 1.0)
     return render_legacy_scaled (engine, open, scale, area, pixels, stride);
 

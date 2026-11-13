@@ -9,6 +9,7 @@
  * layer commands follow app/actions/layers-commands.c.
  */
 #include "engine-private.h"
+#include "lab-layer-storage.h"
 
 #include <math.h>
 #include <string.h>
@@ -535,6 +536,14 @@ glims_gradient_resource (GlimsEngine                           *engine,
 
 /* ---- Layers ------------------------------------------------------------ */
 
+static gboolean
+layered_lab_contains_root (const GlimsLabLayerStorage *storage, GimpLayer *layer)
+{
+  for (guint i = 0; i < storage->map.count; i++)
+    if (storage->layers[i].group == layer) return TRUE;
+  return FALSE;
+}
+
 GlimsStatus
 glims_layer_select (GlimsEngine  *engine,
                     GlimsImageID  id,
@@ -550,6 +559,13 @@ glims_layer_select (GlimsEngine  *engine,
   layer = find_layer (open->image, layer_id);
   if (! layer || layer_id == 0)
     return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!storage) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID ||
+          !layered_lab_contains_root (storage, layer)) return GLIMS_STATUS_UNSUPPORTED;
+    }
 
   /* Plug-ins, fills and filters act on the engine's selected layers. */
   layers = g_list_prepend (NULL, layer);
@@ -621,6 +637,15 @@ glims_image_select_layers (GlimsEngine       *engine,
     return GLIMS_STATUS_NOT_FOUND;
   image = open->image;
 
+  g_autofree GlimsLabLayerStorage *layered = NULL;
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      layered = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!layered) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (image, layered) != GLIMS_LAB_LAYER_STORAGE_VALID)
+        return GLIMS_STATUS_UNSUPPORTED;
+    }
+
   if (count > 0 && ! layers)
     {
       glims_fail (error, NULL, "A NULL layer list needs count 0.");
@@ -673,6 +698,11 @@ glims_image_select_layers (GlimsEngine       *engine,
                 {
                   glims_fail (error, NULL, "The id names a mask, channel or path, not a layer.");
                   status = GLIMS_STATUS_INVALID_ARGUMENT;
+                }
+              else if (layered && !layered_lab_contains_root (layered, GIMP_LAYER (item)))
+                {
+                  glims_fail (error, NULL, "Only logical Lab layer roots can be selected.");
+                  status = GLIMS_STATUS_UNSUPPORTED;
                 }
               else
                 {

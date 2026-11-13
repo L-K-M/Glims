@@ -283,6 +283,7 @@ final class ImageDocument {
             role: axis.role, component: colorInfo.component).map(\.value)
     }
     func toolIsAvailable(_ tool: ToolID) -> Bool {
+        if storage.readOnly { return [.hand, .zoom].contains(tool) }
         guard tool.isAvailable(in: colorInfo.mode) else { return false }
         guard colorInfo.mode == .lab else { return true }
         switch tool {
@@ -302,6 +303,7 @@ final class ImageDocument {
     /// the Precision form and the Image Information sheet all read this
     /// cache; none of them asks the engine while it validates a menu.
     private(set) var colorInfo: EngineSession.ColorInfo
+    private(set) var storage = EngineSession.ImageStorage(layout: .legacyUnknown, readOnly: false)
     /// Bumped by every reload; thumbnail caches key on it so a result
     /// read for an older state never lands on a newer row.
     private(set) var stateVersion = 0
@@ -504,7 +506,10 @@ final class ImageDocument {
             && !EngineActivity.shared.isBusy
     }
 
-    var acceptsEdits: Bool { acceptsImageReads && !recorder.isReplaying }
+    var acceptsEdits: Bool { acceptsImageReads && !storage.readOnly && !recorder.isReplaying }
+    var acceptsLayerSelection: Bool {
+        acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
+    }
 
     /// A queued target command's drawable is still unknown. Menu
     /// validation reads this cached flag instead of asking the engine.
@@ -550,7 +555,12 @@ final class ImageDocument {
         info = try session.info(image)
         fileState.syncDirty(info.isDirty)
         colorInfo = try session.colorInfo(image)
-        if colorInfo.mode == .lab && !(session.supportsLabCreation && session.supportsLabAxes && session.supportsLabFill) {
+        storage = try session.imageStorage(image)
+        if storage.layout == .layeredLab && colorInfo.mode != .lab {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                            message: "The image storage does not match its color mode.")
+        }
+        if colorInfo.mode == .lab && storage.layout != .layeredLab && !(session.supportsLabCreation && session.supportsLabAxes && session.supportsLabFill) {
             throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                             message: "This image engine cannot edit Lab documents.")
         }
@@ -580,7 +590,11 @@ final class ImageDocument {
             }
         }
         maskStates = masks
-        if colorInfo.mode == .lab {
+        if storage.layout == .layeredLab {
+            labAxes = nil
+            components = nil
+            channels = []
+        } else if colorInfo.mode == .lab {
             let axes = try session.labAxes(image)
             guard axes.component == colorInfo.component else {
                 throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
@@ -771,6 +785,7 @@ final class ImageDocument {
     /// own thumbnail does in GIMP.
     func selectLayer(_ id: Int32) {
         guard !isClosing else { return }
+        if storage.layout == .layeredLab { selectLayers([id]); return }
         guard !refuseWhileEditingUnavailable() else { return }
         // A target switch would implicitly anchor an active floating
         // selection in the engine; this slice refuses it instead.
@@ -866,7 +881,11 @@ final class ImageDocument {
     /// it can never land on another document or the front window.
     func selectLayers(_ ids: [Int32]) {
         guard !isClosing else { return }
-        guard !refuseWhileEditingUnavailable() else { return }
+        if storage.layout == .layeredLab {
+            guard acceptsImageReads, !recorder.isReplaying else { return }
+        } else {
+            guard !refuseWhileEditingUnavailable() else { return }
+        }
         // A selection switch would implicitly anchor an active floating
         // selection; the resolve-first gate refuses it, like selectLayer.
         guard !refuseWhileFloatingActive() else { return }
@@ -910,16 +929,17 @@ final class ImageDocument {
         for id in ids { maskStates[id]?.editing = false }
         channels = channels.map { channelRow($0, selected: false) }
         selectedChannelIDs = []
+        let readOnlySelection = storage.layout == .layeredLab
         enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
             self.paintTargetIsValid = false
             do {
-                try session.channelCommand(.select, channel: 0, image: image)
+                if !readOnlySelection { try session.channelCommand(.select, channel: 0, image: image) }
                 try session.selectLayers(ids, image: image)
                 guard try session.selectedLayers(image) == ids else {
                     throw DocumentError.targetChanged
                 }
-                self.paintTargetIsValid = true
+                self.paintTargetIsValid = !readOnlySelection
             } catch {
                 failure = error
             }
@@ -4504,6 +4524,10 @@ final class ImageDocument {
     /// commit through.
     private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false, allowingReplayRead: Bool = false) -> Bool {
         onUserCommand?()
+        if storage.readOnly && !allowingReplayRead {
+            onError?("This layered Lab document is read-only. You can view it and save an XCF copy.")
+            return true
+        }
         if recorder.isReplaying && !allowingReplayRead {
             onError?("Cancel Recorder replay before editing the image.")
             return true

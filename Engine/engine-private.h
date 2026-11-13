@@ -133,6 +133,14 @@ GlimsStatus     glims_image_item_set_edit (GlimsEngine *e, GlimsImageID image,
                                            const GlimsItemID *members, int32_t count,
                                            uint64_t *outToken, char **error);
 
+/* Storage layout is independent of the color mode. */
+typedef enum
+{
+  GLIMS_COMPONENT_LAYOUT_ORDINARY,
+  GLIMS_COMPONENT_LAYOUT_FLAT,
+  GLIMS_COMPONENT_LAYOUT_LAYERED_LAB
+} GlimsComponentLayout;
+
 /* An image the app holds open. */
 typedef struct
 {
@@ -154,10 +162,12 @@ typedef struct
   guint64    history_revision;
   /* Set only after complete native storage validation at adoption. */
   gboolean   component_document;
+  GlimsComponentLayout component_layout;
   guint32    component_mode;
   GBytes    *component_cmyk_profile;
   gchar     *component_profile_label;
   struct _GlimsPlatePreview *component_preview;
+  struct _GlimsLabLayerPreview *layered_lab_preview;
   struct GlimsDisplaySample *display_sample;
   gboolean display_sample_active;
   struct _GlimsInkSnapshot *ink_snapshot;

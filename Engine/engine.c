@@ -15,6 +15,7 @@
 #include "engine-private.h"
 #include "facade-policy.h"
 #include "plate-preview.h"
+#include "lab-layer-preview.h"
 #include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
@@ -1068,6 +1069,7 @@ open_image_free (gpointer data)
   glims_ink_snapshot_free (open->ink_snapshot);
   glims_lab_snapshot_free (open->lab_snapshot);
   glims_item_sets_free (open->item_sets);
+  glims_lab_layer_preview_free (open->layered_lab_preview);
   glims_plate_preview_free (open->component_preview);
   g_clear_pointer (&open->component_cmyk_profile, g_bytes_unref);
   g_clear_pointer (&open->component_profile_label, g_free);
@@ -4918,6 +4920,42 @@ api_image_lab_snapshot_apply_levels (GlimsEngine *engine, GlimsImageID image, ui
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_apply_levels,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_lab_snapshot_apply_levels_on_engine, &a, error);
+}
+
+typedef struct { GlimsImageID image; GlimsImageStorageInfo *info; } ImageStorageArgs;
+
+static GlimsStatus
+image_storage_info_on_engine (GlimsEngine *engine, gpointer data)
+{
+  ImageStorageArgs *args = data;
+  GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+  uint32_t size;
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (!args->info) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, args->info, sizeof size);
+  if (size < sizeof (GlimsImageStorageInfo)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsImageStorageInfo info = { .struct_size = size };
+  switch (open->component_layout)
+    {
+    case GLIMS_COMPONENT_LAYOUT_ORDINARY: info.layout = GLIMS_IMAGE_LAYOUT_ORDINARY; break;
+    case GLIMS_COMPONENT_LAYOUT_FLAT: info.layout = GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT; break;
+    case GLIMS_COMPONENT_LAYOUT_LAYERED_LAB:
+      info.layout = GLIMS_IMAGE_LAYOUT_LAYERED_LAB;
+      info.flags = GLIMS_IMAGE_STORAGE_READ_ONLY;
+      break;
+    default: return GLIMS_STATUS_UNSUPPORTED;
+    }
+  memcpy (args->info, &info, sizeof info);
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+api_image_storage_info (GlimsEngine *engine, GlimsImageID image, GlimsImageStorageInfo *info)
+{
+  ImageStorageArgs args = { image, info };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_storage_info,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_storage_info_on_engine, &args, NULL);
 }
 
 static const GlimsEngineAPI api_v1 = {
