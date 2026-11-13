@@ -18,9 +18,10 @@
 static const GlimsEngineAPI *api;static unsigned checks,failures;
 static GlimsEngine *running_engine;
 static gboolean request_fill_cancel, fill_cancel_scheduled, fill_cancelled;
+static guint fill_cancel_source;
 #define CHECK(c,n) do{gboolean b=!!(c);checks++;if(!b)failures++;printf("%s %s\n",b?"ok":"FAIL",n);fflush(stdout);}while(0)
-static gboolean cancel_fill_on_engine(gpointer unused){(void)unused;fill_cancelled=running_engine&&api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;return G_SOURCE_REMOVE;}
-static void on_event(void *context,const GlimsEvent *event){(void)context;if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;g_idle_add(cancel_fill_on_engine,NULL);}}
+static gboolean cancel_fill_on_engine(gpointer unused){(void)unused;fill_cancel_source=0;if(request_fill_cancel)fill_cancelled=running_engine&&api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;return G_SOURCE_REMOVE;}
+static void on_event(void *context,const GlimsEvent *event){(void)context;if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}}
 static gboolean save_fixture(Gimp *g,GimpImage *im,const char *path){GError *err=NULL;GFile *f=g_file_new_for_path(path);GimpPlugInProcedure *p=gimp_plug_in_manager_file_procedure_find(g->plug_in_manager,GIMP_FILE_PROCEDURE_GROUP_SAVE,f,&err);GimpPDBStatusType s=p?file_save(g,im,NULL,f,p,GIMP_RUN_NONINTERACTIVE,TRUE,FALSE,FALSE,&err):GIMP_PDB_EXECUTION_ERROR;if(err){fprintf(stderr,"fixture save: %s\n",err->message);g_clear_error(&err);}g_object_unref(f);return s==GIMP_PDB_SUCCESS;}
 static GlimsStatus worker(GlimsEngine *engine,gpointer work){
  GlimsLabLayerMap m={.width=4,.height=4,.count=2,.mode=GLIMS_LAB_LAYER_MAP_MODE_LAB,.storage=GLIMS_LAB_LAYER_MAP_STORAGE_U8,.encoding=GLIMS_LAB_LAYER_MAP_ENCODING_LAB_D50};
@@ -210,6 +211,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    request_fill_cancel=TRUE;fill_cancel_scheduled=FALSE;fill_cancelled=FALSE;
    GlimsStatus fill_status=api->image_fill_lab_layer(engine,id,(const GlimsLabLayerFillSettings*)(unaligned_fill+1),&error);
    request_fill_cancel=FALSE;
+   if(fill_cancel_source){g_source_remove(fill_cancel_source);fill_cancel_source=0;}
    CHECK(fill_cancel_scheduled&&fill_cancelled&&fill_status==GLIMS_STATUS_CANCELLED,
          "public fill honors cancellation after staging");if(error)api->free_string(error);error=NULL;
    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
