@@ -35,6 +35,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <glib/gstdio.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "libgimpbase/gimpbase-private.h"
 
@@ -51,6 +55,7 @@
 #include "paint/gimppaintcore.h"
 #include "plug-in/gimpplugin.h"
 #include "plug-in/gimppluginmanager.h"
+#include "plug-in/plug-in-rc.h"
 #include "paint/gimppaintoptions.h"
 
 #include "errors.h"
@@ -664,44 +669,67 @@ check_engine_interface (Gimp    *gimp,
 
 /* ---- Start-up and shut-down (engine thread) --------------------------- */
 
-/* Never seed a user-selected alternate registry. A missing default file is
- * checked only as an optimization; the later exclusive create is the actual
- * race and symlink guard. */
-static gboolean
-default_plugin_cache_missing (Gimp *gimp)
+/* Resolve exactly the registry path that GIMP's plug-in manager will read. */
+static GFile *
+configured_plugin_cache (Gimp *gimp)
 {
   gchar *path = NULL;
   gchar *expanded = NULL;
   GFile *configured = NULL;
-  GFile *standard = gimp_directory_file ("pluginrc", NULL);
-  gboolean missing = FALSE;
   g_object_get (gimp->config, "pluginrc-path", &path, NULL);
   if (!path)
-    configured = g_object_ref (standard);
+    configured = gimp_directory_file ("pluginrc", NULL);
   else if ((expanded = gimp_config_path_expand (path, TRUE, NULL)))
     configured = g_path_is_absolute (expanded) ? g_file_new_for_path (expanded)
                                                 : gimp_directory_file (expanded, NULL);
-  if (configured && g_file_equal (configured, standard))
-    missing = !g_file_query_exists (standard, NULL);
-  g_clear_object (&configured);
-  g_object_unref (standard);
   g_free (expanded);
   g_free (path);
-  return missing;
+  return configured;
+}
+
+/* Parse the selected registry from one already-open descriptor. The
+ * nonblocking open and fstat refuse FIFOs and other special files even when a
+ * symlink changes concurrently; GIMP's ordinary path handles every refusal. */
+static gboolean
+configured_plugin_cache_unusable (Gimp *gimp)
+{
+  GFile *file = configured_plugin_cache (gimp);
+  gchar *path = file ? g_file_get_path (file) : NULL;
+  int fd = path ? open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC) : -1;
+  gboolean unusable = FALSE;
+  struct stat statbuf;
+  if (fd >= 0 && fstat (fd, &statbuf) == 0 && S_ISREG (statbuf.st_mode) &&
+      statbuf.st_size >= 0 && statbuf.st_size <= 16 * 1024 * 1024)
+    {
+      gchar *fd_path = g_strdup_printf ("/dev/fd/%d", fd);
+      GFile *snapshot = g_file_new_for_path (fd_path);
+      GError *parse_error = NULL;
+      GSList *defs = plug_in_rc_parse (gimp, snapshot, &parse_error);
+      unusable = defs == NULL;
+      g_slist_free_full (defs, g_object_unref);
+      g_clear_error (&parse_error);
+      g_object_unref (snapshot);
+      g_free (fd_path);
+    }
+  if (fd >= 0) close (fd);
+  g_free (path);
+  g_clear_object (&file);
+  return unusable;
 }
 
 /* The bundle contains a registry captured for one engine and language.
- * Seed a missing default per-user registry when that identity matches. GIMP
+ * Seed the missing selected registry when that identity matches. GIMP
  * still checks every executable's path/mtime and runs init
  * procedures, so changed and user-installed plug-ins are discovered normally.
  * Existing registries and preferences always belong to the user. */
 static gboolean
 seed_bundle_plugin_cache (const gchar *contents,
-                          const gchar *language)
+                          const gchar *language,
+                          GFile       *destination)
 {
   gboolean seeded = FALSE;
   gchar *metadata_path, *metadata = NULL, *escaped, *expected;
-  GFile *source, *destination;
+  GFile *source;
 
   if (! contents || ! language)
     return FALSE;
@@ -713,7 +741,6 @@ seed_bundle_plugin_cache (const gchar *contents,
       g_strcmp0 (metadata, expected) == 0)
     {
       source = g_file_new_build_filename (contents, "Resources", "Engine-Startup", "pluginrc", NULL);
-      destination = gimp_directory_file ("pluginrc", NULL);
       gchar *registry = NULL;
       gsize length = 0;
       if (g_file_load_contents (source, NULL, &registry, &length, NULL, NULL))
@@ -755,7 +782,6 @@ seed_bundle_plugin_cache (const gchar *contents,
           g_free (uri);
           g_free (registry);
         }
-      g_object_unref (destination);
       g_object_unref (source);
     }
   g_free (expected);
@@ -774,6 +800,11 @@ engine_initialize (GlimsEngine  *engine,
   const gchar *abort_message;
   const gchar *current_language;
   gchar       *prev_language = NULL;
+  gchar       *original_pluginrc_path = NULL;
+  gchar       *temporary_registry_dir = NULL;
+  gchar       *temporary_registry_path = NULL;
+  gboolean     temporary_registry_active = FALSE;
+  gboolean     preserve_previous_language = FALSE;
   GError      *font_error    = NULL;
   gchar       *contents;
 
@@ -947,18 +978,83 @@ engine_initialize (GlimsEngine  *engine,
   g_object_get (gimp->edit_config, "prev-language", &prev_language, NULL);
   gimp->query_all = (prev_language == NULL ||
                      g_strcmp0 (prev_language, current_language) != 0);
-  if ((!prev_language || g_strcmp0 (prev_language, current_language) == 0) &&
-      default_plugin_cache_missing (gimp) &&
-      seed_bundle_plugin_cache (contents, current_language))
-    {
-      gimp->query_all = FALSE;
-      if (g_getenv ("GLIMS_STARTUP_TRACE"))
-        g_printerr ("Glims: seeded bundled command cache\n");
-    }
+  {
+      gboolean language_changed = prev_language &&
+                                  g_strcmp0 (prev_language, current_language) != 0;
+      GFile *selected = configured_plugin_cache (gimp);
+      if (selected && !g_file_query_exists (selected, NULL))
+        {
+          if (seed_bundle_plugin_cache (contents, current_language, selected))
+            {
+              gimp->query_all = FALSE;
+              if (g_getenv ("GLIMS_STARTUP_TRACE"))
+                g_printerr ("Glims: seeded bundled command cache\n");
+            }
+        }
+      else if (selected &&
+               ((!language_changed && configured_plugin_cache_unusable (gimp)) ||
+                (language_changed &&
+                 g_file_query_file_type (selected, G_FILE_QUERY_INFO_NONE, NULL) == G_FILE_TYPE_REGULAR)))
+        {
+          temporary_registry_dir = g_dir_make_tmp ("glims-pluginrc-XXXXXX", NULL);
+          if (temporary_registry_dir)
+            {
+              temporary_registry_path = g_build_filename (temporary_registry_dir, "pluginrc", NULL);
+              GFile *file = g_file_new_for_path (temporary_registry_path);
+              /* GIMP treats '~' and ${tokens} specially in config paths.
+               * Use this temporary path only if that parser resolves it back
+               * to the exact filesystem name, including filename encoding. */
+              gchar *config_path = g_filename_to_utf8 (temporary_registry_path, -1, NULL, NULL, NULL);
+              gchar *expanded = config_path ? gimp_config_path_expand (config_path, TRUE, NULL) : NULL;
+              if (!expanded || g_strcmp0 (expanded, temporary_registry_path) != 0)
+                {
+                  const gchar *tmpdir = g_getenv ("TMPDIR");
+                  gchar *directory_name = g_path_get_basename (temporary_registry_dir);
+
+                  /* GIMP substitutes the value of TMPDIR once, without
+                   * interpreting special characters inside that value. */
+                  g_clear_pointer (&config_path, g_free);
+                  g_clear_pointer (&expanded, g_free);
+                  if (tmpdir && *tmpdir)
+                    {
+                      config_path = g_strdup_printf ("${TMPDIR}%s%s/pluginrc",
+                                                     g_str_has_suffix (tmpdir, "/") ? "" : "/",
+                                                     directory_name);
+                      expanded = gimp_config_path_expand (config_path, TRUE, NULL);
+                    }
+                  g_free (directory_name);
+                }
+              if (expanded && g_strcmp0 (expanded, temporary_registry_path) == 0 &&
+                  seed_bundle_plugin_cache (contents, current_language, file))
+                {
+                  g_object_get (gimp->config, "pluginrc-path", &original_pluginrc_path, NULL);
+                  g_object_set (gimp->config, "pluginrc-path", config_path, NULL);
+                  gimp->query_all = FALSE;
+                  temporary_registry_active = TRUE;
+                  /* The selected registry still contains the old language.
+                   * Retain its tag so later launches also use a fresh seed. */
+                  preserve_previous_language = language_changed;
+                  if (g_getenv ("GLIMS_STARTUP_TRACE"))
+                    g_printerr ("Glims: using temporary bundled command cache\n");
+                }
+              g_free (expanded);
+              g_free (config_path);
+              g_object_unref (file);
+            }
+        }
+      g_clear_object (&selected);
+  }
   g_free (prev_language);
   g_free (contents);
 
   gimp_restore (gimp, init_status, &font_error);
+  if (temporary_registry_active)
+    g_object_set (gimp->config, "pluginrc-path", original_pluginrc_path, NULL);
+  if (temporary_registry_path) g_unlink (temporary_registry_path);
+  if (temporary_registry_dir) g_rmdir (temporary_registry_dir);
+  g_free (original_pluginrc_path);
+  g_free (temporary_registry_path);
+  g_free (temporary_registry_dir);
   if (font_error)
     {
       show_message (gimp, NULL, GIMP_MESSAGE_WARNING, NULL, font_error->message);
@@ -967,10 +1063,9 @@ engine_initialize (GlimsEngine  *engine,
 
   gimp_rc_set_autosave (GIMP_RC (gimp->edit_config), TRUE);
 
-  g_object_set (gimp->edit_config,
-                "config-version", GIMP_VERSION,
-                "prev-language",  current_language,
-                NULL);
+  g_object_set (gimp->edit_config, "config-version", GIMP_VERSION, NULL);
+  if (!preserve_previous_language)
+    g_object_set (gimp->edit_config, "prev-language", current_language, NULL);
 
   gimp->initialized = TRUE;
 

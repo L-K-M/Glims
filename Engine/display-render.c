@@ -175,7 +175,8 @@ display_render (GlimsEngine   *engine,
    * source. Its reader validates the additional filter and mip footprints. */
   if (!layered_lab)
     {
-      status = glims_projection_prepare_read (open, scale, area, &buffer);
+      status = needs_sampling ? glims_projection_prepare_sample (open, scale, area, &buffer)
+                              : glims_projection_prepare_read (open, scale, area, &buffer);
       if (status != GLIMS_STATUS_OK)
         return status;
     }
