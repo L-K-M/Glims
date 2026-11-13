@@ -17,8 +17,8 @@ final class EngineUndoManager: UndoManager {
         groupsByEvent = false
     }
 
-    override var canUndo: Bool { document?.acceptsEdits == true && (document?.undoInfo.undoCount ?? 0) > 0 }
-    override var canRedo: Bool { document?.acceptsEdits == true && (document?.undoInfo.redoCount ?? 0) > 0 }
+    override var canUndo: Bool { document?.acceptsLayerProperties == true && (document?.undoInfo.undoCount ?? 0) > 0 }
+    override var canRedo: Bool { document?.acceptsLayerProperties == true && (document?.undoInfo.redoCount ?? 0) > 0 }
 
     override var undoActionName: String { document?.undoInfo.nextUndo ?? "" }
     override var redoActionName: String { document?.undoInfo.nextRedo ?? "" }

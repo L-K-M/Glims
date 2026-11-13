@@ -15,6 +15,7 @@
 #include "engine-private.h"
 #include "facade-policy.h"
 #include "plate-preview.h"
+#include "lab-layer-preview.h"
 #include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
@@ -717,30 +718,113 @@ configured_plugin_cache_unusable (Gimp *gimp)
   return unusable;
 }
 
-/* The bundle contains a registry captured for one engine and language.
- * Seed the missing selected registry when that identity matches. GIMP
+/* The bundle contains registries captured for specific engine and language
+ * identities. Seed the missing selected registry only on an exact match. GIMP
  * still checks every executable's path/mtime and runs init
  * procedures, so changed and user-installed plug-ins are discovered normally.
  * Existing registries and preferences always belong to the user. */
+/* The macOS language identity omits gettext environment overrides. Bind the
+ * host seed to the exact environment in which the packager queried it. */
+static gint
+startup_environment_name_compare (gconstpointer a, gconstpointer b)
+{
+  return g_strcmp0 (*(const gchar * const *) a, *(const gchar * const *) b);
+}
+
+static gchar *
+startup_locale_environment_fingerprint (void)
+{
+  gchar **environment_names = g_listenv ();
+  GPtrArray *names = g_ptr_array_new_with_free_func (g_free);
+  g_ptr_array_add (names, g_strdup ("LANG"));
+  g_ptr_array_add (names, g_strdup ("LANGUAGE"));
+  for (guint i = 0; environment_names[i]; i++)
+    if (g_str_has_prefix (environment_names[i], "LC_"))
+      g_ptr_array_add (names, g_strdup (environment_names[i]));
+  g_strfreev (environment_names);
+  g_ptr_array_sort (names, startup_environment_name_compare);
+  GChecksum *checksum = g_checksum_new (G_CHECKSUM_SHA256);
+  for (guint i = 0; i < names->len; i++)
+    {
+      const gchar *name = g_ptr_array_index (names, i);
+      const gchar *value = g_getenv (name);
+      const guchar present = value != NULL;
+      g_checksum_update (checksum, (const guchar *) name, strlen (name) + 1);
+      g_checksum_update (checksum, &present, 1);
+      if (value)
+        g_checksum_update (checksum, (const guchar *) value, strlen (value) + 1);
+    }
+  gchar *fingerprint = g_strdup (g_checksum_get_string (checksum));
+  g_checksum_free (checksum);
+  g_ptr_array_free (names, TRUE);
+  return fingerprint;
+}
+
+static gboolean
+startup_locale_environment_is_clean (void)
+{
+  gchar **names = g_listenv ();
+  gboolean clean = TRUE;
+  for (guint i = 0; names[i]; i++)
+    if (g_str_equal (names[i], "LANG") || g_str_equal (names[i], "LANGUAGE") ||
+        g_str_has_prefix (names[i], "LC_"))
+      { clean = FALSE; break; }
+  g_strfreev (names);
+  return clean;
+}
+
 static gboolean
 seed_bundle_plugin_cache (const gchar *contents,
                           const gchar *language,
                           GFile       *destination)
 {
   gboolean seeded = FALSE;
-  gchar *metadata_path, *metadata = NULL, *escaped, *expected;
+  gboolean identity_matches;
+  gchar *metadata_path, *metadata = NULL, *escaped, *expected, *directory, *digest;
   GFile *source;
 
   if (! contents || ! language)
     return FALSE;
 
-  metadata_path = g_build_filename (contents, "Resources", "Engine-Startup", "identity", NULL);
   escaped = g_strescape (language, NULL);
   expected = g_strdup_printf ("%s\n%s\n", GIMP_VERSION, escaped);
-  if (g_file_get_contents (metadata_path, &metadata, NULL, NULL) &&
-      g_strcmp0 (metadata, expected) == 0)
+  directory = g_build_filename (contents, "Resources", "Engine-Startup", NULL);
+  metadata_path = g_build_filename (directory, "identity", NULL);
+  /* Preserve the original packager-host seed. Additional locales are keyed
+   * by a digest of the escaped identity, never by an untrusted path string. */
+  identity_matches = g_file_get_contents (metadata_path, &metadata, NULL, NULL) &&
+                     g_strcmp0 (metadata, expected) == 0;
+  if (identity_matches)
     {
-      source = g_file_new_build_filename (contents, "Resources", "Engine-Startup", "pluginrc", NULL);
+      gchar *environment_path = g_build_filename (directory, "environment", NULL);
+      gchar *actual_environment = NULL;
+      gchar *fingerprint = startup_locale_environment_fingerprint ();
+      gchar *expected_environment = g_strconcat (fingerprint, "\n", NULL);
+      identity_matches = g_file_get_contents (environment_path, &actual_environment, NULL, NULL) &&
+                         g_strcmp0 (actual_environment, expected_environment) == 0;
+      g_free (expected_environment);
+      g_free (fingerprint);
+      g_free (actual_environment);
+      g_free (environment_path);
+    }
+  /* On macOS the preferred-language list does not include explicit gettext
+   * locale overrides. These extra seeds are captured without such overrides;
+   * using one with different environment settings could show stale labels. */
+  if (!identity_matches && startup_locale_environment_is_clean ())
+    {
+      g_clear_pointer (&metadata, g_free);
+      g_free (metadata_path);
+      g_free (directory);
+      digest = g_compute_checksum_for_string (G_CHECKSUM_SHA256, escaped, -1);
+      directory = g_build_filename (contents, "Resources", "Engine-Startup", "localized", digest, NULL);
+      g_free (digest);
+      metadata_path = g_build_filename (directory, "identity", NULL);
+      identity_matches = g_file_get_contents (metadata_path, &metadata, NULL, NULL) &&
+                         g_strcmp0 (metadata, expected) == 0;
+    }
+  if (identity_matches)
+    {
+      source = g_file_new_build_filename (directory, "pluginrc", NULL);
       gchar *registry = NULL;
       gsize length = 0;
       if (g_file_load_contents (source, NULL, &registry, &length, NULL, NULL))
@@ -788,6 +872,7 @@ seed_bundle_plugin_cache (const gchar *contents,
   g_free (escaped);
   g_free (metadata);
   g_free (metadata_path);
+  g_free (directory);
   return seeded;
 }
 
@@ -1166,6 +1251,7 @@ open_image_free (gpointer data)
   glims_ink_snapshot_free (open->ink_snapshot);
   glims_lab_snapshot_free (open->lab_snapshot);
   glims_item_sets_free (open->item_sets);
+  glims_lab_layer_preview_free (open->layered_lab_preview);
   glims_plate_preview_free (open->component_preview);
   g_clear_pointer (&open->component_cmyk_profile, g_bytes_unref);
   g_clear_pointer (&open->component_profile_label, g_free);
@@ -5016,6 +5102,45 @@ api_image_lab_snapshot_apply_levels (GlimsEngine *engine, GlimsImageID image, ui
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_apply_levels,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_lab_snapshot_apply_levels_on_engine, &a, error);
+}
+
+typedef struct { GlimsImageID image; GlimsImageStorageInfo *info; } ImageStorageArgs;
+
+static GlimsStatus
+image_storage_info_on_engine (GlimsEngine *engine, gpointer data)
+{
+  ImageStorageArgs *args = data;
+  GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+  uint32_t size;
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (!args->info) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, args->info, sizeof size);
+  if (size < sizeof (GlimsImageStorageInfo)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsImageStorageInfo info = { .struct_size = size };
+  switch (open->component_layout)
+    {
+    case GLIMS_COMPONENT_LAYOUT_ORDINARY: info.layout = GLIMS_IMAGE_LAYOUT_ORDINARY; break;
+    case GLIMS_COMPONENT_LAYOUT_FLAT: info.layout = GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT; break;
+    case GLIMS_COMPONENT_LAYOUT_LAYERED_LAB:
+      info.layout = GLIMS_IMAGE_LAYOUT_LAYERED_LAB;
+      info.flags = GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME |
+                   GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE |
+                   GLIMS_IMAGE_STORAGE_LAYER_DELETE | GLIMS_IMAGE_STORAGE_LAYER_REORDER |
+                   GLIMS_IMAGE_STORAGE_LAB_SELECTIONS;
+      break;
+    default: return GLIMS_STATUS_UNSUPPORTED;
+    }
+  memcpy (args->info, &info, sizeof info);
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+api_image_storage_info (GlimsEngine *engine, GlimsImageID image, GlimsImageStorageInfo *info)
+{
+  ImageStorageArgs args = { image, info };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_storage_info,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_storage_info_on_engine, &args, NULL);
 }
 
 static const GlimsEngineAPI api_v1 = {

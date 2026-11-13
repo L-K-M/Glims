@@ -22,6 +22,9 @@ static double now (void)
 
 int main (int argc, char **argv)
 {
+  /* Foundation reads this preference from the process's original argv. */
+  if (argc >= 6 && strcmp (argv[argc - 2], "-AppleLanguages") == 0)
+    argc -= 2;
   if (argc != 4 && argc != 5) return 2;
   double limit = INFINITY;
   if (argc == 5)

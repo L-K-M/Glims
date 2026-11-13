@@ -42,7 +42,9 @@
 #include "engine-private.h"
 #include "plate-preview.h"
 #include "display-sample.h"
+#include "lab-layer-preview-read.h"
 
+#include <math.h>
 #include <string.h>
 
 #include <cairo.h>
@@ -105,7 +107,8 @@ display_render (GlimsEngine   *engine,
   const Babl         *linear_format = NULL;
   const Babl         *encode_fish = NULL;
   GlimsDisplaySample *sample = NULL;
-  const gboolean      needs_sampling = scale < 2.0 && scale != 1.0;
+  const gboolean      layered_lab = open && open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB;
+  const gboolean      needs_sampling = !layered_lab && scale < 2.0 && scale != 1.0;
   g_auto (DisplayReadLease) read_lease = { NULL, NULL };
   const char         *src_encoding;
   gboolean            gray;
@@ -143,12 +146,23 @@ display_render (GlimsEngine   *engine,
               (uint64_t) area.width * 4u;
   if (out_bytes > GLIMS_MAX_PIXEL_BUFFER_BYTES)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (layered_lab)
+    {
+      const double native_scale = (double) (float) scale;
+      const double max_coord = 67108864.0;
+      if ((uintptr_t) pixels > UINTPTR_MAX - out_bytes ||
+          fabs ((double) area.x / native_scale) > max_coord ||
+          fabs ((double) area.y / native_scale) > max_coord ||
+          fabs (((double) area.x + area.width) / native_scale) > max_coord ||
+          fabs (((double) area.y + area.height) / native_scale) > max_coord)
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
 
   /* Refuse reentry into this image's sampler while protecting the read from
    * writes. Global busy may already be set by a plug-in's nested loop: viewing
    * must remain available while its dialog is open. Balance both guards on
    * every return, including profile-validation failures. */
-  if (needs_sampling)
+  if (needs_sampling || layered_lab)
     {
       if (open->display_sample_active) return GLIMS_STATUS_BUSY;
       open->display_sample_active = TRUE;
@@ -159,10 +173,13 @@ display_render (GlimsEngine   *engine,
 
   /* Retain native projection stop/flush behavior before creating the derived
    * source. Its reader validates the additional filter and mip footprints. */
-  status = needs_sampling ? glims_projection_prepare_sample (open, scale, area, &buffer)
-                          : glims_projection_prepare_read (open, scale, area, &buffer);
-  if (status != GLIMS_STATUS_OK)
-    return status;
+  if (!layered_lab)
+    {
+      status = needs_sampling ? glims_projection_prepare_sample (open, scale, area, &buffer)
+                              : glims_projection_prepare_read (open, scale, area, &buffer);
+      if (status != GLIMS_STATUS_OK)
+        return status;
+    }
 
   image     = open->image;
   base_type = open->component_document ? GIMP_RGB : gimp_image_get_base_type (image);
@@ -171,7 +188,7 @@ display_render (GlimsEngine   *engine,
     case GIMP_RGB:
     case GIMP_INDEXED: /* an indexed image's projection is RGB */
       gray = FALSE;
-      src_encoding = "R'G'B'A float";
+      src_encoding = layered_lab ? "RGBA float" : "R'G'B'A float";
       break;
     case GIMP_GRAY:
       gray = TRUE;
@@ -186,7 +203,8 @@ display_render (GlimsEngine   *engine,
   /* Honest source-format validation: the projection must really be an
    * alpha-carrying 4-component format for RGB/indexed or 2-component for
    * grayscale; anything else is refused rather than coerced. */
-  proj_format = open->component_document ? gegl_buffer_get_format (buffer)
+  proj_format = layered_lab ? babl_format ("RGBA float") :
+                open->component_document ? gegl_buffer_get_format (buffer)
                                         : gimp_projectable_get_format (GIMP_PROJECTABLE (image));
   if (! proj_format ||
       babl_format_get_n_components (proj_format) != (gray ? 2 : 4) ||
@@ -209,7 +227,8 @@ display_render (GlimsEngine   *engine,
    * builtin fallback for its model otherwise. Borrowed; not released. */
   if (open->component_document)
     {
-      component_profile = gimp_color_profile_new_rgb_srgb ();
+      component_profile = layered_lab ? gimp_color_profile_new_rgb_srgb_linear ()
+                                      : gimp_color_profile_new_rgb_srgb ();
       src_profile = component_profile;
     }
   else
@@ -359,13 +378,19 @@ display_render (GlimsEngine   *engine,
        * the same source space preserves the existing ICC/proof contract. */
       /* A final single-pixel chunk can take GEGL's hot-pixel shortcut
        * even when the whole request was larger. Validate that chunk too. */
-      if (scale == 1.0 && rect.width == 1 && rect.height == 1)
+      if (!layered_lab && scale == 1.0 && rect.width == 1 && rect.height == 1)
         {
           GlimsRect single = { rect.x, rect.y, 1, 1 };
           status = glims_projection_prepare_read (open, scale, single, &buffer);
           if (status != GLIMS_STATUS_OK) goto out;
         }
-      if (needs_sampling)
+      if (layered_lab)
+        {
+          status = glims_lab_layer_preview_read (image, &open->layered_lab_preview, scale,
+            (GlimsRect) { rect.x, rect.y, rect.width, rect.height }, tmp_src, (size_t) row_src);
+          if (status != GLIMS_STATUS_OK) goto out;
+        }
+      else if (needs_sampling)
         {
           status = glims_display_sample_read (sample, scale,
             (GlimsRect) { rect.x, rect.y, rect.width, rect.height }, tmp_linear, (size_t) row_src);

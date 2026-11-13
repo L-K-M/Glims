@@ -474,9 +474,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let undo = imageDocument.undoInfo.nextUndo.isEmpty ? "" : " · Undo \(imageDocument.undoInfo.nextUndo)"
         let multichannel = imageDocument.colorInfo.mode.usesInkChannels
         let lab = imageDocument.colorInfo.mode == .lab
-        let count = lab ? 3 : multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
-        let item = lab ? "Lab channel" : multichannel ? "ink channel" : "layer"
-        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(undo)"
+        let layeredLab = imageDocument.storage.layout == .layeredLab
+        let count = layeredLab ? imageDocument.layers.count : lab ? 3 : multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
+        let item = lab && !layeredLab ? "Lab channel" : multichannel ? "ink channel" : "layer"
+        let readOnly = imageDocument.storage.readOnly ? " · Read-only" : layeredLab ? " · Limited editing" : ""
+        let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(readOnly)\(undo)"
         let current = statusBar.message
         let message = ToolHintPolicy.status(current: current, isError: statusIsError,
             progressActive: statusProgressActive, activity: EngineActivity.shared.label,
@@ -567,6 +569,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: ColorForms.precisionLabel(imageDocument.colorInfo),
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
+            + (imageDocument.storage.readOnly ? " — Read-only" : imageDocument.storage.layout == .layeredLab ? " — Limited editing" : "")
         refreshStatusInformation()
         refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
@@ -2538,6 +2541,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+             #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerReorder
+        case #selector(deleteLayer(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerDelete
+        case #selector(newLayer(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerCreate
+        case #selector(duplicateLayer(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerDuplicate
         case #selector(runNativeFilter(_:)):
             let operation = (item.representedObject as? NativeFilterCommand)?.operation.name
             return (operation == "gimp:curves" && imageDocument.session.supportsLabCurveSnapshots)
@@ -2563,6 +2575,37 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
+            switch menuItem.action {
+            case #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+                 #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)):
+                guard imageDocument.acceptsLayerReorder else { return false }
+            case #selector(deleteLayer(_:)) where imageDocument.acceptsLayerDelete:
+                break
+            case #selector(newLayer(_:)) where imageDocument.acceptsLayerCreate:
+                break
+            case #selector(duplicateLayer(_:)) where imageDocument.acceptsLayerDuplicate:
+                break
+            case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
+                guard imageDocument.acceptsLabSelections else { return false }
+            case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
+                 #selector(revertDocument(_:)), #selector(imageInformation(_:)),
+                 #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
+                 #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
+                 #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
+                 #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
+                 #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+                 #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
+                 #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
+                 #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
+                break
+            default:
+                menuItem.toolTip = imageDocument.storage.allowsLayerProperties
+                    ? "This layered Lab document supports limited layer-property edits."
+                    : "This document is read-only."
+                return false
+            }
+        }
         if imageDocument.colorInfo.mode == .lab {
             guard permitsLabMenu(menuItem) else {
                 menuItem.toolTip = "This command is unavailable for Lab documents."
@@ -2600,6 +2643,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
+        if imageDocument.storage.layout == .layeredLab, let action = menuItem.action,
+            [#selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:))].contains(action) {
+            return imageDocument.acceptsLabSelections && !editingBlocked && !previewBusy &&
+                !imageDocument.strokeIsActive && !imageDocument.targetCommandIsPending
+        }
+        if imageDocument.storage.layout == .layeredLab, let action = menuItem.action,
+            [#selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
+             #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:))].contains(action) {
+            return imageDocument.acceptsLayerReorder && imageDocument.selectedLayerIDs.count == 1 &&
+                !editingBlocked && !previewBusy && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+        }
+        if menuItem.action == #selector(newLayer(_:)), imageDocument.storage.layout == .layeredLab {
+            return imageDocument.acceptsLayerCreate && imageDocument.selectedLayerIDs.count <= 1 &&
+                !editingBlocked && !previewBusy && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+        }
         switch menuItem.action {
         case #selector(toggleSoftProof(_:)):
             menuItem.state = canvas.softProof == nil ? .off : .on
@@ -2610,6 +2668,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let ids = imageDocument.selectedLayerIDs
             menuItem.title = ids.count > 1 ? "Duplicate Layers" : "Duplicate Layer"
             menuItem.toolTip = nil
+            if imageDocument.storage.layout == .layeredLab {
+                return imageDocument.acceptsLayerDuplicate && ids.count == 1 && !editingBlocked && !previewBusy
+                    && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+            }
             guard !editingBlocked, !previewBusy, !ids.isEmpty, !imageDocument.targetCommandIsPending,
                   !imageDocument.floatingState.isActive else { return false }
             if ids.count > 1 {
@@ -2623,6 +2685,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let ids = imageDocument.selectedLayerIDs
             menuItem.title = ids.count > 1 ? "Delete Layers" : "Delete Layer"
             menuItem.toolTip = nil
+            if imageDocument.storage.layout == .layeredLab {
+                return imageDocument.acceptsLayerDelete && ids.count == 1 && !editingBlocked && !previewBusy &&
+                    !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+            }
             guard !editingBlocked, !previewBusy, !ids.isEmpty, !imageDocument.targetCommandIsPending,
                   !imageDocument.floatingState.isActive else { return false }
             if ids.count > 1 && (ids.count > 256 || !ids.allSatisfy({ imageDocument.layerSources[$0]?.kind == .pixel })) {

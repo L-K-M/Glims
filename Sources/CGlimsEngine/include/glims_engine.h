@@ -1215,6 +1215,40 @@ typedef struct GlimsProofSettings {
   uint32_t flags;           /* GlimsProofFlags; unknown bits are invalid */
 } GlimsProofSettings;
 
+/* Storage layout is independent of color mode. Layered Lab carriers expose
+ * only the editing capabilities advertised in GlimsImageStorageInfo. */
+typedef enum GlimsImageStorageLayout {
+  GLIMS_IMAGE_LAYOUT_ORDINARY = 0,
+  GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT = 1,
+  GLIMS_IMAGE_LAYOUT_LAYERED_LAB = 2
+} GlimsImageStorageLayout;
+
+/* Absence of READ_ONLY does not promise that every editing operation is
+ * supported for the layout. Individual operations may still refuse it. */
+enum {
+  GLIMS_IMAGE_STORAGE_READ_ONLY = 1u << 0,
+  /* Logical layer visibility and opacity, plus their Undo/Redo, are supported.
+   * This does not grant other layer changes or pixel editing. */
+  GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES = 1u << 1,
+  /* Logical layer roots may also be renamed separately, with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_RENAME = 1u << 2,
+  /* A single logical root can be duplicated with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE = 1u << 3,
+  /* A transparent logical root can be created with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_CREATE = 1u << 4,
+  /* A single logical root can be deleted with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_DELETE = 1u << 5,
+  /* One logical root can move among top-level roots with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_REORDER = 1u << 6,
+  /* Typed Lab shape and All/None/Invert commands edit the root mask. */
+  GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7
+};
+typedef struct GlimsImageStorageInfo {
+  uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */
+  uint32_t layout;      /* GlimsImageStorageLayout */
+  uint64_t flags;       /* GLIMS_IMAGE_STORAGE_* */
+} GlimsImageStorageInfo;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -3941,7 +3975,8 @@ typedef struct GlimsEngineAPI {
    * without Undo, even if axis metadata/selection changed. Ordinary strokes
    * refuse; expired handles return NOT_FOUND. */
   GlimsStatus (*stroke_cancel_lab) (GlimsEngine *engine, GlimsStrokeID stroke);
-  /* Slot195: native Lab root selection mask only. Rectangle/ellipse require
+  /* Slot195: native Lab root selection mask only. Layered Lab additionally
+   * requires GLIMS_IMAGE_STORAGE_LAB_SELECTIONS. Rectangle/ellipse require
    * exactly two opposite corners; polygon requires 3..MAX_POINTS vertices.
    * Every coordinate must be finite within +/-COORDINATE_LIMIT; rounded
    * rectangle/ellipse bounds must have positive width and height. Settings
@@ -4130,6 +4165,11 @@ typedef struct GlimsEngineAPI {
                                                  uint64_t token,
                                                  const GlimsLabLevelsSettings *settings,
                                                  char **error);
+  /* Slot213: per-image storage layout and capabilities. Caller sets
+   * struct_size; unaligned pointers are supported. Short outputs are untouched.
+   * The known prefix is filled on success and any extension tail is untouched. */
+  GlimsStatus (*image_storage_info) (GlimsEngine *engine, GlimsImageID image,
+                                     GlimsImageStorageInfo *info);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
