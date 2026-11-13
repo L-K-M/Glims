@@ -134,10 +134,6 @@ struct RecorderPalettePresentation {
                 gates[.saveRecording] = "Record a command or name this recording first."
             }
         }
-        if document.colorInfo.mode.usesInkChannels {
-            gates[.record] = "Recording ink-channel edits is not available."
-            gates[.replay] = "Replay requires an RGB, grayscale or indexed image."
-        }
         if document.colorInfo.mode == .lab {
             gates[.record] = "Recording physical Lab edits is not available."
             gates[.replay] = "Replay is not available for Lab documents."
