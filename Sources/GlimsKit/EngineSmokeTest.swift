@@ -629,6 +629,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (spring tool letters)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-brush-controls" {
+                try exerciseInkBrushControls(session)
+                print(failures == 0 ? "PASSED (ink brush controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "brush-palette-sync" {
                 try exerciseBrushPaletteSync(session, documents: documents)
                 print(failures == 0 ? "PASSED (brush-palette-sync)" : "FAILED: \(failures) failure(s)")
