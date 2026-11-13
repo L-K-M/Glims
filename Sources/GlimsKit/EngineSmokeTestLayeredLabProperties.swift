@@ -168,6 +168,33 @@ extension EngineSmokeTest {
         func descendants<T: NSView>(_ view: NSView, as type: T.Type) -> [T] {
             ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants($0, as: type) }
         }
+        let duplicateMenu = NSMenuItem(title: "Duplicate Layer", action: #selector(DocumentWindowController.duplicateLayer(_:)), keyEquivalent: "")
+        let duplicateButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Duplicate Layers" }
+        if opened.storage.allowsLayerDuplicate {
+            check(windowController.validateMenuItem(duplicateMenu), "Layer menu enables logical duplication")
+            check(duplicateButton?.isEnabled == true, "palette enables logical duplication")
+            let originalIDs = opened.layers.map(\.id)
+            duplicateButton?.performClick(nil)
+            drain("logical layer duplicate")
+            check(opened.layers.count == 3 && Set(originalIDs).isSubset(of: Set(opened.layers.map(\.id))),
+                  "palette duplicates one logical layer")
+            let undo = EngineUndoManager(document: opened)
+            check(undo.canUndo, "logical duplication offers Undo")
+            undo.undo()
+            drain("logical duplication Undo")
+            check(opened.layers.map(\.id) == originalIDs, "Undo restores the original logical layers")
+            check(undo.canRedo, "logical duplication offers Redo")
+            undo.redo()
+            drain("logical duplication Redo")
+            check(opened.layers.count == 3, "Redo restores the logical copy")
+            undo.undo()
+            drain("restore original layers")
+            check(opened.layers.map(\.id) == originalIDs, "final Undo restores the original layer tree")
+        } else {
+            check(!windowController.validateMenuItem(duplicateMenu) && duplicateButton?.isEnabled == false,
+                  "older engines keep logical duplication disabled")
+        }
+        palette.reload()
         var editedOpacity = -1.0 // No valid layer opacity can satisfy the saved-copy check until an edit runs.
         if let target = opened.activeLayer,
            let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),

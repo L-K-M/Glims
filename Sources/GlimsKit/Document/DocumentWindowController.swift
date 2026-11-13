@@ -2541,6 +2541,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(duplicateLayer(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerDuplicate
         case #selector(runNativeFilter(_:)):
             let operation = (item.representedObject as? NativeFilterCommand)?.operation.name
             return (operation == "gimp:curves" && imageDocument.session.supportsLabCurveSnapshots)
@@ -2568,6 +2570,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
+            case #selector(duplicateLayer(_:)) where imageDocument.acceptsLayerDuplicate:
+                break
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
                  #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
@@ -2633,6 +2637,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let ids = imageDocument.selectedLayerIDs
             menuItem.title = ids.count > 1 ? "Duplicate Layers" : "Duplicate Layer"
             menuItem.toolTip = nil
+            if imageDocument.storage.layout == .layeredLab {
+                return imageDocument.acceptsLayerDuplicate && ids.count == 1 && !editingBlocked && !previewBusy
+                    && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+            }
             guard !editingBlocked, !previewBusy, !ids.isEmpty, !imageDocument.targetCommandIsPending,
                   !imageDocument.floatingState.isActive else { return false }
             if ids.count > 1 {

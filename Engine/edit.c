@@ -10,6 +10,7 @@
  */
 #include "engine-private.h"
 #include "lab-layer-storage.h"
+#include "lab-layer-duplicate.h"
 
 #include <math.h>
 #include <string.h>
@@ -813,6 +814,26 @@ glims_layer_command (GlimsEngine  *engine,
 
   if (! image)
     return status;
+
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (open && open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      /* Never let a generic layer command mutate the physical scalar tree. */
+      if (result) *result = 0;
+      if (command != GLIMS_LAYER_DUPLICATE)
+        return GLIMS_STATUS_UNSUPPORTED;
+      if (!layer_id && g_list_length (gimp_image_get_selected_layers (image)) != 1)
+        return GLIMS_STATUS_UNSUPPORTED;
+      layer = find_layer (image, layer_id);
+      if (!layer) return GLIMS_STATUS_NOT_FOUND;
+      status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
+      if (status == GLIMS_STATUS_OK)
+        {
+          if (result) *result = gimp_item_get_id (GIMP_ITEM (created));
+          gimp_image_flush (image);
+        }
+      return status;
+    }
 
   layer = find_layer (image, layer_id);
   if (! layer && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_FLATTEN)

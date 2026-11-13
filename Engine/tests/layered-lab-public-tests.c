@@ -43,7 +43,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsImageStorageInfo layout;memcpy(&layout,info_bytes+1,sizeof layout);
   CHECK(s==GLIMS_STATUS_OK&&layout.layout==GLIMS_IMAGE_LAYOUT_LAYERED_LAB&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
-        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
@@ -65,6 +65,52 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsLayerInfo rows[8];int32_t count=0;CHECK(api->image_layers(engine,id,rows,8,&count)==GLIMS_STATUS_OK&&count==2,"only two logical layer roots are exposed");
   if(count==2){
    CHECK(rows[0].depth==0&&rows[1].depth==0&&rows[0].parent==0&&rows[1].parent==0,"logical rows are top-level");
+   GlimsItemID duplicate=0;error=NULL;
+   GlimsStatus duplicated=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,&duplicate,&error);
+   CHECK(duplicated==GLIMS_STATUS_OK&&duplicate!=0,"public command duplicates a logical Lab layer");
+   if(error)api->free_string(error);error=NULL;
+   if(duplicated==GLIMS_STATUS_OK&&duplicate){
+    GlimsLayerInfo duplicated_rows[8];int32_t duplicated_count=0;
+    CHECK(api->image_layers(engine,id,duplicated_rows,8,&duplicated_count)==GLIMS_STATUS_OK&&
+          duplicated_count==3&&duplicated_rows[0].id==duplicate&&duplicated_rows[1].id==rows[0].id,
+          "duplicate is a logical root immediately above its source");
+    GlimsOpenImage *dup_open=glims_lookup_image(engine,id);GlimsLabLayerStorage dup_storage;
+    gboolean dup_valid=dup_open&&glims_lab_layer_storage_read(dup_open->image,&dup_storage)==GLIMS_LAB_LAYER_STORAGE_VALID&&
+                       dup_storage.map.count==3;
+    CHECK(dup_valid,"duplicated carrier has valid distinct physical identities");
+    if(dup_valid){
+     for(guint role=0;role<4;role++){
+      GimpDrawable *copy_plane=GIMP_DRAWABLE(dup_storage.layers[0].planes[role]);
+      GimpDrawable *source_plane=GIMP_DRAWABLE(dup_storage.layers[1].planes[role]);
+      guint8 copy_samples[16],source_samples[16];
+      gegl_buffer_get(gimp_drawable_get_buffer(copy_plane),GEGL_RECTANGLE(0,0,4,4),1,
+                      gimp_drawable_get_format(copy_plane),copy_samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+      gegl_buffer_get(gimp_drawable_get_buffer(source_plane),GEGL_RECTANGLE(0,0,4,4),1,
+                      gimp_drawable_get_format(source_plane),source_samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+      CHECK(!memcmp(copy_samples,source_samples,sizeof copy_samples),"logical copy preserves its scalar samples");
+     }
+    }
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,duplicated_rows,8,&duplicated_count)==GLIMS_STATUS_OK&&duplicated_count==2,
+          "one Undo removes the logical copy");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,duplicated_rows,8,&duplicated_count)==GLIMS_STATUS_OK&&
+          duplicated_count==3&&duplicated_rows[0].id==duplicate,"Redo restores the same logical copy");
+    gchar *dup_path=g_build_filename((const gchar*)work,"layered-lab-duplicate.xcf",NULL);
+    GlimsStatus dup_saved=api->image_save_copy(engine,id,dup_path,&error);
+    CHECK(dup_saved==GLIMS_STATUS_OK,"duplicated layered Lab saves");if(error)api->free_string(error);error=NULL;
+    if(dup_saved==GLIMS_STATUS_OK){
+     GlimsImageID dup_copy=0;GlimsStatus dup_opened=api->image_open(engine,dup_path,&dup_copy,&error);
+     CHECK(dup_opened==GLIMS_STATUS_OK&&dup_copy,"duplicated layered Lab reopens");if(error)api->free_string(error);error=NULL;
+     if(dup_opened==GLIMS_STATUS_OK&&dup_copy){
+      CHECK(api->image_layers(engine,dup_copy,duplicated_rows,8,&duplicated_count)==GLIMS_STATUS_OK&&duplicated_count==3,
+            "saved XCF preserves all logical layers");
+      CHECK(api->image_close(engine,dup_copy)==GLIMS_STATUS_OK,"duplicated copy closes");
+     }
+    }
+    g_free(dup_path);
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"duplicate test restores the original fixture");
+   }
    GlimsLayerChange rename={.struct_size=sizeof rename,.properties=GLIMS_LAYER_NAME,.name="Retouched Lab"};
    error=NULL;GlimsStatus renamed=api->layer_change(engine,id,rows[0].id,&rename,&error);
    CHECK(renamed==GLIMS_STATUS_OK,"logical Lab layer can be renamed");if(error)api->free_string(error);error=NULL;
@@ -100,6 +146,15 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          item_count==1&&items[0]==rows[0].id,
          "generic selected-items query exposes only the logical root");
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"selecting a logical root succeeds");
+   GlimsItemID both_roots[]={rows[0].id,rows[1].id};error=NULL;
+   CHECK(api->image_select_layers(engine,id,both_roots,2,&error)==GLIMS_STATUS_OK,
+         "two logical roots can be selected");
+   if(error)api->free_string(error);error=NULL;
+   GlimsItemID ambiguous=123;
+   CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_DUPLICATE,&ambiguous,&error)==GLIMS_STATUS_UNSUPPORTED&&ambiguous==0,
+         "implicit duplication refuses an ambiguous multi-selection");
+   if(error)api->free_string(error);error=NULL;
+   CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"single logical selection restored");
    GlimsLayerChange visibility={.struct_size=sizeof visibility,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};
    error=NULL;GlimsStatus changed=api->layer_change(engine,id,rows[0].id,&visibility,&error);
    CHECK(changed==GLIMS_STATUS_OK,"logical Lab layer visibility can be edited");
@@ -170,6 +225,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     GlimsItemID hidden=gimp_item_get_id(GIMP_ITEM(current.layers[0].planes[0]));
     GlimsUndoInfo undo_before={0},undo_after={0};
     CHECK(api->image_undo_info(engine,id,&undo_before)==GLIMS_STATUS_OK,"history captured before invalid property edits");
+    GlimsItemID hidden_copy=123;error=NULL;
+    CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_DUPLICATE,&hidden_copy,&error)==GLIMS_STATUS_UNSUPPORTED&&hidden_copy==0,
+          "a private scalar plane cannot be duplicated through the public layer command");
+    if(error)api->free_string(error);error=NULL;
     GimpLayer *locked_root=current.layers[0].group;GimpItem *locked_item=GIMP_ITEM(locked_root);
     gboolean old_visible=gimp_item_get_visible(locked_item);gdouble old_opacity=gimp_layer_get_opacity(locked_root);
     gimp_item_set_lock_visibility(locked_item,TRUE,FALSE);
@@ -354,6 +413,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    GlimsLayerChange damaged_change={.struct_size=sizeof damaged_change,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
    if(count==2)CHECK(api->layer_change(engine,id,rows[0].id,&damaged_change,&error)==GLIMS_STATUS_UNSUPPORTED,
                      "layer edits reject damaged storage");
+   if(error)api->free_string(error);error=NULL;
+   if(count==2)CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,NULL,&error)==GLIMS_STATUS_UNSUPPORTED,
+                     "duplication rejects damaged storage");
    if(error)api->free_string(error);error=NULL;
    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_UNSUPPORTED&&api->image_redo(engine,id)==GLIMS_STATUS_UNSUPPORTED,
          "Undo and Redo reject damaged storage");
