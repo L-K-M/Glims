@@ -239,7 +239,9 @@ extension EngineSmokeTest {
             drain("blocked layer commands")
             check(opened.layers.map(\.id) == before, "stale palette actions cannot change layers behind a sheet")
             owner.endSheet(sheet)
-            EngineSmokeTestHost.pumpEvents(for: 0.05)
+            let detachDeadline = Date().addingTimeInterval(3)
+            while owner.attachedSheet === sheet && Date() < detachDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(owner.attachedSheet !== sheet, "document sheet detaches before palette menu checks")
             palette.reload()
             let newItem = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
             newItem.tag = Int(EngineSession.LayerCommand.new.rawValue)

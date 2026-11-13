@@ -420,6 +420,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             : #selector(DocumentWindowController.restoreLayerSource(_:))
     }
 
+    // Detached palettes still resolve their document's window. If the window
+    // is gone or closing, fail closed: sheet and activity admission cannot be
+    // verified from a windowless document.
     private func sourceWindow(for captured: ImageDocument) -> DocumentWindowController? {
         NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
             .first { $0.imageDocument === captured && !$0.closeStarted }
