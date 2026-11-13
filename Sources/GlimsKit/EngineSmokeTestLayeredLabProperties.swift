@@ -20,6 +20,10 @@ extension EngineSmokeTest {
             palette.retarget(to: nil)
             paletteWindow.orderOut(nil)
             paletteWindow.close()
+            if let window = controller?.window, let sheet = window.attachedSheet {
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                sheet.orderOut(nil)
+            }
             if let controller, !controller.closeStarted { controller.closeDiscardingChanges() }
             if let document {
                 if controller == nil && !document.isClosing { document.closeImageWhenDrained() }
@@ -134,6 +138,79 @@ extension EngineSmokeTest {
             try opened.stopRecording()
         } else {
             check(!opened.toolIsAvailable(.rectangleSelect), "older engines keep layered Lab selection disabled")
+        }
+        let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
+        check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
+              "Fill menu follows the layered Lab color capability")
+        if opened.storage.allowsLabLayerColorFill, let window = windowController.window,
+           let originalRoot = opened.selectedLayerIDs.first {
+            let oldForeground = ToolState.shared.foreground
+            defer { ToolState.shared.foreground = oldForeground }
+            ToolState.shared.foreground = .red
+            let beforeRecording = pixel(session, image, x: 1, y: 1)
+            let previousError = opened.onError
+            var recordingErrors: [String] = []
+            opened.onError = { recordingErrors.append($0) }
+            try opened.startRecording()
+            check(!windowController.validateMenuItem(fillMenu), "Lab Fill is disabled while recording")
+            windowController.fill(nil)
+            EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Lab Fill refusal during recording")
+            check(!recordingErrors.isEmpty && window.attachedSheet == nil &&
+                  pixel(session, image, x: 1, y: 1) == beforeRecording && opened.recorder.records.isEmpty,
+                  "Lab Fill during recording changes nothing and opens no sheet")
+            try opened.stopRecording()
+            opened.onError = previousError
+            func waitForSheet() -> NSWindow? {
+                let deadline = Date().addingTimeInterval(15)
+                while window.attachedSheet == nil && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                return window.attachedSheet
+            }
+            opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
+            drain("fill selection")
+            let insideBefore = pixel(session, image, x: 1, y: 1)
+            let outsideBefore = pixel(session, image, x: 0, y: 0)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                check(true, "captured Lab layer Fill sheet opens")
+                window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Lab color fill")
+                let insideAfter = pixel(session, image, x: 1, y: 1)
+                check(insideAfter?.count == 4 && (insideAfter?[0] ?? 0) > 245 &&
+                      (insideAfter?[1] ?? 255) < 20 && (insideAfter?[2] ?? 255) < 20 &&
+                      pixel(session, image, x: 0, y: 0) == outsideBefore,
+                      "foreground Fill changes only selected pixels to red")
+                let undo = EngineUndoManager(document: opened)
+                check(undo.canUndo, "Lab color fill offers Undo")
+                undo.undo(); drain("Lab color fill Undo")
+                check(pixel(session, image, x: 1, y: 1) == insideBefore, "Undo restores pixels before Lab color fill")
+                undo.redo(); drain("Lab color fill Redo")
+                check(pixel(session, image, x: 1, y: 1) == insideAfter, "Redo restores the Lab color fill")
+                undo.undo(); drain("restore pixels after Lab color fill")
+                undo.undo(); drain("restore selection after Lab color fill")
+                check(opened.selectionBounds == nil, "fill fixture restores its empty selection")
+            } else { check(false, "captured Lab layer Fill sheet opens") }
+            let beforeCancel = pixel(session, image, x: 1, y: 1)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("cancel Lab Fill")
+                check(pixel(session, image, x: 1, y: 1) == beforeCancel, "Cancel leaves Lab pixels unchanged")
+            } else { check(false, "Lab Fill sheet opens for cancellation") }
+            if let other = opened.layers.first(where: { $0.id != originalRoot }) {
+                var errors: [String] = []
+                let oldError = opened.onError
+                opened.onError = { errors.append($0) }
+                windowController.fill(nil)
+                if let sheet = waitForSheet() {
+                    opened.selectLayer(other.id); drain("retarget while Fill is open")
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("refuse retargeted Lab Fill")
+                    check(!errors.isEmpty && pixel(session, image, x: 1, y: 1) == beforeCancel,
+                          "Fill refuses a layer changed while its sheet was open")
+                    opened.selectLayer(originalRoot); drain("restore captured layer")
+                } else { check(false, "Lab Fill sheet opens for retarget test") }
+                opened.onError = oldError
+            }
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }

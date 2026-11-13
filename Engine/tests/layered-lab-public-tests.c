@@ -50,6 +50,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_CREATE)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DELETE)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_REORDER)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAB_SELECTIONS)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
