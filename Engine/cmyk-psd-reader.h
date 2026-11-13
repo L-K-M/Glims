@@ -19,8 +19,8 @@ typedef enum {
 
 typedef struct {
   uint32_t width, height;
-  uint16_t depth;
-  uint64_t icc_offset, pixel_offset, file_size;
+  uint16_t depth, compression; /* 0 = RAW, 1 = PackBits/RLE */
+  uint64_t icc_offset, pixel_offset, file_size, row_lengths_offset;
   uint32_t icc_size;
 } GlimsCmykPsdInput;
 
@@ -35,9 +35,12 @@ typedef bool (*GlimsCmykPsdEmit) (void *context, uint32_t channel,
                                  uint32_t y, uint32_t x, uint32_t count,
                                  const void *samples);
 
-/* PSD v1 RAW, four U8/U16 CMYK channels, no color-mode data or layer section,
+/* PSD v1 RAW or RLE, four U8/U16 CMYK channels, no color-mode data or layer section,
  * exactly one ICC resource and no other resources. Complete section bounds,
- * structural ICC header and exact final pixel length are checked. Nonempty
+ * structural ICC header and exact final pixel length are checked. RLE checks
+ * every row's declared extent and all packets before returning a layout.
+ * Expanded samples are also capped at MAX_FILE bytes. No-op packets are
+ * permitted, including at row end; other trailing bytes refuse. Nonempty
  * resource names and arbitrary present padding bytes are permitted. Full ICC
  * validation is the native caller's responsibility before image allocation.
  * Clears *out on every failure, no allocation or pixel callback. Borrowed input

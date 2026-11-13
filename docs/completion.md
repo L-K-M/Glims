@@ -7,33 +7,33 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked (including the current integration candidate)
 
-The installed editor uses qualified source `03c38338`, integrated through
-[#251](https://github.com/L-K-M/Glims/pull/251) at `d7d9a7da`. It includes the
-previous CMYK/Multichannel editor and Recorder support, native Lab documents,
-physical Lab Fill/Brush and selections, explicit merged RGB/Lab converted
-copies, and preserving CMYK PSD import for the documented flat raw subset.
-The import route retains all four native inks and its embedded profile;
-ordinary PSD Open remains the appearance-import route. Broader layered and
-compressed CMYK PSD preservation remains open.
+The installed editor uses qualified source `c13a1c97`, integrated through
+[#258](https://github.com/L-K-M/Glims/pull/258) at `64bfc5dc`. It includes
+CMYK/Multichannel Curves with Freehand/Smooth controls, captured preview,
+Undo and Recorder commands, alongside the previously qualified physical Lab
+Fill/Brush and selections, explicit merged RGB/Lab converted copies, and
+preserving flat raw CMYK PSD import.
 
-All 1,623 Swift and 130 Python tests pass on the qualified source. Native and
-focused app checks pass on four engines. The standalone pinned bundle passed
-20 cases with development paths denied, including 2,268 native and 3,355 full
-app checks. Source and relocated bundles have matching payloads and checked
-signatures. The exact integration CI head `c17db410` passed with the same tree
-as the qualified source. Fresh/cached/relocated-fresh launches measured
-1.799/1.492/3.560 seconds; the installed `/Applications/Glims.app` reached its
-usable editor in 3.271 seconds on this Mac. These observations do not establish
-every machine's latency. No notarization is requested or required.
+All 1,672 Swift and 130 Python tests pass on this source. The combined app
+passes 255 selected-ink Curves, 423 Recorder and 32 ordinary Curves checks on
+each of four engines. Its standalone pinned release bundle passed all 22
+cases with development paths denied, including 2,268 native and 3,355 full
+workflow checks (these two totals are unchanged from the previous
+qualification). Payloads, signatures, release-compiler output and desktop
+evidence are verified. Exact-head CI
+[43322205774](https://github.com/L-K-M/Glims/actions/runs/43322205774) passed.
+Fresh/cached/relocated-fresh launches measured 1.781/1.423/3.052 seconds;
+the installed `/Applications/Glims.app` reached its usable editor in
+3.746 seconds on this Mac. Both the build copy and `/Applications` installation
+have receipts and preserve their previous app. No notarization is requested.
 
-This is not a claim of complete Photoshop 4 parity. Ink adjustment breadth,
-layered Lab/CMYK editing and interchange, Bitmap/duotone modes, broader Recorder
-coverage, PSD fidelity and physical-tablet/VoiceOver qualification remain open.
-Selected-ink Curves is a subsequent candidate: its native and freehand panel
-checks do not imply that the installed app contains it. See [the plan](plan.md)
-for slice evidence and [the earlier verification report](editor-verification.md)
-for its historical scope. Dated reports below retain their original scope and
-pending notes.
+This is not complete Photoshop 4 parity. Physical Lab adjustments, further
+ink adjustments, layered Lab/CMYK editing and interchange, Bitmap/duotone,
+broader Recorder/PSD preservation and physical-tablet/VoiceOver qualification
+remain open. These measurements do not establish every machine's latency.
+See [the plan](plan.md) for slice evidence and
+[the earlier verification report](editor-verification.md) for its historical
+scope. Dated reports below retain their original scope and pending notes.
 
 - [x] Ordinary builds bundle the pinned engine; unavailable prerequisites
       fail before packaging. Hosted CI explicitly builds only the interface.

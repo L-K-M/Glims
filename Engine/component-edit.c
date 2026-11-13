@@ -6,6 +6,7 @@
 #include "component-scalar.h"
 #include "component-levels.h"
 #include "lab-fill.h"
+#include "lab-curves.h"
 
 #include <math.h>
 #include <string.h>
@@ -20,7 +21,8 @@
  * Curves values from ever being compared or served across requests. */
 typedef enum {
   INK_SNAPSHOT_CALC_LEVELS,
-  INK_SNAPSHOT_CALC_CURVES
+  INK_SNAPSHOT_CALC_CURVES,
+  INK_SNAPSHOT_CALC_LAB_CURVES
 } InkSnapshotCalc;
 
 typedef struct _GlimsInkSnapshot {
@@ -168,7 +170,7 @@ snapshot_pixels_match (GlimsOpenImage *open, const GlimsInkSnapshot *snapshot,
   status = GLIMS_STATUS_OK;
   goto finish;
 stale:
-  if (error) *error = g_strdup ("The image changed after this preview began. Close Levels and try again.");
+  if (error) *error = g_strdup ("The image changed after this preview began. Close the adjustment and try again.");
   status = GLIMS_STATUS_INVALID_ARGUMENT;
 finish:
   for (guint i = 0; i < G_N_ELEMENTS (live); i++)
@@ -292,7 +294,7 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
                          mask ? coverage : NULL, output, &row_changed))
           {
             if (error) *error = g_strdup (lab ?
-              "The Lab fill contains invalid samples or produces an unrepresentable value. No pixels were changed." :
+              "The Lab edit contains invalid samples or produces an unrepresentable value. No pixels were changed." :
               "The ink edit contains invalid samples or produces an unrepresentable value. No pixels were changed.");
             status = GLIMS_STATUS_INVALID_ARGUMENT;
             goto finish;
@@ -323,7 +325,7 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
           (!lab && current_storage.map.mode == GLIMS_PLATE_MODE_LAB) ||
           gimp_drawable_get_buffer (target) != source)
         {
-          if (error) *error = g_strdup (lab ? "The selected Lab channel changed before the fill could finish." :
+          if (error) *error = g_strdup (lab ? "The selected Lab channel changed before the Lab edit could finish." :
                                               "The selected ink changed before the edit could finish.");
           status = GLIMS_STATUS_INVALID_ARGUMENT;
           goto finish;
@@ -333,7 +335,7 @@ apply_component (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel,
           GlimsPlateStorage baseline;
           if (!snapshot_metadata_matches (current, snapshot, &current_storage, &baseline))
             {
-              if (error) *error = g_strdup ("The image changed before Levels could be applied.");
+              if (error) *error = g_strdup ("The image changed before the adjustment could be applied.");
               status = GLIMS_STATUS_INVALID_ARGUMENT;
               goto finish;
             }
@@ -408,6 +410,55 @@ glims_image_fill_lab (GlimsEngine *engine, GlimsImageID id,
   GlimsLabFillSettings fill = *settings;
   return apply_component (engine, id, fill.axis, "Fill Lab Channel", fill.opacity == 0,
                            lab_fill_row, &fill, NULL, &fill, error);
+}
+
+static bool
+lab_curves_row (GlimsComponentScalarFormat format, const void *settings,
+                size_t count, const void *source, const float *mask,
+                void *destination, bool *changed)
+{
+  const GlimsLabCurvesSettings *curves = settings;
+  GlimsLabFormat lab_format;
+  switch (format)
+    {
+    case GLIMS_COMPONENT_SCALAR_U8: lab_format = GLIMS_LAB_FORMAT_U8; break;
+    case GLIMS_COMPONENT_SCALAR_U16: lab_format = GLIMS_LAB_FORMAT_U16; break;
+    case GLIMS_COMPONENT_SCALAR_FLOAT: lab_format = GLIMS_LAB_FORMAT_FLOAT; break;
+    default: return false;
+    }
+  if (curves->role > GLIMS_LAB_AXIS_B) return false;
+  GlimsLabCurve curve;
+  memcpy (curve.samples, curves->samples, sizeof curve.samples);
+  return glims_lab_curves_row ((GlimsLabRole[]) { GLIMS_LAB_ROLE_L, GLIMS_LAB_ROLE_A, GLIMS_LAB_ROLE_B }[curves->role],
+                               lab_format, &curve, count, source, mask, destination, changed);
+}
+
+GlimsStatus
+glims_image_curves_lab (GlimsEngine *engine, GlimsImageID id,
+                        const GlimsLabCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings || settings->axis <= 0 ||
+      settings->role > GLIMS_LAB_AXIS_B)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  for (guint i = 0; i < G_N_ELEMENTS (settings->samples); i++)
+    if (!isfinite (settings->samples[i]) || settings->samples[i] < 0 || settings->samples[i] > 1)
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+  /* Own the immutable request across cooperative progress callbacks. The UUID
+   * and role bind this handle to the document's canonical captured axis. The
+   * Lab Fill binding checks only axis/role/uuid, so reuse it as an explicit
+   * identity bridge without widening ink/fill semantics. */
+  GlimsLabCurvesSettings curves = *settings;
+  GlimsLabFillSettings identity = { 0 };
+  identity.struct_size = sizeof identity;
+  identity.axis = curves.axis;
+  identity.role = curves.role;
+  memcpy (identity.uuid, curves.uuid, sizeof identity.uuid);
+  identity.value = curves.role == GLIMS_LAB_AXIS_LIGHTNESS ? 0 : -128;
+  identity.opacity = 1;
+  /* Even identity must validate affected source samples and selection masks. */
+  return apply_component (engine, id, curves.axis, "Curves Lab", FALSE,
+                          lab_curves_row, &curves, NULL, &identity, error);
 }
 
 typedef struct {
@@ -522,11 +573,12 @@ glims_image_ink_snapshot_begin (GlimsEngine *engine, GlimsImageID id,
   if (!open) return GLIMS_STATUS_NOT_FOUND;
   GlimsStatus status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;
-  if (open->ink_snapshot || g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  if (open->ink_snapshot || open->lab_snapshot || g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
   if (engine->next_ink_snapshot_token == G_MAXUINT64)
     return GLIMS_STATUS_FAILED;
   GlimsPlateStorage storage;
-  if (!glims_plate_storage_read_open (open, &storage)) return GLIMS_STATUS_UNSUPPORTED;
+  if (!glims_plate_storage_read_open (open, &storage) ||
+      storage.map.mode == GLIMS_PLATE_MODE_LAB) return GLIMS_STATUS_UNSUPPORTED;
   GimpDrawable *target = selected_ink (open, channel, &storage);
   if (!target) return GLIMS_STATUS_INVALID_ARGUMENT;
   status = glims_check_item_locks (GIMP_ITEM (target), GLIMS_LOCK_PIXELS, error);
@@ -735,5 +787,255 @@ glims_image_ink_snapshot_end (GlimsEngine *engine, GlimsImageID id, uint64_t tok
   if (engine->busy) return GLIMS_STATUS_BUSY;
   open->ink_snapshot = NULL;
   glims_ink_snapshot_free (snapshot);
+  return GLIMS_STATUS_OK;
+}
+
+/* ---- Immutable Lab Curves previews (component snapshot, not ink) ---- */
+
+/* Both modes share frozen-state ownership and the staged transaction. The
+ * public Lab target and physical curve calculation remain distinct. */
+typedef struct _GlimsLabSnapshot {
+  GlimsInkSnapshot base;
+} GlimsLabSnapshot;
+
+void
+glims_lab_snapshot_free (GlimsLabSnapshot *snapshot)
+{
+  if (!snapshot) return;
+  g_clear_object (&snapshot->base.frozen);
+  g_clear_object (&snapshot->base.calculated);
+  g_free (snapshot);
+}
+
+static GlimsLabSnapshot *
+find_lab_snapshot (GlimsOpenImage *open, uint64_t token)
+{
+  return open && token && open->lab_snapshot && open->lab_snapshot->base.token == token
+           ? open->lab_snapshot : NULL;
+}
+
+static gboolean
+lab_snapshot_target_matches (const GlimsPlateStorage *storage, GlimsItemID axis,
+                            guint index, GlimsLabAxisRole role, const guint8 uuid[16])
+{
+  return storage->map.mode == GLIMS_PLATE_MODE_LAB && storage->map.count == 3 &&
+         index < 3 && (guint) role == index && axis > 0 &&
+         gimp_item_get_id (GIMP_ITEM (storage->planes[index])) == axis &&
+         !memcmp (storage->map.entries[index].uuid, uuid, 16);
+}
+
+static gboolean
+selected_lab_axis (GlimsOpenImage *open, GlimsItemID id, const GlimsPlateStorage *storage,
+                   guint *index)
+{
+  GList *selected = gimp_image_get_selected_channels (open->image);
+  if (!id || !selected || selected->next) return FALSE;
+  for (guint i = 0; i < storage->map.count; i++)
+    if (selected->data == storage->planes[i] &&
+        gimp_item_get_id (GIMP_ITEM (storage->planes[i])) == id)
+      {
+        if (index) *index = i;
+        return TRUE;
+      }
+  return FALSE;
+}
+
+static gboolean
+lab_snapshot_metadata_matches (GlimsOpenImage *open, const GlimsLabSnapshot *snapshot,
+                               GlimsPlateStorage *current, GlimsPlateStorage *frozen)
+{
+  return snapshot_metadata_matches (open, &snapshot->base, current, frozen) &&
+         current->map.mode == GLIMS_PLATE_MODE_LAB && current->map.count == 3;
+}
+
+static gboolean
+lab_settings_valid (const GlimsLabCurvesSettings *settings)
+{
+  if (!settings || settings->struct_size < sizeof *settings || settings->axis <= 0 ||
+      settings->role > GLIMS_LAB_AXIS_B)
+    return FALSE;
+  for (guint i = 0; i < G_N_ELEMENTS (settings->samples); i++)
+    if (!isfinite (settings->samples[i]) || settings->samples[i] < 0 || settings->samples[i] > 1)
+      return FALSE;
+  return TRUE;
+}
+
+static gboolean
+lab_settings_match_snapshot (const GlimsLabSnapshot *snapshot,
+                             const GlimsLabCurvesSettings *settings)
+{
+  return snapshot && settings && settings->axis == snapshot->base.target &&
+         settings->role == (uint32_t) snapshot->base.target_index &&
+         !memcmp (settings->uuid, snapshot->base.target_uuid, sizeof snapshot->base.target_uuid);
+}
+
+static gboolean
+same_lab_curve_cache (const GlimsLabSnapshot *snapshot,
+                      const GlimsLabCurvesSettings *settings)
+{
+  return snapshot->base.calculated &&
+         snapshot->base.calculated_kind == INK_SNAPSHOT_CALC_LAB_CURVES &&
+         !memcmp (settings->samples, snapshot->base.calculated_curve.samples,
+                  sizeof settings->samples);
+}
+
+static GlimsStatus
+lab_snapshot_render (GlimsEngine *engine, GlimsLabSnapshot *snapshot,
+                     const GlimsLabCurvesSettings *settings,
+                     GlimsImageID *result, char **error)
+{
+  gboolean cached = snapshot->base.calculated && same_lab_curve_cache (snapshot, settings);
+  engine->busy++;
+  GimpImage *copy = gimp_image_duplicate (cached ? snapshot->base.calculated : snapshot->base.frozen);
+  engine->busy--;
+  if (!copy) return glims_fail (error, NULL, "The adjustment preview could not be rendered.");
+  GlimsImageID copy_id = 0;
+  GlimsStatus status = glims_adopt_image (engine, copy, &copy_id);
+  if (status != GLIMS_STATUS_OK) { g_object_unref (copy); return status; }
+  GlimsPlateStorage storage;
+  GlimsOpenImage *copy_open = glims_lookup_image (engine, copy_id);
+  if (!copy_open || !glims_plate_storage_read_open (copy_open, &storage) ||
+      storage.map.mode != GLIMS_PLATE_MODE_LAB || storage.map.count != 3 ||
+      snapshot->base.target_index >= storage.map.count ||
+      memcmp (storage.map.entries[snapshot->base.target_index].uuid, snapshot->base.target_uuid, 16))
+    status = GLIMS_STATUS_UNSUPPORTED;
+  else if (!cached)
+    {
+      GlimsLabCurvesSettings render = *settings;
+      GlimsItemID target = gimp_item_get_id (GIMP_ITEM (storage.planes[snapshot->base.target_index]));
+      /* Remap to the private copy's handle only after UUID+role verification. */
+      render.axis = target;
+      status = glims_image_curves_lab (engine, copy_id, &render, error);
+    }
+  if (status != GLIMS_STATUS_OK) glims_release_image (engine, copy_id);
+  else
+    {
+      if (!cached)
+        {
+          engine->busy++;
+          GimpImage *calculated = gimp_image_duplicate (copy);
+          engine->busy--;
+          if (calculated)
+            {
+              g_clear_object (&snapshot->base.calculated);
+              snapshot->base.calculated = calculated;
+              snapshot->base.calculated_kind = INK_SNAPSHOT_CALC_LAB_CURVES;
+              memcpy (snapshot->base.calculated_curve.samples, settings->samples,
+                        sizeof settings->samples);
+            }
+        }
+      *result = copy_id;
+    }
+  return status;
+}
+
+static GlimsStatus
+lab_snapshot_apply_component (GlimsEngine *engine, GlimsImageID id,
+                              const GlimsLabSnapshot *snapshot,
+                              const GlimsLabCurvesSettings *settings,
+                              char **error)
+{
+  GlimsLabFillSettings identity = { .struct_size = sizeof identity,
+    .axis = settings->axis, .role = settings->role, .opacity = 1 };
+  memcpy (identity.uuid, settings->uuid, sizeof identity.uuid);
+  return apply_component (engine, id, settings->axis, "Curves Lab", FALSE,
+                           lab_curves_row, settings, &snapshot->base, &identity, error);
+}
+
+GlimsStatus
+glims_image_lab_snapshot_begin (GlimsEngine *engine, GlimsImageID id,
+                                const GlimsLabSnapshotTarget *target,
+                                uint64_t *token, char **error)
+{
+  if (error) *error = NULL;
+  if (token) *token = 0;
+  if (!target || !token || target->struct_size < sizeof *target || target->axis <= 0 ||
+      target->role > GLIMS_LAB_AXIS_B)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (open->ink_snapshot || open->lab_snapshot || g_hash_table_size (engine->filters))
+    return GLIMS_STATUS_BUSY;
+  if (engine->next_ink_snapshot_token == G_MAXUINT64)
+    return GLIMS_STATUS_FAILED;
+  GlimsPlateStorage storage;
+  if (!glims_plate_storage_read_open (open, &storage) || storage.map.mode != GLIMS_PLATE_MODE_LAB)
+    return GLIMS_STATUS_UNSUPPORTED;
+  guint index = 0;
+  if (!selected_lab_axis (open, target->axis, &storage, &index) ||
+      !lab_snapshot_target_matches (&storage, target->axis, index,
+                                    (GlimsLabAxisRole) target->role, target->uuid))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  status = glims_check_item_locks (GIMP_ITEM (storage.planes[index]), GLIMS_LOCK_PIXELS, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  engine->busy++;
+  GimpImage *frozen = gimp_image_duplicate (open->image);
+  engine->busy--;
+  if (!frozen) return glims_fail (error, NULL, "The adjustment preview could not be prepared.");
+  GlimsLabSnapshot *snapshot = g_new0 (GlimsLabSnapshot, 1);
+  snapshot->base.frozen = frozen;
+  snapshot->base.target = target->axis;
+  snapshot->base.target_index = index;
+  memcpy (snapshot->base.target_uuid, target->uuid, sizeof snapshot->base.target_uuid);
+  GlimsPlateStorage a, b;
+  if (!lab_snapshot_metadata_matches (open, snapshot, &a, &b))
+    {
+      glims_lab_snapshot_free (snapshot);
+      return glims_fail (error, NULL, "The adjustment preview could not preserve the source document.");
+    }
+  snapshot->base.token = ++engine->next_ink_snapshot_token;
+  open->lab_snapshot = snapshot;
+  *token = snapshot->base.token;
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_lab_snapshot_curves (GlimsEngine *engine, GlimsImageID id, uint64_t token,
+                                 const GlimsLabCurvesSettings *settings,
+                                 GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  if (!result || !lab_settings_valid (settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsLabSnapshot *snapshot = find_lab_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  if (!lab_settings_match_snapshot (snapshot, settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (g_hash_table_size (engine->filters)) return GLIMS_STATUS_BUSY;
+  return lab_snapshot_render (engine, snapshot, settings, result, error);
+}
+
+GlimsStatus
+glims_image_lab_snapshot_apply_curves (GlimsEngine *engine, GlimsImageID id, uint64_t token,
+                                       const GlimsLabCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!lab_settings_valid (settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsLabSnapshot *snapshot = find_lab_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  if (!lab_settings_match_snapshot (snapshot, settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStatus status = lab_snapshot_apply_component (engine, id, snapshot, settings, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      open->lab_snapshot = NULL;
+      glims_lab_snapshot_free (snapshot);
+    }
+  return status;
+}
+
+GlimsStatus
+glims_image_lab_snapshot_end (GlimsEngine *engine, GlimsImageID id, uint64_t token)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GlimsLabSnapshot *snapshot = find_lab_snapshot (open, token);
+  if (!snapshot) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy) return GLIMS_STATUS_BUSY;
+  open->lab_snapshot = NULL;
+  glims_lab_snapshot_free (snapshot);
   return GLIMS_STATUS_OK;
 }

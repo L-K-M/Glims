@@ -1013,6 +1013,7 @@ open_image_free (gpointer data)
   GlimsOpenImage *open = data;
 
   glims_ink_snapshot_free (open->ink_snapshot);
+  glims_lab_snapshot_free (open->lab_snapshot);
   glims_item_sets_free (open->item_sets);
   glims_plate_preview_free (open->component_preview);
   g_clear_pointer (&open->component_cmyk_profile, g_bytes_unref);
@@ -4516,6 +4517,128 @@ api_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_convert_lab_copy,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_convert_lab_copy_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsLabCurvesSettings settings;
+  char **error;
+} LabCurvesArgs;
+
+static GlimsStatus
+image_curves_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabCurvesArgs *a = data;
+  return glims_image_curves_lab (engine, a->image, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_curves_lab (GlimsEngine *engine, GlimsImageID image,
+                      const GlimsLabCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabCurvesArgs a = { .image = image, .error = error };
+  memcpy (&a.settings, settings, sizeof a.settings);
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_curves_lab,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_curves_lab_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsLabSnapshotTarget target;
+  uint64_t token;
+  uint64_t *result_token;
+  GlimsLabCurvesSettings settings;
+  GlimsImageID *result_image;
+  char **error;
+} LabSnapshotArgs;
+
+static GlimsStatus
+image_lab_snapshot_begin_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSnapshotArgs *a = data;
+  return glims_image_lab_snapshot_begin (engine, a->image, &a->target, a->result_token, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_begin (GlimsEngine *engine, GlimsImageID image,
+                              const GlimsLabSnapshotTarget *target,
+                              uint64_t *token, char **error)
+{
+  if (error) *error = NULL;
+  if (token) *token = 0;
+  if (!target || target->struct_size < sizeof *target)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabSnapshotArgs a = { .image = image, .result_token = token, .error = error };
+  memcpy (&a.target, target, sizeof a.target);
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_begin,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_lab_snapshot_begin_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_curves_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSnapshotArgs *a = data;
+  return glims_image_lab_snapshot_curves (engine, a->image, a->token, &a->settings,
+                                          a->result_image, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_curves (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                               const GlimsLabCurvesSettings *settings,
+                               GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  if (!result || !settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabSnapshotArgs a = { .image = image, .token = token, .result_image = result, .error = error };
+  memcpy (&a.settings, settings, sizeof a.settings);
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_curves,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_lab_snapshot_curves_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_apply_curves_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSnapshotArgs *a = data;
+  return glims_image_lab_snapshot_apply_curves (engine, a->image, a->token,
+                                                &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_apply_curves (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                                     const GlimsLabCurvesSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabSnapshotArgs a = { .image = image, .token = token, .error = error };
+  memcpy (&a.settings, settings, sizeof a.settings);
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_apply_curves,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_lab_snapshot_apply_curves_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_end_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabSnapshotArgs *a = data;
+  return glims_image_lab_snapshot_end (engine, a->image, a->token);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_end (GlimsEngine *engine, GlimsImageID image, uint64_t token)
+{
+  LabSnapshotArgs a = { .image = image, .token = token };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_end,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_lab_snapshot_end_on_engine, &a, NULL);
 }
 
 static const GlimsEngineAPI api_v1 = {

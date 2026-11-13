@@ -5435,6 +5435,17 @@ engines pass 423 ink Recorder checks and 186 actual Curves panel checks each.
 Independent production review is clear; hosted CI and combined qualification
 remain pending. See [ink-recorder.md](ink-recorder.md).
 
+### Preserving compressed CMYK PSD import (candidate)
+
+The explicit CMYK importer now reads flat PackBits/RLE PSDs at 8/16 bits as
+well as RAW. The private reader validates every compressed row before native
+allocation, retains exact C/M/Y/K samples and the embedded profile, and limits
+expanded sample bytes as well as input size. Layered/ZIP PSDs and resources
+beyond the single ICC remain outside this preserving subset.
+The standalone reader passes 1,011 optimized/sanitized checks and the pinned
+native acceptance fixture passes 1,328 checks. Four-engine qualification and
+independent review are in progress. See [cmyk-psd-import.md](cmyk-psd-import.md).
+
 ### Physical Lab Curves numerical foundation (2026-11-13)
 
 A private row kernel maps normalized 256-sample tables into physical L/a/b
@@ -5448,3 +5459,37 @@ oracle. A kernel-only 24 MP float-axis pass measured 0.172 seconds on this Mac;
 this excludes native transactions, rendering and UI work. Independent numerical/fixture review found no important issue. Hosted CI
 remains pending. This private slice does not yet expose Lab
 Curves in the editor. See [lab-curves.md](lab-curves.md).
+
+### Direct physical Lab Curves transaction (candidate)
+
+Additive slot202 applies a normalized 256-sample curve to a captured physical
+Lab axis. The existing staged component transaction preserves exact other-axis,
+selection, profile and metadata bytes, rejects changed target identities and
+publishes one Undo step only after validation and cancellation checks.
+Canonical identity still validates affected float samples and mask values.
+The first pinned native fixture passes 1,042 checks; the complete four-engine
+regression run and independent review are pending. No Lab adjustment panel,
+preview or Recorder behavior is enabled by this direct engine operation yet.
+See [lab-curves-edit.md](lab-curves-edit.md).
+
+### Captured Lab Curves previews (candidate)
+
+Slots 203–206 add immutable Lab preview baselines and separately owned rendered
+copies. Apply shares the staged component transaction and verifies every source
+axis, selection and captured target before one Undo publication. Cancel keeps
+source pixels and history intact. Ink and Lab preview tokens use one unique
+engine counter. The pinned native fixture passes 819 checks after reproducing
+and fixing a token collision; all 1,677 Swift tests pass with the new transport.
+The remaining engine regression run and independent reviews are in progress.
+The Lab panel and Recorder route remain subsequent work. See
+[lab-curves-preview.md](lab-curves-preview.md).
+
+### Physical Lab Curves panel (candidate)
+
+The shared sampled-curve panel now has a typed Lab route with physical L/a/b
+numeric coordinates, immutable native previews and ordered Apply/Cancel/close
+cleanup. All 1,682 Swift tests and 251 pinned-engine GUI checks pass, including
+all axes/precisions and pending-work cancellation. The four-engine Lab/ink
+panel matrix and independent reviews are running. Lab Recorder replay and
+standalone release qualification remain separate follow-up work. See
+[lab-curves-ui.md](lab-curves-ui.md).

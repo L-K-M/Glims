@@ -54,8 +54,11 @@ enum InkAdjustmentSettings: Equatable {
     }
 }
 
-protocol InkPreviewSettings: Equatable {
+protocol ComponentPreviewSettings: Equatable {
     var isValid: Bool { get }
+}
+
+protocol InkPreviewSettings: ComponentPreviewSettings {
     var adjustment: InkAdjustmentSettings { get }
 }
 
@@ -66,3 +69,5 @@ extension EngineSession.InkLevelsSettings: InkPreviewSettings {
 extension EngineSession.InkCurvesSettings: InkPreviewSettings {
     var adjustment: InkAdjustmentSettings { .curves(self) }
 }
+
+extension EngineSession.LabCurvesSettings: ComponentPreviewSettings {}

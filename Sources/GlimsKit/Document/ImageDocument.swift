@@ -369,6 +369,10 @@ final class ImageDocument {
     private var inkPreviewRecordingTarget: (channel: Int32, identity: RecorderInkIdentity?)?
     private var inkPreviewStartIsPending = false
     private var inkPreviewCleanups = 0
+    private var labPreviewToken: UInt64?
+    private var labPreviewAxis: EngineSession.LabAxis?
+    private var labPreviewStartIsPending = false
+    private var labPreviewCleanups = 0
     /// Queued engine commands whose result becomes or replaces the paint
     /// target — a created, pasted or text layer, an editing mask, or a
     /// command that removes the target. While one is queued the drawable
@@ -472,6 +476,7 @@ final class ImageDocument {
         !isClosing && !isSavingForClose && !isTransferringClipboard && !PlugInCommands.isRunning
             && !filterPreviewIsOpen && inkPreviewToken == nil
             && !inkPreviewStartIsPending && inkPreviewCleanups == 0
+            && labPreviewToken == nil && !labPreviewStartIsPending && labPreviewCleanups == 0
             && !EngineActivity.shared.isBusy
     }
 
@@ -5089,7 +5094,8 @@ final class ImageDocument {
                                 completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard filterPreviewIsOpen, inkPreviewToken == nil, !inkPreviewStartIsPending,
-              inkPreviewCleanups == 0, kind.isSupported(by: session),
+              inkPreviewCleanups == 0, labPreviewToken == nil, !labPreviewStartIsPending, labPreviewCleanups == 0,
+              kind.isSupported(by: session),
               colorInfo.mode.usesInkChannels, activeChannel == channel,
               !recorder.isReplaying, !isSavingForClose, !isTransferringClipboard,
               !PlugInCommands.isRunning, !EngineActivity.shared.isBusy else {
@@ -5254,6 +5260,150 @@ final class ImageDocument {
                 if !self.isClosing {
                     do { try self.reload() }
                     catch { self.onError?("The ink channel state could not be refreshed: \(error)") }
+                }
+                completion(result)
+            }
+        }
+        if accepted, admission.capture != nil { notifyRecorderChanged() }
+        return accepted
+    }
+
+    func labCurvesRefusal(axis: EngineSession.LabAxis) -> String? {
+        guard colorInfo.mode == .lab, session.supportsLabCurveSnapshots else {
+            return "This engine does not support Lab Curves previews."
+        }
+        guard !isClosing else { return DocumentError.closed.localizedDescription }
+        guard acceptsEdits, !strokeIsActive, !targetCommandIsPending else {
+            return "Wait for the Lab channel selection or current operation to finish."
+        }
+        guard let current = selectedLabAxis, current.id == axis.id,
+              current.role == axis.role, current.uuid == axis.uuid else {
+            return "Select one Lab channel in the Channels palette."
+        }
+        return nil
+    }
+
+    func beginLabCurvesPreview(axis: EngineSession.LabAxis,
+                               completion: @escaping @MainActor (Result<UInt64, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard filterPreviewIsOpen, labPreviewToken == nil, !labPreviewStartIsPending,
+              labPreviewCleanups == 0, inkPreviewToken == nil, !inkPreviewStartIsPending,
+              inkPreviewCleanups == 0, session.supportsLabCurveSnapshots,
+              colorInfo.mode == .lab, selectedLabAxis == axis, !targetCommandIsPending,
+              !recorder.isReplaying, !isSavingForClose, !isTransferringClipboard,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy else {
+            return completion(.failure(DocumentError.busy))
+        }
+        labPreviewStartIsPending = true
+        EngineActivity.shared.beginTransformPreview()
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.beginLabCurvesSnapshot(image, axis: axis) }
+            DispatchQueue.main.async {
+                self.labPreviewStartIsPending = false
+                if case .success(let token) = result {
+                    self.labPreviewToken = token
+                    self.labPreviewAxis = axis
+                }
+                EngineActivity.shared.endTransformPreview()
+                completion(result)
+            }
+        }
+    }
+
+    func renderLabCurvesPreview(_ request: LabCurvesPixelPreview.Request,
+                                completion: @escaping @MainActor (Result<CGImage, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard filterPreviewIsOpen, labPreviewToken == request.token,
+              let axis = labPreviewAxis, request.isValid else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        pendingWork += 1 // Includes asynchronous private-copy destruction.
+        EngineActivity.shared.beginTransformPreview()
+        enqueue(on: inputQueue) { [session, image] in
+            var copy: Int32?
+            let result = Result { () throws -> CGImage in
+                let preview = try session.renderLabCurvesSnapshot(image, token: request.token, axis: axis, settings: request.settings)
+                copy = preview
+                return try CanvasDisplayDestination.render(session, image: preview, scale: request.renderScale,
+                    area: request.renderArea, destination: request.destination, proof: request.proof)
+            }
+            DispatchQueue.main.async {
+                let finish: @MainActor (Result<Void, Error>) -> Void = { cleanup in
+                    defer { self.jobDidFinish(input: false) }
+                    EngineActivity.shared.endTransformPreview()
+                    if self.isClosing || self.labPreviewToken != request.token {
+                        completion(.failure(DocumentError.closed))
+                    } else {
+                        completion(cleanup.flatMap { result })
+                    }
+                }
+                if let copy { EngineActivity.shared.closeImage(copy, session: session, completion: finish) }
+                else { finish(.success(())) }
+            }
+        }
+    }
+
+    func endLabCurvesPreview(_ token: UInt64,
+                              completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) {
+        if labPreviewToken == token {
+            labPreviewToken = nil
+            labPreviewAxis = nil
+        }
+        labPreviewCleanups += 1
+        pendingWork += 1
+        // Order after work already queued. Any request deferred by another
+        // activity will refuse its expired token and discard its stale reply.
+        inputQueue.async {
+            DispatchQueue.main.async {
+                EngineActivity.shared.endLabSnapshot(token, image: self.image, session: self.session) { result in
+                    defer { self.jobDidFinish(input: false) }
+                    self.labPreviewCleanups -= 1
+                    completion(result)
+                    self.onStateChange?()
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    func applyLabCurvesPreview(_ token: UInt64, settings: EngineSession.LabCurvesSettings,
+                                completion: @escaping @MainActor (Result<Void, Error>) -> Void) -> Bool {
+        guard settings.isValid, filterPreviewIsOpen, labPreviewToken == token,
+              let axis = labPreviewAxis,
+              !refuseWhileEditingUnavailable(forPreviewWork: true) else {
+            completion(.failure(DocumentError.busy))
+            return false
+        }
+        let admission = InkEditAdmission()
+        let accepted = enqueueExclusive(label: "Applying Lab Curves", admission: {
+            self.filterPreviewIsOpen && self.labPreviewToken == token
+                && self.labPreviewAxis == axis && !self.isClosing
+        }, didAdmit: {
+            if self.recorder.isRecording {
+                do {
+                    admission.capture = try self.reserveRecording(context: .unavailable(
+                        "Lab Curves cannot be replayed by Recorder yet."))
+                }
+                catch { admission.error = error }
+            }
+        }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
+            let result = Result<Void, Error> {
+                if let error = admission.error { throw error }
+                try session.applyLabCurvesSnapshot(image, token: token, axis: axis, settings: settings)
+            }
+            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
+                .failure(RecorderReplayError(message: "Lab Curves cannot be replayed by Recorder yet."))
+            }
+            self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
+            self.dispatchReadWhenReady {
+                if case .success = result, self.labPreviewToken == token {
+                    self.labPreviewToken = nil
+                    self.labPreviewAxis = nil
+                }
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The Lab channel state could not be refreshed: \(error)") }
                 }
                 completion(result)
             }

@@ -1,5 +1,5 @@
 /* Explicit preserving PSD import. A private immutable spool supplies both
- * inspection and raw decoding; only a fully prepared native image is adopted. */
+ * inspection and sample decoding; only a fully prepared native image is adopted. */
 #include "engine-private.h"
 #include "component-document.h"
 #include "cmyk-psd-reader.h"
@@ -185,7 +185,7 @@ parser_failure (CmykImport *state, GlimsCmykPsdInputStatus parsed, char **error)
   if (parsed == GLIMS_CMYK_PSD_INPUT_NOT_PSD || parsed == GLIMS_CMYK_PSD_INPUT_OTHER_MODE ||
       parsed == GLIMS_CMYK_PSD_INPUT_UNSUPPORTED)
     {
-      if (error) *error = g_strdup ("Preserving CMYK import requires a flat RAW 8-bit or 16-bit PSD with four process inks and only one embedded CMYK profile. Other metadata, layers and compression are not supported.");
+      if (error) *error = g_strdup ("Preserving CMYK import requires a flat RAW or RLE 8-bit or 16-bit PSD with four process inks and only one embedded CMYK profile. Other metadata, layers and ZIP compression are not supported.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
   return glims_fail (error, NULL, "The CMYK PSD has malformed or incomplete data.");

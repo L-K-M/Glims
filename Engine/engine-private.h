@@ -60,6 +60,7 @@ struct GlimsEngine
    * reused, never reset. 0 is never issued. At UINT64_MAX the allocation
    * fails closed (no identity is handed out, none is reused). */
   guint64             next_item_set_token;
+  /* One token space shared by ink and Lab snapshots. Never reused. */
   guint64             next_ink_snapshot_token;
 
   /* Transport lifetime, guarded by `lock`. A registered external caller
@@ -158,6 +159,7 @@ typedef struct
   gchar     *component_profile_label;
   struct _GlimsPlatePreview *component_preview;
   struct _GlimsInkSnapshot *ink_snapshot;
+  struct _GlimsLabSnapshot *lab_snapshot;
   GimpDrawable *component_planes[32];
   gulong component_updates[32];
 } GlimsOpenImage;
@@ -212,6 +214,7 @@ GlimsStatus      glims_image_levels_ink  (GlimsEngine *engine, GlimsImageID imag
                                          GlimsItemID channel, const GlimsInkLevelsSettings *settings,
                                          char **error);
 void glims_ink_snapshot_free (struct _GlimsInkSnapshot *snapshot);
+void glims_lab_snapshot_free (struct _GlimsLabSnapshot *snapshot);
 GlimsStatus glims_image_ink_snapshot_begin (GlimsEngine *engine, GlimsImageID image,
                                             GlimsItemID channel, uint64_t *token, char **error);
 GlimsStatus glims_image_ink_snapshot_levels (GlimsEngine *engine, GlimsImageID image,
@@ -238,6 +241,21 @@ GlimsStatus glims_image_lab_axes (GlimsEngine *engine, GlimsImageID image,
                                   GlimsLabAxes *out);
 GlimsStatus glims_image_fill_lab (GlimsEngine *engine, GlimsImageID image,
                                   const GlimsLabFillSettings *settings, char **error);
+GlimsStatus glims_image_curves_lab (GlimsEngine *engine, GlimsImageID image,
+                                    const GlimsLabCurvesSettings *settings, char **error);
+GlimsStatus glims_image_lab_snapshot_begin (GlimsEngine *engine, GlimsImageID image,
+                                            const GlimsLabSnapshotTarget *target,
+                                            uint64_t *token, char **error);
+GlimsStatus glims_image_lab_snapshot_curves (GlimsEngine *engine, GlimsImageID image,
+                                             uint64_t token,
+                                             const GlimsLabCurvesSettings *settings,
+                                             GlimsImageID *copy, char **error);
+GlimsStatus glims_image_lab_snapshot_apply_curves (GlimsEngine *engine, GlimsImageID image,
+                                                   uint64_t token,
+                                                   const GlimsLabCurvesSettings *settings,
+                                                   char **error);
+GlimsStatus glims_image_lab_snapshot_end (GlimsEngine *engine, GlimsImageID image,
+                                          uint64_t token);
 gboolean         glims_stroke_references_image (GlimsEngine *engine, GlimsStrokeID stroke, GimpImage *image);
 
 /* The largest pixel buffer the facade accepts, and its overflow-safe

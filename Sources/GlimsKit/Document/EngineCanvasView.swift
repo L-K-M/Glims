@@ -104,6 +104,21 @@ final class EngineCanvasView: NSView {
     })
     var inkCurvesPreviewImage: CGImage? { inkCurvesPixels.image }
     var inkCurvesPreviewIsCurrent: Bool { inkCurvesPixels.isCurrent }
+    private var labCurvesPreviewToken: UInt64?
+    private var labCurvesPreviewSettings = EngineSession.LabCurvesSettings()
+    var onLabCurvesPreviewChange: ((Bool, String?) -> Void)?
+    private lazy var labCurvesPixels: LabCurvesPixelPreview = LabCurvesPixelPreview(render: { [weak self] request, completion in
+        guard let self else { return completion(.failure(ImageDocument.DocumentError.closed)) }
+        self.document.renderLabCurvesPreview(request, completion: completion)
+    }, changed: { [weak self] in
+        guard let self else { return }
+        self.needsDisplay = true
+        self.onLabCurvesPreviewChange?(self.labCurvesPixels.isCurrent, nil)
+    }, failed: { [weak self] error in
+        self?.onLabCurvesPreviewChange?(false, error.localizedDescription)
+    })
+    var labCurvesPreviewImage: CGImage? { labCurvesPixels.image }
+    var labCurvesPreviewIsCurrent: Bool { labCurvesPixels.isCurrent }
     /// Destination observer tokens for the owning window and its associated
     /// screen; swapped on window changes and removed on detach/close. The
     /// blocks hold `self` weakly, so no observer retain cycle.
@@ -322,6 +337,8 @@ final class EngineCanvasView: NSView {
         onInkLevelsPreviewChange = nil
         inkCurvesPreviewToken = nil
         inkCurvesPixels.update(nil)
+        labCurvesPreviewToken = nil
+        labCurvesPixels.update(nil)
         onInkCurvesPreviewChange = nil
         onRenderMetricsChange = nil
         tools.cancelFloatingShape()
@@ -640,6 +657,7 @@ final class EngineCanvasView: NSView {
         refreshTransformPixelPreview()
         refreshInkLevelsPixelPreview()
         refreshInkCurvesPixelPreview()
+        refreshLabCurvesPixelPreview()
         surroundColor.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -668,6 +686,10 @@ final class EngineCanvasView: NSView {
                         dirtyRect: dirtyRect, context: context)
         }
         if let image = inkCurvesPixels.image, let request = inkCurvesPixels.displayedRequest {
+            drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
+                        dirtyRect: dirtyRect, context: context)
+        }
+        if let image = labCurvesPixels.image, let request = labCurvesPixels.displayedRequest {
             drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
                         dirtyRect: dirtyRect, context: context)
         }
@@ -738,6 +760,28 @@ final class EngineCanvasView: NSView {
                               width: visibleRect.width / scale, height: visibleRect.height / scale)
             .intersection(CGRect(origin: .zero, size: size))
         inkCurvesPixels.update(.init(token: token, settings: inkCurvesPreviewSettings,
+            imageSize: size, destination: destination, proof: softProof,
+            viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
+    }
+
+    func setLabCurvesPreview(token: UInt64?, settings: EngineSession.LabCurvesSettings = .init()) {
+        labCurvesPreviewToken = token
+        labCurvesPreviewSettings = settings
+        refreshLabCurvesPixelPreview(retryFailure: true)
+        needsDisplay = true
+    }
+
+    private func refreshLabCurvesPixelPreview(retryFailure: Bool = false) {
+        guard !renderingStopped, !document.isClosing, document.filterPreviewIsOpen,
+              let token = labCurvesPreviewToken, !visibleRect.intersection(bounds).isEmpty else {
+            labCurvesPixels.update(nil)
+            return
+        }
+        let size = CGSize(width: document.info.width, height: document.info.height)
+        let viewport = CGRect(x: visibleRect.minX / scale, y: visibleRect.minY / scale,
+                              width: visibleRect.width / scale, height: visibleRect.height / scale)
+            .intersection(CGRect(origin: .zero, size: size))
+        labCurvesPixels.update(.init(token: token, settings: labCurvesPreviewSettings,
             imageSize: size, destination: destination, proof: softProof,
             viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
     }
