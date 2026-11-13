@@ -5927,3 +5927,22 @@ cases reached engine readiness in about 1.4 seconds on this Mac, with a
 changed user plug-in label observed on restart. An incompatible bundle keeps
 native discovery, which took about 10.5 seconds. Final package checks,
 review and CI remain open.
+
+### Script-Fu with special profile paths (candidate)
+
+Script-Fu expands the result of the engine's configuration query twice. A
+profile path containing a literal `~` or `${...}` can therefore crash the
+extension and stall startup. The adapter scopes an indirection to the three
+native initialization queries of the bundled Script-Fu processes; later user
+script queries and other plug-ins receive the ordinary value. This is enabled
+only for the four inspected engine versions. Other versions and unbundled
+development engines retain native behavior pending qualification.
+
+On the pinned engine, the packaged startup suite exercises undefined and
+defined tokens, a tilde, user scripts, a custom script directory across
+restart, unchanged third-party and Scheme queries, and preserved registry
+and preferences. The isolated bundle passes 2,268 engine and 3,355 app
+checks; a disposable special-profile app launch reached its document window
+in 1.51 seconds on this Mac. Other packaged engine versions and independent
+review remain in progress. This does not qualify language changes or complete
+the application.
