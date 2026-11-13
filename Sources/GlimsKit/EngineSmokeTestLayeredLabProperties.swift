@@ -257,12 +257,13 @@ extension EngineSmokeTest {
             let recordedFirst = EngineSession.StrokePoint(x: 1.5, y: 1.5, pressure: 0.8, timeMilliseconds: 1)
             opened.beginStroke(at: recordedFirst, brush: state.brush(for: .paintbrush))
             if session.supportsLabLayerBrushEmptySelection {
-                check(opened.strokeIsActive, "layered Lab Brush starts while recording")
+                check(opened.strokeIsActive && errors.isEmpty, "layered Lab Brush starts while recording")
                 opened.continueStroke([.init(x: 2.5, y: 1.5, pressure: 0.6, timeMilliseconds: 2)])
                 opened.endStroke(); drain("recorded layered Brush")
                 try opened.stopRecording()
                 let deadline = Date().addingTimeInterval(15)
                 while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                check(opened.recorder.pendingCount == 0, "Recorder settles the layered Brush before the deadline")
                 if let row = opened.recorder.records.first, case .success(.completeLabLayerStroke(let value)) = row.resolution {
                     check(value.trace.first.nativeSample.point == recordedFirst && value.trace.batches.count == 1,
                           "Recorder retains the layered Brush samples and accepted batch")
@@ -297,6 +298,9 @@ extension EngineSmokeTest {
                 opened.continueStroke([.init(x: 2.5, y: 1.5, pressure: 0.6, timeMilliseconds: 2)])
                 opened.cancelLabBrushStroke(); drain("cancel recorded layered Brush")
                 try opened.stopRecording()
+                let cancelDeadline = Date().addingTimeInterval(15)
+                while opened.recorder.pendingCount != 0 && Date() < cancelDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                check(opened.recorder.pendingCount == 0, "Recorder settles the cancelled Brush before the deadline")
                 if let row = opened.recorder.records.first, case .failure = row.resolution {
                     check(pixel(session, image, x: 1, y: 1) == before && (try session.undoInfo(image)) == beforeCancel,
                           "cancelled recorded layered Brush restores pixels and history")
@@ -316,6 +320,7 @@ extension EngineSmokeTest {
                 opened.beginStroke(at: recordedFirst, brush: state.brush(for: .paintbrush))
                 check(!opened.strokeIsActive && !errors.isEmpty && opened.recorder.records.isEmpty,
                       "Recorder refuses a layered Brush with an uncaptured selection")
+                if opened.strokeIsActive { opened.cancelLabBrushStroke(); drain("cancel refused-selection Brush") }
                 try opened.stopRecording(); _ = opened.clearRecording(); errors.removeAll()
             }
             let outside = pixel(session, image, x: 0, y: 0)
@@ -357,11 +362,16 @@ extension EngineSmokeTest {
                 canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
                 drain("recorded canvas Brush")
                 try opened.stopRecording()
+                let flushDeadline = Date().addingTimeInterval(15)
+                while opened.recorder.pendingCount != 0 && Date() < flushDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                check(opened.recorder.pendingCount == 0, "Recorder settles the canvas Brush before the deadline")
                 let canvasPixel = pixel(session, image, x: 1, y: 1)
                 if let row = opened.recorder.records.first, case .success(.completeLabLayerStroke) = row.resolution {
                     check(canvasPixel != before, "canvas gesture records a complete layered Lab Brush stroke")
                 } else { check(false, "canvas gesture records a complete layered Lab Brush stroke") }
                 opened.undo(); drain("recorded canvas Brush Undo")
+                check(pixel(session, image, x: 1, y: 1) == before,
+                      "recorded canvas Brush Undo restores the original pixels")
                 try opened.startReplay(); drain("recorded canvas Brush replay")
                 let deadline = Date().addingTimeInterval(15)
                 while opened.recorder.isReplaying && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
@@ -370,6 +380,8 @@ extension EngineSmokeTest {
                           "recorded canvas Brush replays the same pixels")
                 } else { check(false, "recorded canvas Brush replays the same pixels") }
                 opened.undo(); drain("recorded canvas replay Undo")
+                check(pixel(session, image, x: 1, y: 1) == before,
+                      "recorded canvas replay Undo restores the original pixels")
                 _ = opened.clearRecording()
             }
             if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
