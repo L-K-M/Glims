@@ -330,10 +330,12 @@ GlimsStatus glims_image_redo       (GlimsEngine *e, GlimsImageID id);
 /* paint.c */
 GlimsStatus glims_stroke_component_ready (GlimsEngine *engine, GlimsStrokeID id);
 gboolean glims_stroke_is_lab (GlimsEngine *engine, GlimsStrokeID id);
-/* Query active Lab strokes, or cancel them before their image is released. */
-typedef enum { GLIMS_LAB_STROKES_QUERY, GLIMS_LAB_STROKES_CANCEL } GlimsLabStrokeAction;
-gboolean glims_lab_strokes_for_image (GlimsEngine *engine, GimpImage *image,
-                                    GlimsLabStrokeAction action);
+gboolean glims_stroke_is_ink (GlimsEngine *engine, GlimsStrokeID id);
+/* Query active Lab and typed ink strokes, or cancel them before their image
+ * is released. */
+typedef enum { GLIMS_TYPED_STROKES_QUERY, GLIMS_TYPED_STROKES_CANCEL } GlimsTypedStrokeAction;
+gboolean glims_typed_strokes_for_image (GlimsEngine *engine, GimpImage *image,
+                                        GlimsTypedStrokeAction action);
 GlimsStatus glims_stroke_begin_lab (GlimsEngine *engine, GlimsImageID image,
                                     GlimsResourceID brush,
                                     const GlimsLabBrushSettings *settings,
@@ -347,6 +349,15 @@ GlimsStatus glims_stroke_begin_lab_with_capture_facts (GlimsEngine *engine, Glim
                                     const char *expected_fingerprint,
                                     GlimsStrokeID *result,
                                     GlimsStrokeCaptureFacts *facts, char **error);
+GlimsStatus glims_stroke_begin_ink_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsResourceID brush,
+                                    const GlimsInkStrokeTarget *target,
+                                    const GlimsBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *first,
+                                    const char *expected_fingerprint,
+                                    GlimsStrokeID *result,
+                                    GlimsStrokeCaptureFacts *facts, char **error);
+GlimsStatus glims_stroke_cancel_ink (GlimsEngine *engine, GlimsStrokeID stroke);
 GlimsStatus glims_stroke_begin     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsBrushSettings *brush, const GlimsStrokePoint *first,
                                     GlimsStrokeID *out, char **error);

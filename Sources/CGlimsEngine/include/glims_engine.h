@@ -1149,6 +1149,17 @@ typedef struct GlimsInkChannelIdentity {
   uint8_t  uuid[16];
 } GlimsInkChannelIdentity;
 
+/* Typed ink stroke capture target: CMYK or Multichannel component documents
+ * only. UUID is the owning document identity, role is canonical for the
+ * channel/mode and channel is the explicit selected channel. */
+typedef struct GlimsInkStrokeTarget {
+  uint32_t struct_size;
+  GlimsItemID channel;
+  uint32_t color_mode;
+  uint32_t role;
+  uint8_t  uuid[16];
+} GlimsInkStrokeTarget;
+
 /* The image's color model, as image_color_info reports it and
  * image_convert_mode takes. Facade-owned values only; the engine's own
  * enum never crosses this boundary. */
@@ -4058,6 +4069,30 @@ typedef struct GlimsEngineAPI {
                                    const char *expected_fingerprint,
                                    GlimsStrokeID *result,
                                    GlimsStrokeCaptureFacts *facts, char **error);
+  /* Slot208: deterministic Paintbrush/Pencil capture on an explicit selected
+   * CMYK/Multichannel channel. Ordinary/Lab targets and Airbrush are unsupported.
+   * Settings retain the old component painter's RGB/intensity semantics. Resource
+   * zero uses the effective current brush for live input; NULL expected permits
+   * live paint without returned strings for a non-recordable brush. Replay needs
+   * an explicit brush and a 64-character lowercase SHA256 fingerprint. Mismatched
+   * or unavailable facts refuse before any dab or Undo. This separate ink domain
+   * binds effective intensity, brush content/options/dynamics and mode/role, not
+   * document/native IDs. Requires full known target/settings/V2 packet and facts,
+   * plus result. Unaligned struct pointers are supported. Short facts are untouched;
+   * accepted facts payload is cleared before admission, even NOT_RUNNING, preserving
+   * caller struct_size and extension tail. Free returned strings with free_string. */
+  GlimsStatus (*stroke_begin_ink_with_capture_facts) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsResourceID brush,
+                                   const GlimsInkStrokeTarget *target,
+                                   const GlimsBrushSettings *settings,
+                                   const GlimsStrokePacketV2 *first,
+                                   const char *expected_fingerprint,
+                                   GlimsStrokeID *result,
+                                   GlimsStrokeCaptureFacts *facts, char **error);
+  /* Slot209: cancel an active typed ink capture stroke. Cleanup is admitted while
+   * metadata is damaged; wrong ordinary/Lab handles refuse, expired handles are
+   * NOT_FOUND. */
+  GlimsStatus (*stroke_cancel_ink) (GlimsEngine *engine, GlimsStrokeID stroke);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

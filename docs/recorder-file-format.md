@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 12
+# Recorder file format, versions 1 to 15
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `11` or `12`. `recordingID` is a file UUID. `origin` contains
+`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `11`, `12`, `13`, `14` or `15`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -15,11 +15,12 @@ The writer chooses the highest version required by a successful record:
 `completeStroke` requires 2, `channelToSelection` 3, `transformLayer` 4,
 `applyLevels` 5, `transformProjectiveLayer` 6, `applyCurves` 7,
 `applyColorBalance` 8, `applyHueSaturation` 9, `applyBrightnessContrast` 10, `editInk` or
-`applyInkLevels` 11, and `applyInkCurves` 12. A file declaring one of those versions must contain at least one
+`applyInkLevels` 11, `applyInkCurves` 12, `fillLab`/`applyLabCurves` 13,
+`completeLabStroke` 14, and `labSelectionShape`/`labSelectCommand` 15. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...12 refuse the file.
+version 1. Integers outside 1...15 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -420,3 +421,56 @@ interface and binding installation are implemented outside the codec and are
 outside this document's scope. This document describes the implemented schema
 and validation only; it claims no runtime verification and no whole-editor
 completeness.
+
+
+## Physical Lab commands (versions 13 and 14)
+
+`fillLab` contains exactly `tag`, `value` and `opacity`; `applyLabCurves`
+contains `tag` and exactly 256 normalized `samples`. Each requires a `lab`
+binding with `symbol`, owned `role` (`lightness`, `a`, `b`), `precision`
+(`u8`, `u16`, `float`) and a nonzero document-scoped `uuid`. Its symbol must
+have a channel description. Integer physical values remain in the nominal
+axis range; Float accepts finite values representable by Float. A symbol
+cannot mix Lab and ink identity or carry inconsistent Lab identities.
+
+Version 14 adds `completeLabStroke`, with exactly `tag`, `settings`, `facts`,
+`first` and `batches`. Settings contain `value` (physical Lab), `size`
+(1...10000), `opacity` and `hardness` (0...1). Facts use the ordinary stroke
+brush identity and 64 lowercase hexadecimal fingerprint schema. The Lab
+fingerprint describes the effective physical stroke configuration, with its
+own hash domain; it is not interchangeable with an RGB stroke fingerprint.
+
+Each sample contains `x`, `y`, `pressure`, `xTilt`, `yTilt` and unsigned
+32-bit `timeMilliseconds`. Optional `rotationTurns` is in [0,1), and
+optional `tangentialPressure` is in [-1,1]. Omission and explicit numeric zero
+are distinct. Null, unknown fields and nonfinite numbers refuse the file.
+Coordinates are in [-524288,524288], pressure in [0,1], and tilt in [-1,1].
+Timestamp deltas use unsigned modular subtraction and cannot exceed
+0x7fffffff, including at batch boundaries. Every continuation batch has
+1...4096 samples, and the whole stroke has at most 65536 including `first`.
+All successful strokes and polygons share the 100000-point file budget.
+
+Lab strokes require the same explicit physical-axis binding as Lab Fill.
+Before replay begins, the engine checks the installed brush and captured
+configuration. A failed continuation or End cancels the complete Lab stroke.
+These are execution checks; a valid file alone never authorizes a target.
+
+
+## Lab root-mask selections (version 15)
+
+`labSelectionShape` has exactly `tag`, `shape`, `options`. Its rectangle or
+ellipse shape contains `tag` and `rect` (`x`, `y`, `width`, `height`); its
+polygon contains `tag` and `points` (each exactly `x`, `y`). Options contain
+only `operation` (replace/add/subtract/intersect), `antialias`, `feather` and
+`cornerRadius`. Both radii must be finite in 0...1000. Coordinates and opposite
+rectangle endpoints must be finite in ±1048576. Signed extents and off-canvas
+positions remain unchanged; snapped floor/ceil rectangle spans must be positive.
+A polygon has 3...65536 points and consumes the shared 100000-point file budget.
+
+`labSelectCommand` has exactly `tag` and `command` (all/none/invert). Both new
+tags require binding `none`. Their explicit Lab tag records document-mode
+intent; no axis identity is needed for the root mask. Replay calls only typed
+Lab selection APIs, so loading on an incompatible document does not permit an
+ordinary selection fallback. Version 15 requires a successful new Lab selection
+command. Earlier versions and ordinary selection tags retain their existing
+semantics; unknown fields, unsupported commands and axis/layer bindings refuse.
