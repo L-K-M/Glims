@@ -2,6 +2,7 @@
  * authoritative Lab axes are neither sampled nor converted. */
 #include "engine-private.h"
 #include "plate-storage.h"
+#include "lab-layer-storage.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -24,12 +25,25 @@ lab_selection_ready (GlimsEngine *engine, GlimsImageID id, char **error)
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   if (!open) return GLIMS_STATUS_NOT_FOUND;
 
-  GlimsPlateStorage storage;
-  if (!open->component_document || open->component_mode != GLIMS_PLATE_MODE_LAB ||
-      !glims_plate_storage_read_open (open, &storage) ||
-      storage.map.mode != GLIMS_PLATE_MODE_LAB || storage.map.count != 3)
+  if (!open->component_document || open->component_mode != GLIMS_PLATE_MODE_LAB)
     return selection_refusal (GLIMS_STATUS_UNSUPPORTED, error,
                                "Choose a valid native Lab document for this selection.");
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!storage) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+        return selection_refusal (GLIMS_STATUS_UNSUPPORTED, error,
+                                   "The layered Lab document's storage is invalid.");
+    }
+  else
+    {
+      GlimsPlateStorage storage;
+      if (!glims_plate_storage_read_open (open, &storage) ||
+          storage.map.mode != GLIMS_PLATE_MODE_LAB || storage.map.count != 3)
+        return selection_refusal (GLIMS_STATUS_UNSUPPORTED, error,
+                                   "Choose a valid native Lab document for this selection.");
+    }
 
   GlimsStatus status = glims_edit_ready (engine, open, error);
   if (status != GLIMS_STATUS_OK) return status;

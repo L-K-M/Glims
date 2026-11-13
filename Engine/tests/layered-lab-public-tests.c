@@ -45,7 +45,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_CREATE)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DELETE)&&
-        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_REORDER)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_REORDER)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAB_SELECTIONS)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
@@ -67,6 +67,47 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsLayerInfo rows[8];int32_t count=0;CHECK(api->image_layers(engine,id,rows,8,&count)==GLIMS_STATUS_OK&&count==2,"only two logical layer roots are exposed");
   if(count==2){
    CHECK(rows[0].depth==0&&rows[1].depth==0&&rows[0].parent==0&&rows[1].parent==0,"logical rows are top-level");
+   GlimsPoint points[2]={{1,1},{3,3}};
+   GlimsLabSelectOptions select_options={.struct_size=sizeof select_options,.operation=GLIMS_SELECT_REPLACE};
+   guint8 before_mask_render[4]={0},after_mask_render[4]={0};
+   CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},before_mask_render,4)==GLIMS_STATUS_OK,
+         "layered Lab pixels are captured before selection edits");
+   engine->busy++;
+   CHECK(api->image_select_lab_shape(engine,id,GLIMS_SHAPE_RECTANGLE,points,2,&select_options,&error)==GLIMS_STATUS_BUSY,
+         "layered Lab selection refuses a busy engine");
+   engine->busy--;if(error)api->free_string(error);error=NULL;
+   CHECK(api->select_shape(engine,id,GLIMS_SHAPE_RECTANGLE,points,2,NULL)==GLIMS_STATUS_UNSUPPORTED,
+         "ordinary selection facade remains closed for layered Lab");
+   error=NULL;
+   GlimsStatus selected_shape=api->image_select_lab_shape(engine,id,GLIMS_SHAPE_RECTANGLE,points,2,&select_options,&error);
+   CHECK(selected_shape==GLIMS_STATUS_OK,"layered Lab rectangle edits its root selection mask");
+   if(error)api->free_string(error);error=NULL;
+   if(selected_shape==GLIMS_STATUS_OK){
+    bool empty=true;GlimsRect bounds={0};
+    CHECK(api->selection_bounds(engine,id,&empty,&bounds)==GLIMS_STATUS_OK&&!empty&&
+          bounds.x==1&&bounds.y==1&&bounds.width==2&&bounds.height==2,
+          "layered Lab selection has expected rectangle bounds");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+          api->selection_bounds(engine,id,&empty,&bounds)==GLIMS_STATUS_OK&&empty,
+          "Undo restores the empty layered Lab selection");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+          api->selection_bounds(engine,id,&empty,&bounds)==GLIMS_STATUS_OK&&!empty&&bounds.width==2,
+          "Redo restores the layered Lab selection");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"selection fixture returns to its initial state");
+    CHECK(api->image_select_lab_command(engine,id,GLIMS_SELECT_ALL,&error)==GLIMS_STATUS_OK&&
+          api->selection_bounds(engine,id,&empty,&bounds)==GLIMS_STATUS_OK&&!empty&&bounds.width==4&&bounds.height==4,
+          "Select All fills the layered Lab root mask");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_select_lab_command(engine,id,GLIMS_SELECT_INVERT,&error)==GLIMS_STATUS_OK&&
+          api->selection_bounds(engine,id,&empty,&bounds)==GLIMS_STATUS_OK&&empty,
+          "Invert clears a full layered Lab selection");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_undo(engine,id)==GLIMS_STATUS_OK,
+          "selection commands each undo independently");
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},after_mask_render,4)==GLIMS_STATUS_OK&&
+          !memcmp(before_mask_render,after_mask_render,sizeof before_mask_render),
+          "selection editing leaves layered Lab pixels unchanged");
+   }
    GlimsItemID duplicate=0;error=NULL;
    GlimsStatus duplicated=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,&duplicate,&error);
    CHECK(duplicated==GLIMS_STATUS_OK&&duplicate!=0,"public command duplicates a logical Lab layer");
