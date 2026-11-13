@@ -5515,3 +5515,16 @@ plus conformance, and all 1,702 Swift and 141 Python tests pass. Independent
 source review and hosted CI remain open. Recorder file and document wiring
 remain a subsequent slice.
 See [lab-brush.md](lab-brush.md).
+
+
+### Physical Lab Brush Recorder integration (candidate)
+
+The document now captures complete physical Lab gestures with the effective
+native brush facts, owned settings and exact V2 sample batches. Version 14
+files preserve optional tablet axes and require an explicit role/precision
+binding. Replay validates resource/configuration before painting and cancels
+failed strokes. The initial pinned native app fixture passes 325 checks; an
+actual older producer preserves live paint and explicitly refuses recording.
+All 1,714 Swift and 141 Python tests pass; document/replay review is clear.
+Four-engine checks, codec/fixture review and hosted CI remain open.
+See [lab-recorder.md](lab-recorder.md). No installed-app change is claimed.
