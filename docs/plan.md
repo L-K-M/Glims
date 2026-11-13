@@ -5879,3 +5879,12 @@ viewports at 22.6, 15.3, 1.1 and 22.8 ms respectively, versus 5.3, 1.1,
 work preserves alpha and correct color. These are native timings, not app
 interaction guarantees. Review, CI and app qualification remain pending;
 the private layered Lab preview is still a separate sampling path.
+
+The fractional-zoom cost remains an open responsiveness issue. A five-second
+sample of repeated 50% reads attributed much of the time to Babl color
+conversion, with additional time in sampling and unassociation. A guarded
+associated-output prototype preserved the tested small-alpha HDR cases but did
+not improve the cached 24 MP viewport: nine-read means were 16.18 ms versus
+15.49 ms for this candidate at 50%, and 23.34 versus 23.01 ms at 130%. The
+prototype was not adopted; pursue a faster color-correct path and measure it
+with interactive panning and alpha/profile regressions before claiming a fix.
