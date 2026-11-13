@@ -413,6 +413,30 @@ extension EngineSmokeTest {
             }
             check(try session.undoInfo(image) == captureHistory,
                   "captured and refused Brush fixtures preserve Undo and Redo")
+            if session.supportsLabLayerBrushCapture {
+                var brush = state.brush(for: .paintbrush)
+                brush.pressureSize = session.supportsLabLayerBrushPressure
+                let captured = try session.beginLabLayerStrokeCapturing(image: image, target: target,
+                                                                        brush: brush, first: sample)
+                let expectedPixel = pixel(session, image, x: 1, y: 1)
+                try session.cancelLabLayerStroke(captured.stroke)
+                if let facts = captured.facts, let settings = RecorderStrokeCommand.Settings(brush) {
+                    let trace = RecorderTabletStrokeTrace(first: try .init(native: sample), batches: [])
+                    let command = RecorderLabLayerStrokeCommand(settings: settings, trace: trace, facts: facts)
+                    let wrongTarget = EngineSession.LabLayerFillTarget(root: target.root, uuid: UUID())
+                    var refused = false
+                    do { try command.apply(session: session, image: image, target: wrongTarget) }
+                    catch { refused = true }
+                    check(refused && pixel(session, image, x: 1, y: 1) == captureBefore,
+                          "recorded layered Brush refuses a changed logical identity")
+                    try command.apply(session: session, image: image, target: target)
+                    check(pixel(session, image, x: 1, y: 1) == expectedPixel,
+                          "recorded layered Brush command reproduces the captured pixel")
+                    try session.undo(image)
+                    check(pixel(session, image, x: 1, y: 1) == captureBefore,
+                          "one Undo restores recorded layered Brush pixels")
+                } else { check(false, "recorded layered Brush has replayable settings and facts") }
+            }
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }
