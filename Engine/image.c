@@ -9,6 +9,7 @@
 #include "plate-preview.h"
 #include "cmyk-transform.h"
 #include "lab-transform.h"
+#include "lab-layer-storage.h"
 
 #include <math.h>
 #include <string.h>
@@ -256,6 +257,16 @@ glims_adopt_image (GlimsEngine  *engine,
   GlimsPlateStorageState state = glims_plate_storage_read (image, &storage);
   if (id) *id = 0;
   if (state == GLIMS_PLATE_STORAGE_INVALID) return GLIMS_STATUS_UNSUPPORTED;
+  if (state == GLIMS_PLATE_STORAGE_NONE)
+    {
+      /* A missing map with remaining layer/path identities is a damaged
+       * layered Lab carrier, not an ordinary grayscale document. The flat
+       * reader only checks channel identities when the map is missing. */
+      g_autofree GlimsLabLayerStorage *layered = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!layered) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (image, layered) != GLIMS_LAB_LAYER_STORAGE_NONE)
+        return GLIMS_STATUS_UNSUPPORTED;
+    }
   GimpColorProfile *cmyk_profile = NULL;
   if (state == GLIMS_PLATE_STORAGE_VALID && storage.map.mode == GLIMS_PLATE_MODE_CMYK)
     {
