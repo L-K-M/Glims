@@ -105,3 +105,23 @@ Independent production review found no important issue. A later wording-only
 change displays "1 point" correctly. Fixture review is in progress. This does
 not qualify physical tablet input, VoiceOver, Photoshop spline equivalence or
 the installed bundle, which remains separately qualified.
+
+## Installed integration (2026-11-13)
+
+Qualified source `c13a1c97` is merged through PR #258 and installed in both
+`dist/Glims.app` and `/Applications/Glims.app`. All 1,672 Swift and 130 Python
+tests pass. On each of four engines the combined app passes 255 selected-ink
+Curves, 423 Recorder and 32 ordinary Curves checks. The pinned release bundle
+passes 22 standalone cases with development trees denied, including 2,268
+native and 3,355 full workflow checks. Release compiler output, signed copies,
+full file/link payloads and desktop capture provenance are checked. Exact-head
+CI [43322205774](https://github.com/L-K-M/Glims/actions/runs/43322205774) passes.
+
+Fresh/cached/relocated-fresh launches measured 1.781/1.423/3.052 seconds; the
+installed app launched in 3.746 seconds. These are this Mac's measurements,
+not a hardware-wide guarantee. Independent implementation and fixture reviews
+are clear; review findings in the qualification verifier were addressed.
+Installation fault checks cover publication failure, interruption and an
+unexpected destination without overwriting the prior app. Test apps exited
+and the desktop was released. No notarization or Photoshop equivalence is
+claimed. This supersedes the earlier pending-installation notes in this file.
