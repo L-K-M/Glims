@@ -10,6 +10,7 @@
 #include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
+#include "core/gimpprogress.h"
 #include "core/gimpundostack.h"
 #include "file/file-save.h"
 #include "plug-in/gimppluginmanager.h"
@@ -19,12 +20,42 @@ static const GlimsEngineAPI *api;
 static unsigned checks, failures;
 static unsigned projection_events;
 static GlimsRect last_damage;
+static GlimsEngine *running_engine;
+static gboolean request_cancel, cancel_scheduled, cancel_fired;
+static gboolean request_retarget, retarget_scheduled, retarget_fired;
+static GimpImage *retarget_image;
+static GimpLayer *retarget_layer;
 #define CHECK(c,n) do { gboolean ok=!!(c); checks++; if(!ok) failures++; printf("%s %s\n",ok?"ok":"FAIL",n); fflush(stdout); } while(0)
+
+static gboolean cancel_on_engine(gpointer unused)
+{
+  (void)unused;
+  if(running_engine && running_engine->progress)
+    cancel_fired=api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean retarget_on_engine(gpointer unused)
+{
+  (void)unused;
+  if(!retarget_image||!retarget_layer) return G_SOURCE_REMOVE;
+  GList *selection=g_list_prepend(NULL,retarget_layer);
+  gimp_image_set_selected_layers(retarget_image,selection);
+  g_list_free(selection);
+  retarget_fired=TRUE;
+  return G_SOURCE_REMOVE;
+}
 
 static void on_event(void *context,const GlimsEvent *event)
 {
   (void)context;
   if(event->kind==GLIMS_EVENT_PROJECTION_CHANGED){projection_events++;last_damage=event->rect;}
+  if(event->kind==GLIMS_EVENT_PROGRESS && event->active && event->value>=1 && request_cancel && !cancel_scheduled){
+    cancel_scheduled=TRUE;g_idle_add(cancel_on_engine,NULL);
+  }
+  if(event->kind==GLIMS_EVENT_PROGRESS && event->active && event->value>=1 && request_retarget && !retarget_scheduled){
+    retarget_scheduled=TRUE;g_idle_add(retarget_on_engine,NULL);
+  }
 }
 
 typedef struct { GimpImage *image; gboolean frozen; } FreezeOnUpdate;
@@ -91,6 +122,44 @@ static GlimsStatus worker(GlimsEngine *engine, gpointer context)
   gimp_item_set_lock_content(GIMP_ITEM(root),FALSE,FALSE);
   CHECK(status==GLIMS_STATUS_UNSUPPORTED&&!changed&&read_planes(image,0,after)&&!memcmp(before,after,sizeof before),
         "a locked logical root refuses without changing any plane");if(error)api->free_string(error);error=NULL;
+  unsigned before_cancel_events=projection_events;
+  request_cancel=TRUE;cancel_scheduled=FALSE;cancel_fired=FALSE;
+  status=glims_lab_layer_fill(engine,image,root,50,0,0,1,&changed,&error);
+  request_cancel=FALSE;
+  CHECK(cancel_scheduled&&cancel_fired&&status==GLIMS_STATUS_CANCELLED&&!changed,
+        "progress cancellation interrupts a fully staged fill before publication");
+  CHECK(read_planes(image,0,after)&&!memcmp(before,after,sizeof before)&&
+        gimp_undo_stack_get_depth(gimp_image_get_undo_stack(image))==0&&
+        !gimp_image_get_undo_group_count(image)&&!engine->busy&&!engine->progress&&projection_events==before_cancel_events,
+        "cancelled staged fill leaves planes, history, redraw and engine admission unchanged");
+  if(error)api->free_string(error);error=NULL;
+  retarget_fired=FALSE;
+  CHECK(retarget_on_engine(NULL)==G_SOURCE_REMOVE&&!retarget_fired,
+        "a delayed retarget callback with cleared targets safely expires");
+  retarget_image=image;retarget_layer=other;
+  request_retarget=TRUE;retarget_scheduled=FALSE;retarget_fired=FALSE;
+  status=glims_lab_layer_fill(engine,image,root,50,0,0,1,&changed,&error);
+  request_retarget=FALSE;retarget_image=NULL;retarget_layer=NULL;
+  CHECK(retarget_scheduled&&retarget_fired&&status==GLIMS_STATUS_INVALID_ARGUMENT&&!changed,
+        "a changed selection refuses the fully staged fill before publication");
+  CHECK(read_planes(image,0,after)&&!memcmp(before,after,sizeof before)&&
+        gimp_undo_stack_get_depth(gimp_image_get_undo_stack(image))==0&&
+        !gimp_image_get_undo_group_count(image)&&!engine->busy&&!engine->progress&&projection_events==before_cancel_events,
+        "a stale target leaves planes, history, redraw and engine admission unchanged");
+  selection=g_list_prepend(NULL,root);gimp_image_set_selected_layers(image,selection);g_list_free(selection);
+  if(error)api->free_string(error);error=NULL;
+  retarget_image=image;retarget_layer=other;
+  request_retarget=TRUE;retarget_scheduled=FALSE;retarget_fired=FALSE;
+  status=glims_lab_layer_fill(engine,image,root,50,0,0,0.000001,&changed,&error);
+  request_retarget=FALSE;retarget_image=NULL;retarget_layer=NULL;
+  CHECK(retarget_scheduled&&retarget_fired&&status==GLIMS_STATUS_INVALID_ARGUMENT&&!changed,
+        "a changed selection also refuses a quantized no-op fill");
+  CHECK(read_planes(image,0,after)&&!memcmp(before,after,sizeof before)&&
+        gimp_undo_stack_get_depth(gimp_image_get_undo_stack(image))==0&&
+        !gimp_image_get_undo_group_count(image)&&!engine->busy&&!engine->progress&&projection_events==before_cancel_events,
+        "a stale no-op leaves planes, history, redraw and engine admission unchanged");
+  selection=g_list_prepend(NULL,root);gimp_image_set_selected_layers(image,selection);g_list_free(selection);
+  if(error)api->free_string(error);error=NULL;
   unsigned before_event=projection_events;
   status=glims_lab_layer_fill(engine,image,root,50,0,0,1,&changed,&error);
   CHECK(status==GLIMS_STATUS_OK&&changed,"opaque physical Lab fill succeeds");if(error)api->free_string(error);error=NULL;
@@ -207,6 +276,6 @@ int main(int argc,char **argv)
   GlimsEngineConfig cfg={.struct_size=sizeof cfg,.user_directory=user,.cache_directory=cache,.on_event=on_event};GlimsEngine *engine=NULL;char *error=NULL;
   GlimsStatus status=api->start(&cfg,&engine,&error);g_free(user);g_free(cache);
   if(status||!engine){fprintf(stderr,"start: %s\n",error?error:"");if(error)api->free_string(error);return 2;}
-  if(error)api->free_string(error);status=glims_engine_call(engine,worker,argv[1]);api->stop(engine);
+  if(error)api->free_string(error);running_engine=engine;status=glims_engine_call(engine,worker,argv[1]);running_engine=NULL;api->stop(engine);
   printf("checks=%u failures=%u\n",checks,failures);return status==GLIMS_STATUS_OK&&!failures?0:1;
 }
