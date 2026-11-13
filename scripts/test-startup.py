@@ -54,7 +54,7 @@ def main():
                                      str(work / 'user'), str(work / 'cache')],
                                     env=run_env, cwd=work, capture_output=True, text=True, timeout=180)
             if result.returncode:
-                raise AssertionError(f'{label}: {result.stdout}\n{result.stderr}')
+                raise AssertionError(f'{label}: exit {result.returncode}\n{result.stdout}\n{result.stderr}')
             marker = 'Glims: seeded bundled command cache' in result.stderr
             assert marker == seeded, f'{label}: unexpected command-cache seeding state'
             temporary_marker = 'Glims: using temporary bundled command cache' in result.stderr
@@ -64,7 +64,7 @@ def main():
                 f'{label}: temporary registry path leaked into preferences'
             assert not list((work / 'tmp').glob('glims-pluginrc-*')), f'{label}: temporary registry left behind'
             if tmpdir is not None:
-                assert not list(tmpdir.glob('glims-pluginrc-*')), f'{label}: temporary registry left behind'
+                assert not list(Path(tmpdir).glob('glims-pluginrc-*')), f'{label}: temporary registry left behind'
             fonts, commands = (work / 'catalog.txt').read_text().split('[procedures]\n', 1)
             catalog = (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines()))
             assert catalog[0] and catalog[1], f'{label}: empty catalog'
@@ -92,6 +92,13 @@ def main():
         valid_with_custom = registry.read_bytes()
         registry.write_text('invalid registry\n')
         unchanged('corrupt cache with user plug-in', with_custom, temporary=True)
+        assert registry.read_text() == 'invalid registry\n', 'corrupt user registry was replaced'
+        special_tmp = work / 'temporary ${GLIMS_TEST_UNDEFINED_PATH_TOKEN} ~ space'
+        special_tmp.mkdir()
+        unchanged('corrupt cache with user plug-in and special temporary path',
+                  with_custom, temporary=True, tmpdir=special_tmp)
+        unchanged('corrupt cache with trailing-slash temporary path',
+                  with_custom, temporary=True, tmpdir=f'{special_tmp}/')
         assert registry.read_text() == 'invalid registry\n', 'corrupt user registry was replaced'
         # Two overlapping launches get distinct private registries. Each
         # must discover the user plug-in without replacing the shared file.
@@ -223,10 +230,9 @@ def main():
         assert (work / 'user/pluginrc').is_symlink(), 'registry symlink was replaced'
         assert link_target.read_text() == 'invalid registry\n', 'registry symlink target was replaced'
         (work / 'user/pluginrc').unlink(missing_ok=True)
-        special_tmp = work / 'temporary ${GLIMS_TEST_UNDEFINED_PATH_TOKEN} ~ space'
-        special_tmp.mkdir()
         (work / 'user/pluginrc').write_text('invalid registry\n')
-        unchanged('corrupt cache with special temporary path', baseline, tmpdir=special_tmp)
+        unchanged('corrupt cache with special temporary path', baseline, temporary=True, tmpdir=special_tmp)
+        assert (work / 'user/pluginrc').read_text() == 'invalid registry\n', 'corrupt registry was replaced'
         identity = clone / 'Contents/Resources/Engine-Startup/identity'
         compatible_identity = identity.read_bytes()
         identity.write_text('0.0.0\nincompatible-language\n')

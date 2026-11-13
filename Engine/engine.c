@@ -1000,6 +1000,24 @@ engine_initialize (GlimsEngine  *engine,
                * to the exact filesystem name, including filename encoding. */
               gchar *config_path = g_filename_to_utf8 (temporary_registry_path, -1, NULL, NULL, NULL);
               gchar *expanded = config_path ? gimp_config_path_expand (config_path, TRUE, NULL) : NULL;
+              if (!expanded || g_strcmp0 (expanded, temporary_registry_path) != 0)
+                {
+                  const gchar *tmpdir = g_getenv ("TMPDIR");
+                  gchar *directory_name = g_path_get_basename (temporary_registry_dir);
+
+                  /* GIMP substitutes the value of TMPDIR once, without
+                   * interpreting special characters inside that value. */
+                  g_clear_pointer (&config_path, g_free);
+                  g_clear_pointer (&expanded, g_free);
+                  if (tmpdir && *tmpdir)
+                    {
+                      config_path = g_strdup_printf ("${TMPDIR}%s%s/pluginrc",
+                                                     g_str_has_suffix (tmpdir, "/") ? "" : "/",
+                                                     directory_name);
+                      expanded = gimp_config_path_expand (config_path, TRUE, NULL);
+                    }
+                  g_free (directory_name);
+                }
               if (expanded && g_strcmp0 (expanded, temporary_registry_path) == 0 &&
                   seed_bundle_plugin_cache (contents, current_language, file))
                 {
