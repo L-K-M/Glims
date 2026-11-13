@@ -654,6 +654,11 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          "render rejects damaged storage without writing output");
    if(count==2)CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_UNSUPPORTED,
                      "selection rejects damaged storage");
+   if(count==2){error=NULL;
+    CHECK(api->image_select_layers(engine,id,&rows[0].id,1,&error)==GLIMS_STATUS_UNSUPPORTED && error && *error,
+          "damaged storage selection supplies an actionable error");
+    if(error)api->free_string(error);error=NULL;
+   }
    GlimsLayerChange damaged_change={.struct_size=sizeof damaged_change,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
    if(count==2)CHECK(api->layer_change(engine,id,rows[0].id,&damaged_change,&error)==GLIMS_STATUS_UNSUPPORTED,
                      "layer edits reject damaged storage");
