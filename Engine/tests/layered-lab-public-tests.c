@@ -67,6 +67,63 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsLayerInfo rows[8];int32_t count=0;CHECK(api->image_layers(engine,id,rows,8,&count)==GLIMS_STATUS_OK&&count==2,"only two logical layer roots are exposed");
   if(count==2){
    CHECK(rows[0].depth==0&&rows[1].depth==0&&rows[0].parent==0&&rows[1].parent==0,"logical rows are top-level");
+   guint8 raw_identity[sizeof(GlimsLabLayerIdentity)+10];memset(raw_identity,0xa5,sizeof raw_identity);
+   guint32 identity_size=sizeof(GlimsLabLayerIdentity)+8;memcpy(raw_identity+1,&identity_size,sizeof identity_size);
+   GlimsUndoInfo identity_before={0},identity_after={0};
+   CHECK(api->image_undo_info(engine,id,&identity_before)==GLIMS_STATUS_OK,"identity read captures history");
+   GlimsStatus identity_status=api->image_lab_layer_identity(engine,id,rows[0].id,(GlimsLabLayerIdentity*)(raw_identity+1));
+   GlimsLabLayerIdentity first_identity;memcpy(&first_identity,raw_identity+1,sizeof first_identity);
+   CHECK(identity_status==GLIMS_STATUS_OK&&first_identity.struct_size==identity_size&&
+         !memcmp(first_identity.uuid,m.entries[0].group,16)&&raw_identity[0]==0xa5&&
+         !memcmp(raw_identity+1+sizeof first_identity,"\xa5\xa5\xa5\xa5\xa5\xa5\xa5\xa5",8)&&
+         raw_identity[sizeof raw_identity-1]==0xa5,
+         "unaligned logical identity returns the captured UUID and preserves its extension");
+   GlimsLabLayerIdentity second_identity={.struct_size=sizeof second_identity};
+   CHECK(api->image_lab_layer_identity(engine,id,rows[1].id,&second_identity)==GLIMS_STATUS_OK&&
+         !memcmp(second_identity.uuid,m.entries[1].group,16)&&memcmp(first_identity.uuid,second_identity.uuid,16),
+         "distinct logical roots have their own durable identities");
+   engine->busy++;
+   CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,&second_identity)==GLIMS_STATUS_OK&&
+         !memcmp(first_identity.uuid,second_identity.uuid,16),"identity remains readable while busy");
+   engine->busy--;
+   GlimsOpenImage *identity_open=glims_lookup_image(engine,id);GlimsLabLayerStorage identity_storage;
+   gboolean identity_valid=identity_open&&glims_lab_layer_storage_read(identity_open->image,&identity_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+   CHECK(identity_valid,"identity fixture retains valid native mapping");
+   if(identity_valid){
+    GlimsItemID hidden=gimp_item_get_id(GIMP_ITEM(identity_storage.layers[0].planes[0]));
+    memset(second_identity.uuid,0xa5,sizeof second_identity.uuid);
+    guint8 zero_uuid[16]={0};
+    CHECK(api->image_lab_layer_identity(engine,id,hidden,&second_identity)==GLIMS_STATUS_NOT_FOUND&&
+          !memcmp(second_identity.uuid,zero_uuid,sizeof zero_uuid),"hidden planes refuse and clear the UUID");
+   }
+   guint8 short_identity[sizeof(GlimsLabLayerIdentity)+2],saved_identity[sizeof short_identity];
+   memset(short_identity,0xa5,sizeof short_identity);identity_size=sizeof(GlimsLabLayerIdentity)-1;
+   memcpy(short_identity+1,&identity_size,sizeof identity_size);memcpy(saved_identity,short_identity,sizeof short_identity);
+   CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,(GlimsLabLayerIdentity*)(short_identity+1))==GLIMS_STATUS_INVALID_ARGUMENT&&
+         !memcmp(short_identity,saved_identity,sizeof short_identity),"short identity output is untouched");
+   CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,NULL)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "null identity output is refused");
+   memset(second_identity.uuid,0xa5,sizeof second_identity.uuid);
+   CHECK(api->image_lab_layer_identity(engine,id,0,&second_identity)==GLIMS_STATUS_INVALID_ARGUMENT&&
+         !memcmp(second_identity.uuid,"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",16),
+         "a missing explicit root is refused and clears the identity");
+   memset(second_identity.uuid,0xa5,sizeof second_identity.uuid);
+   CHECK(api->image_lab_layer_identity(NULL,id,rows[0].id,&second_identity)==GLIMS_STATUS_NOT_RUNNING&&
+         !memcmp(second_identity.uuid,"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",16),
+         "a stopped engine clears an accepted identity output");
+   CHECK(api->image_undo_info(engine,id,&identity_after)==GLIMS_STATUS_OK&&
+         identity_before.undo_count==identity_after.undo_count&&identity_before.redo_count==identity_after.redo_count,
+         "identity reads leave Undo and Redo unchanged");
+   GlimsImageID ordinary=0;error=NULL;
+   CHECK(api->image_new(engine,2,2,&ordinary,&error)==GLIMS_STATUS_OK&&ordinary,
+         "ordinary image fixture for identity refusal opens");if(error)api->free_string(error);error=NULL;
+   if(ordinary){
+    memset(second_identity.uuid,0xa5,sizeof second_identity.uuid);
+    CHECK(api->image_lab_layer_identity(engine,ordinary,rows[0].id,&second_identity)==GLIMS_STATUS_UNSUPPORTED&&
+          !memcmp(second_identity.uuid,"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",16),
+          "ordinary image refuses a Lab root identity and clears the output");
+    CHECK(api->image_close(engine,ordinary)==GLIMS_STATUS_OK,"ordinary identity fixture closes");
+   }
    GlimsItemID duplicate=0;error=NULL;
    GlimsStatus duplicated=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,&duplicate,&error);
    CHECK(duplicated==GLIMS_STATUS_OK&&duplicate!=0,"public command duplicates a logical Lab layer");
@@ -76,6 +133,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->image_layers(engine,id,duplicated_rows,8,&duplicated_count)==GLIMS_STATUS_OK&&
           duplicated_count==3&&duplicated_rows[0].id==duplicate&&duplicated_rows[1].id==rows[0].id,
           "duplicate is a logical root immediately above its source");
+    GlimsLabLayerIdentity duplicate_identity={.struct_size=sizeof duplicate_identity};
+    CHECK(api->image_lab_layer_identity(engine,id,duplicate,&duplicate_identity)==GLIMS_STATUS_OK&&
+          memcmp(first_identity.uuid,duplicate_identity.uuid,16),"duplicate has a new root UUID");
     GlimsOpenImage *dup_open=glims_lookup_image(engine,id);GlimsLabLayerStorage dup_storage;
     gboolean dup_valid=dup_open&&glims_lab_layer_storage_read(dup_open->image,&dup_storage)==GLIMS_LAB_LAYER_STORAGE_VALID&&
                        dup_storage.map.count==3;
@@ -102,6 +162,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
           api->image_layers(engine,id,duplicated_rows,8,&duplicated_count)==GLIMS_STATUS_OK&&
           duplicated_count==3&&duplicated_rows[0].id==duplicate,"Redo restores the same logical copy");
+    GlimsLabLayerIdentity redone_identity={.struct_size=sizeof redone_identity};
+    CHECK(api->image_lab_layer_identity(engine,id,duplicate,&redone_identity)==GLIMS_STATUS_OK&&
+          !memcmp(duplicate_identity.uuid,redone_identity.uuid,16),"Redo retains the duplicate root UUID");
     gchar *dup_path=g_build_filename((const gchar*)work,"layered-lab-duplicate.xcf",NULL);
     GlimsStatus dup_saved=api->image_save_copy(engine,id,dup_path,&error);
     CHECK(dup_saved==GLIMS_STATUS_OK,"duplicated layered Lab saves");if(error)api->free_string(error);error=NULL;
@@ -207,6 +270,9 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     GlimsLayerInfo ordered[8];int32_t n=0;
     CHECK(api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&n==2&&ordered[0].id==rows[1].id&&ordered[1].id==rows[0].id,
           "lowering swaps logical roots without exposing scalar planes");
+    GlimsLabLayerIdentity reordered_identity={.struct_size=sizeof reordered_identity};
+    CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,&reordered_identity)==GLIMS_STATUS_OK&&
+          !memcmp(reordered_identity.uuid,first_identity.uuid,16),"root UUID remains stable across reorder");
     CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},order_after,4)==GLIMS_STATUS_OK&&
           order_after[0]>order_before[0]+20,"reorder changes the visible composite");
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&
@@ -221,6 +287,11 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
      CHECK(opened_order==GLIMS_STATUS_OK&&reordered_copy,"reordered logical XCF reopens");if(error)api->free_string(error);error=NULL;
      if(opened_order==GLIMS_STATUS_OK&&reordered_copy){
       guint8 reopened_pixel[4]={0};
+      GlimsLayerInfo reopened_rows[8];int32_t reopened_count=0;
+      GlimsLabLayerIdentity reopened_identity={.struct_size=sizeof reopened_identity};
+      CHECK(api->image_layers(engine,reordered_copy,reopened_rows,8,&reopened_count)==GLIMS_STATUS_OK&&
+            reopened_count==2&&api->image_lab_layer_identity(engine,reordered_copy,reopened_rows[1].id,&reopened_identity)==GLIMS_STATUS_OK&&
+            !memcmp(first_identity.uuid,reopened_identity.uuid,16),"root UUID survives reorder, save and reopen");
       CHECK(api->image_render(engine,reordered_copy,1,(GlimsRect){1,1,1,1},reopened_pixel,4)==GLIMS_STATUS_OK&&
             !memcmp(reopened_pixel,order_after,4),"saved XCF retains reordered composite");
       CHECK(api->image_close(engine,reordered_copy)==GLIMS_STATUS_OK,"reordered copy closes");
@@ -613,6 +684,12 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          "render rejects damaged storage without writing output");
    if(count==2)CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_UNSUPPORTED,
                      "selection rejects damaged storage");
+   if(count==2){
+    GlimsLabLayerIdentity bad={.struct_size=sizeof bad};memset(bad.uuid,0xa5,sizeof bad.uuid);
+    guint8 zero_uuid[16]={0};
+    CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,&bad)==GLIMS_STATUS_UNSUPPORTED&&
+          !memcmp(bad.uuid,zero_uuid,sizeof zero_uuid),"damaged storage clears and rejects identity");
+   }
    GlimsLayerChange damaged_change={.struct_size=sizeof damaged_change,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};error=NULL;
    if(count==2)CHECK(api->layer_change(engine,id,rows[0].id,&damaged_change,&error)==GLIMS_STATUS_UNSUPPORTED,
                      "layer edits reject damaged storage");
