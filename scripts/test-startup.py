@@ -43,7 +43,7 @@ def main():
         environment['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / 'catalog.txt')
         environment['GLIMS_STARTUP_TRACE'] = '1'
 
-        def run(label, seeded=None):
+        def run(label, seeded=False):
             (work / 'catalog.txt').unlink(missing_ok=True)
             result = subprocess.run([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                                      str(work / 'user'), str(work / 'cache')],
@@ -51,15 +51,14 @@ def main():
             if result.returncode:
                 raise AssertionError(f'{label}: {result.stdout}\n{result.stderr}')
             marker = 'Glims: seeded bundled command cache' in result.stderr
-            if seeded is not None:
-                assert marker == seeded, f'{label}: unexpected command-cache seeding state'
+            assert marker == seeded, f'{label}: unexpected command-cache seeding state'
             fonts, commands = (work / 'catalog.txt').read_text().split('[procedures]\n', 1)
             catalog = (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines()))
             assert catalog[0] and catalog[1], f'{label}: empty catalog'
             print(f'{label}: {result.stdout.strip()}', flush=True)
             return catalog
 
-        def unchanged(label, reference, seeded=None):
+        def unchanged(label, reference, seeded=False):
             actual = run(label, seeded)
             assert actual == reference, f'{label}: changed font or command catalog'
 
