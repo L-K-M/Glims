@@ -184,6 +184,12 @@ extension RecorderFileCommand {
                                          clampInput: settings.clampInput, clampOutput: settings.clampOutput))
         case .fillLab(let value, let opacity):
             self = .fillLab(.init(value: value, opacity: opacity))
+        case .applyLabLevels(let settings):
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded Lab Levels adjustment has invalid settings.") }
+            self = .applyLabLevels(.init(lowInput: settings.value.lowInput, highInput: settings.value.highInput,
+                                         gamma: settings.value.gamma, lowOutput: settings.value.lowOutput,
+                                         highOutput: settings.value.highOutput,
+                                         clampInput: settings.clampInput, clampOutput: settings.clampOutput))
         case .applyLabCurves(let settings):
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded Lab Curves adjustment has invalid settings.") }
             self = .applyLabCurves(.init(samples: settings.samples))

@@ -18,6 +18,7 @@ enum RecorderFileCodec {
     static let labStrokeVersion = 14
     static let labSelectionVersion = 15
     static let inkStrokeVersion = 16
+    static let labLevelsVersion = 17
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -94,7 +95,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...inkStrokeVersion)
+        let fileVersion = try integer(root.get("version"), range: version...labLevelsVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -126,6 +127,7 @@ enum RecorderFileCodec {
         var hasLabStrokeCommand = false
         var hasLabSelectionCommand = false
         var hasInkStrokeCommand = false
+        var hasLabLevels = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -152,6 +154,7 @@ enum RecorderFileCodec {
                 if case .completeInkStroke = command { hasInkStrokeCommand = true }
                 if case .fillLab = command { hasLabCommand = true }
                 if case .applyLabCurves = command { hasLabCommand = true }
+                if case .applyLabLevels = command { hasLabCommand = true; hasLabLevels = true }
                 if case .completeLabStroke = command { hasLabCommand = true; hasLabStrokeCommand = true }
                 if case .labSelection = command { hasLabSelectionCommand = true }
                 let binding = try binding(row.get("binding"))
@@ -194,6 +197,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == inkStrokeVersion, !hasInkStrokeCommand {
             throw RecorderFileError.invalid("Version 16 requires a successful ink stroke.")
+        }
+        if fileVersion == labLevelsVersion, !hasLabLevels {
+            throw RecorderFileError.invalid("Version 17 requires a successful Lab Levels command.")
         }
         // Each extended version requires its own successful command, exactly
         // as version 2 always required a complete stroke.
@@ -627,6 +633,15 @@ enum RecorderFileCodec {
             guard version >= labVersion else { throw RecorderFileError.invalid("Lab Fill needs recording version 13.") }
             let value = try Object(node, required: ["tag", "value", "opacity"])
             return .fillLab(.init(value: try number(value.get("value")), opacity: try number(value.get("opacity"))))
+        case "applyLabLevels":
+            guard version >= labLevelsVersion else { throw RecorderFileError.invalid("Lab Levels needs recording version 17.") }
+            let value = try Object(node, required: ["tag", "lowInput", "highInput", "gamma", "lowOutput", "highOutput", "clampInput", "clampOutput"])
+            let levels = RecorderFileCommand.LabLevels(lowInput: try number(value.get("lowInput")),
+                highInput: try number(value.get("highInput")), gamma: try number(value.get("gamma")),
+                lowOutput: try number(value.get("lowOutput")), highOutput: try number(value.get("highOutput")),
+                clampInput: try bool(value.get("clampInput")), clampOutput: try bool(value.get("clampOutput")))
+            guard levels.isValid else { throw RecorderFileError.invalid("Invalid Lab Levels values.") }
+            return .applyLabLevels(levels)
         case "applyLabCurves":
             guard version >= labVersion else { throw RecorderFileError.invalid("Lab Curves needs recording version 13.") }
             let value = try Object(node, required: ["tag", "samples"])
@@ -907,6 +922,11 @@ enum RecorderFileCodec {
         case (.fillLab(let fill), .lab(let id, let identity)):
             guard descriptions[id]?.kind == .channel, fill.isValid(for: identity) else {
                 throw RecorderFileError.invalid("Lab Fill needs a valid physical value and Lab channel binding.")
+            }
+            return
+        case (.applyLabLevels(let levels), .lab(let id, let identity)):
+            guard descriptions[id]?.kind == .channel, identity.isValid, levels.isValid else {
+                throw RecorderFileError.invalid("Lab Levels needs valid settings and a Lab channel binding.")
             }
             return
         case (.applyLabCurves(let curves), .lab(let id, let identity)):

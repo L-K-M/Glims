@@ -35,6 +35,9 @@ component_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_lab_axes:
     case GLIMS_FACADE_OP_image_fill_lab:
     case GLIMS_FACADE_OP_image_curves_lab:
+    case GLIMS_FACADE_OP_image_levels_lab:
+    case GLIMS_FACADE_OP_image_lab_snapshot_levels:
+    case GLIMS_FACADE_OP_image_lab_snapshot_apply_levels:
     case GLIMS_FACADE_OP_image_lab_snapshot_begin:
     case GLIMS_FACADE_OP_image_lab_snapshot_curves:
     case GLIMS_FACADE_OP_image_lab_snapshot_apply_curves:

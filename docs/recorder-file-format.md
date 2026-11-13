@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 16
+# Recorder file format, versions 1 to 17
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `16`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `17`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -16,12 +16,12 @@ The writer chooses the highest version required by a successful record:
 `applyLevels` 5, `transformProjectiveLayer` 6, `applyCurves` 7,
 `applyColorBalance` 8, `applyHueSaturation` 9, `applyBrightnessContrast` 10, `editInk` or
 `applyInkLevels` 11, `applyInkCurves` 12, `fillLab`/`applyLabCurves` 13,
-`completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15, and
-`completeInkStroke` 16. A file declaring one of those versions must contain at least one
+`completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15,
+`completeInkStroke` 16, and `applyLabLevels` 17. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...16 refuse the file.
+version 1. Integers outside 1...17 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -492,3 +492,21 @@ compatible ink mode and role; replay then validates the owning document's UUID
 and actual brush before painting. It never infers the current target. Version
 16 requires a successful `completeInkStroke`; older commands retain their
 existing version selection and versions 1–15 retain their schemas.
+
+
+## Physical Lab Levels (version 17)
+
+`applyLabLevels` contains exactly `tag`, `lowInput`, `highInput`, `gamma`,
+`lowOutput`, `highOutput`, `clampInput` and `clampOutput`. Endpoints are finite
+normalized doubles in 0...1, gamma is finite 0.1...10, and clamps are Boolean.
+Equal and reversed endpoints are retained unchanged. The physical panel
+converts L* 0...100 or a*/b* −128...127 to these owned normalized values; files
+never reinterpret them as ink percentages or RGB channels.
+
+A successful command requires an explicit `lab` binding with a described
+channel symbol and valid role, precision and nonzero document-scoped UUID.
+The existing Lab binding rules refuse wrong modes, mismatched roles/precision,
+and stale owning identities before native execution. No current selection
+fallback is inferred. Version 17 requires a successful Lab Levels command;
+versions 1–16 refuse this new tag and retain their earlier schemas. Mixed older
+commands in a version 17 file still use their original validation.

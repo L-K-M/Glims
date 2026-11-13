@@ -119,6 +119,21 @@ final class EngineCanvasView: NSView {
     })
     var labCurvesPreviewImage: CGImage? { labCurvesPixels.image }
     var labCurvesPreviewIsCurrent: Bool { labCurvesPixels.isCurrent }
+    private var labLevelsPreviewToken: UInt64?
+    private var labLevelsPreviewSettings = EngineSession.LabLevelsSettings()
+    var onLabLevelsPreviewChange: ((Bool, String?) -> Void)?
+    private lazy var labLevelsPixels: LabLevelsPixelPreview = LabLevelsPixelPreview(render: { [weak self] request, completion in
+        guard let self else { return completion(.failure(ImageDocument.DocumentError.closed)) }
+        self.document.renderLabLevelsPreview(request, completion: completion)
+    }, changed: { [weak self] in
+        guard let self else { return }
+        self.needsDisplay = true
+        self.onLabLevelsPreviewChange?(self.labLevelsPixels.isCurrent, nil)
+    }, failed: { [weak self] error in
+        self?.onLabLevelsPreviewChange?(false, error.localizedDescription)
+    })
+    var labLevelsPreviewImage: CGImage? { labLevelsPixels.image }
+    var labLevelsPreviewIsCurrent: Bool { labLevelsPixels.isCurrent }
     /// Destination observer tokens for the owning window and its associated
     /// screen; swapped on window changes and removed on detach/close. The
     /// blocks hold `self` weakly, so no observer retain cycle.
@@ -339,6 +354,10 @@ final class EngineCanvasView: NSView {
         inkCurvesPixels.update(nil)
         labCurvesPreviewToken = nil
         labCurvesPixels.update(nil)
+        onLabCurvesPreviewChange = nil
+        labLevelsPreviewToken = nil
+        labLevelsPixels.update(nil)
+        onLabLevelsPreviewChange = nil
         onInkCurvesPreviewChange = nil
         onRenderMetricsChange = nil
         tools.cancelFloatingShape()
@@ -658,6 +677,7 @@ final class EngineCanvasView: NSView {
         refreshInkLevelsPixelPreview()
         refreshInkCurvesPixelPreview()
         refreshLabCurvesPixelPreview()
+        refreshLabLevelsPixelPreview()
         surroundColor.setFill()
         dirtyRect.fill()
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -690,6 +710,10 @@ final class EngineCanvasView: NSView {
                         dirtyRect: dirtyRect, context: context)
         }
         if let image = labCurvesPixels.image, let request = labCurvesPixels.displayedRequest {
+            drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
+                        dirtyRect: dirtyRect, context: context)
+        }
+        if let image = labLevelsPixels.image, let request = labLevelsPixels.displayedRequest {
             drawPreview(image, area: request.renderArea, renderScale: request.renderScale,
                         dirtyRect: dirtyRect, context: context)
         }
@@ -782,6 +806,28 @@ final class EngineCanvasView: NSView {
                               width: visibleRect.width / scale, height: visibleRect.height / scale)
             .intersection(CGRect(origin: .zero, size: size))
         labCurvesPixels.update(.init(token: token, settings: labCurvesPreviewSettings,
+            imageSize: size, destination: destination, proof: softProof,
+            viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
+    }
+
+    func setLabLevelsPreview(token: UInt64?, settings: EngineSession.LabLevelsSettings = .init()) {
+        labLevelsPreviewToken = token
+        labLevelsPreviewSettings = settings
+        refreshLabLevelsPixelPreview(retryFailure: true)
+        needsDisplay = true
+    }
+
+    private func refreshLabLevelsPixelPreview(retryFailure: Bool = false) {
+        guard !renderingStopped, !document.isClosing, document.filterPreviewIsOpen,
+              let token = labLevelsPreviewToken, !visibleRect.intersection(bounds).isEmpty else {
+            labLevelsPixels.update(nil)
+            return
+        }
+        let size = CGSize(width: document.info.width, height: document.info.height)
+        let viewport = CGRect(x: visibleRect.minX / scale, y: visibleRect.minY / scale,
+                              width: visibleRect.width / scale, height: visibleRect.height / scale)
+            .intersection(CGRect(origin: .zero, size: size))
+        labLevelsPixels.update(.init(token: token, settings: labLevelsPreviewSettings,
             imageSize: size, destination: destination, proof: softProof,
             viewport: viewport, displayScale: deviceScale), retryFailure: retryFailure)
     }

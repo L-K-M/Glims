@@ -1296,6 +1296,20 @@ typedef struct GlimsLabCurvesSettings {
   double samples[256];     /* Normalized unit table outputs in [0,1]. */
 } GlimsLabCurvesSettings;
 
+/* Analytic Levels on one captured physical Lab axis. Endpoint values use the
+ * normalized nominal Lab interval (L* 0..100, a* and b* -128..127); they never
+ * represent ink/paper intensity. Gamma and endpoint domains are those of
+ * GlimsLevelsChannel. Both clamp flags must be exactly zero or one. */
+typedef struct GlimsLabLevelsSettings {
+  uint32_t struct_size;
+  GlimsItemID axis;
+  uint32_t role;
+  uint8_t uuid[16];
+  GlimsLevelsChannel value;
+  uint32_t clamp_input;
+  uint32_t clamp_output;
+} GlimsLabLevelsSettings;
+
 /* The palette an indexed conversion builds, as image_convert_indexed's
  * settings name it. Facade-owned values; the engine's
  * GimpConvertPaletteType never crosses this boundary. */
@@ -4093,6 +4107,29 @@ typedef struct GlimsEngineAPI {
    * metadata is damaged; wrong ordinary/Lab handles refuse, expired handles are
    * NOT_FOUND. */
   GlimsStatus (*stroke_cancel_ink) (GlimsEngine *engine, GlimsStrokeID stroke);
+  /* Slot210: analytic Levels on the sole selected captured Lab axis. Identity,
+   * lock, cancellation, selection staging and single-Undo admission match
+   * image_curves_lab. Unclamped finite float samples retain physical extended
+   * range; integer output saturates and quantizes once after selection blending.
+   * Equal input endpoints use a normalized span of one. Settings are copied
+   * before dispatch and may be unaligned. Clears *error on every path. */
+  GlimsStatus (*image_levels_lab) (GlimsEngine *engine, GlimsImageID image,
+                                  const GlimsLabLevelsSettings *settings, char **error);
+  /* Slot211: analytic Levels from a slot203 Lab baseline. Levels and Curves
+   * share the token, with separate calculation cache kinds. Returns an owned
+   * independent image; original source/history remain unchanged. Settings must
+   * match the captured axis/role/UUID. Clears *result and *error on every path. */
+  GlimsStatus (*image_lab_snapshot_levels) (GlimsEngine *engine, GlimsImageID image,
+                                           uint64_t token,
+                                           const GlimsLabLevelsSettings *settings,
+                                           GlimsImageID *result, char **error);
+  /* Slot212: apply analytic Lab Levels from the baseline with the same whole
+   * image comparison, Undo and token lifecycle as slot205. Success consumes
+   * the token; refusal/cancellation retains it and publishes no pixels. */
+  GlimsStatus (*image_lab_snapshot_apply_levels) (GlimsEngine *engine, GlimsImageID image,
+                                                 uint64_t token,
+                                                 const GlimsLabLevelsSettings *settings,
+                                                 char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

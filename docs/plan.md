@@ -84,6 +84,13 @@ plug-in run. Two of the 27 `GimpGui` hooks are set (`show_message`,
 `get_icon_theme_dir`); no `GimpDisplay` subclass was needed yet. GIMP treats
 the unset hooks as "no window" or "not available".
 
+GIMP 3.2.0's first-run migration scan calls `g_file_test()` on an absent
+`SNAP`. The adapter temporarily supplies an empty value only around that
+version's user-install constructor, then restores absence; existing values
+are preserved. Upstream remains unmodified. Run
+`scripts/test-engine-first-start.py ADAPTER` for missing-config startup,
+visible GLib diagnostics and exact absent/empty/present `SNAP` preservation.
+
 Known things to rebuild in the adapter or app, because GIMP keeps them in GTK
 code:
 
@@ -5629,3 +5636,34 @@ bundle cases pass. Ordinary fresh/cached/relocated launches measured
 2.913 seconds. Both prior apps and receipts are retained. No notarization.
 Lab Levels #277 and layered Lab/CMYK remain separate unfinished work.
 See [completion.md](completion.md) for evidence and remaining scope.
+
+### Physical Lab Levels (candidate)
+
+Levels now has typed physical Lab row/native services and selected-axis
+preview/document routing. The shared Levels panel displays L* 0–100 and
+a*/b* −128–127, preserves exact untouched normalized settings, and refuses
+invalid drafts. Pinned native checks pass 1,576, including XCF/Undo and
+progress-time Undo admission; 7,442 optimized/sanitized and 23,064 independent
+rational checks pass. Source reviews found and closed native Undo admission
+and row alias/alignment gaps. All four engines pass 1,576 native Levels checks and surrounding
+conformance/Ink/Lab regressions. All 1,755 Swift tests and 375 pinned actual-app
+checks pass, including bound loaded-file replay and Undo. Native, lifecycle,
+Recorder and app-fixture source reviews are complete. Four-engine app checks
+and latest-head CI remain pending. See [lab-levels.md](lab-levels.md).
+
+### Qualified Lab Levels installed (2026-11-13)
+
+Source `1edb79c` is installed in both app locations after PR #277 merged as
+`59f93da4` and exact-head CI `43365872812` passed both required jobs. All
+1,755 Swift and 141 Python tests pass, along with 28 current native matrix
+runs, four-engine 21-check first-start controls, eight clean app cases and
+29 standalone pinned release cases. The app matrix includes 375 Lab Levels
+checks per engine; loaded-file Recorder replay and Undo are covered.
+Fresh/cached/relocated launches measured 2.246/1.473/3.584 seconds; a separate
+ordinary installed launch reached its ready document in 3.291 seconds and
+quit cleanly. Prior apps and receipts are preserved. No notarization.
+Direct Recorder/service and Ink-control fixtures retain their narrower
+scope rather than being relabeled as ordinary hosted app workflows.
+Layered Lab/CMYK and full editor parity remain open; foundation #278 is not
+included in this installation. See [completion.md](completion.md) for exact
+evidence and historical checkpoints.

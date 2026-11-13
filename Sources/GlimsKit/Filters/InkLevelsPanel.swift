@@ -4,6 +4,93 @@ import AppKit
 final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     typealias Settings = EngineSession.InkLevelsSettings
 
+    private enum Domain {
+        case ink(name: String)
+        case lab(axis: EngineSession.LabAxis)
+
+        var title: String {
+            switch self {
+            case .ink: return "Ink Levels"
+            case .lab: return "Lab Levels"
+            }
+        }
+
+        var heading: String {
+            switch self {
+            case .ink(let name): return name
+            case .lab(let axis): return axis.name
+            }
+        }
+
+        var headingAccessibilityLabel: String {
+            switch self {
+            case .ink: return "Ink"
+            case .lab: return "Lab axis"
+            }
+        }
+
+        var hint: String {
+            switch self {
+            case .ink:
+                return "Intensity: 0 = full ink; 1 = paper."
+            case .lab(let axis):
+                switch axis.role {
+                case .lightness:
+                    return "L*: 0 = black, 100 = white."
+                case .a:
+                    return "a*: -128 = green, 127 = red."
+                case .b:
+                    return "b*: -128 = blue, 127 = yellow."
+                }
+            }
+        }
+
+        func physicalRange(for field: Field) -> ClosedRange<Double> {
+            if field == .gamma { return 0.1...10.0 }
+            switch self {
+            case .ink:
+                return 0.0...1.0
+            case .lab(let axis):
+                let range = axis.role.nominalRange
+                return range.lowerBound...range.upperBound
+            }
+        }
+
+        var endpointRangeDescription: String {
+            switch self {
+            case .ink:
+                return "0 to 1"
+            case .lab(let axis):
+                let range = axis.role.nominalRange
+                return "\(formatBound(range.lowerBound)) to \(formatBound(range.upperBound))"
+            }
+        }
+
+        private func formatBound(_ value: Double) -> String {
+            if value.rounded(.towardZero) == value, value >= -128, value <= 127 {
+                return String(Int(value))
+            }
+            return String(value)
+        }
+
+        var applyingStatus: String {
+            switch self {
+            case .ink: return "Applying ink levels…"
+            case .lab: return "Applying Lab levels…"
+            }
+        }
+
+        var invalidSettingsMessage: String {
+            switch self {
+            case .ink:
+                return "Enter levels endpoints from 0 to 1 and gamma from 0.1 to 10."
+            case .lab(let axis):
+                let range = axis.role.nominalRange
+                return "Enter levels endpoints from \(formatBound(range.lowerBound)) to \(formatBound(range.upperBound)) and gamma from 0.1 to 10."
+            }
+        }
+    }
+
     private enum Field: Int, CaseIterable {
         case lowInput, highInput, gamma, lowOutput, highOutput
 
@@ -16,12 +103,14 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             case .highOutput: return "High output"
             }
         }
+    }
 
-        var range: ClosedRange<Double> { self == .gamma ? 0.1...10.0 : 0.0...1.0 }
+    private struct NeutralSettings: Equatable {
+        var value: EngineSession.LevelsSettings.Channel = .init()
+        var clampInput = false
+        var clampOutput = false
 
-        var invalidMessage: String {
-            "Enter \(title.lowercased()) from \(self == .gamma ? "0.1 to 10" : "0 to 1")."
-        }
+        var isValid: Bool { value.isValid }
     }
 
     private struct NumericEntry {
@@ -45,17 +134,18 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
     let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
     let applyButton = NSButton(title: "Apply", target: nil, action: nil)
 
-    private let inkNameField = NSTextField(wrappingLabelWithString: "")
-    private let hintField = NSTextField(wrappingLabelWithString: "Intensity: 0 = full ink; 1 = paper.")
+    private let headingField = NSTextField(wrappingLabelWithString: "")
+    private let hintField = NSTextField(wrappingLabelWithString: "")
     private let statusField = NSTextField(wrappingLabelWithString: "")
     private let formatter: NumberFormatter
     private var contentStack: NSStackView?
 
-    private let changed: (Settings) -> Void
-    private let apply: (Settings) -> Void
+    private let domain: Domain
+    private let changedNeutral: (NeutralSettings) -> Void
+    private let applyNeutral: (NeutralSettings) -> Void
     private let cancelAction: () -> Void
 
-    private var lastValidSettings: Settings
+    private var lastValidSettings: NeutralSettings
     private var displayedEntries: [NumericEntry]
     private var numericValidationError: String?
     private var previewCurrent = false
@@ -70,17 +160,49 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         [lowInputField, highInputField, gammaField, lowOutputField, highOutputField]
     }
 
-    init(inkName: String,
-         settings: Settings = .init(),
-         changed: @escaping (Settings) -> Void,
-         apply: @escaping (Settings) -> Void,
-         cancel: @escaping () -> Void) {
-        self.changed = changed
-        self.apply = apply
+    convenience init(inkName: String,
+                     settings: Settings = .init(),
+                     changed: @escaping (Settings) -> Void,
+                     apply: @escaping (Settings) -> Void,
+                     cancel: @escaping () -> Void) {
+        self.init(domain: .ink(name: inkName),
+                  initial: NeutralSettings(value: settings.value,
+                                           clampInput: settings.clampInput,
+                                           clampOutput: settings.clampOutput),
+                  initialValid: settings.isValid,
+                  changed: { changed(Settings(value: $0.value, clampInput: $0.clampInput, clampOutput: $0.clampOutput)) },
+                  apply: { apply(Settings(value: $0.value, clampInput: $0.clampInput, clampOutput: $0.clampOutput)) },
+                  cancel: cancel)
+    }
+
+    convenience init(labAxis: EngineSession.LabAxis,
+                     settings: EngineSession.LabLevelsSettings = .init(),
+                     changed: @escaping (EngineSession.LabLevelsSettings) -> Void,
+                     apply: @escaping (EngineSession.LabLevelsSettings) -> Void,
+                     cancel: @escaping () -> Void) {
+        self.init(domain: .lab(axis: labAxis),
+                  initial: NeutralSettings(value: settings.value,
+                                           clampInput: settings.clampInput,
+                                           clampOutput: settings.clampOutput),
+                  initialValid: settings.isValid,
+                  changed: { changed(EngineSession.LabLevelsSettings(value: $0.value, clampInput: $0.clampInput, clampOutput: $0.clampOutput)) },
+                  apply: { apply(EngineSession.LabLevelsSettings(value: $0.value, clampInput: $0.clampInput, clampOutput: $0.clampOutput)) },
+                  cancel: cancel)
+    }
+
+    private init(domain: Domain,
+                 initial: NeutralSettings,
+                 initialValid: Bool,
+                 changed: @escaping (NeutralSettings) -> Void,
+                 apply: @escaping (NeutralSettings) -> Void,
+                 cancel: @escaping () -> Void) {
+        self.domain = domain
+        self.changedNeutral = changed
+        self.applyNeutral = apply
         self.cancelAction = cancel
-        let initialLast = settings.isValid ? settings : .init()
+        let initialLast = initialValid ? initial : .init()
         self.lastValidSettings = initialLast
-        self.numericValidationError = settings.isValid ? nil : "Enter levels endpoints from 0 to 1 and gamma from 0.1 to 10."
+        self.numericValidationError = initialValid ? nil : domain.invalidSettingsMessage
 
         let formatter = NumberFormatter()
         formatter.locale = .current
@@ -89,18 +211,18 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         formatter.minimumFractionDigits = 0
         formatter.maximumFractionDigits = 6
         self.formatter = formatter
-        self.displayedEntries = Self.entries(for: settings.value, formatter: formatter)
+        self.displayedEntries = Self.makeEntries(for: initial.value, domain: domain, formatter: formatter)
 
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 320),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)
         panel.isFloatingPanel = true
-        panel.title = "Ink Levels"
+        panel.title = domain.title
 
         super.init(window: panel)
         panel.delegate = self
-        buildContent(in: panel, inkName: inkName)
-        display(settings)
+        buildContent(in: panel)
+        display(initial)
         updateState()
         panel.center()
     }
@@ -166,12 +288,13 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         return false
     }
 
-    private func buildContent(in panel: NSPanel, inkName: String) {
-        inkNameField.stringValue = inkName
-        inkNameField.font = NSFont.systemFont(ofSize: NSFont.labelFontSize)
-        inkNameField.setAccessibilityLabel("Ink")
-        inkNameField.lineBreakMode = .byWordWrapping
+    private func buildContent(in panel: NSPanel) {
+        headingField.stringValue = domain.heading
+        headingField.font = NSFont.systemFont(ofSize: NSFont.labelFontSize)
+        headingField.setAccessibilityLabel(domain.headingAccessibilityLabel)
+        headingField.lineBreakMode = .byWordWrapping
 
+        hintField.stringValue = domain.hint
         hintField.font = NSFont.systemFont(ofSize: max(11, NSFont.smallSystemFontSize))
         hintField.textColor = .secondaryLabelColor
         hintField.setAccessibilityLabel("Hint")
@@ -241,14 +364,14 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         buttons.alignment = .centerY
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [inkNameField, hintField, grid, clamps, statusField, buttons])
+        let stack = NSStackView(views: [headingField, hintField, grid, clamps, statusField, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
         contentStack = stack
-        for label in [inkNameField, hintField, statusField] {
+        for label in [headingField, hintField, statusField] {
             label.preferredMaxLayoutWidth = 428
         }
 
@@ -262,7 +385,7 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.topAnchor.constraint(equalTo: content.topAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            inkNameField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
+            headingField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             hintField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             statusField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
             grid.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
@@ -277,9 +400,11 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         window?.setContentSize(NSSize(width: 460, height: max(260, stack.fittingSize.height)))
     }
 
-    private func display(_ settings: Settings) {
+    private func display(_ settings: NeutralSettings) {
         for (index, value) in Self.values(of: settings.value).enumerated() {
-            let text = formatter.string(from: NSNumber(value: value)) ?? "0"
+            let field = Field(rawValue: index) ?? .lowInput
+            let physical = Self.physicalValue(for: value, field: field, domain: domain)
+            let text = formatter.string(from: NSNumber(value: physical)) ?? "0"
             displayedEntries[index] = NumericEntry(text: text, value: value)
             fields[index].stringValue = text
         }
@@ -305,14 +430,14 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         suppressFieldEvents = true
         window?.endEditing(for: nil)
         suppressFieldEvents = false
-        let identity = Settings()
+        let identity = NeutralSettings()
         display(identity)
         numericValidationError = nil
         previewCurrent = false
         previewError = nil
         lastValidSettings = identity
         updateState()
-        changed(identity)
+        changedNeutral(identity)
     }
 
     @objc private func cancelPressed(_ sender: Any?) { cancel() }
@@ -333,7 +458,7 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         applying = true
         defer { actionPending = false; updateState() }
         updateState()
-        apply(lastValidSettings)
+        applyNeutral(lastValidSettings)
     }
 
     @discardableResult
@@ -349,7 +474,7 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
                 previewError = nil
                 actionPending = true
                 updateState()
-                changed(settings)
+                changedNeutral(settings)
                 actionPending = false
             }
             updateState()
@@ -362,7 +487,7 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         }
     }
 
-    private func parseFields() -> Result<Settings, ParseError> {
+    private func parseFields() -> Result<NeutralSettings, ParseError> {
         var values = Self.values(of: lastValidSettings.value)
         for item in Field.allCases {
             let index = item.rawValue
@@ -376,21 +501,29 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             }
             let scanner = Scanner(string: trimmed)
             scanner.locale = formatter.locale
-            guard let value = scanner.scanDouble(), scanner.isAtEnd,
-                  value.isFinite, item.range.contains(value) else {
-                return .failure(ParseError(message: item.invalidMessage))
+            let physicalRange = domain.physicalRange(for: item)
+            guard let parsed = scanner.scanDouble(), scanner.isAtEnd,
+                  parsed.isFinite, physicalRange.contains(parsed) else {
+                return .failure(ParseError(message: invalidMessage(for: item)))
             }
-            values[index] = value
+            values[index] = Self.normalizedValue(forPhysical: parsed, field: item, domain: domain)
         }
         let channel = EngineSession.LevelsSettings.Channel(lowInput: values[0], highInput: values[1],
                                                            gamma: values[2], lowOutput: values[3], highOutput: values[4])
-        let settings = Settings(value: channel,
-                                clampInput: clampInputButton.state == .on,
-                                clampOutput: clampOutputButton.state == .on)
+        let settings = NeutralSettings(value: channel,
+                                       clampInput: clampInputButton.state == .on,
+                                       clampOutput: clampOutputButton.state == .on)
         guard settings.isValid else {
-            return .failure(ParseError(message: "Enter levels endpoints from 0 to 1 and gamma from 0.1 to 10."))
+            return .failure(ParseError(message: domain.invalidSettingsMessage))
         }
         return .success(settings)
+    }
+
+    private func invalidMessage(for field: Field) -> String {
+        if field == .gamma {
+            return "Enter gamma from 0.1 to 10."
+        }
+        return "Enter \(field.title.lowercased()) from \(domain.endpointRangeDescription)."
     }
 
     private var canApply: Bool {
@@ -414,7 +547,7 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
             statusField.stringValue = previewError
             statusField.textColor = .systemRed
         } else if applying {
-            statusField.stringValue = "Applying ink levels…"
+            statusField.stringValue = domain.applyingStatus
             statusField.textColor = .secondaryLabelColor
         } else if !previewCurrent {
             statusField.stringValue = "Updating preview…"
@@ -432,9 +565,28 @@ final class InkLevelsPanel: NSWindowController, NSWindowDelegate, NSTextFieldDel
         [channel.lowInput, channel.highInput, channel.gamma, channel.lowOutput, channel.highOutput]
     }
 
-    private static func entries(for channel: EngineSession.LevelsSettings.Channel, formatter: NumberFormatter) -> [NumericEntry] {
-        values(of: channel).map { value in
-            NumericEntry(text: formatter.string(from: NSNumber(value: value)) ?? "0", value: value)
+    private static func makeEntries(for channel: EngineSession.LevelsSettings.Channel, domain: Domain, formatter: NumberFormatter) -> [NumericEntry] {
+        values(of: channel).enumerated().map { index, value in
+            let field = Field(rawValue: index) ?? .lowInput
+            let physical = physicalValue(for: value, field: field, domain: domain)
+            return NumericEntry(text: formatter.string(from: NSNumber(value: physical)) ?? "0", value: value)
         }
+    }
+
+    private static func physicalValue(for normalized: Double, field: Field, domain: Domain) -> Double {
+        if field == .gamma { return normalized }
+        if case .ink = domain { return normalized }
+        let range = domain.physicalRange(for: field)
+        let span = range.upperBound - range.lowerBound
+        return range.lowerBound + span * normalized
+    }
+
+    private static func normalizedValue(forPhysical physical: Double, field: Field, domain: Domain) -> Double {
+        if field == .gamma { return physical }
+        if case .ink = domain { return physical }
+        let range = domain.physicalRange(for: field)
+        let span = range.upperBound - range.lowerBound
+        guard span != 0 else { return 0 }
+        return (physical - range.lowerBound) / span
     }
 }

@@ -7,12 +7,52 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked
 
-The current installed release is qualified source `e887259`, integrated through
+The current installed release is qualified source `1edb79c`, integrated through
+[#277](https://github.com/L-K-M/Glims/pull/277) at `59f93da4` on 2026-11-13.
+It adds physical Lab Levels with selected-axis previews, Cancel/Apply/Undo,
+physical L*/a*/b* fields and version 17 Recorder files with explicit Lab
+bindings and loaded-file replay. It also includes the GIMP 3.2.0 first-start
+compatibility fix. Layered Lab/CMYK remains unfinished; the layered-storage
+foundation in #278 is not part of this installed build.
+
+All 1,755 Swift and 141 Python tests pass. The current native matrix covers
+seven cases on each of four engines (28 runs), including 1,576 Lab Levels
+checks per engine and surrounding conformance, Fill, Curves, snapshots and
+ink-adjustment regressions. A separate first-start regression passes 21
+checks per engine for absent, empty and present SNAP values. The clean app
+matrix passes 375 Lab Levels checks on each engine plus four pinned
+regression cases (eight runs total). The self-contained pinned release
+passes all 29 standalone cases with development paths denied.
+
+The Lab Levels and Lab Recorder cases run through the smoke host. Lab Brush
+Recorder, Lab Selection Recorder, Ink Brush Recorder and Ink-controls cases
+use direct document/service or AppKit-control fixtures. Those direct cases
+do not establish physical pointer/tablet delivery or the ordinary outer
+application lifecycle for those workflows.
+
+[CI 43365872812](https://github.com/L-K-M/Glims/actions/runs/43365872812)
+passed both required jobs on the exact qualified source. Full payloads,
+signatures and release-compiler output are verified. Fresh/cached/relocated
+launches measured 2.246/1.473/3.584 seconds. A separate ordinary launch of
+the installed `/Applications/Glims.app` opened its ready document in
+**3.291 seconds**, without arguments or an engine override and with a private
+home. Its owned process exited and the desktop was released. Both prior
+apps and receipts are preserved; no notarization was performed or requested.
+Evidence is under `/tmp/glims-lab-levels-final`; its qualification receipt
+hash is `313b0d98b1c731480833c44a3aff8dff8ec22107b3656722658ba98204bb33f5`.
+The Applications receipt is
+`/Applications/.Glims-lab-levels-1b45f97ab8554ab281f9f4c9d433f963/installation.json`;
+the dist receipt is
+`dist/.Glims-lab-levels-6ec434ee0ce0498d9b29b61b471c7438/installation.json`.
+
+### Previous Ink controls and Recorder installation
+
+Qualified source `e887259` was installed through
 [#276](https://github.com/L-K-M/Glims/pull/276) at `e84d2017` on 2026-11-13.
-It adds explicit Ink coverage controls and complete CMYK/Multichannel
+It added explicit Ink coverage controls and complete CMYK/Multichannel
 Brush/Pencil recording with version 16 files, alongside the Lab Recorder
-work below. Airbrush remains live but unrecordable. Lab Levels #277 is a
-separate candidate; it is not included in this installation.
+work below. Airbrush remains live but unrecordable. Lab Levels #277 was a
+separate candidate at this checkpoint and was not included in that installation.
 
 All 1,740 Swift tests pass. The self-contained pinned release passed all 28
 standalone cases with development paths denied, retaining the previous 26

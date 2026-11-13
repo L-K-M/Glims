@@ -36,6 +36,7 @@ def check(root=ROOT):
     component.add('image_ink_channel_identity')
     component.add('image_lab_axes')
     component.add('image_fill_lab')
+    component.update({'image_levels_lab', 'image_lab_snapshot_levels', 'image_lab_snapshot_apply_levels'})
     component.add('image_convert_lab_copy')
     component.add('stroke_begin_lab')
     component.add('stroke_begin_lab_with_capture_facts')

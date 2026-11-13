@@ -836,7 +836,23 @@ engine_initialize (GlimsEngine  *engine,
   gimpdir = gimp_directory_file (NULL);
   if (g_file_query_file_type (gimpdir, G_FILE_QUERY_INFO_NONE, NULL) != G_FILE_TYPE_DIRECTORY)
     {
-      GimpUserInstall *install = gimp_user_install_new (G_OBJECT (gimp), FALSE);
+      GimpUserInstall *install;
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 2 && GIMP_MICRO_VERSION == 0
+      /* 3.2.0's migration scan passes an absent SNAP to g_file_test(). An
+       * empty value takes the non-Snap path without changing existing values.
+       * Only the constructor scans old installations; restore it immediately. */
+      gboolean restore_absent_snap = g_getenv ("SNAP") == NULL;
+
+      if (restore_absent_snap)
+        g_setenv ("SNAP", "", TRUE);
+#endif
+
+      install = gimp_user_install_new (G_OBJECT (gimp), FALSE);
+
+#if GIMP_MAJOR_VERSION == 3 && GIMP_MINOR_VERSION == 2 && GIMP_MICRO_VERSION == 0
+      if (restore_absent_snap)
+        g_unsetenv ("SNAP");
+#endif
 
       gimp_user_install_run (install, 1);
       gimp_user_install_free (install);
@@ -4784,6 +4800,87 @@ api_stroke_cancel_ink (GlimsEngine *engine, GlimsStrokeID stroke)
   return glims_facade_call (engine, GLIMS_FACADE_OP_stroke_cancel_ink,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
     stroke_cancel_ink_on_engine, &stroke, NULL);
+}
+
+typedef struct {
+  GlimsImageID image;
+  uint64_t token;
+  GlimsLabLevelsSettings settings;
+  GlimsImageID *result;
+  char **error;
+} LabLevelsArgs;
+
+static gboolean
+copy_lab_levels_settings (const GlimsLabLevelsSettings *source, GlimsLabLevelsSettings *copy)
+{
+  if (!source) return FALSE;
+  uint32_t size;
+  const unsigned char *bytes = (const unsigned char *) (const void *) source;
+  memcpy (&size, bytes, sizeof size);
+  if (size < sizeof *copy) return FALSE;
+  memcpy (copy, bytes, sizeof *copy);
+  copy->struct_size = sizeof *copy;
+  return TRUE;
+}
+
+static GlimsStatus
+image_levels_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLevelsArgs *a = data;
+  return glims_image_levels_lab (engine, a->image, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_levels_lab (GlimsEngine *engine, GlimsImageID image,
+                      const GlimsLabLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLevelsArgs a = { .image = image, .error = error };
+  if (!copy_lab_levels_settings (settings, &a.settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_levels_lab,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_levels_lab_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_levels_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLevelsArgs *a = data;
+  return glims_image_lab_snapshot_levels (engine, a->image, a->token, &a->settings,
+                                          a->result, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_levels (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                               const GlimsLabLevelsSettings *settings,
+                               GlimsImageID *result, char **error)
+{
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  LabLevelsArgs a = { .image = image, .token = token, .result = result, .error = error };
+  if (!result || !copy_lab_levels_settings (settings, &a.settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_levels,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_snapshot_levels_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_lab_snapshot_apply_levels_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLevelsArgs *a = data;
+  return glims_image_lab_snapshot_apply_levels (engine, a->image, a->token, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_lab_snapshot_apply_levels (GlimsEngine *engine, GlimsImageID image, uint64_t token,
+                                     const GlimsLabLevelsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLevelsArgs a = { .image = image, .token = token, .error = error };
+  if (!copy_lab_levels_settings (settings, &a.settings)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_snapshot_apply_levels,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_snapshot_apply_levels_on_engine, &a, error);
 }
 
 static const GlimsEngineAPI api_v1 = {
