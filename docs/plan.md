@@ -5999,3 +5999,14 @@ runs on the 24 MP fixture did not show a reliable speedup: the two 50% median
 read times were 15.64 and 15.69 ms before, versus 15.35 and 16.23 ms with
 the experiment. The change was not adopted. These are native viewport reads,
 not end-to-end interaction timings.
+
+### Guarded layered Lab Fill for Recorder (native candidate)
+
+A separately advertised engine entry fills the captured logical Lab root only
+when the image selection is empty. It checks that condition on the engine
+thread before work and again before publishing the staged result. A nonempty
+or changed selection, stale root and cancellation refuse without publishing
+pixels or adding an Undo step. The existing selection-aware Fill is unchanged.
+The four-engine conformance and public tests cover those refusals, cancellation,
+unaligned input and Undo. This is an engine prerequisite only: Recorder does
+not yet capture or replay layered Lab Fill. Review and CI remain pending.
