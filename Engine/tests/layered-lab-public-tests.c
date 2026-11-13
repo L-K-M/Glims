@@ -19,9 +19,35 @@ static const GlimsEngineAPI *api;static unsigned checks,failures;
 static GlimsEngine *running_engine;
 static gboolean request_fill_cancel, fill_cancel_scheduled, fill_cancelled;
 static guint fill_cancel_source;
+static GlimsImageID brush_retarget_image;
+static GlimsItemID brush_retarget_root;
+static gboolean brush_retargeted;
+static GlimsStrokeID brush_reentrant_stroke;
+static GlimsStatus brush_close_status,brush_cancel_status,brush_end_status,brush_continue_status;
 #define CHECK(c,n) do{gboolean b=!!(c);checks++;if(!b)failures++;printf("%s %s\n",b?"ok":"FAIL",n);fflush(stdout);}while(0)
 static gboolean cancel_fill_on_engine(gpointer unused){(void)unused;fill_cancel_source=0;if(request_fill_cancel)fill_cancelled=running_engine&&api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;return G_SOURCE_REMOVE;}
 static void on_event(void *context,const GlimsEvent *event){(void)context;if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}}
+static void retarget_on_brush_update(GimpDrawable *drawable,gint x,gint y,gint width,gint height,gpointer data){
+ (void)drawable;(void)x;(void)y;(void)width;(void)height;(void)data;
+ if(!brush_retargeted){
+  brush_retargeted=TRUE;brush_close_status=api->image_close(running_engine,brush_retarget_image);
+  if(brush_reentrant_stroke){
+   GlimsStrokePacketV2 empty={.struct_size=sizeof empty,.sample_stride=sizeof(GlimsStrokeSampleV2)};
+   brush_cancel_status=api->stroke_cancel_lab_layer(running_engine,brush_reentrant_stroke);
+   brush_end_status=api->stroke_end(running_engine,brush_reentrant_stroke);
+   brush_continue_status=api->stroke_continue_v2(running_engine,brush_reentrant_stroke,&empty,NULL);
+  }
+  if(brush_retarget_root)api->layer_select(running_engine,brush_retarget_image,brush_retarget_root);
+ }
+}
+static gboolean brush_raw(GlimsEngine *engine,GlimsImageID image,unsigned root,guint8 pixels[4][16]){
+ GlimsOpenImage *open=glims_lookup_image(engine,image);GlimsLabLayerStorage storage;
+ if(!open||glims_lab_layer_storage_read(open->image,&storage)!=GLIMS_LAB_LAYER_STORAGE_VALID||root>=storage.map.count)return FALSE;
+ for(unsigned i=0;i<4;i++){GimpDrawable *plane=GIMP_DRAWABLE(storage.layers[root].planes[i]);
+  gegl_buffer_get(gimp_drawable_get_buffer(plane),GEGL_RECTANGLE(0,0,4,4),1,
+                  gimp_drawable_get_format(plane),pixels[i],GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);}
+ return TRUE;
+}
 static gboolean save_fixture(Gimp *g,GimpImage *im,const char *path){GError *err=NULL;GFile *f=g_file_new_for_path(path);GimpPlugInProcedure *p=gimp_plug_in_manager_file_procedure_find(g->plug_in_manager,GIMP_FILE_PROCEDURE_GROUP_SAVE,f,&err);GimpPDBStatusType s=p?file_save(g,im,NULL,f,p,GIMP_RUN_NONINTERACTIVE,TRUE,FALSE,FALSE,&err):GIMP_PDB_EXECUTION_ERROR;if(err){fprintf(stderr,"fixture save: %s\n",err->message);g_clear_error(&err);}g_object_unref(f);return s==GIMP_PDB_SUCCESS;}
 static GlimsStatus worker(GlimsEngine *engine,gpointer work){
  GlimsLabLayerMap m={.width=4,.height=4,.count=2,.mode=GLIMS_LAB_LAYER_MAP_MODE_LAB,.storage=GLIMS_LAB_LAYER_MAP_STORAGE_U8,.encoding=GLIMS_LAB_LAYER_MAP_ENCODING_LAB_D50};
@@ -172,6 +198,150 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->image_close(engine,ordinary)==GLIMS_STATUS_OK,"ordinary identity fixture closes");
    }
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"fill fixture selects its captured root");
+   GlimsLabLayerBrushSettings brush={.struct_size=sizeof brush,.root=rows[0].id,
+     .color={1,0,0,1},.opacity=1,.size=5,.hardness=1};memcpy(brush.uuid,first_identity.uuid,16);
+   GlimsStrokeSampleV2 brush_point={.struct_size=sizeof brush_point,.x=1.5,.y=1.5,.pressure=1,.time_ms=1};
+   GlimsStrokePacketV2 brush_packet={.struct_size=sizeof brush_packet,.sample_stride=sizeof brush_point,
+     .samples=&brush_point,.count=1,.byte_count=sizeof brush_point};
+   guint8 brush_before[4][16],brush_after[4][16],brush_other[4][16],brush_other_after[4][16];
+   CHECK(brush_raw(engine,id,0,brush_before)&&brush_raw(engine,id,1,brush_other),"capture public brush source planes");
+   GlimsUndoInfo brush_history_before={0},brush_history_after={0};
+   CHECK(api->image_undo_info(engine,id,&brush_history_before)==GLIMS_STATUS_OK,"capture public brush history");
+   brush_retarget_image=id;brush_retarget_root=rows[1].id;brush_retargeted=FALSE;brush_reentrant_stroke=0;
+   gulong brush_update_handler=g_signal_connect(identity_storage.layers[0].planes[0],"update",G_CALLBACK(retarget_on_brush_update),NULL);
+   GlimsStrokeID reentrant_stroke=0;GlimsStatus reentrant_status=api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&reentrant_stroke,&error);
+   g_signal_handler_disconnect(identity_storage.layers[0].planes[0],brush_update_handler);
+   CHECK(brush_retargeted&&reentrant_status==GLIMS_STATUS_INVALID_ARGUMENT&&!reentrant_stroke,
+         "reentrant target change cancels the first brush dab");
+   CHECK(brush_close_status==GLIMS_STATUS_BUSY,"reentrant close refuses while the first dab is running");
+   if(error)api->free_string(error);error=NULL;
+   if(reentrant_stroke)api->stroke_cancel_lab_layer(engine,reentrant_stroke);
+   CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+         !memcmp(brush_before,brush_after,sizeof brush_before),"reentrant begin restores its captured planes");
+   GlimsStrokeID brush_id=123;GlimsLabLayerBrushSettings invalid_brush=brush;invalid_brush.uuid[0]^=0xff;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&invalid_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+         "public brush refuses a stale UUID before painting");if(error)api->free_string(error);error=NULL;
+   invalid_brush=brush;invalid_brush.color.red=NAN;brush_id=123;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&invalid_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+         "public brush refuses nonfinite color");if(error)api->free_string(error);error=NULL;
+   invalid_brush=brush;invalid_brush.struct_size=sizeof invalid_brush-1;brush_id=123;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&invalid_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+         "public brush refuses a short request");if(error)api->free_string(error);error=NULL;
+   invalid_brush=brush;invalid_brush.root=rows[1].id;memcpy(invalid_brush.uuid,m.entries[1].group,16);brush_id=123;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&invalid_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+         "public brush refuses an unselected root");if(error)api->free_string(error);error=NULL;
+   engine->busy++;brush_id=123;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_BUSY&&brush_id==0,
+         "public brush refuses a busy engine");engine->busy--;if(error)api->free_string(error);error=NULL;
+   brush_id=123;
+   CHECK(api->stroke_begin_lab_layer(engine,id,INT32_MAX,&brush,&brush_packet,&brush_id,&error)!=GLIMS_STATUS_OK&&brush_id==0,
+         "public brush refuses an unknown brush resource");if(error)api->free_string(error);error=NULL;
+   CHECK(brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before)&&
+         api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
+         brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
+         "refused public strokes preserve pixels and history");
+   guint8 unaligned_brush[sizeof brush+2];memset(unaligned_brush,0xa5,sizeof unaligned_brush);memcpy(unaligned_brush+1,&brush,sizeof brush);
+   brush_id=0;GlimsStatus brush_status=api->stroke_begin_lab_layer(engine,id,0,(const GlimsLabLayerBrushSettings*)(unaligned_brush+1),&brush_packet,&brush_id,&error);
+   CHECK(brush_status==GLIMS_STATUS_OK&&brush_id&&unaligned_brush[0]==0xa5&&unaligned_brush[sizeof unaligned_brush-1]==0xa5,
+         "public brush accepts a captured unaligned request");if(error)api->free_string(error);error=NULL;
+   if(brush_status==GLIMS_STATUS_OK&&brush_id){
+    brush_point.x=2.5;brush_point.time_ms=2;
+    CHECK(api->stroke_continue_v2(engine,brush_id,&brush_packet,&error)==GLIMS_STATUS_OK,"public brush accepts V2 continuation");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->stroke_end(engine,brush_id)==GLIMS_STATUS_OK,"public brush commits");
+    CHECK(brush_raw(engine,id,0,brush_after)&&memcmp(brush_before,brush_after,sizeof brush_before)&&
+          brush_raw(engine,id,1,brush_other_after)&&!memcmp(brush_other,brush_other_after,sizeof brush_other),
+          "public brush paints the captured root and preserves the other root");
+    guint8 brush_painted[4][16];memcpy(brush_painted,brush_after,sizeof brush_painted);
+    CHECK(api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
+          brush_history_after.undo_count==brush_history_before.undo_count+1,"public brush makes one Undo step");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+          !memcmp(brush_before,brush_after,sizeof brush_before),"public brush Undo restores all source planes");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+          !memcmp(brush_painted,brush_after,sizeof brush_painted),"public brush Redo restores all planes");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"public brush fixture restores original planes");
+   }
+   brush_point.x=1.5;brush_point.time_ms=1;brush_id=0;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+         "public cancel witness begins");if(error)api->free_string(error);error=NULL;
+   if(brush_id){CHECK(api->stroke_cancel_lab(engine,brush_id)==GLIMS_STATUS_UNSUPPORTED,
+      "flat Lab cancel cannot consume a layered Lab stroke");
+    CHECK(api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_OK&&
+      brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+      "public cancellation restores all planes");}
+   brush_id=0;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+         "public stale-target witness begins");if(error)api->free_string(error);error=NULL;
+   if(brush_id){
+    CHECK(api->layer_select(engine,id,rows[1].id)==GLIMS_STATUS_OK,"public root selection changes during a live brush");
+    brush_point.time_ms=2;
+    CHECK(api->stroke_continue_v2(engine,brush_id,&brush_packet,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&error,
+          "public brush cancels when the selected root changes");if(error)api->free_string(error);error=NULL;
+    CHECK(brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before)&&
+          api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_NOT_FOUND,
+          "stale brush restores all planes and releases its handle");
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"public brush fixture restores selected root");
+   }
+   GlimsLabLayerBrushSettings motion_brush=brush;motion_brush.size=3;
+   brush_point.x=.5;brush_point.time_ms=1;brush_id=0;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&motion_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+         "reentrant continuation witness begins");if(error)api->free_string(error);error=NULL;
+   if(brush_id){
+    brush_retargeted=FALSE;brush_reentrant_stroke=brush_id;
+    brush_update_handler=g_signal_connect(identity_storage.layers[0].planes[0],"update",G_CALLBACK(retarget_on_brush_update),NULL);
+    brush_point.x=3.5;brush_point.time_ms=2;
+    GlimsStatus motion_status=api->stroke_continue_v2(engine,brush_id,&brush_packet,&error);
+    g_signal_handler_disconnect(identity_storage.layers[0].planes[0],brush_update_handler);
+    CHECK(brush_retargeted&&brush_close_status==GLIMS_STATUS_BUSY&&brush_cancel_status==GLIMS_STATUS_BUSY&&
+          brush_end_status==GLIMS_STATUS_BUSY&&brush_continue_status==GLIMS_STATUS_BUSY,
+          "reentrant close, cancel, end and continuation refuse during a dab");
+    CHECK(motion_status==GLIMS_STATUS_INVALID_ARGUMENT&&brush_raw(engine,id,0,brush_after)&&
+          !memcmp(brush_before,brush_after,sizeof brush_before)&&
+          api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_NOT_FOUND,
+          "reentrant target change cancels and restores the entire continued stroke");
+    if(error)api->free_string(error);error=NULL;brush_reentrant_stroke=0;
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"reentrant continuation restores selected root");
+   }
+   brush_point.x=1.5;
+   brush_id=0;brush_point.time_ms=1;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+         "public stale-target end witness begins");if(error)api->free_string(error);error=NULL;
+   if(brush_id){
+    CHECK(api->layer_select(engine,id,rows[1].id)==GLIMS_STATUS_OK,"public root changes before stroke end");
+    CHECK(api->stroke_end(engine,brush_id)==GLIMS_STATUS_INVALID_ARGUMENT&&
+          brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before)&&
+          api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_NOT_FOUND,
+          "ending a stale brush cancels and restores its target");
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"public brush root is reselected after stale end");
+   }
+   GlimsLabLayerBrushSettings transparent_brush=brush;transparent_brush.color.alpha=0;brush_id=0;brush_point.time_ms=1;
+   CHECK(api->image_undo_info(engine,id,&brush_history_before)==GLIMS_STATUS_OK&&
+         api->stroke_begin_lab_layer(engine,id,0,&transparent_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+         "transparent public brush begins");if(error)api->free_string(error);error=NULL;
+   if(brush_id)CHECK(api->stroke_end(engine,brush_id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+         !memcmp(brush_before,brush_after,sizeof brush_before)&&api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
+         brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
+         "transparent public brush preserves pixels, Undo and Redo");
+   GlimsLabSelectOptions brush_selection={.struct_size=sizeof brush_selection,.operation=GLIMS_SELECT_REPLACE};
+   GlimsPoint brush_points[2]={{1,1},{3,3}};
+   CHECK(api->image_select_lab_shape(engine,id,GLIMS_SHAPE_RECTANGLE,brush_points,2,&brush_selection,&error)==GLIMS_STATUS_OK,
+         "public brush selection fixture is active");if(error)api->free_string(error);error=NULL;
+   brush_id=0;
+   CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+         "selected public brush begins");if(error)api->free_string(error);error=NULL;
+   if(brush_id){
+    CHECK(api->stroke_end(engine,brush_id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after),"selected public brush commits");
+    gboolean outside_same=TRUE,inside_diff=FALSE;
+    for(unsigned p=0;p<4;p++)for(unsigned y=0;y<4;y++)for(unsigned x=0;x<4;x++){
+      unsigned pos=y*4+x;
+      if(x>=1&&x<3&&y>=1&&y<3)inside_diff|=brush_before[p][pos]!=brush_after[p][pos];
+      else outside_same&=brush_before[p][pos]==brush_after[p][pos];
+    }
+    CHECK(inside_diff&&outside_same,"public brush respects the captured selection mask");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+          !memcmp(brush_before,brush_after,sizeof brush_before),"Undo restores the selected brush stroke");
+   }
+   CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"brush fixture restores the empty selection");
    GlimsLabLayerFillSettings fill={.struct_size=sizeof fill,.root=rows[0].id,.lightness=0,.a=0,.b=0,.opacity=1};
    memcpy(fill.uuid,first_identity.uuid,16);
    GlimsLabSelectOptions fill_selection={.struct_size=sizeof fill_selection,.operation=GLIMS_SELECT_REPLACE};
@@ -906,6 +1076,41 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    if(error)api->free_string(error);g_free(damaged_path);
   }
   CHECK(api->image_close(engine,id)==GLIMS_STATUS_OK,"public layered Lab image closes");
+ }
+ GlimsImageID close_image=0;error=NULL;
+ CHECK(api->image_open(engine,path,&close_image,&error)==GLIMS_STATUS_OK&&close_image,"open independent brush-close fixture");
+ if(error)api->free_string(error);error=NULL;
+ if(close_image){
+  GlimsLayerInfo close_rows[4];int32_t close_count=0;GlimsLabLayerIdentity close_identity={.struct_size=sizeof close_identity};
+  gboolean close_ready=api->image_layers(engine,close_image,close_rows,4,&close_count)==GLIMS_STATUS_OK&&close_count==2&&
+    api->layer_select(engine,close_image,close_rows[0].id)==GLIMS_STATUS_OK&&
+    api->image_lab_layer_identity(engine,close_image,close_rows[0].id,&close_identity)==GLIMS_STATUS_OK;
+  CHECK(close_ready,"brush-close fixture captures a logical root");
+  if(close_ready){
+   GlimsLabLayerBrushSettings close_brush={.struct_size=sizeof close_brush,.root=close_rows[0].id,
+     .color={1,0,0,1},.opacity=1,.size=5,.hardness=1};memcpy(close_brush.uuid,close_identity.uuid,16);
+   GlimsStrokeSampleV2 point={.struct_size=sizeof point,.x=1.5,.y=1.5,.pressure=1,.time_ms=1};
+   GlimsStrokePacketV2 packet={.struct_size=sizeof packet,.sample_stride=sizeof point,.samples=&point,.count=1,.byte_count=sizeof point};
+   GlimsStrokeID stroke=0;GlimsStatus started=api->stroke_begin_lab_layer(engine,close_image,0,&close_brush,&packet,&stroke,&error);
+   CHECK(started==GLIMS_STATUS_OK&&stroke,"brush-close fixture starts a live stroke");if(error)api->free_string(error);error=NULL;
+   if(started==GLIMS_STATUS_OK&&stroke){
+    GlimsOpenImage *close_open=glims_lookup_image(engine,close_image);GlimsLabLayerStorage close_storage;
+    gboolean close_valid=close_open&&glims_lab_layer_storage_read(close_open->image,&close_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+    CHECK(close_valid,"brush-close fixture has an intact target");
+    if(close_valid){
+     GimpDrawable *observed=g_object_ref(GIMP_DRAWABLE(close_storage.layers[0].planes[0]));
+     brush_retarget_image=close_image;brush_retarget_root=0;brush_retargeted=FALSE;brush_reentrant_stroke=stroke;
+     gulong handler=g_signal_connect(observed,"update",G_CALLBACK(retarget_on_brush_update),NULL);
+     GlimsStatus closed=api->image_close(engine,close_image);
+     g_signal_handler_disconnect(observed,handler);g_object_unref(observed);
+     CHECK(closed==GLIMS_STATUS_OK&&brush_retargeted&&brush_close_status==GLIMS_STATUS_BUSY,
+           "closing an active brush refuses reentrant close during rollback");
+     CHECK(api->stroke_end(engine,stroke)==GLIMS_STATUS_NOT_FOUND,"close releases the active brush handle");
+     close_image=0;brush_reentrant_stroke=0;
+    }
+   }
+  }
+  if(close_image)CHECK(api->image_close(engine,close_image)==GLIMS_STATUS_OK,"close fixture cleans up");
  }
  CHECK(g_file_get_contents(path,&after,&after_size,NULL)&&before&&before_size==after_size&&!memcmp(before,after,before_size),"open/read leaves source XCF bytes unchanged");g_free(before);g_free(after);g_free(path);return GLIMS_STATUS_OK;
 }

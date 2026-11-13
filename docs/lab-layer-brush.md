@@ -9,8 +9,21 @@ the caller must cancel the whole stroke after any error.
 
 The caller is responsible for admitting the logical root, checking its durable
 identity and locks, keeping the ordered planes stable for every input packet,
-and owning native start, finish and cancellation. The prototype does not
-expose a facade, a canvas tool, Recorder support, or tablet pressure dynamics.
+and owning native start, finish and cancellation. The core itself does not
+expose a canvas tool, Recorder support, or tablet pressure dynamics.
+
+## Captured stroke API (candidate)
+
+The follow-up adds typed begin and cancel calls for a solely selected logical
+root, identified by both its current handle and document-scoped UUID. It
+converts bounded sRGB to D50 Lab and accepts V2 stroke packets. Continuation
+and end revalidate the root and plane identities; a changed target cancels and
+restores the full stroke. Native painting runs under a reentrancy guard, and
+closing a document with an active typed stroke guards its rollback. A changed
+stroke has one native Undo step; cancellation and no-op strokes preserve
+history. This candidate does not enable the canvas tool or Recorder, and its
+brush dynamics are disabled, including pressure effects. Engine compatibility,
+review and full application qualification remain required.
 
 The native fixture uses real brush masks and independent plane snapshots. It
 checks selection-weighted physical color, interpolation, other-layer
