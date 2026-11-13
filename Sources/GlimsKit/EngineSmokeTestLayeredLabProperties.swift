@@ -138,7 +138,9 @@ extension EngineSmokeTest {
             drain("opacity edit")
             check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - editedOpacity) < 0.0001,
                   "opacity field changes the captured logical layer")
+            let manager = EngineUndoManager(document: opened)
             let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")
+            check(manager.canUndo, "document Undo is available after the opacity edit")
             check(windowController.window?.validateMenuItem(undo) == true, "window Undo is available after the opacity edit")
             check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
                   "window responder handles opacity Undo")
@@ -146,6 +148,7 @@ extension EngineSmokeTest {
             check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - originalOpacity) < 0.0001,
                   "Undo restores logical layer opacity")
             let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "")
+            check(manager.canRedo, "document Redo is available after opacity Undo")
             check(windowController.window?.validateMenuItem(redo) == true, "window Redo is available after opacity Undo")
             check(windowController.window?.tryToPerform(Selector(("redo:")), with: redo) == true,
                   "window responder handles opacity Redo")
