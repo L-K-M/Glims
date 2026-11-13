@@ -852,7 +852,8 @@ glims_layer_command (GlimsEngine  *engine,
         status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
       else if (command == GLIMS_LAYER_DELETE)
         status = glims_lab_layer_delete (engine, image, layer, error);
-      else
+      else if (command == GLIMS_LAYER_RAISE || command == GLIMS_LAYER_LOWER ||
+               command == GLIMS_LAYER_TO_TOP || command == GLIMS_LAYER_TO_BOTTOM)
         {
           g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
           if (!storage) return GLIMS_STATUS_FAILED;
@@ -883,6 +884,8 @@ glims_layer_command (GlimsEngine  *engine,
           glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &full, NULL);
           return GLIMS_STATUS_OK;
         }
+      else
+        return GLIMS_STATUS_UNSUPPORTED;
       if (status == GLIMS_STATUS_OK)
         {
           if (result && created) *result = gimp_item_get_id (GIMP_ITEM (created));
