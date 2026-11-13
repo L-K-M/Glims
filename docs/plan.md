@@ -5915,3 +5915,22 @@ plug-in catalog with a temporary path containing both a variable token and a
 tilde, including a trailing slash; local engine readiness was about 1.4
 seconds. Full package qualification, review and CI remain open. Language
 changes and an incompatible bundled registry still require native discovery.
+
+### Script-Fu with special profile paths (candidate)
+
+Script-Fu expands the result of the engine's configuration query twice. A
+profile path containing a literal `~` or `${...}` can therefore crash the
+extension and stall startup. The adapter scopes an indirection to the three
+native initialization queries of the bundled Script-Fu processes; later user
+script queries and other plug-ins receive the ordinary value. This is enabled
+only for the four inspected engine versions. Other versions and unbundled
+development engines retain native behavior pending qualification.
+
+On the pinned engine, the packaged startup suite exercises undefined and
+defined tokens, a tilde, user scripts, a custom script directory across
+restart, unchanged third-party and Scheme queries, and preserved registry
+and preferences. The isolated bundle passes 2,268 engine and 3,355 app
+checks; a disposable special-profile app launch reached its document window
+in 1.51 seconds on this Mac. Other packaged engine versions and independent
+review remain in progress. This does not qualify language changes or complete
+the application.

@@ -263,6 +263,91 @@ def main():
         assert added[1] == baseline[1], 'font installation changed commands'
         installed.unlink()
         unchanged('user font removed after cached launch', baseline)
+        # GIMP's Script-Fu extension expands a queried path a second time.
+        # A literal config token in the profile path must remain filename data.
+        special_profile = work / 'profile ${GLIMS_TEST_UNDEFINED_PATH_TOKEN} ${HOME} ~'
+        special_profile.mkdir()
+        profile_env = environment.copy()
+        for key, leaf in [('HOME', 'home'), ('CFFIXED_USER_HOME', 'home'),
+                          ('XDG_CACHE_HOME', 'cache'), ('XDG_CONFIG_HOME', 'config'),
+                          ('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state'),
+                          ('GIMP3_DIRECTORY', 'user'), ('TMPDIR', 'tmp')]:
+            (special_profile / leaf).mkdir(exist_ok=True)
+            profile_env[key] = str(special_profile / leaf)
+        shutil.copytree(work / 'user', special_profile / 'user', dirs_exist_ok=True)
+        scripts = special_profile / 'user/scripts'
+        scripts.mkdir(exist_ok=True)
+        (scripts / 'glims-path-regression.scm').write_text('''
+(let ((output (open-output-file (getenv "GLIMS_SCRIPT_PATH_OBSERVER"))))
+  (display (car (gimp-gimprc-query "script-fu-path")) output)
+  (close-output-port output))
+(let ((output (open-output-file (getenv "GLIMS_SCRIPT_DIRECTORY_OBSERVER"))))
+  (display (car (gimp-gimprc-query "gimp_dir")) output)
+  (close-output-port output))
+(define (script-fu-glims-path-regression image drawables) (script-fu-use-v3))
+(script-fu-register-filter "script-fu-glims-path-regression"
+  "Glims Path Regression" "Check the user script path" "Glims" "Glims" "2026"
+  "RGB*" SF-ONE-OR-MORE-DRAWABLE)
+(script-fu-menu-register "script-fu-glims-path-regression" "<Image>/Filters/Development")
+''')
+        # A non-Script-Fu plug-in must still receive GIMP's ordinary expanded
+        # PDB value, not the representation used by the Script-Fu workaround.
+        observer_dir = special_profile / 'user/plug-ins/glims-path-observer'
+        observer_dir.mkdir(parents=True)
+        observer = observer_dir / 'glims-path-observer.py'
+        plugin_source = (ROOT / 'Engine/tests/metadata-loader.py').read_text()
+        hook = '    def do_query_procedures(self):\n'
+        assert plugin_source.count(hook) == 1
+        observer.write_text(plugin_source.replace(hook, hook + '''        with open(os.environ['GLIMS_PATH_OBSERVER'], 'w', encoding='utf-8') as output:
+            output.write(Gimp.gimprc_query('script-fu-path'))
+'''))
+        observer.chmod(0o755)
+        registry = special_profile / 'user/pluginrc'
+        registry.write_text('invalid registry\n')
+        profile_catalog = special_profile / 'catalog.txt'
+        profile_env['GLIMS_STARTUP_CATALOG_REPORT'] = str(profile_catalog)
+        profile_env['GLIMS_PATH_OBSERVER'] = str(special_profile / 'observed-path.txt')
+        profile_env['GLIMS_SCRIPT_PATH_OBSERVER'] = str(special_profile / 'script-observed-path.txt')
+        profile_env['GLIMS_SCRIPT_DIRECTORY_OBSERVER'] = str(special_profile / 'script-observed-directory.txt')
+        profile_env.pop('GLIMS_TEST_UNDEFINED_PATH_TOKEN', None)
+        def check_special_profile(label, script_dir):
+            process = subprocess.Popen([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
+                                        str(special_profile / 'user'), str(special_profile / 'cache')],
+                                       env=profile_env, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(timeout=25)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                stdout, stderr = process.communicate()
+                raise AssertionError(f'{label} timed out: {stdout}\n{stderr}')
+            assert process.returncode == 0, f'{label} failed: {stdout}\n{stderr}'
+            assert registry.read_text() == 'invalid registry\n', 'special profile registry was replaced'
+            fonts, commands = profile_catalog.read_text().split('[procedures]\n', 1)
+            profile_fonts, profile_commands = frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines())
+            assert 'script-fu-glims-path-regression' in profile_commands, 'special profile user script was not discovered'
+            assert 'plug-in-glims-meta-oracle' in profile_commands, 'special profile observer plug-in was not discovered'
+            observed_path = (special_profile / 'observed-path.txt').read_text()
+            expected_path = f'{special_profile}/user/{script_dir}:{clone.resolve()}/Contents/share/gimp/3.0/scripts'
+            assert observed_path == expected_path, f'a non-Script-Fu plug-in received {observed_path!r}, expected {expected_path!r}'
+            script_observed = (special_profile / 'script-observed-path.txt').read_text()
+            assert script_observed == expected_path, f'a user Script-Fu script received {script_observed!r}, expected {expected_path!r}'
+            assert (special_profile / 'script-observed-directory.txt').read_text() == str(special_profile / 'user'), \
+                'a user Script-Fu script received a modified unrelated config query'
+            assert (profile_fonts, profile_commands - {'script-fu-glims-path-regression', 'plug-in-glims-meta-oracle'}) == baseline, \
+                'special profile changed unrelated fonts or commands'
+            print(f'{label}: {stdout.strip()}', flush=True)
+
+        check_special_profile('special profile startup', 'scripts')
+        custom_scripts = special_profile / 'user/custom-scripts'
+        scripts.rename(custom_scripts)
+        special_rc = special_profile / 'user/gimprc'
+        custom_setting = '(script-fu-path "${gimp_dir}/custom-scripts:${gimp_data_dir}/scripts")'
+        special_rc.write_text(special_rc.read_text() + '\n' + custom_setting + '\n')
+        check_special_profile('special profile with custom script path', 'custom-scripts')
+        saved_rc = special_rc.read_text()
+        assert custom_setting in saved_rc and 'GLIMS_SCRIPT_DOLLAR_' not in saved_rc and 'GLIMS_SCRIPT_TILDE_' not in saved_rc, \
+            'custom script path was changed or the workaround leaked into preferences'
         # An incompatible packaged registry must use normal plug-in discovery.
         shutil.rmtree(work / 'user')
         (work / 'user').mkdir()
