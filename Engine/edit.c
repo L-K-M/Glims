@@ -848,8 +848,10 @@ glims_layer_command (GlimsEngine  *engine,
         }
       else if (command == GLIMS_LAYER_DUPLICATE)
         status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
-      else
+      else if (command == GLIMS_LAYER_DELETE)
         status = glims_lab_layer_delete (engine, image, layer, error);
+      else
+        return GLIMS_STATUS_UNSUPPORTED;
       if (status == GLIMS_STATUS_OK)
         {
           if (result && created) *result = gimp_item_get_id (GIMP_ITEM (created));

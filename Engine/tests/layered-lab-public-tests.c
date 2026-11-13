@@ -400,6 +400,12 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
           "rejected hidden-plane selection preserves the logical root");
    }
    GlimsItemID result=123;error=NULL;
+   CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_MERGE_DOWN,&result,&error)==GLIMS_STATUS_UNSUPPORTED&&result==0,
+         "unqualified logical layer commands remain refused");
+   if(error)api->free_string(error);error=NULL;result=123;
+   CHECK(api->layer_command(engine,id,rows[0].id,UINT32_MAX,&result,&error)==GLIMS_STATUS_UNSUPPORTED&&result==0,
+         "unknown logical layer commands fail closed");
+   if(error)api->free_string(error);error=NULL;result=123;
    GlimsStatus deleted=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DELETE,&result,&error);
    CHECK(deleted==GLIMS_STATUS_OK&&result==0,"public command deletes a logical Lab layer");
    if(error)api->free_string(error);error=NULL;
