@@ -61,7 +61,10 @@ extension EngineSmokeTest {
         NSApp.activate(ignoringOtherApps: true)
         windowController.window?.makeKeyAndOrderFront(nil)
         windowController.window?.makeMain()
-        EngineSmokeTestHost.pumpEvents(for: 0.3)
+        let keyDeadline = Date().addingTimeInterval(3)
+        while NSApp.keyWindow !== windowController.window && Date() < keyDeadline {
+            EngineSmokeTestHost.pumpEvents(for: 0.02)
+        }
         func menuItem(_ action: Selector, in menu: NSMenu?) -> NSMenuItem? {
             guard let menu else { return nil }
             for item in menu.items {
@@ -83,11 +86,8 @@ extension EngineSmokeTest {
         if let item = menuItem(#selector(NSWindow.performMiniaturize(_:)), in: NSApp.mainMenu) {
             let target = NSApp.target(forAction: #selector(NSWindow.performMiniaturize(_:)), to: item.target, from: item)
             let validation = (target as? NSMenuItemValidation)?.validateMenuItem(item) ?? true
-            if (target as AnyObject?) !== windowController.window || !validation {
-                print("MINIMIZE_DIAGNOSTIC target=\(String(describing: target)) validation=\(validation) itemTarget=\(String(describing: item.target)) key=\(String(describing: NSApp.keyWindow)) main=\(String(describing: NSApp.mainWindow)) document=\(String(describing: windowController.window))")
-            }
             check((target as AnyObject?) === windowController.window && validation,
-                  "read-only document leaves window Minimize available")
+                  "read-only document leaves window Minimize available (target: \(String(describing: target)), key: \(String(describing: NSApp.keyWindow)))")
         } else { check(false, "window Minimize menu item exists") }
         check(opened.storage.layout == .layeredLab && opened.storage.readOnly,
               "document recognizes read-only layered Lab storage")
