@@ -5541,3 +5541,13 @@ refusal. All 1,721 Swift and 141 Python tests pass; document/value review is
 clear. Codec/fixture review, four-engine checks and hosted CI are pending.
 See [lab-recorder.md](lab-recorder.md); installed-app qualification is
 separate.
+
+### Lab Recorder qualification fixture correction (2026-11-13)
+
+The combined Recorder release run reproduced one stale Lab Fill assertion:
+its older document fixture expected recording to be unavailable. Lab recording
+is now supported by the typed Fill/Curves/Brush/selection routes. The fixture
+now checks that recording starts, stops, and refuses replay of the empty log.
+Its other pixel, Undo, save, recovery and close assertions remain in place.
+The failed release evidence is preserved; a fresh release qualification is
+required after this fixture-only change. No installed app is replaced here.
