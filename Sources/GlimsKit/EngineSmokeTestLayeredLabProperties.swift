@@ -213,6 +213,50 @@ extension EngineSmokeTest {
                 undo.undo(); drain("restore selection after Lab color fill")
                 check(opened.selectionBounds == nil, "fill fixture restores its empty selection")
             } else { check(false, "captured Lab layer Fill sheet opens") }
+            let beforeInvalidFill = pixel(session, image, x: 1, y: 1)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap { descendants($0) }
+                }
+                let controls = sheet.contentView.map { descendants($0) } ?? []
+                if let field = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Fill opacity, percent" }),
+                   let choice = controls.compactMap({ $0 as? NSPopUpButton }).first(where: { $0.itemTitles.contains("Custom") }),
+                   let well = controls.compactMap({ $0 as? NSColorWell }).first,
+                   let submit = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Fill" }),
+                   let action = choice.action {
+                    let oldError = opened.onError
+                    var errors: [String] = []
+                    opened.onError = { errors.append($0) }
+                    defer { opened.onError = oldError }
+                    choice.selectItem(withTitle: "Custom")
+                    NSApp.sendAction(action, to: choice.target, from: choice)
+                    well.color = .blue
+                    field.stringValue = "not a number"
+                    submit.performClick(nil)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("invalid Lab Fill opacity")
+                    let stillOpen = window.attachedSheet === sheet
+                    check(stillOpen && choice.titleOfSelectedItem == "Custom" && well.color == .blue &&
+                          field.stringValue == "not a number" &&
+                          controls.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "Enter an opacity from 0 to 100%." }) &&
+                          pixel(session, image, x: 1, y: 1) == beforeInvalidFill,
+                          "invalid Fill opacity keeps the sheet and its choices without changing pixels")
+                    if stillOpen {
+                        field.stringValue = "100"
+                        submit.performClick(nil)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("corrected Lab Fill opacity")
+                        let result = pixel(session, image, x: 1, y: 1)
+                        check(window.attachedSheet == nil && result?.count == 4 && (result?[2] ?? 0) > 245,
+                              "correcting Fill opacity applies the retained custom color")
+                        opened.undo(); drain("corrected Lab Fill Undo")
+                    } else {
+                        check(false, "correcting Fill opacity applies the retained custom color")
+                    }
+                } else {
+                    check(false, "Lab Fill opacity and submit controls exist")
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+            } else { check(false, "Lab Fill sheet opens for opacity validation") }
             let beforeCustom = pixel(session, image, x: 1, y: 1)
             windowController.fill(nil)
             if let sheet = waitForSheet() {
@@ -244,9 +288,25 @@ extension EngineSmokeTest {
             let beforeCancel = pixel(session, image, x: 1, y: 1)
             windowController.fill(nil)
             if let sheet = waitForSheet() {
-                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
-                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("cancel Lab Fill")
-                check(pixel(session, image, x: 1, y: 1) == beforeCancel, "Cancel leaves Lab pixels unchanged")
+                func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap { descendants($0) }
+                }
+                let controls = sheet.contentView.map { descendants($0) } ?? []
+                if let field = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Fill opacity, percent" }),
+                   let submit = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Fill" }),
+                   let cancel = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" }) {
+                    field.stringValue = "101"
+                    submit.performClick(nil)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1)
+                    check(window.attachedSheet === sheet, "out-of-range Fill opacity leaves the sheet open")
+                    cancel.performClick(nil)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("cancel Lab Fill")
+                    check(window.attachedSheet == nil && pixel(session, image, x: 1, y: 1) == beforeCancel,
+                          "Cancel after invalid opacity leaves Lab pixels unchanged")
+                } else {
+                    check(false, "Lab Fill cancellation controls exist")
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
             } else { check(false, "Lab Fill sheet opens for cancellation") }
             if let other = opened.layers.first(where: { $0.id != originalRoot }) {
                 var errors: [String] = []
