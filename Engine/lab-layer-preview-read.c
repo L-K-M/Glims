@@ -94,48 +94,6 @@ unassociate (float *rgba, guint width)
   return TRUE;
 }
 
-static gboolean
-sample_magnified_row (GeglBuffer *buffer, const GeglRectangle *rect,
-                      double scale, const Babl *format, float *rgba)
-{
-  /* GEGL's AUTO box filter omits its bottom-right alpha in a zero shortcut.
-   * Forcing its bilinear filter during magnification instead omits the left/
-   * top sample halo. Use the standard 2x2 pixel-center bilinear definition
-   * here, on associated values. Global double coordinates keep the result
-   * independent of this helper's output-chunk boundaries. */
-  const double first_x = ((double) rect->x + 0.5) / scale - 0.5;
-  const double last_x = ((double) rect->x + rect->width - 0.5) / scale - 0.5;
-  const double source_y = ((double) rect->y + 0.5) / scale - 0.5;
-  const gint left = (gint) floor (first_x), top = (gint) floor (source_y);
-  const gint columns = (gint) floor (last_x) - left + 2;
-  if (columns < 2 || columns > (gint) GLIMS_LAB_LAYER_RENDER_MAX_WIDTH + 2)
-    return FALSE;
-  float samples[2 * (GLIMS_LAB_LAYER_RENDER_MAX_WIDTH + 2) * 4];
-  const GeglRectangle source = { left, top, columns, 2 };
-  /* At least two columns, so GEGL's 1x1 shortcut cannot bypass validation.
-   * ABYSS_NONE supplies transparent samples outside the actual image. */
-  gegl_buffer_get (buffer, &source, 1.0, format, samples,
-                   GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
-  const double fy = source_y - top;
-  for (gint x = 0; x < rect->width; x++)
-    {
-      const double source_x = ((double) rect->x + x + 0.5) / scale - 0.5;
-      const gint base = (gint) floor (source_x);
-      const gint offset = base - left;
-      if (offset < 0 || offset + 1 >= columns) return FALSE;
-      const double fx = source_x - base;
-      for (guint c = 0; c < 4; c++)
-        {
-          const float *above = samples + offset * 4;
-          const float *below = above + columns * 4;
-          const double upper = (1.0 - fx) * above[c] + fx * above[4+c];
-          const double lower = (1.0 - fx) * below[c] + fx * below[4+c];
-          rgba[x*4+c] = (float) ((1.0 - fy) * upper + fy * lower);
-        }
-    }
-  return TRUE;
-}
-
 GlimsStatus
 glims_lab_layer_preview_read (GimpImage *image, GlimsLabLayerPreview **preview,
                               double scale, GlimsRect area, void *rgba, size_t stride)
@@ -148,6 +106,8 @@ glims_lab_layer_preview_read (GimpImage *image, GlimsLabLayerPreview **preview,
   const Babl *format = babl_format ("RaGaBaA float");
   if (!buffer || gegl_buffer_get_format (buffer) != format)
     return GLIMS_STATUS_FAILED;
+  if (scale < 2.0 && scale != 1.0)
+    return glims_lab_layer_preview_sample (*preview, scale, area, rgba, stride);
   if (scale != 1.0 || area.width == 1)
     validate_sampling_area (buffer, scale, area);
   if (!glims_lab_layer_preview_succeeded (*preview)) return GLIMS_STATUS_FAILED;
@@ -161,14 +121,8 @@ glims_lab_layer_preview_read (GimpImage *image, GlimsLabLayerPreview **preview,
          * one-column request was explicitly validated above. */
         if (area.width - x == GLIMS_LAB_LAYER_RENDER_MAX_WIDTH + 1) width--;
         const GeglRectangle rect = { area.x + x, area.y + y, (gint) width, 1 };
-        if (scale > 1.0 && scale < 2.0)
-          {
-            if (!sample_magnified_row (buffer, &rect, scale, format, chunk))
-              return GLIMS_STATUS_FAILED;
-          }
-        else
-          gegl_buffer_get (buffer, &rect, scale, format, chunk,
-                           GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+        gegl_buffer_get (buffer, &rect, scale, format, chunk,
+                         GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
         if (!glims_lab_layer_preview_succeeded (*preview) || !unassociate (chunk, width))
           return GLIMS_STATUS_FAILED;
         memcpy ((guint8 *) rgba + (size_t) y * stride + (size_t) x * 4 * sizeof (float),

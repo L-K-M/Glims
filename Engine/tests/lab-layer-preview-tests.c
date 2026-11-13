@@ -126,11 +126,11 @@ static GeglBuffer *reference(Oracle *o,gboolean bottom_visible,gboolean reordere
   if(b)gegl_buffer_set(b,GEGL_RECTANGLE(0,0,W,H),0,babl_format("RaGaBaA float"),pixels,GEGL_AUTO_ROWSTRIDE);
   return b;
 }
-/* Independent mathematical magnification: weighted sum of four known
+/* Independent mathematical interpolation: weighted sum of four known
  * associated source neighbors, computed in long double without row recurrence.
  * GEGL's native upscale BOX/BILINEAR paths are deliberately not this oracle. */
 static void sample_reference(GeglBuffer *ref,double scale,GlimsRect area,float *out) {
-  if(!(scale>1&&scale<2)) {
+  if(!(scale>.5&&scale<2&&scale!=1)) {
     gegl_buffer_get(ref,GEGL_RECTANGLE(area.x,area.y,area.width,area.height),scale,babl_format("RaGaBaA float"),out,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);return;
   }
   float source[N*4];gegl_buffer_get(ref,GEGL_RECTANGLE(0,0,W,H),1,babl_format("RaGaBaA float"),source,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
@@ -253,6 +253,18 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer unused) {
   gboolean valid=glims_lab_layer_storage_read(image,&st)==GLIMS_LAB_LAYER_STORAGE_VALID;
   CHECK(valid,"fixture carrier validates");if(!valid)goto done;
   seed_checker(&st);gimp_item_set_visible(GIMP_ITEM(st.layers[1].group),FALSE,FALSE);
+  /* Each 2^20-square footprint contains the entire 267x2 checker plus
+   * transparent abyss. Exactly 267 source pixels have full coverage. */
+  {Snapshot deep_before;CHECK(snapshot(image,&deep_before),"minimum-scale source snapshot");
+   float deep[4]={0};GlimsStatus status=glims_lab_layer_preview_read(image,&cache,0x1p-20,
+      (GlimsRect){0,0,1,1},deep,sizeof deep);
+   CHECK(status==GLIMS_STATUS_OK,"minimum-scale Lab preview completes");
+   CHECK(status==GLIMS_STATUS_OK && fabs((double)deep[3]-267.0*0x1p-40)<0x1p-58,
+         "minimum-scale Lab coverage includes the entire transparent abyss");
+   float expected[3];rgb_for(&o,100.0*128/255,0,0,expected);
+   for(guint c=0;c<3;c++)CHECK(status==GLIMS_STATUS_OK && fabs(deep[c]-expected[c])<2e-5,
+       "minimum-scale Lab preview preserves straight linear color");
+   preserved(image,&deep_before);}
   /* An actual partial native selection must not be applied a second time. */
   GimpDrawable *mask=GIMP_DRAWABLE(gimp_image_get_mask(image));float coverage=.375f;
   gegl_buffer_set(gimp_drawable_get_buffer(mask),GEGL_RECTANGLE(1,1,1,1),0,babl_format("Y float"),&coverage,GEGL_AUTO_ROWSTRIDE);
@@ -290,7 +302,12 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer unused) {
   g_clear_object(&ref);ref=reference(&o,FALSE,FALSE,1,FALSE,TRUE);
   CHECK(glims_lab_layer_preview_prepare(image,&cache,&borrowed)==GLIMS_STATUS_OK&&cache==original_cache&&borrowed==original_buffer,"same-buffer dirty tracking reuses cache identity");
   compare_read(image,&cache,ref,1,(GlimsRect){1,1,1,1});
-  compare_read(image,&cache,ref,.75,(GlimsRect){0,0,(gint)ceil(W*.75),(gint)ceil(H*.75)});preserved(image,&before);
+  compare_read(image,&cache,ref,.75,(GlimsRect){0,0,(gint)ceil(W*.75),(gint)ceil(H*.75)});
+  {float deep[4]={0};GlimsStatus status=glims_lab_layer_preview_read(image,&cache,0x1p-20,
+      (GlimsRect){0,0,1,1},deep,sizeof deep);
+   CHECK(status==GLIMS_STATUS_OK && fabs((double)deep[3]-266.0*0x1p-40)<0x1p-58,
+         "minimum-scale cache refreshes after an alpha write");}
+  preserved(image,&before);
   /* Stale-alpha neighbor at the 257-pixel chunk boundary, after scaled warmup. */
   write_pixel(st.layers[0].planes[3],256,1,255);
   { float associated[4];rgb_for(&o,100,-128,127,associated);associated[3]=1;

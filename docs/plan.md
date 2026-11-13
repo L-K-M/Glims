@@ -5746,6 +5746,20 @@ This remains private infrastructure: facade adoption, layered editing and
 whole-editor qualification are pending. See [lab-layer-preview.md](lab-layer-preview.md)
 and `/tmp/glims-lab-layer-preview` for contracts and retained evidence.
 
+The private preview's minimum-zoom native read subsequently reproduced a
+process abort from an enormous allocation on a 267-by-2 Lab carrier. A
+candidate reuses the bounded associated-linear display sampler and tracks its
+cache with the preview's validator. All four engine sets pass 16,320 preview
+checks each, including literal minimum-scale coverage and a cached read after
+an alpha edit; adapter conformance also passes. Review and CI remain in
+progress. This is private infrastructure and does not itself enable layered
+Lab documents.
+
+One native 24 MP/two-layer comparison measured cold fit at 609 ms versus
+501 ms before this change, cached fit at 11.2 versus 6.6 ms, and cached 130%
+at 8.6 versus 4.8 ms. The additional cache and alpha-aware integer sampling
+add work; these single-run native timings are not app interaction guarantees.
+
 ### Private logical Lab layer commands (candidate)
 
 The tiled preview merged through #281 at `3d51a561`, after both jobs in
