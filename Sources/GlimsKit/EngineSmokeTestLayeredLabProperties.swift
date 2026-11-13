@@ -220,7 +220,7 @@ extension EngineSmokeTest {
             let oldTool = state.current, oldForeground = state.foreground, oldBrush = state.brush(for: .paintbrush)
             defer { state.foreground = oldForeground; state.update(.paintbrush) { $0 = oldBrush }; state.select(oldTool) }
             state.foreground = .red
-            state.update(.paintbrush) { $0.size = 4; $0.opacity = 1; $0.hardness = 1; $0.resource = nil }
+            state.update(.paintbrush) { $0.size = 4; $0.opacity = 1; $0.hardness = 1; $0.pressureSize = true; $0.resource = nil }
             state.select(.paintbrush)
             let options = ToolOptionsPaletteController()
             _ = options.view
@@ -233,8 +233,16 @@ extension EngineSmokeTest {
             let optionText = optionViews.compactMap { ($0 as? NSTextField)?.stringValue }
             let pressure = optionViews.compactMap { $0 as? NSButton }.first { $0.title == "Pen pressure sets size" }
             check(optionText.contains(where: { $0.contains("foreground color") }) &&
-                  !optionText.contains(where: { $0.contains("Select one Lab channel") }) && pressure?.isEnabled == false,
-                  "layered Brush options show foreground color and fixed pressure behavior")
+                  !optionText.contains(where: { $0.contains("Select one Lab channel") }) &&
+                  pressure?.isEnabled == session.supportsLabLayerBrushPressure &&
+                  pressure?.state == (session.supportsLabLayerBrushPressure ? .on : .off),
+                  "layered Brush options show foreground color and available pressure behavior")
+            if session.supportsLabLayerBrushPressure, let pressure {
+                pressure.performClick(nil)
+                check(!state.brush(for: .paintbrush).pressureSize, "pressure option can be turned off")
+                pressure.performClick(nil)
+                check(state.brush(for: .paintbrush).pressureSize, "pressure option can be turned back on")
+            }
             let oldError = opened.onError
             var errors: [String] = []
             opened.onError = { errors.append($0) }
@@ -318,6 +326,33 @@ extension EngineSmokeTest {
                       pixel(session, image, x: 1, y: 1) == before && rapidUndo == rapidAfter,
                       "immediate Escape cancels a queued Brush begin without a history change")
             } else { check(false, "canvas Brush cancellation events can be created") }
+            if session.supportsLabLayerBrushPressure {
+                let cornerBefore = pixel(session, image, x: 0, y: 0)
+                let brush = state.brush(for: .paintbrush)
+                func pressureStroke(_ amount: Double, brush: EngineSession.Brush) {
+                    opened.beginTabletStroke(at: .init(point: .init(x: 1.5, y: 1.5, pressure: amount,
+                                                                   timeMilliseconds: 1),
+                                                       rotationTurns: nil, tangentialPressure: nil), brush: brush)
+                    opened.endStroke(); drain("pressure Brush gesture")
+                }
+                pressureStroke(0.25, brush: brush)
+                let lowCorner = pixel(session, image, x: 0, y: 0)
+                let undo = EngineUndoManager(document: opened)
+                undo.undo(); drain("low-pressure Brush Undo")
+                pressureStroke(1, brush: brush)
+                let highCorner = pixel(session, image, x: 0, y: 0)
+                check(lowCorner == cornerBefore && highCorner != cornerBefore,
+                      "tablet sample pressure changes the layered Brush footprint")
+                undo.undo(); drain("full-pressure Brush Undo")
+                check(pixel(session, image, x: 0, y: 0) == cornerBefore,
+                      "Undo restores the pressure Brush fixture")
+                state.update(.paintbrush) { $0.pressureSize = false }
+                pressureStroke(0.25, brush: state.brush(for: .paintbrush))
+                check(pixel(session, image, x: 0, y: 0) == highCorner,
+                      "turning pressure off keeps the full-size Brush footprint")
+                undo.undo(); drain("fixed-size Brush Undo")
+                state.update(.paintbrush) { $0.pressureSize = true }
+            }
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }

@@ -544,11 +544,20 @@ final class EngineSession: @unchecked Sendable {
                api.stroke_cancel_lab_layer != nil && api.stroke_continue_v2 != nil
     }
 
+    var supportsLabLayerBrushPressure: Bool {
+        guard supportsLabLayerBrush,
+              let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_begin_lab_layer_pressure),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_begin_lab_layer_pressure) else { return false }
+        return api.stroke_begin_lab_layer_pressure != nil
+    }
+
     func beginLabLayerStroke(image: Int32, target: LabLayerFillTarget,
                              brush: Brush, first: StrokeSampleV2) throws -> Int32 {
-        guard supportsLabLayerBrush, let begin = api.stroke_begin_lab_layer else {
+        guard supportsLabLayerBrush, let fixedSizeBegin = api.stroke_begin_lab_layer else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This engine cannot paint a Lab layer.")
         }
+        let begin = brush.pressureSize && supportsLabLayerBrushPressure
+            ? (api.stroke_begin_lab_layer_pressure ?? fixedSizeBegin) : fixedSizeBegin
         let hardness = brush.hardness ?? 0.5
         let colors = [brush.red, brush.green, brush.blue, brush.opacity, hardness]
         guard image > 0, target.root > 0, brush.tool == .paintbrush, first.isValid,

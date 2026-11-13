@@ -887,11 +887,13 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         }
 
         let lab = document?.colorInfo.mode == .lab
-        let pressure = checkbox("Pen pressure sets size", !lab && brush.pressureSize,
-                                         readBrush: { !lab && $0.pressureSize }) { on in
+        let pressureAvailable = !lab || (document?.storage.layout == .layeredLab &&
+                                         document?.session.supportsLabLayerBrushPressure == true)
+        let pressure = checkbox("Pen pressure sets size", pressureAvailable && brush.pressureSize,
+                                         readBrush: { pressureAvailable && $0.pressureSize }) { on in
             ToolState.shared.update(tool) { $0.pressureSize = on }
         }
-        if lab, let pressure = pressure as? NSButton {
+        if !pressureAvailable, let pressure = pressure as? NSButton {
             pressure.isEnabled = false
             pressure.state = .off
             pressure.toolTip = "Lab Brush uses the fixed size above."
