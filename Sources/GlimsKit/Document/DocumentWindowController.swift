@@ -2541,6 +2541,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func permitsLabMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(deleteLayer(_:)):
+            return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerDelete
         case #selector(newLayer(_:)):
             return imageDocument.storage.layout == .layeredLab && imageDocument.acceptsLayerCreate
         case #selector(duplicateLayer(_:)):
@@ -2572,6 +2574,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
+            case #selector(deleteLayer(_:)) where imageDocument.acceptsLayerDelete:
+                break
             case #selector(newLayer(_:)) where imageDocument.acceptsLayerCreate:
                 break
             case #selector(duplicateLayer(_:)) where imageDocument.acceptsLayerDuplicate:
@@ -2662,6 +2666,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let ids = imageDocument.selectedLayerIDs
             menuItem.title = ids.count > 1 ? "Delete Layers" : "Delete Layer"
             menuItem.toolTip = nil
+            if imageDocument.storage.layout == .layeredLab {
+                return imageDocument.acceptsLayerDelete && ids.count == 1 && !editingBlocked && !previewBusy &&
+                    !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+            }
             guard !editingBlocked, !previewBusy, !ids.isEmpty, !imageDocument.targetCommandIsPending,
                   !imageDocument.floatingState.isActive else { return false }
             if ids.count > 1 && (ids.count > 256 || !ids.allSatisfy({ imageDocument.layerSources[$0]?.kind == .pixel })) {

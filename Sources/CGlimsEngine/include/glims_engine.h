@@ -1235,7 +1235,9 @@ enum {
   /* A single logical root can be duplicated with Undo/Redo. */
   GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE = 1u << 3,
   /* A transparent logical root can be created with Undo/Redo. */
-  GLIMS_IMAGE_STORAGE_LAYER_CREATE = 1u << 4
+  GLIMS_IMAGE_STORAGE_LAYER_CREATE = 1u << 4,
+  /* A single logical root can be deleted with Undo/Redo. */
+  GLIMS_IMAGE_STORAGE_LAYER_DELETE = 1u << 5
 };
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */

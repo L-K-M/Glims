@@ -12,6 +12,7 @@
 #include "lab-layer-storage.h"
 #include "lab-layer-duplicate.h"
 #include "lab-layer-create.h"
+#include "lab-layer-delete.h"
 
 #include <math.h>
 #include <string.h>
@@ -821,7 +822,7 @@ glims_layer_command (GlimsEngine  *engine,
     {
       /* Never let a generic layer command mutate the physical scalar tree. */
       if (result) *result = 0;
-      if (command != GLIMS_LAYER_DUPLICATE && command != GLIMS_LAYER_NEW)
+      if (command != GLIMS_LAYER_DUPLICATE && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_DELETE)
         return GLIMS_STATUS_UNSUPPORTED;
       if (!layer_id && g_list_length (gimp_image_get_selected_layers (image)) != 1)
         {
@@ -845,11 +846,13 @@ glims_layer_command (GlimsEngine  *engine,
             }
           status = glims_lab_layer_create (engine, image, position, NULL, &created, error);
         }
-      else
+      else if (command == GLIMS_LAYER_DUPLICATE)
         status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
+      else
+        status = glims_lab_layer_delete (engine, image, layer, error);
       if (status == GLIMS_STATUS_OK)
         {
-          if (result) *result = gimp_item_get_id (GIMP_ITEM (created));
+          if (result && created) *result = gimp_item_get_id (GIMP_ITEM (created));
           gimp_image_flush (image);
         }
       return status;
