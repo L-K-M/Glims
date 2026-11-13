@@ -208,9 +208,16 @@ extension EngineSmokeTest {
             let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 160, height: 90),
                                  styleMask: [.titled], backing: .buffered, defer: false)
             sheet.isReleasedWhenClosed = false
+            defer {
+                if owner.attachedSheet === sheet { owner.endSheet(sheet) }
+                sheet.orderOut(nil)
+                sheet.close()
+            }
             let before = opened.layers.map(\.id)
             owner.beginSheet(sheet)
-            EngineSmokeTestHost.pumpEvents(for: 0.05)
+            let deadline = Date().addingTimeInterval(3)
+            while owner.attachedSheet !== sheet && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(owner.attachedSheet === sheet, "document sheet is attached before palette checks")
             // These controls still reflect the state from before the sheet.
             // Their action closures must recheck admission at dispatch time.
             newButton?.performClick(nil)
@@ -232,10 +239,16 @@ extension EngineSmokeTest {
             drain("blocked layer commands")
             check(opened.layers.map(\.id) == before, "stale palette actions cannot change layers behind a sheet")
             owner.endSheet(sheet)
-            sheet.orderOut(nil)
-            sheet.close()
             EngineSmokeTestHost.pumpEvents(for: 0.05)
             palette.reload()
+            let newItem = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
+            newItem.tag = Int(EngineSession.LayerCommand.new.rawValue)
+            _ = palette.perform(newItem.action!, with: newItem)
+            drain("palette menu after sheet")
+            check(opened.layers.count == before.count + 1, "palette menu creates a layer after the sheet closes")
+            EngineUndoManager(document: opened).undo()
+            drain("restore palette menu fixture")
+            check(opened.layers.map(\.id) == before, "Undo restores the palette menu fixture")
         }
         if opened.storage.allowsLayerCreate {
             check(windowController.validateMenuItem(newMenu), "Layer menu enables logical layer creation")
