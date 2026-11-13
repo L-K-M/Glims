@@ -16,6 +16,10 @@ extension RecorderFileCodec {
                     throw RecorderFileError.invalid("Invalid polygon point count.")
                 }
                 pointCount += points.count
+            case .success(.completeLabStroke(let stroke), _):
+                let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                pointCount += count
+                fileVersion = max(fileVersion, labStrokeVersion)
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -51,6 +55,8 @@ extension RecorderFileCodec {
                     }
                     inkIdentities[symbol] = identity
                 }
+            case .success(.fillLab, _), .success(.applyLabCurves, _):
+                fileVersion = max(fileVersion, labVersion)
             case .success(.applyInkCurves, let binding):
                 fileVersion = max(fileVersion, inkCurvesVersion)
                 hasInkCurves = true
@@ -77,6 +83,12 @@ extension RecorderFileCodec {
         }
         if fileVersion == inkCurvesVersion, !hasInkCurves {
             throw RecorderFileError.invalid("Version 12 requires a successful ink Curves command.")
+        }
+        if fileVersion == labStrokeVersion, !value.records.contains(where: {
+            if case .success(.completeLabStroke, _) = $0.outcome { return true }
+            return false
+        }) {
+            throw RecorderFileError.invalid("Version 14 requires a successful Lab stroke.")
         }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
@@ -108,6 +120,31 @@ extension RecorderFileCodec {
     private static func strokePointJSON(_ value: RecorderStrokeTrace.Point) throws -> RecorderJSON {
         .object(["x": try d(value.x), "y": try d(value.y), "pressure": try d(value.pressure),
             "xTilt": try d(value.xTilt), "yTilt": try d(value.yTilt), "timeMilliseconds": j(Int(value.timeMilliseconds))])
+    }
+    private static func labStrokePointJSON(_ value: RecorderTabletStrokeTrace.Point) throws -> RecorderJSON {
+        var fields: [String: RecorderJSON] = [
+            "x": try d(value.x), "y": try d(value.y), "pressure": try d(value.pressure),
+            "xTilt": try d(value.xTilt), "yTilt": try d(value.yTilt), "timeMilliseconds": j(Int(value.timeMilliseconds)),
+        ]
+        if let rotationTurns = value.rotationTurns { fields["rotationTurns"] = try d(rotationTurns) }
+        if let tangentialPressure = value.tangentialPressure { fields["tangentialPressure"] = try d(tangentialPressure) }
+        return .object(fields)
+    }
+    private static func labStrokeJSON(_ value: RecorderLabStrokeCommand) throws -> RecorderJSON {
+        let stroke = try value.validated()
+        _ = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points)
+        let settings = stroke.settings
+        let brushSettings: [String: RecorderJSON] = [
+            "value": try d(settings.value), "size": try d(settings.size),
+            "opacity": try d(settings.opacity), "hardness": try d(settings.hardness),
+        ]
+        let identity = stroke.facts.brush
+        var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
+        if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
+        let facts = RecorderJSON.object(["brush": .object(brushIdentity), "fingerprint": .string(stroke.facts.fingerprint)])
+        let batches = try stroke.trace.batches.map { RecorderJSON.array(try $0.map(labStrokePointJSON)) }
+        return .object(["tag": .string("completeLabStroke"), "settings": .object(brushSettings), "facts": facts,
+                        "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
     }
     private static func strokeJSON(_ value: RecorderStrokeCommand) throws -> RecorderJSON {
         let brush = value.settings
@@ -220,9 +257,15 @@ extension RecorderFileCodec {
                 "highInput": try d(levels.highInput), "gamma": try d(levels.gamma),
                 "lowOutput": try d(levels.lowOutput), "highOutput": try d(levels.highOutput),
                 "clampInput": .bool(levels.clampInput), "clampOutput": .bool(levels.clampOutput)])
+        case .fillLab(let fill):
+            return .object(["tag": .string("fillLab"), "value": try d(fill.value), "opacity": try d(fill.opacity)])
+        case .applyLabCurves(let curves):
+            guard curves.isValid else { throw RecorderFileError.invalid("Invalid Lab Curves values.") }
+            return .object(["tag": .string("applyLabCurves"), "samples": .array(try curves.samples.map { try d($0) })])
         case .applyInkCurves(let curves):
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
             return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
+        case .completeLabStroke(let stroke): return try labStrokeJSON(stroke)
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }
@@ -251,6 +294,10 @@ extension RecorderFileCodec {
             guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
             return .object(["kind": .string("ink"), "symbol": id(symbol), "mode": .string(identity.mode.rawValue),
                 "role": .string(identity.role.rawValue), "uuid": id(identity.uuid)])
+        case .lab(let symbol, let identity):
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid Lab identity.") }
+            return .object(["kind": .string("lab"), "symbol": id(symbol), "role": .string(identity.role.rawValue),
+                "precision": .string(identity.precision.rawValue), "uuid": id(identity.uuid)])
         case .unavailable(let reason): throw RecorderFileError.invalid("The original target description is unavailable: \(reason)")
         case .context(let context):
             let target: RecorderJSON

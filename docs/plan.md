@@ -5498,10 +5498,46 @@ standalone release qualification remain separate follow-up work. See
 ### Qualified Lab Curves/CMYK import installed (2026-11-13)
 
 PR #266 merged as `e1be7354` after exact-head CI passed. Qualified source
-`b6840eea` is published to `dist/Glims.app` and `/Applications/Glims.app`,
+`b6840eea` was published to `dist/Glims.app` and `/Applications/Glims.app`,
 with the prior apps and receipts preserved. Its standalone 23-case suite,
 source/payload provenance and fresh/cached/relocated launches passed; the
 installed ordinary launch reached the editor in 3.222 seconds and closed
 cleanly. No notarization was performed. See [completion.md](completion.md)
-for exact coverage. Lab Recorder work in #267–#270 remains a separately
-reviewed and tested candidate, not part of this installed build.
+for the five per-engine case counts and exact qualification coverage. Lab
+Recorder work in #267–#270 is separately reviewed and tested work, not part
+of this installed `b6840eea` build.
+
+### Physical Lab Recorder capture and replay (2026-11-13)
+
+A candidate adds version 13 Lab Fill/Curves recording, explicit axis/precision
+binding, typed Lab descriptions and queued UUID admission. The pinned fixture
+passes 355 checks, including actual binding-sheet choices, physical Fill
+oracles, save/load, refusal and Undo. All 1,687 Swift tests pass; source review
+and the reproduced channel-reader correction are scoped in
+[lab-recorder.md](lab-recorder.md). Four-engine runtime and final installed
+qualification are still pending; Lab brush/selection recording stays open.
+
+### Physical Lab Brush capture foundation (candidate)
+
+Slot207 adds atomic actual-brush/configuration capture before physical Lab
+painting, with pre-dab mismatch refusal for guarded replay. Swift transports
+owned facts and V2 input without dropping optional axes; bounded tablet traces
+preserve accepted batch boundaries and timestamp semantics. The old producer
+fails the missing-slot regression. All four engines pass 1,268 native checks
+plus conformance, and all 1,702 Swift and 141 Python tests pass. Independent
+source review and hosted CI remain open. Recorder file and document wiring
+remain a subsequent slice.
+See [lab-brush.md](lab-brush.md).
+
+
+### Physical Lab Brush Recorder integration (candidate)
+
+The document now captures complete physical Lab gestures with the effective
+native brush facts, owned settings and exact V2 sample batches. Version 14
+files preserve optional tablet axes and require an explicit role/precision
+binding. Replay validates resource/configuration before painting and cancels
+failed strokes. The initial pinned native app fixture passes 325 checks; an
+actual older producer preserves live paint and explicitly refuses recording.
+All 1,714 Swift and 141 Python tests pass; document/replay review is clear.
+Four-engine checks, codec/fixture review and hosted CI remain open.
+See [lab-recorder.md](lab-recorder.md). No installed-app change is claimed.

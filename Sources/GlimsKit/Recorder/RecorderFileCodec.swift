@@ -14,6 +14,8 @@ enum RecorderFileCodec {
     static let brightnessContrastVersion = 10
     static let inkVersion = 11
     static let inkCurvesVersion = 12
+    static let labVersion = 13
+    static let labStrokeVersion = 14
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -90,7 +92,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...inkCurvesVersion)
+        let fileVersion = try integer(root.get("version"), range: version...labStrokeVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -118,6 +120,9 @@ enum RecorderFileCodec {
         var hasBrightnessContrast = false
         var hasInkCommand = false
         var hasInkCurves = false
+        var hasLabCommand = false
+        var hasLabStrokeCommand = false
+        var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
             guard case .object(let members) = node, let outcome = members["outcome"] else { throw RecorderFileError.invalid("Missing record outcome.") }
@@ -140,6 +145,9 @@ enum RecorderFileCodec {
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
                 if case .applyInkCurves = command { hasInkCurves = true }
+                if case .fillLab = command { hasLabCommand = true }
+                if case .applyLabCurves = command { hasLabCommand = true }
+                if case .completeLabStroke = command { hasLabCommand = true; hasLabStrokeCommand = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
                 if case .ink(let symbol, let identity) = binding {
@@ -147,6 +155,12 @@ enum RecorderFileCodec {
                         throw RecorderFileError.invalid("Ink identity is inconsistent across records.")
                     }
                     inkIdentities[symbol] = identity
+                }
+                if case .lab(let symbol, let identity) = binding {
+                    if let seen = labIdentities[symbol], seen != identity {
+                        throw RecorderFileError.invalid("Lab identity is inconsistent across records.")
+                    }
+                    labIdentities[symbol] = identity
                 }
                 result = .success(command, binding)
             case "failure", "cancelled":
@@ -159,6 +173,15 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("Record ordinals must be contiguous from zero.")
             }
             return .init(ordinal: index, outcome: result)
+        }
+        guard Set(labIdentities.keys).isDisjoint(with: inkIdentities.keys) else {
+            throw RecorderFileError.invalid("A symbol cannot bind both Lab and ink commands.")
+        }
+        if fileVersion == labVersion, !hasLabCommand {
+            throw RecorderFileError.invalid("Version 13 requires a successful Lab command.")
+        }
+        if fileVersion == labStrokeVersion, !hasLabStrokeCommand {
+            throw RecorderFileError.invalid("Version 14 requires a successful Lab stroke.")
         }
         // Each extended version requires its own successful command, exactly
         // as version 2 always required a complete stroke.
@@ -275,6 +298,68 @@ enum RecorderFileCodec {
         return .init(settings: brush, trace: .init(first: first, batches: batches),
                      facts: .init(brush: .init(name: name, collection: collection,
                                               isInternal: try bool(identity.get("isInternal"))), fingerprint: fingerprint))
+    }
+
+    private static func labStrokePoint(_ node: RecorderJSON) throws -> RecorderTabletStrokeTrace.Point {
+        let point = try Object(node, required: ["x", "y", "pressure", "xTilt", "yTilt", "timeMilliseconds"],
+                               optional: ["rotationTurns", "tangentialPressure"])
+        func optionalDouble(_ key: String) throws -> Double? {
+            guard let value = point.optional(key) else { return nil }
+            guard case .number = value else { throw RecorderFileError.invalid("Invalid Lab stroke sample.") }
+            return try number(value)
+        }
+        do {
+            return try .init(x: number(point.get("x")), y: number(point.get("y")),
+                pressure: number(point.get("pressure")), xTilt: number(point.get("xTilt")), yTilt: number(point.get("yTilt")),
+                timeMilliseconds: UInt32(integer(point.get("timeMilliseconds"), range: 0...Int(UInt32.max))),
+                rotationTurns: optionalDouble("rotationTurns"), tangentialPressure: optionalDouble("tangentialPressure"))
+        } catch {
+            throw RecorderFileError.invalid("Invalid Lab stroke sample.")
+        }
+    }
+
+    private static func labStroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderLabStrokeCommand {
+        let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
+        let settings = try Object(value.get("settings"), required: ["value", "size", "opacity", "hardness"])
+        let brush = RecorderLabStrokeCommand.Settings(value: try number(settings.get("value")),
+            size: try number(settings.get("size")), opacity: try number(settings.get("opacity")),
+            hardness: try number(settings.get("hardness")))
+        let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
+        let identity = try Object(facts.get("brush"), required: ["name", "isInternal"], optional: ["collection"])
+        let name = try string(identity.get("name"), native: true)
+        let collection = try identity.optional("collection").map { try string($0, native: true) }
+        let fingerprint = try string(facts.get("fingerprint"))
+        guard !name.isEmpty, fingerprint.utf8.count == 64,
+              fingerprint.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw RecorderFileError.invalid("Invalid recorded brush identity or fingerprint.")
+        }
+        let capture = EngineSession.StrokeCaptureFacts(brush: .init(name: name, collection: collection,
+            isInternal: try bool(identity.get("isInternal"))), fingerprint: fingerprint)
+
+        guard RecorderFileLimits.points - points >= 1 else { throw RecorderFileError.invalid("Invalid Lab stroke point count.") }
+        let batchLimit = min(RecorderTabletStrokeAccumulator.maximumPoints - 1, RecorderFileLimits.points - points - 1)
+        let batchNodes = try array(value.get("batches"), maximum: batchLimit)
+        var count = 1
+        for batch in batchNodes {
+            let samples = try array(batch, maximum: 4096)
+            guard !samples.isEmpty, samples.count <= 4096, samples.count <= RecorderFileLimits.points - points - count else {
+                throw RecorderFileError.invalid("Invalid Lab stroke batch or point count.")
+            }
+            count += samples.count
+        }
+        guard count <= RecorderTabletStrokeAccumulator.maximumPoints else {
+            throw RecorderFileError.invalid("Invalid Lab stroke point count.")
+        }
+
+        let first = try labStrokePoint(value.get("first"))
+        let batches = try batchNodes.map { batch -> [RecorderTabletStrokeTrace.Point] in
+            try array(batch, maximum: 4096).map(labStrokePoint)
+        }
+        let trace = RecorderTabletStrokeTrace(first: first, batches: batches)
+        let consumed = try RecorderFileLimits.tabletStrokePointCount(trace, remaining: RecorderFileLimits.points - points)
+        let stroke = try RecorderLabStrokeCommand(settings: brush, trace: trace, facts: capture).validated()
+        points += consumed
+        return stroke
     }
 
     private static func command(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderFileCommand {
@@ -429,6 +514,16 @@ enum RecorderFileCodec {
             let curves = RecorderFileCommand.InkCurves(samples: samples)
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
             return .applyInkCurves(curves)
+        case "fillLab":
+            guard version >= labVersion else { throw RecorderFileError.invalid("Lab Fill needs recording version 13.") }
+            let value = try Object(node, required: ["tag", "value", "opacity"])
+            return .fillLab(.init(value: try number(value.get("value")), opacity: try number(value.get("opacity"))))
+        case "applyLabCurves":
+            guard version >= labVersion else { throw RecorderFileError.invalid("Lab Curves needs recording version 13.") }
+            let value = try Object(node, required: ["tag", "samples"])
+            let curves = RecorderFileCommand.LabCurves(samples: try array(value.get("samples"), maximum: 256).map { try number($0) })
+            guard curves.isValid else { throw RecorderFileError.invalid("Invalid Lab Curves values.") }
+            return .applyLabCurves(curves)
         case "channelToSelection":
             guard version >= channelVersion else { throw RecorderFileError.invalid("A channel selection needs recording version 3.") }
             let value = try Object(node, required: ["tag", "operation"])
@@ -436,6 +531,9 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("Unknown selection operation.")
             }
             return .channelToSelection(operation)
+        case "completeLabStroke":
+            guard version >= labStrokeVersion else { throw RecorderFileError.invalid("A Lab stroke needs recording version 14.") }
+            return .completeLabStroke(try labStroke(node, points: &points))
         case "completeStroke":
             guard version >= strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
             return .completeStroke(try stroke(node, points: &points))
@@ -588,6 +686,15 @@ enum RecorderFileCodec {
             let identity = RecorderInkIdentity(mode: mode, role: role, uuid: try uuid(value.get("uuid")))
             guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
             return .ink(symbol: try uuid(value.get("symbol")), identity: identity)
+        case "lab":
+            let value = try Object(node, required: ["kind", "symbol", "role", "precision", "uuid"])
+            guard let role = RecorderLabIdentity.Role(rawValue: try string(value.get("role"))),
+                  let precision = RecorderLabIdentity.Precision(rawValue: try string(value.get("precision"))) else {
+                throw RecorderFileError.invalid("Unknown Lab role or precision.")
+            }
+            let identity = RecorderLabIdentity(role: role, precision: precision, uuid: try uuid(value.get("uuid")))
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid Lab identity.") }
+            return .lab(symbol: try uuid(value.get("symbol")), identity: identity)
         case "context":
             let value = try Object(node, required: ["kind", "context"])
             let context = try Object(value.get("context"), required: ["layers", "channels", "target", "masks", "quickMask"])
@@ -631,7 +738,7 @@ enum RecorderFileCodec {
         switch binding {
         case .none: return []
         case .layer(let id), .channel(let id): return [id]
-        case .ink(let id, _): return [id]
+        case .ink(let id, _), .lab(let id, _): return [id]
         case .unavailable(let reason): throw RecorderFileError.invalid("The recording has an unavailable original target: \(reason)")
         case .context(let context):
             var result = Set(context.layers + context.channels + context.masks.map(\.owner))
@@ -678,6 +785,25 @@ enum RecorderFileCodec {
         case (.editInk, .ink(let id, let identity)), (.applyInkLevels, .ink(let id, let identity)), (.applyInkCurves, .ink(let id, let identity)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("An ink command needs a channel description.") }
             guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
+            return
+        case (.fillLab(let fill), .lab(let id, let identity)):
+            guard descriptions[id]?.kind == .channel, fill.isValid(for: identity) else {
+                throw RecorderFileError.invalid("Lab Fill needs a valid physical value and Lab channel binding.")
+            }
+            return
+        case (.applyLabCurves(let curves), .lab(let id, let identity)):
+            guard descriptions[id]?.kind == .channel, identity.isValid, curves.isValid else {
+                throw RecorderFileError.invalid("Lab Curves needs valid samples and a Lab channel binding.")
+            }
+            return
+        case (.completeLabStroke(let stroke), .lab(let id, let identity)):
+            guard descriptions[id]?.kind == .channel, identity.isValid else {
+                throw RecorderFileError.invalid("A Lab stroke needs a Lab channel description and identity.")
+            }
+            guard RecorderFileCommand.LabFill(value: stroke.settings.value, opacity: stroke.settings.opacity).isValid(for: identity) else {
+                throw RecorderFileError.invalid("A Lab stroke needs a valid physical value and opacity for its binding.")
+            }
+            _ = try stroke.validated()
             return
         case (.selectColor(_, let options), .context) where !options.sampleMerged: break
         case (.selectCommand(.fromAlpha, _), .context): break

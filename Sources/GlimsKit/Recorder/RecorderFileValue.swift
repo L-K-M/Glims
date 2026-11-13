@@ -220,6 +220,25 @@ enum RecorderFileCommand: Equatable {
         }
     }
 
+    struct LabFill: Equatable {
+        let value: Double
+        let opacity: Double
+
+        func isValid(for identity: RecorderLabIdentity) -> Bool {
+            identity.isValid && value.isFinite && abs(value) <= Double(Float.greatestFiniteMagnitude)
+                && opacity.isFinite && (0...1).contains(opacity)
+                && (identity.precision == .float || identity.nativeRole.nominalRange.contains(value))
+        }
+    }
+
+    /// Normalized samples map to physical L*, a* or b*, never ink intensity.
+    struct LabCurves: Equatable {
+        let samples: [Double]
+        var isValid: Bool {
+            samples.count == 256 && samples.allSatisfy { $0.isFinite && (0...1).contains($0) }
+        }
+    }
+
     /// Complete committed Levels values: an owned TRC tag, both clamps and
     /// all five named channels, each with the five native fields. Equal or
     /// inverted endpoints are valid native mappings.
@@ -268,6 +287,9 @@ enum RecorderFileCommand: Equatable {
     case editInk(InkEdit)
     case applyInkLevels(InkLevels)
     case applyInkCurves(InkCurves)
+    case fillLab(LabFill)
+    case applyLabCurves(LabCurves)
+    case completeLabStroke(RecorderLabStrokeCommand)
     /// A newly applied Curves adjustment with its whole accepted settings:
     /// the owned TRC tag and all five named channels, each preserving both
     /// curve representations and the HDR bypass flag. The explicit layer is
@@ -293,7 +315,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
@@ -342,6 +364,24 @@ enum RecorderFileLimits {
     static let depth = 64
     static let values = 1_000_000
     static let numberBytes = 128
+
+    static func tabletStrokePointCount(_ trace: RecorderTabletStrokeTrace, remaining: Int) throws -> Int {
+        var count = 1
+        guard remaining >= 1 else { throw RecorderFileError.invalid("Invalid tablet stroke point count.") }
+        var accepted = RecorderTabletStrokeAccumulator(first: trace.first)
+        for batch in trace.batches {
+            guard !batch.isEmpty, batch.count <= 4096, batch.count <= remaining - count else {
+                throw RecorderFileError.invalid("Invalid tablet stroke batch or point count.")
+            }
+            count += batch.count
+            accepted.appendAccepted(batch)
+        }
+        guard count <= RecorderTabletStrokeAccumulator.maximumPoints else {
+            throw RecorderFileError.invalid("Invalid tablet stroke point count.")
+        }
+        _ = try accepted.finish()?.get()
+        return count
+    }
 
     static func strokePointCount(_ trace: RecorderStrokeTrace, remaining: Int) throws -> Int {
         let maximum = min(remaining, RecorderStrokeAccumulator.maximumPoints)

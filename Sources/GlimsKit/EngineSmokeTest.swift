@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-curves", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-curves", "recorder-lab", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -231,6 +231,16 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-ink" {
                 try exerciseRecorderInk(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (ink Recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-lab" {
+                try exerciseRecorderLab(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab Recorder)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-lab-brush" {
+                try exerciseRecorderLabBrush(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Lab Brush Recorder)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ink-identity" {

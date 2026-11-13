@@ -5,18 +5,31 @@ opened a disabled placeholder. This ledger distinguishes working features
 from the remaining design in `design.md`. Compilation alone does not close
 an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
-## Implemented and checked (including the current integration candidate)
+## Implemented and checked
 
-The installed editor uses qualified source `b6840eea`, integrated through
+Qualified source `b6840eea` was installed on 2026-11-13 through
 [#266](https://github.com/L-K-M/Glims/pull/266) at `e1be7354`. It adds physical
 Lab Curves with captured previews and preserving flat PackBits CMYK PSD
-import. It also includes CMYK/Multichannel Curves, physical Lab Fill/Brush
-and selections, explicit merged RGB/Lab converted copies, and ink Recorder
-controls. Lab Recorder extensions are separate pending changes.
+import. It also includes CMYK/Multichannel Curves (Freehand/Smooth controls,
+captured preview, Undo and Recorder commands), physical Lab Fill/Brush and
+selections, explicit merged RGB/Lab converted copies, and ink Recorder controls.
+Lab Recorder extensions (#267–#270) are separately reviewed and tested work;
+they are not part of this installed `b6840eea` build.
 
-All 1,682 Swift and 141 Python tests pass on this source. The four-engine
-combined app matrix passes all 20 cases. The standalone pinned release
-bundle passed 23 cases with development paths denied, including 2,268 native,
+All 1,682 Swift and 141 Python tests pass on this source. The combined app
+matrix passed five cases on each of four engines (20 engine/case runs), with
+these check counts per engine:
+
+| Engine | Lab Curves | Selected-ink Curves | CMYK import | Ink Recorder | Ordinary Curves |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GIMP 3.2.8 | 251 | 255 | 102 | 483 | 32 |
+| GIMP 3.0.8 | 251 | 255 | 102 | 483 | 32 |
+| GIMP 3.2.0 | 251 | 255 | 102 | 483 | 32 |
+| master | 251 | 255 | 102 | 483 | 32 |
+
+The recorded matrix is `/tmp/glims-lab-curves-rle/ui-matrix/results.json`;
+its `run` entries identify the raw `test.log` evidence. The standalone pinned
+release bundle passed 23 cases with development paths denied, including 2,268 native,
 3,355 full workflow, 251 Lab Curves, 102 CMYK import and 483 ink Recorder
 checks. Payloads, signatures, release-compiler output and desktop evidence
 are verified. Exact-head CI
