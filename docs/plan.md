@@ -5624,3 +5624,21 @@ scalar-child group storage and parentage. The private v2 membership map passes
 comparisons. CI now runs both pure foundations with sanitizers on Linux and
 optimized on macOS; hosted results remain pending. This foundation adds no
 production layered-Lab admission, native document adoption or UI.
+
+### Private native Lab layer carrier (candidate)
+
+A private factory and validator now bind the v2 map to Gray U8 storage:
+one native group per logical layer, with separate scalar L/a/b/alpha children.
+The factory starts transparent; native group order, visibility and opacity
+remain distinct from the preserved sample bytes. No document adoption,
+renderer, layer command or UI is enabled by this slice.
+
+All four engines pass 146 checks each for raw bytes, duplicate independence,
+reorder/removal Undo, empty and maximum stacks, XCF, and malformed carriers.
+Independent review identified reserved UUIDs on paths escaping quarantine;
+native controls reproduced it and now pass after marked/unmarked path checks.
+The pinned run has no warnings. Older-engine tag-cache/plug-in EOF messages
+and master's missing cached-XML cleanup messages remain recorded, as in the
+earlier raw-storage probe. Native producer objects and matching facade/private
+headers are attested before compilation and remain unchanged. This is private
+storage evidence, not layered Lab editing or whole-editor qualification.
