@@ -7,6 +7,7 @@
 #include "foreign-effect-load.h"
 #include "tiff-import.h"
 #include "plate-preview.h"
+#include "display-sample.h"
 #include "cmyk-transform.h"
 #include "lab-transform.h"
 #include "lab-layer-storage.h"
@@ -36,6 +37,7 @@
 #endif
 #endif
 #include "core/gimppickable.h"
+#include "core/gimpprojectable.h"
 #include "core/gimpprojection.h"
 
 #include <cairo.h>
@@ -823,6 +825,81 @@ glims_projection_prepare_read (GlimsOpenImage  *open,
   return GLIMS_STATUS_OK;
 }
 
+/* Sample in the source's linear space before Babl converts to the legacy
+ * premultiplied sRGB output. Bounded chunks amortize validation across rows.
+ * The engine thread owns the cache during this read. */
+static GlimsStatus
+render_legacy_scaled (GlimsEngine *engine, GlimsOpenImage *open, double scale,
+                      GlimsRect area, uint8_t *pixels, size_t stride)
+{
+  GeglBuffer *buffer = NULL;
+  const Babl *projection_format, *space, *linear, *fish;
+  GimpImageBaseType base;
+  GlimsStatus status;
+  gboolean gray;
+  gfloat *samples = NULL;
+
+  if (area.width < 1 || area.height < 1 ||
+      (int64_t) area.x + area.width > G_MAXINT32 ||
+      (int64_t) area.y + area.height > G_MAXINT32 ||
+      stride < (uint64_t) area.width * 4 || stride > G_MAXINT32)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint64_t span = (uint64_t) stride * (area.height - 1) + (uint64_t) area.width * 4;
+  if (span > GLIMS_MAX_PIXEL_BUFFER_BYTES || (uintptr_t) pixels > UINTPTR_MAX - span)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (open->display_sample_active) return GLIMS_STATUS_BUSY;
+  open->display_sample_active = TRUE;
+  engine->busy++;
+
+  status = glims_projection_prepare_read (open, scale, area, &buffer);
+  if (status != GLIMS_STATUS_OK) goto out;
+  base = open->component_document ? GIMP_RGB : gimp_image_get_base_type (open->image);
+  if (base != GIMP_RGB && base != GIMP_INDEXED && base != GIMP_GRAY)
+    { status = GLIMS_STATUS_UNSUPPORTED; goto out; }
+  gray = base == GIMP_GRAY;
+  projection_format = open->component_document ? gegl_buffer_get_format (buffer)
+    : gimp_projectable_get_format (GIMP_PROJECTABLE (open->image));
+  if (!projection_format || !babl_format_has_alpha (projection_format) ||
+      babl_format_get_n_components (projection_format) != (gray ? 2 : 4))
+    { status = GLIMS_STATUS_UNSUPPORTED; goto out; }
+  space = babl_format_get_space (projection_format);
+  linear = space ? babl_format_with_space (gray ? "YA float" : "RGBA float", space)
+                 : babl_format (gray ? "YA float" : "RGBA float");
+  fish = linear ? babl_fish (linear, babl_format ("R'aG'aB'aA u8")) : NULL;
+  if (!fish) { status = GLIMS_STATUS_FAILED; goto out; }
+  status = glims_display_sample_prepare (buffer, linear, &open->display_sample);
+  if (status != GLIMS_STATUS_OK) goto out;
+  const guint columns = MIN (4096u, (guint) area.width);
+  const size_t sample_stride = (size_t) columns * (gray ? 2 : 4) * sizeof (gfloat);
+  const guint rows = MIN (256u, (guint) (GLIMS_RENDER_TEMP_CHUNK_BYTES / sample_stride));
+  samples = g_try_malloc ((size_t) rows * sample_stride);
+  if (!samples) { status = GLIMS_STATUS_FAILED; goto out; }
+  for (gint x = 0; x < area.width; )
+    {
+      guint width = MIN (columns, (guint) (area.width - x));
+      for (gint y = 0; y < area.height; )
+      {
+        guint height = MIN (rows, (guint) (area.height - y));
+        GlimsRect part = { area.x + x, area.y + y, (gint) width, (gint) height };
+        status = glims_display_sample_read (open->display_sample, scale, part,
+                                            samples, sample_stride);
+        if (status != GLIMS_STATUS_OK || !glims_plate_preview_succeeded (open->component_preview))
+          { if (status == GLIMS_STATUS_OK) status = GLIMS_STATUS_FAILED; goto out; }
+        for (guint row = 0; row < height; row++)
+          babl_process (fish, (guint8 *) samples + row * sample_stride,
+                        pixels + (size_t) (y + row) * stride + (size_t) x * 4, width);
+        y += height;
+      }
+      x += width;
+    }
+  status = GLIMS_STATUS_OK;
+out:
+  g_free (samples);
+  open->display_sample_active = FALSE;
+  engine->busy--;
+  return status;
+}
+
 GlimsStatus
 glims_image_render (GlimsEngine  *engine,
                     GlimsImageID  id,
@@ -840,6 +917,9 @@ glims_image_render (GlimsEngine  *engine,
     return GLIMS_STATUS_NOT_FOUND;
   if (! pixels)
     return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  if (scale >= MIN_RENDER_SCALE && scale < 2.0 && scale != 1.0)
+    return render_legacy_scaled (engine, open, scale, area, pixels, stride);
 
   status = glims_projection_prepare_read (open, scale, area, &buffer);
   if (status != GLIMS_STATUS_OK)

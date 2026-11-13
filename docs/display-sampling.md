@@ -1,10 +1,11 @@
 # Alpha-aware display sampling
 
 The profile and proof renderers sample associated linear source pixels before
-applying the existing ICC transform. This applies below 100% zoom and between
-100% and 200%. Unit and nearest-neighbor magnification retain their direct
-path. The legacy sRGB renderer and private layered Lab preview are separate
-paths; this change does not qualify their large-coordinate behavior.
+applying the existing ICC transform. The legacy sRGB fallback also uses that
+sampler before Babl converts to premultiplied sRGB. This applies below 100%
+zoom and between 100% and 200%. Unit and nearest-neighbor magnification retain
+their direct path. The private layered Lab preview remains a separate path;
+this change does not qualify its large-coordinate behavior.
 
 ## Why the adapter owns sampling
 
