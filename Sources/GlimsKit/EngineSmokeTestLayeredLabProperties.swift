@@ -93,6 +93,22 @@ extension EngineSmokeTest {
             check(brushEnabled == opened.storage.allowsLabLayerBrush,
                   "Tools palette updates Brush availability for the layered Lab layout")
         } else { check(false, "Tools palette contains its tool grid") }
+        do {
+            let previousTool = ToolState.shared.current
+            defer { ToolState.shared.select(previousTool) }
+            ToolState.shared.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func optionDescendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap { optionDescendants($0) }
+            }
+            let labels = optionDescendants(options.view).compactMap { ($0 as? NSTextField)?.stringValue }
+            let activeHint = labels.contains { $0.contains("Paint the selected Lab layer") }
+            check(activeHint == opened.toolIsAvailable(.paintbrush),
+                  "Brush hint matches layered Lab tool availability")
+        }
         func drain(_ step: String) {
             let deadline = Date().addingTimeInterval(15)
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
@@ -281,6 +297,21 @@ extension EngineSmokeTest {
             opened.onProjectionChange = { rect in brushDamage.append(rect); oldProjection?(rect) }
             defer { opened.onProjectionChange = oldProjection }
             let before = pixel(session, image, x: 1, y: 1)
+            var invalidBrush = state.brush(for: .paintbrush)
+            invalidBrush.size = .nan
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: invalidBrush)
+            drain("failed layered Brush begin")
+            check(!opened.strokeIsActive && !opened.labBrushStrokeIsActive && !errors.isEmpty,
+                  "a failed layered Brush begin releases gesture admission without mouse-up")
+            if opened.strokeIsActive { opened.endStroke(); drain("clean up failed Brush begin") }
+            errors.removeAll()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            drain("Brush begin after failure")
+            check(opened.labBrushStrokeIsActive && errors.isEmpty,
+                  "a valid layered Brush begins after a failed begin")
+            opened.cancelLabBrushStroke(); drain("cancel Brush after failed begin")
+            check(pixel(session, image, x: 1, y: 1) == before,
+                  "the recovery stroke cancels without changing pixels")
             try opened.startRecording()
             opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
             check(!opened.strokeIsActive && !errors.isEmpty && opened.recorder.records.isEmpty,
