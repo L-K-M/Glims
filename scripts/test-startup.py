@@ -6,6 +6,7 @@ bundle. Ordinary GUI launch timing is a separate acceptance check.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -61,6 +62,43 @@ def main():
 
         baseline = run('fresh relocated bundle')
         unchanged('warm restart', baseline)
+        (work / 'user/pluginrc').unlink()
+        unchanged('missing command cache recovery', baseline)
+        plugin_dir = work / 'user/plug-ins/glims-metadata-loader'
+        plugin_dir.mkdir(parents=True)
+        plugin = plugin_dir / 'glims-metadata-loader.py'
+        shutil.copy2(ROOT / 'Engine/tests/metadata-loader.py', plugin)
+        plugin.chmod(0o755)
+        with_custom = run('user plug-in installed')
+        assert 'plug-in-glims-meta-oracle' in with_custom[1], 'custom plug-in was not discovered'
+        (work / 'user/pluginrc').unlink()
+        unchanged('missing cache with user plug-in', with_custom)
+        rc = work / 'user/gimprc'
+        previous_rc = rc.read_bytes()
+        changed_rc, replacements = re.subn(rb'\(prev-language "(?:[^"\\]|\\.)*"\)',
+                                           b'(prev-language "glims-test-other-language")', previous_rc, count=1)
+        assert replacements == 1, 'fixture is missing its previous-language setting'
+        try:
+            rc.write_bytes(changed_rc)
+            (work / 'user/pluginrc').unlink()
+            unchanged('missing cache after language change', with_custom)
+        finally:
+            rc.write_bytes(previous_rc)
+        shutil.rmtree(plugin_dir)
+        unchanged('user plug-in removed', baseline)
+        # A configured registry belongs to the user. Do not manufacture the
+        # default file just because it is absent while this path is active.
+        rc = work / 'user/gimprc'
+        original_rc = rc.read_bytes()
+        alternate = work / 'user/alternate-pluginrc'
+        shutil.copy2(work / 'user/pluginrc', alternate)
+        (work / 'user/pluginrc').unlink()
+        try:
+            rc.write_bytes(original_rc + b'\n(pluginrc-path "${gimp_dir}/alternate-pluginrc")\n')
+            unchanged('alternate user registry', baseline)
+            assert not (work / 'user/pluginrc').exists(), 'created default cache despite alternate registry'
+        finally:
+            rc.write_bytes(original_rc)
         (work / 'user/pluginrc').write_text('invalid registry\n')
         unchanged('corrupt command cache recovery', baseline)
         caches = list((work / 'cache/fontconfig').glob('*.cache-*'))

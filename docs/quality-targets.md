@@ -36,6 +36,14 @@ fresh/warm/relocated catalog comparisons, corrupt cache recovery, user-font
 installation/removal and missing-helper fallback. Arbitrary custom plug-in
 changes, other Macs and old preference collections remain unqualified.
 
+An experimental missing-cache recovery reuses the bundled command registry
+when the default user cache is absent and the language matches. In isolated
+engine checks on this Mac, recovery fell from 10.4 to 0.94 seconds; with a
+test user plug-in it fell from 11.0 to 1.30 seconds, with the same command
+catalog. One ordinary launch showed a document window 1.51 seconds after a
+cache deletion. Corrupt caches, changed languages and incompatible packaged
+registries still require slower discovery; this does not close the target.
+
 ## Functional baseline
 
 Compare actual workflows, including their result, cancellation, Undo/Redo and
