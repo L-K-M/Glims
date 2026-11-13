@@ -7,12 +7,41 @@ an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
 ## Implemented and checked
 
-The current installed release is qualified source `9f3d0c5`, integrated through
+The current installed release is qualified source `e887259`, integrated through
+[#276](https://github.com/L-K-M/Glims/pull/276) at `e84d2017` on 2026-11-13.
+It adds explicit Ink coverage controls and complete CMYK/Multichannel
+Brush/Pencil recording with version 16 files, alongside the Lab Recorder
+work below. Airbrush remains live but unrecordable. Lab Levels #277 is a
+separate candidate; it is not included in this installation.
+
+All 1,740 Swift tests pass. The self-contained pinned release passed all 28
+standalone cases with development paths denied, retaining the previous 26
+cases and adding 383 Ink Brush Recorder and 38 actual Ink-controls checks.
+Historical four-engine native evidence has unchanged production: 921 Ink
+capture and 1,268 Lab brush checks per engine plus conformance. Frontend
+matrices retain their separately identified sources and binary hashes.
+The older pinned Ink-controls run lacks a same-run adapter/binary hash and
+is context only; the fresh combined release run supplies current coverage.
+
+[CI 43359370740](https://github.com/L-K-M/Glims/actions/runs/43359370740)
+passed both required jobs on the exact qualified source. Payloads, signatures
+and release-compiler output are verified. Fresh/cached/relocated launches
+measured 1.751/1.411/3.100 seconds. The installed `/Applications/Glims.app`
+opened a ready document in **2.913 seconds**, without arguments or an engine
+override. Its owned process exited and the desktop was released. Both prior
+apps and receipts are preserved; no notarization was performed or requested.
+Evidence is under `/tmp/glims-ink-recorder-integration`; the Applications
+receipt is `/Applications/.Glims-ink-recorder-e3ee09f50d4144e59199986047cd96d5/installation.json`.
+
+### Previous Lab Recorder installation
+
+Qualified source `9f3d0c5` was installed through
 [#272](https://github.com/L-K-M/Glims/pull/272) at `80f3c0ba` on 2026-11-13.
 It includes typed Lab Fill/Curves, Brush and selection Recorder commands,
 with explicit Lab identity/precision bindings and exact file values. Versions
 through 15 are supported. Ink Brush/Pencil recording and direct Ink coverage
-controls remain candidates in #273–#276; Lab Levels is still being implemented.
+controls were candidates in #273–#276 at this checkpoint; Lab Levels was
+still being implemented.
 
 All 1,721 Swift and 141 Python tests pass. The self-contained pinned release
 passed 26 standalone cases with development paths denied, including 2,268

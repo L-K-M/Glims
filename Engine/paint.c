@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "core/gimp.h"
+#include "core/gimpchannel.h"
 #include "core/gimpcontainer.h"
 #include "core/gimpcontext.h"
 #include "core/gimpdata.h"
@@ -79,6 +80,9 @@ typedef struct
   gboolean         lab_stroke;
   GlimsLabBrushSettings lab;
   guint32          lab_storage;
+  gboolean         ink_capture_stroke;
+  GlimsInkStrokeTarget ink_target;
+  guint32          ink_storage;
 } GlimsStroke;
 
 gboolean
@@ -89,8 +93,8 @@ glims_stroke_is_lab (GlimsEngine *engine, GlimsStrokeID id)
 }
 
 gboolean
-glims_lab_strokes_for_image (GlimsEngine *engine, GimpImage *image,
-                            GlimsLabStrokeAction action)
+glims_typed_strokes_for_image (GlimsEngine *engine, GimpImage *image,
+                              GlimsTypedStrokeAction action)
 {
   GHashTableIter iter;
   gpointer value;
@@ -99,13 +103,20 @@ glims_lab_strokes_for_image (GlimsEngine *engine, GimpImage *image,
   while (g_hash_table_iter_next (&iter, NULL, &value))
     {
       GlimsStroke *stroke = value;
-      if (stroke->lab_stroke && stroke->image == image)
+      if ((stroke->lab_stroke || stroke->ink_capture_stroke) && stroke->image == image)
         {
           found = TRUE;
-          if (action == GLIMS_LAB_STROKES_CANCEL) g_hash_table_iter_remove (&iter);
+          if (action == GLIMS_TYPED_STROKES_CANCEL) g_hash_table_iter_remove (&iter);
         }
     }
   return found;
+}
+
+gboolean
+glims_stroke_is_ink (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  return stroke && stroke->ink_capture_stroke;
 }
 
 /* Live source options may still sample another document on every motion.
@@ -161,13 +172,18 @@ glims_strokes_free (gpointer data)
   if (stroke->core && stroke->drawables)
     {
       /* Native cancel returns before thawing an untouched drawable. */
-      if (stroke->lab_stroke &&
+      if ((stroke->lab_stroke || stroke->ink_capture_stroke) &&
           (stroke->core->x1 == stroke->core->x2 || stroke->core->y1 == stroke->core->y2))
         gimp_paint_core_finish (stroke->core, stroke->drawables, FALSE);
       else
         gimp_paint_core_cancel (stroke->core, stroke->drawables);
       gimp_paint_core_cleanup (stroke->core);
     }
+
+  /* GIMP 7addd2b77's finish releases this reference, but cancel/cleanup and
+   * finalization do not. Cancelled strokes must not retain the selection. */
+  if (stroke->core)
+    g_clear_object (&stroke->core->mask_buffer);
 
   if (stroke->core)
     g_signal_handlers_disconnect_matched (stroke->core, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, stroke);
@@ -500,6 +516,7 @@ capture_stroke_facts (GlimsEngine               *engine,
                       const GlimsBrushSettings  *brush,
                       const GlimsStrokePoint    *first,
                       GimpPaintOptions          *options,
+                      const GlimsInkStrokeTarget *ink,
                       GlimsStrokeCaptureFacts   *facts)
 {
   GimpContext *context = GIMP_CONTEXT (options);
@@ -508,15 +525,16 @@ capture_stroke_facts (GlimsEngine               *engine,
   if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
        brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
       !recordable_first_point (first) ||
-      G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
-      !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
-      gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL ||
+      (ink ? (brush->tool == GLIMS_PAINT_ERASER || !GIMP_IS_CHANNEL (drawable)) :
+             (G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
+              !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
+              gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL)) ||
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
-      (paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
+      (!ink && paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
       options->expand_use || options->jitter_options->use_jitter ||
       options->smoothing_options->use_smoothing ||
-      (options->application_mode != GIMP_PAINT_CONSTANT &&
+      (!ink && options->application_mode != GIMP_PAINT_CONSTANT &&
        options->application_mode != GIMP_PAINT_INCREMENTAL))
     return FALSE;
 
@@ -528,7 +546,11 @@ capture_stroke_facts (GlimsEngine               *engine,
       if (!dynamics) return FALSE;
     }
 
-  const gdouble values[] = { brush->red, brush->green, brush->blue,
+  /* Component painting uses this raw binary32 intensity, not three RGB
+   * samples. Preserve the legacy RGB fingerprint bytes exactly. */
+  gfloat ink_intensity = .2126 * brush->red + .7152 * brush->green + .0722 * brush->blue;
+  const gdouble values[] = { ink ? ink_intensity : brush->red,
+    ink ? 0 : brush->green, ink ? 0 : brush->blue,
     gimp_context_get_opacity (context), options->brush_size, options->brush_angle,
     options->brush_aspect_ratio, options->brush_spacing, options->brush_hardness,
     options->brush_force };
@@ -550,15 +572,20 @@ capture_stroke_facts (GlimsEngine               *engine,
                                   NULL) != GLIMS_STATUS_OK)
     return FALSE;
 
-  static const gchar domain[] = "glims-stroke-configuration-v1";
+  const gchar *domain = ink ? "glims-ink-stroke-configuration-v1" : "glims-stroke-configuration-v1";
   g_autoptr(GChecksum) hash = g_checksum_new (G_CHECKSUM_SHA256);
-  g_checksum_update (hash, (const guchar *) domain, sizeof domain);
+  g_checksum_update (hash, (const guchar *) domain, strlen (domain) + 1);
+  if (ink)
+    {
+      const guint8 identity[] = { ink->color_mode, ink->role };
+      g_checksum_update (hash, identity, sizeof identity);
+    }
   g_checksum_update (hash, (const guchar *) content, strlen (content) + 1);
   const guint8 flags[] = { brush->tool == GLIMS_PAINT_ERASER,
     brush->tool == GLIMS_PAINT_ERASER && brush->anti_erase, options->hard != FALSE,
     options->use_applicator != FALSE, options->brush_lock_to_view != FALSE,
-    paint_mode == GIMP_LAYER_MODE_NORMAL_LEGACY,
-    options->application_mode == GIMP_PAINT_INCREMENTAL };
+    !ink && paint_mode == GIMP_LAYER_MODE_NORMAL_LEGACY,
+    !ink && options->application_mode == GIMP_PAINT_INCREMENTAL };
   g_checksum_update (hash, flags, sizeof flags);
   for (gsize i = 0; i < G_N_ELEMENTS (values); i++)
     {
@@ -592,6 +619,49 @@ capture_stroke_facts (GlimsEngine               *engine,
   return TRUE;
 }
 
+/* The selected authoritative plane is checked again before every accepted
+ * continuation and End. UUIDs are meaningful only inside this owning image. */
+static GlimsStatus
+ink_stroke_target_ready (GlimsEngine *engine, GlimsImageID image,
+                         const GlimsInkStrokeTarget *target,
+                         GimpDrawable *expected_drawable, gint expected_storage,
+                         guint32 *storage_kind, char **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, image);
+  GlimsPlateStorage storage;
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (!glims_plate_storage_read_open (open, &storage) ||
+      (storage.map.mode != GLIMS_PLATE_MODE_CMYK && storage.map.mode != GLIMS_PLATE_MODE_MULTICHANNEL))
+    return GLIMS_STATUS_UNSUPPORTED;
+  guint32 mode = storage.map.mode == GLIMS_PLATE_MODE_CMYK
+                ? GLIMS_COLOR_MODE_CMYK : GLIMS_COLOR_MODE_MULTICHANNEL;
+  if (target->channel <= 0 || target->color_mode != mode ||
+      (expected_storage >= 0 && storage.map.storage != (guint32) expected_storage))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GimpDrawable *drawable = NULL;
+  for (guint i = 0; i < storage.map.count; i++)
+    if (gimp_item_get_id (GIMP_ITEM (storage.planes[i])) == target->channel)
+      {
+        guint32 role = mode == GLIMS_COLOR_MODE_CMYK ? GLIMS_INK_ROLE_CYAN + i : GLIMS_INK_ROLE_UNSPECIFIED;
+        if (target->role != role || memcmp (target->uuid, storage.map.entries[i].uuid, 16))
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        drawable = GIMP_DRAWABLE (storage.planes[i]);
+        break;
+      }
+  GList *selected = gimp_image_get_selected_channels (open->image);
+  if (!drawable || (expected_drawable && drawable != expected_drawable) ||
+      !selected || selected->next || selected->data != drawable)
+    {
+      if (error) *error = g_strdup ("The selected ink channel changed. The stroke was cancelled.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (!gimp_image_undo_is_enabled (open->image) || gimp_image_get_undo_group_count (open->image))
+    return GLIMS_STATUS_BUSY;
+  GlimsStatus status = glims_check_item_locks (GIMP_ITEM (drawable), GLIMS_LOCK_PIXELS, error);
+  if (status == GLIMS_STATUS_OK && storage_kind) *storage_kind = storage.map.storage;
+  return status;
+}
+
 /* The one paint-begin path behind stroke_begin and
  * stroke_begin_with_brush_resource: `brush_resource` is the stroke's own
  * selected brush, or NULL to inherit the user context's brush. */
@@ -606,6 +676,7 @@ stroke_begin_common (GlimsEngine              *engine,
                      GlimsStrokeID            *out,
                      const char               *expected_fingerprint,
                      GlimsStrokeCaptureFacts  *facts,
+                     const GlimsInkStrokeTarget *ink_target,
                      char                    **error)
 {
   GlimsOpenImage     *open = glims_lookup_image (engine, image_id);
@@ -630,6 +701,12 @@ stroke_begin_common (GlimsEngine              *engine,
   brush = &settings;
   if (engine->busy > 0)
     return GLIMS_STATUS_BUSY;
+  guint32 ink_storage = 0;
+  if (ink_target)
+    {
+      status = ink_stroke_target_ready (engine, image_id, ink_target, NULL, -1, &ink_storage, error);
+      if (status != GLIMS_STATUS_OK) return status;
+    }
 
   drawable = glims_lookup_drawable (open, layer_id);
   if (! drawable)
@@ -690,6 +767,12 @@ stroke_begin_common (GlimsEngine              *engine,
   stroke->last_time_ms = first->time_ms;
   glims_set_tool_options (stroke->options, brush, source);
   stroke->component_stroke = open->component_document;
+  if (ink_target)
+    {
+      stroke->ink_capture_stroke = TRUE;
+      stroke->ink_target = *ink_target;
+      stroke->ink_storage = ink_storage;
+    }
   if (stroke->component_stroke)
     {
       /* A numeric gray foreground is a direct ink intensity, so 50% gray
@@ -704,7 +787,7 @@ stroke_begin_common (GlimsEngine              *engine,
 
 
   GlimsStrokeCaptureFacts captured = { .struct_size = sizeof captured };
-  if (facts && !capture_stroke_facts (engine, open->image, drawable, brush, first, stroke->options, &captured))
+  if (facts && !capture_stroke_facts (engine, open->image, drawable, brush, first, stroke->options, ink_target, &captured))
     drop_stroke_facts (&captured);
   if (expected_fingerprint && g_strcmp0 (expected_fingerprint, captured.fingerprint))
     {
@@ -758,7 +841,7 @@ glims_stroke_begin (GlimsEngine              *engine,
                     GlimsStrokeID            *out,
                     char                    **error)
 {
-  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, NULL, out, NULL, NULL, error);
+  return stroke_begin_common (engine, image_id, layer_id, brush, NULL, first, NULL, out, NULL, NULL, NULL, error);
 }
 
 GlimsStatus
@@ -791,7 +874,7 @@ glims_stroke_begin_with_brush_resource (GlimsEngine              *engine,
       return status;
     }
 
-  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, NULL, out, NULL, NULL, error);
+  return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, NULL, out, NULL, NULL, NULL, error);
 }
 
 GlimsStatus
@@ -823,7 +906,7 @@ glims_stroke_begin_with_capture_facts (GlimsEngine               *engine,
         return status;
     }
   return stroke_begin_common (engine, image_id, layer_id, brush, resource, first, NULL, out,
-                              expected_fingerprint, facts, error);
+                              expected_fingerprint, facts, NULL, error);
 }
 
 GlimsStatus
@@ -861,7 +944,7 @@ glims_stroke_begin_v2 (GlimsEngine                *engine,
   GlimsStrokePoint first = {p->x, p->y, p->pressure, p->xtilt, p->ytilt, p->time_ms};
   GimpCoords coords = to_coords_v2 (p);
   status = stroke_begin_common (engine, image, drawable, brush, resource, &first, &coords,
-                                out, NULL, NULL, error);
+                                out, NULL, NULL, NULL, error);
   g_object_unref (resource);
   g_free (samples);
   return status;
@@ -1198,6 +1281,68 @@ glims_stroke_begin_lab_with_capture_facts (GlimsEngine *engine, GlimsImageID ima
 }
 
 GlimsStatus
+glims_stroke_begin_ink_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+    GlimsResourceID brush_id, const GlimsInkStrokeTarget *target,
+    const GlimsBrushSettings *settings, const GlimsStrokePacketV2 *packet,
+    const char *expected_fingerprint, GlimsStrokeID *out,
+    GlimsStrokeCaptureFacts *facts, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!clear_lab_stroke_facts (facts) || !out || !target ||
+      target->struct_size < sizeof *target || !settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (settings->tool != GLIMS_PAINT_PAINTBRUSH && settings->tool != GLIMS_PAINT_PENCIL)
+    return GLIMS_STATUS_UNSUPPORTED;
+  if (expected_fingerprint && (!brush_id || !valid_lab_expected_fingerprint (expected_fingerprint)))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = ink_stroke_target_ready (engine, image, target, NULL, -1, NULL, error);
+  if (status != GLIMS_STATUS_OK) return status;
+
+  GlimsStrokeSampleV2 *samples = NULL;
+  gsize count = 0;
+  status = read_stroke_packet_v2 (packet, TRUE, 0, &samples, &count, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  GimpBrush *resource = NULL;
+  if (brush_id)
+    status = glims_lookup_brush (engine, brush_id, &resource);
+  else
+    resource = gimp_context_get_brush (gimp_get_user_context (engine->gimp));
+  if (status != GLIMS_STATUS_OK || !resource)
+    {
+      g_free (samples);
+      return status != GLIMS_STATUS_OK ? status :
+        glims_fail (error, NULL, "Choose an available brush before painting.");
+    }
+  g_object_ref (resource);
+  const GlimsStrokeSampleV2 *p = samples;
+  GlimsStrokePoint first = { p->x, p->y, p->pressure, p->xtilt, p->ytilt, p->time_ms };
+  GimpCoords coords = to_coords_v2 (p);
+  status = stroke_begin_common (engine, image, target->channel, settings, resource,
+                                &first, &coords, out, expected_fingerprint, facts, target, error);
+  g_object_unref (resource);
+  g_free (samples);
+  return status;
+}
+
+GlimsStatus
+glims_stroke_cancel_ink (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  if (!stroke) return GLIMS_STATUS_NOT_FOUND;
+  if (!stroke->ink_capture_stroke) return GLIMS_STATUS_UNSUPPORTED;
+  GimpImage *image = g_object_ref (stroke->image);
+  g_hash_table_remove (engine->strokes, GINT_TO_POINTER (id));
+  gimp_image_flush (image);
+  g_object_unref (image);
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
 glims_stroke_continue (GlimsEngine            *engine,
                        GlimsStrokeID           id,
                        const GlimsStrokePoint *points,
@@ -1256,6 +1401,17 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
           return status;
         }
     }
+  if (stroke->ink_capture_stroke)
+    {
+      status = ink_stroke_target_ready (engine, gimp_image_get_id (stroke->image),
+        &stroke->ink_target, stroke->drawable, stroke->ink_storage, NULL, error);
+      if (status != GLIMS_STATUS_OK)
+        {
+          g_free (samples);
+          glims_stroke_cancel_ink (engine, id);
+          return status;
+        }
+    }
   if (!count) return GLIMS_STATUS_OK;
   for (gsize i = 0; i < count; i++)
     {
@@ -1285,6 +1441,16 @@ glims_stroke_end (GlimsEngine   *engine,
   if (! stroke)
     return GLIMS_STATUS_NOT_FOUND;
 
+  if (stroke->ink_capture_stroke)
+    {
+      GlimsStatus status = ink_stroke_target_ready (engine, gimp_image_get_id (stroke->image),
+        &stroke->ink_target, stroke->drawable, stroke->ink_storage, NULL, NULL);
+      if (status != GLIMS_STATUS_OK)
+        {
+          glims_stroke_cancel_ink (engine, id);
+          return status;
+        }
+    }
   if (stroke->lab_stroke)
     {
       GlimsStatus status = lab_stroke_target_ready (engine, stroke, NULL);

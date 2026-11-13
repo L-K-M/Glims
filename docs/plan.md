@@ -5575,5 +5575,57 @@ the only qualified-source delta is the reviewed Xcode 26 test-expression fix.
 All 1,721 Swift/141 Python tests and 26 standalone bundle cases pass. An
 ordinary installed launch reached the ready document window in 3.088 seconds.
 No notarization. See [completion.md](completion.md) for exact scope and evidence.
-The combined Ink controls/Recorder candidate #276 is being qualified separately;
-Lab Levels and the remaining Photoshop 4 parity gaps are still open.
+At that checkpoint, combined Ink controls/Recorder #276 was being qualified
+separately. The following dated entry records its later installation.
+
+### Typed ink brush capture foundation (candidate)
+
+Slots 208–209 add captured CMYK/Multichannel Brush/Pencil begin and rollback,
+using the existing scalar painter and complete V2 input. All four engines
+pass general conformance, 921 Ink capture and 1,268 Lab brush checks after
+reproducing and fixing selection-buffer retention on cancellation.
+All 1,729 Swift and 141 Python tests pass. Final review and hosted CI remain
+open. Recorder document/file wiring and installed-app qualification are
+subsequent work. See [ink-stroke-capture.md](ink-stroke-capture.md).
+
+### Ink Brush and Pencil Recorder integration (candidate)
+
+The document records complete CMYK/Multichannel Brush and Pencil gestures,
+including accepted colored settings and exact V2 samples, through version 16
+files and explicit ink bindings. Replay validates the same owned target and
+brush before painting; typed cancellation restores the tentative gesture.
+An actual older 207-slot engine still paints and reports a failed recording
+row. The initial pinned app run passes 359 checks across both modes, all three
+precisions, both tools and mouse/tablet input. The subsequent fixture also
+checks exact command equality after actual disk Save/Load. Seven new codec
+tests and seven Lab selection regressions pass. Document and codec reviews
+are clear; final fixture review, four-engine checks and full unit tests are
+pending. No installation or complete Photoshop 4 parity claim is made.
+
+### Explicit ink coverage in Tool Options (candidate)
+
+CMYK and Multichannel Brush, Pencil and Airbrush show an Ink percentage
+slider and numeric field: 0% is paper and 100% is full ink. Colored foregrounds
+are displayed using the component painter's normalized display-sRGB Rec.709
+luma; opening or refreshing the palette does not neutralize the foreground.
+Only a valid explicit edit sets an opaque neutral sRGB gray. Opacity stays
+independent. The row keeps active drafts and refuses stale document/tool
+callbacks; Lab physical-value controls and ordinary tools retain their routes.
+Pure endpoint, colored-luma, invalid-input and locale-parser tests are added.
+The build and four focused pure tests pass. A real AppKit field-editor
+fixture passes 38 checks across CMYK and Multichannel, including preserved
+drafts, invalid text, independent opacity and stale callbacks. Independent
+production review found no important issue. Latest-head CI and the remaining
+engine checks are pending; this has not changed the installed app.
+
+### Qualified Ink controls and Recorder installed (2026-11-13)
+
+Source `e887259` is installed in both app locations after PR #276 merged as
+`e84d2017` and exact-head CI `43359370740` passed both required jobs. This
+adds explicit Ink coverage controls and typed CMYK/Multichannel Brush/Pencil
+recording with version 16 files. All 1,740 Swift tests and 28 standalone
+bundle cases pass. Ordinary fresh/cached/relocated launches measured
+1.751/1.411/3.100 seconds; the installed app opened a ready document in
+2.913 seconds. Both prior apps and receipts are retained. No notarization.
+Lab Levels #277 and layered Lab/CMYK remain separate unfinished work.
+See [completion.md](completion.md) for evidence and remaining scope.

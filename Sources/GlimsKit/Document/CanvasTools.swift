@@ -1297,12 +1297,13 @@ final class CanvasToolController {
 
         guard CanvasKeyboardPolicy.allowsPlainKey(event.modifierFlags),
               let key = event.charactersIgnoringModifiers else { return false }
-        if keyCode == Self.escapeKey, document.labBrushStrokeIsActive {
-            document.cancelLabBrushStroke()
+        if keyCode == Self.escapeKey, document.labBrushStrokeIsActive || document.inkBrushStrokeIsActive {
+            if document.labBrushStrokeIsActive { document.cancelLabBrushStroke() }
+            else { document.cancelInkBrushStroke() }
             tabletStrokeCapture = nil
             dragTool = nil
             cancelSpringTools()
-            onStatus?("Lab brush stroke cancelled.")
+            onStatus?("Brush stroke cancelled.")
             return true
         }
         if transformSession != nil, Self.returnKeys.contains(keyCode) {
