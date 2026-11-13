@@ -757,9 +757,8 @@ validate_area (GeglBuffer *buffer,
   gimp_tile_handler_validate_validate (validate, buffer, &full, TRUE, FALSE);
 }
 
-/* Shared by both renderers (glims_image_render, display-render.c):
- * validates `scale` and `area`, then prepares the projection buffer for
- * one synchronous read of `area` at `scale`. */
+/* Check the request and prepare the projection for a synchronous read.
+ * Only the fractional display sampler may take over footprint validation. */
 static GlimsStatus
 projection_prepare (GlimsOpenImage  *open,
                                double           scale,
@@ -913,7 +912,7 @@ GlimsStatus
 glims_projection_prepare_sample (GlimsOpenImage *open, double scale, GlimsRect area, GeglBuffer **buffer_out)
 {
   /* glims_display_sample_read accepts only fractional scales below 2. */
-  if (!(scale < 1.0 || (scale > 1.0 && scale < 2.0)))
+  if (!(scale >= MIN_RENDER_SCALE && (scale < 1.0 || (scale > 1.0 && scale < 2.0))))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   return projection_prepare (open, scale, area, buffer_out, TRUE);
 }

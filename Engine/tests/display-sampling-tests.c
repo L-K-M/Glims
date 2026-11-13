@@ -258,6 +258,9 @@ static void profile_damage_scales(GlimsEngine *e)
        "sampling-only preparation refuses unit scale");
  CHECK(glims_projection_prepare_sample(open,2,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT,
        "sampling-only preparation refuses direct magnification");
+ CHECK(glims_projection_prepare_sample(open,0,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT &&
+       glims_projection_prepare_sample(open,-.5,(GlimsRect){0,0,1,1},&buffer)==GLIMS_STATUS_INVALID_ARGUMENT,
+       "sampling-only preparation refuses nonpositive scales");
  const double scales[]={.225,.5,.75,1.25}; guint8 before[4][2][36]={0},after[36]={0};
  GlimsLayerInfo layer={0}; int32_t count=0;
  GlimsStatus status=api->image_layers(e,f.id,&layer,1,&count);
@@ -280,6 +283,7 @@ static void profile_damage_scales(GlimsEngine *e)
  CHECK(api->image_undo(e,f.id)==GLIMS_STATUS_OK,"damage fixture Undo succeeds");
  for(guint i=0;i<4;i++)for(guint route=1;route<=2;route++){
   GlimsRect area={(gint)floor(255*scales[i]),(gint)floor(255*scales[i]),3,3};
+  memset(after,0xa5,sizeof after);
   CHECK(render(e,&f,route,&srgb,scales[i],area,after,12)==GLIMS_STATUS_OK,"profile or proof read after Undo succeeds");
   CHECK(!memcmp(before[i][route-1],after,sizeof after),"Undo restores exact profile or proof pixels");
  }
