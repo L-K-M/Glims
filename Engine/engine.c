@@ -4095,6 +4095,26 @@ typedef struct {
 } GlimsSampleColorArgs;
 
 static GlimsStatus
+image_sample_layered_lab_on_engine (GlimsEngine *engine, gpointer data)
+{
+  GlimsSampleColorArgs *args = data;
+  return glims_image_sample_layered_lab (engine, args->image, args->x, args->y, args->out, args->error);
+}
+
+static GlimsStatus
+api_image_sample_layered_lab (GlimsEngine *engine, GlimsImageID image, int32_t x, int32_t y,
+                              GlimsSampledColor *out, char **error)
+{
+  if (error) *error = NULL;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  *out = (GlimsSampledColor) {0};
+  GlimsSampleColorArgs args = {image, x, y, out, error};
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_sample_layered_lab,
+                           (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, {0, 0} },
+                           image_sample_layered_lab_on_engine, &args, error);
+}
+
+static GlimsStatus
 image_sample_color_on_engine (GlimsEngine *e, gpointer data)
 {
   GlimsSampleColorArgs *a = data;

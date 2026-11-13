@@ -298,6 +298,7 @@ final class ImageDocument {
     func toolIsAvailable(_ tool: ToolID) -> Bool {
         if storage.layout == .layeredLab {
             return [.hand, .zoom].contains(tool) || (tool == .paintbrush && storage.allowsLabLayerBrush && session.supportsLabLayerBrush) ||
+                (tool == .eyedropper && session.supportsLayeredLabSampling) ||
                 (storage.allowsLabSelections && session.supportsLabSelections &&
                 [.rectangleSelect, .ellipseSelect, .lasso].contains(tool))
         }
