@@ -4,6 +4,8 @@
 #include "plate-storage.h"
 #include "core/gimpchannel.h"
 #include "core/gimpcontainer.h"
+#include "core/gimpdata.h"
+#include "core/gimpdatafactory.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-undo.h"
@@ -690,6 +692,161 @@ static GlimsStatus watch_owners(GlimsEngine *engine,gpointer data) {
   g_object_add_weak_pointer(G_OBJECT(w->image),&w->image);g_object_add_weak_pointer(G_OBJECT(w->axis),&w->axis);
   return GLIMS_STATUS_OK;
 }
+/* Capture oracle: independently seeded slot193 painting, slot207 capture and
+ * guarded replay must have identical raw samples, not merely matching digests. */
+static GlimsResourceID captured_brush;
+static GlimsStatus choose_capture_brush(GlimsEngine *engine,gpointer unused) {
+  (void)unused;
+  GimpContainer *factory=gimp_data_factory_get_container(engine->gimp->brush_factory);
+  GimpObject *object=gimp_container_get_child_by_name(factory,"2. Hardness 025");
+  if(!GIMP_IS_BRUSH_GENERATED(object))return GLIMS_STATUS_FAILED;
+  captured_brush=gimp_data_get_id(GIMP_DATA(object));
+  gimp_context_set_brush(gimp_get_user_context(engine->gimp),GIMP_BRUSH(object));
+  return captured_brush>0?GLIMS_STATUS_OK:GLIMS_STATUS_FAILED;
+}
+static void free_capture(GlimsStrokeCaptureFacts *facts) {
+  api->free_string(facts->brush_name);api->free_string(facts->brush_collection);api->free_string(facts->fingerprint);
+  memset(facts,0,sizeof *facts);facts->struct_size=sizeof *facts;
+}
+static gboolean valid_capture(const GlimsStrokeCaptureFacts *facts) {
+  if(!facts->brush_name || !*facts->brush_name || !facts->fingerprint || strlen(facts->fingerprint)!=64)return FALSE;
+  for(unsigned i=0;i<64;i++)if(!strchr("0123456789abcdef",facts->fingerprint[i]))return FALSE;
+  return TRUE;
+}
+static void capture_refusal(GlimsEngine *engine,Scene *s,GlimsResourceID resource,
+                            GlimsLabBrushSettings *settings,const char *expected,
+                            const GlimsStrokePacketV2 *first,GlimsStatus wanted) {
+  Snapshot *before=take_snapshot(engine,s);
+  GlimsStrokeCaptureFacts facts={.struct_size=sizeof facts};GlimsStrokeID stroke=91;char *error=NULL;
+  GlimsStatus status=api->stroke_begin_lab_with_capture_facts(engine,s->id,resource,settings,first,expected,&stroke,&facts,&error);
+  CHECK(status==wanted && !stroke && !facts.brush_name && !facts.brush_collection && !facts.fingerprint,
+    "capture refusal returns no stroke or owned facts");
+  if(stroke)api->stroke_cancel_lab(engine,stroke);
+  expect_original(engine,s,before,"capture refusal preserves exact pixels, metadata, dirty/history before first dab");
+  api->free_string(error);free_capture(&facts);destroy_snapshot(before);
+}
+typedef struct {double radius;gboolean restore;} BrushMutation;
+static GlimsStatus change_capture_brush(GlimsEngine *engine,gpointer data) {
+  BrushMutation *change=data;GimpBrush *brush=NULL;
+  GlimsStatus status=glims_lookup_brush(engine,captured_brush,&brush);
+  if(status!=GLIMS_STATUS_OK || !GIMP_IS_BRUSH_GENERATED(brush))return GLIMS_STATUS_FAILED;
+  if(change->restore)gimp_brush_generated_set_radius(GIMP_BRUSH_GENERATED(brush),change->radius);
+  else {change->radius=gimp_brush_generated_get_radius(GIMP_BRUSH_GENERATED(brush));
+    gimp_brush_generated_set_radius(GIMP_BRUSH_GENERATED(brush),change->radius+3);}
+  return GLIMS_STATUS_OK;
+}
+static void capture_happy(GlimsEngine *engine,uint32_t component,unsigned role) {
+  Scene *s=create_scene(engine,component,role,HALF),*reference=create_scene(engine,component,role,HALF),
+        *replay=create_scene(engine,component,role,HALF);
+  Snapshot *before=NULL,*painted=NULL,*ordinary=NULL,*replayed=NULL,*undone=NULL;
+  GlimsStrokeCaptureFacts facts={.struct_size=sizeof facts},again={.struct_size=sizeof again};
+  GlimsStrokeID stroke=0;char *error=NULL;
+  if(!s || !reference || !replay)goto done;
+  before=take_snapshot(engine,s);if(!before)goto done;
+  GlimsStrokeSampleV2 first=sample(16.5,24.5,UINT32_MAX-2);
+  first.flags=GLIMS_STROKE_SAMPLE_HAS_ROTATION|GLIMS_STROKE_SAMPLE_HAS_TANGENTIAL_PRESSURE;
+  first.rotation_turns=.25;first.tangential_pressure=-.4;first.xtilt=.3;first.ytilt=-.2;first.pressure=.6;
+  GlimsStrokePacketV2 initial=packet(&first,1);
+  GlimsLabBrushSettings settings=brush_settings(s);settings.opacity=.7;settings.hardness=.4;
+  GlimsStatus status=api->stroke_begin_lab_with_capture_facts(engine,s->id,0,&settings,&initial,NULL,&stroke,&facts,&error);
+  CHECK(status==GLIMS_STATUS_OK && stroke && valid_capture(&facts),"live Lab capture owns actual brush/configuration facts");
+  api->free_string(error);error=NULL;if(!stroke || !valid_capture(&facts))goto done;
+  CHECK(advance(engine,stroke,30.5,1)==GLIMS_STATUS_OK && api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,
+    "captured V2 stroke accepts modular time wrap and completes");stroke=0;
+  painted=take_snapshot(engine,s);
+  CHECK(painted && !same_pixels(s,before,painted) && painted->undo==before->undo+1 && painted->redo==0,
+    "captured Lab stroke makes a real edit and exactly one Undo");
+  GlimsResourceID resolved=0;
+  CHECK(api->resource_resolve(engine,GLIMS_RESOURCE_BRUSH,facts.brush_name,facts.brush_collection,
+    facts.brush_internal,&resolved,&error)==GLIMS_STATUS_OK && resolved==captured_brush,
+    "captured identity resolves the actual installed brush");api->free_string(error);error=NULL;
+  if(!resolved)goto done;
+  GlimsLabBrushSettings independent=settings;independent.axis=reference->ids[role];memcpy(independent.uuid,reference->uuids[role],16);
+  CHECK(api->stroke_begin_lab(engine,reference->id,resolved,&independent,&initial,&stroke,&error)==GLIMS_STATUS_OK && stroke,
+    "independent legacy Lab route accepts same physical settings and V2 input");api->free_string(error);error=NULL;
+  if(stroke){CHECK(advance(engine,stroke,30.5,1)==GLIMS_STATUS_OK && api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,
+    "independent legacy Lab trace finishes");stroke=0;}
+  ordinary=take_snapshot(engine,reference);
+  CHECK(painted && ordinary && same_pixels(s,painted,ordinary) && painted->undo==ordinary->undo,
+    "captured stroke exactly matches legacy raw pixels and Undo count");
+  GlimsLabBrushSettings bound=settings;bound.axis=replay->ids[role];memcpy(bound.uuid,replay->uuids[role],16);
+  for(unsigned changed=0;changed<4;changed++) {
+    GlimsLabBrushSettings bad=bound;
+    if(changed==0)bad.size+=2;else if(changed==1)bad.hardness=.8;else if(changed==2)bad.opacity=.5;else bad.value=role?-64:25;
+    capture_refusal(engine,replay,resolved,&bad,facts.fingerprint,&initial,GLIMS_STATUS_FAILED);
+  }
+  char wrong[65];memcpy(wrong,facts.fingerprint,65);wrong[0]=wrong[0]=='0'?'1':'0';
+  capture_refusal(engine,replay,resolved,&bound,wrong,&initial,GLIMS_STATUS_FAILED);
+  capture_refusal(engine,replay,0,&bound,facts.fingerprint,&initial,GLIMS_STATUS_INVALID_ARGUMENT);
+  capture_refusal(engine,replay,resolved,&bound,"not-a-sha256",&initial,GLIMS_STATUS_INVALID_ARGUMENT);
+  BrushMutation mutation={0};
+  CHECK(glims_engine_call(engine,change_capture_brush,&mutation)==GLIMS_STATUS_OK,"change actual brush content without changing its resource identity");
+  capture_refusal(engine,replay,resolved,&bound,facts.fingerprint,&initial,GLIMS_STATUS_FAILED);
+  mutation.restore=TRUE;CHECK(glims_engine_call(engine,change_capture_brush,&mutation)==GLIMS_STATUS_OK,"restore original actual brush content");
+  CHECK(api->stroke_begin_lab_with_capture_facts(engine,replay->id,resolved,&bound,&initial,facts.fingerprint,&stroke,&again,&error)==GLIMS_STATUS_OK
+    && stroke && valid_capture(&again) && !strcmp(again.fingerprint,facts.fingerprint),
+    "guarded capture replays into separately bound axis UUID with identical facts");api->free_string(error);error=NULL;
+  if(stroke){CHECK(advance(engine,stroke,30.5,1)==GLIMS_STATUS_OK && api->stroke_end(engine,stroke)==GLIMS_STATUS_OK,
+    "guarded replay trace finishes");stroke=0;}
+  replayed=take_snapshot(engine,replay);
+  CHECK(painted && replayed && same_pixels(s,painted,replayed) && replayed->undo==before->undo+1,
+    "guarded replay matches independent raw pixels and one Undo");
+  CHECK(api->image_undo(engine,replay->id)==GLIMS_STATUS_OK,"captured Lab replay Undo succeeds");
+  undone=take_snapshot(engine,replay);CHECK(undone && same_pixels(s,before,undone),"replay Undo restores exact starting pixels");
+ done:
+  if(stroke)api->stroke_cancel_lab(engine,stroke);
+  api->free_string(error);free_capture(&facts);free_capture(&again);
+  destroy_snapshot(before);destroy_snapshot(painted);destroy_snapshot(ordinary);destroy_snapshot(replayed);destroy_snapshot(undone);
+  close_scene(engine,s);close_scene(engine,reference);close_scene(engine,replay);
+}
+static void capture_contract(GlimsEngine *engine) {
+  gboolean available=api->struct_size>=offsetof(GlimsEngineAPI,stroke_begin_lab_with_capture_facts)+sizeof api->stroke_begin_lab_with_capture_facts;
+  CHECK(available,"Lab brush producer exposes atomic capture slot207");if(!available)return;
+  CHECK(glims_engine_call(engine,choose_capture_brush,NULL)==GLIMS_STATUS_OK,"choose actual installed generated brush for capture");if(!captured_brush)return;
+  const uint32_t components[]={GLIMS_COLOR_COMPONENT_U8,GLIMS_COLOR_COMPONENT_U16,GLIMS_COLOR_COMPONENT_FLOAT};
+  for(unsigned c=0;c<3;c++)for(unsigned role=0;role<3;role++)capture_happy(engine,components[c],role);
+  Scene *s=create_scene(engine,GLIMS_COLOR_COMPONENT_U8,0,HARD);if(!s)return;
+  GlimsLabBrushSettings settings=brush_settings(s);GlimsStrokeSampleV2 first=sample(16.5,24.5,1);GlimsStrokePacketV2 input=packet(&first,1);
+  /* A short prefix immediately before PROT_NONE proves refusal has no tail access. */
+  size_t page=(size_t)sysconf(_SC_PAGESIZE);guint8 *memory=mmap(NULL,page*2,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+  CHECK(memory!=MAP_FAILED,"allocate capture facts guard pages");
+  if(memory!=MAP_FAILED){
+    CHECK(mprotect(memory+page,page,PROT_NONE)==0,"guard capture facts tail");
+    uint32_t size=4;memcpy(memory+page-4,&size,4);GlimsStrokeID stroke=42;char *error=NULL;
+    GlimsStatus status=api->stroke_begin_lab_with_capture_facts(engine,s->id,captured_brush,&settings,&input,NULL,&stroke,(GlimsStrokeCaptureFacts *)(memory+page-4),&error);
+    CHECK(status==GLIMS_STATUS_INVALID_ARGUMENT && stroke==0,"short facts prefix refuses without out-of-bounds access");api->free_string(error);munmap(memory,page*2);
+  }
+  guint8 extended[sizeof(GlimsStrokeCaptureFacts)+18];memset(extended,0xa5,sizeof extended);
+  GlimsStrokeCaptureFacts input_facts={.struct_size=sizeof(GlimsStrokeCaptureFacts)+17,
+    .brush_internal=TRUE,.brush_name=(char *)1,.brush_collection=(char *)2,.fingerprint=(char *)3};
+  memcpy(extended+1,&input_facts,sizeof input_facts);
+  GlimsStrokeID refused=99;char *error=NULL;
+  GlimsStatus status=api->stroke_begin_lab_with_capture_facts(engine,INT32_MAX,captured_brush,&settings,&input,NULL,
+    &refused,(GlimsStrokeCaptureFacts *)(extended+1),&error);
+  GlimsStrokeCaptureFacts output_facts;memcpy(&output_facts,extended+1,sizeof output_facts);
+  gboolean tail=extended[0]==0xa5;
+  for(size_t i=sizeof output_facts+1;i<sizeof extended;i++)tail=tail && extended[i]==0xa5;
+  CHECK(status==GLIMS_STATUS_NOT_FOUND && !refused && !output_facts.brush_name && !output_facts.brush_collection &&
+    !output_facts.fingerprint && !output_facts.brush_internal && output_facts.struct_size==input_facts.struct_size && tail,
+    "unaligned extended facts preserve future tail and clear known outputs on dispatch refusal");
+  api->free_string(error);error=NULL;refused=99;
+  CHECK(api->stroke_begin_lab_with_capture_facts(engine,s->id,captured_brush,&settings,&input,NULL,&refused,NULL,&error)==GLIMS_STATUS_INVALID_ARGUMENT
+    && !refused,"new capture contract requires facts even for unguarded live calls");api->free_string(error);
+  close_scene(engine,s);
+  CHECK(glims_engine_call(engine,install_private_brush,NULL)==GLIMS_STATUS_OK,"restore private noncatalog brush for legacy lifecycle witnesses");
+  s=create_scene(engine,GLIMS_COLOR_COMPONENT_U8,0,HARD);if(!s)return;
+  Snapshot *before=take_snapshot(engine,s);settings=brush_settings(s);
+  GlimsStrokeCaptureFacts unavailable={.struct_size=sizeof unavailable};GlimsStrokeID live=0;error=NULL;
+  status=api->stroke_begin_lab_with_capture_facts(engine,s->id,0,&settings,&input,NULL,&live,&unavailable,&error);
+  CHECK(status==GLIMS_STATUS_OK && live && !unavailable.brush_name && !unavailable.brush_collection && !unavailable.fingerprint,
+    "noncatalog live brush still paints while explicitly returning unavailable capture facts");
+  Snapshot *during=take_snapshot(engine,s);
+  CHECK(before && during && !same_pixels(s,before,during),"unsupported-facts live path actually paints");
+  if(live)CHECK(api->stroke_cancel_lab(engine,live)==GLIMS_STATUS_OK,"cancel unsupported-facts live stroke");
+  expect_original(engine,s,before,"unrecordable live stroke cancel restores exact pixels and history");
+  api->free_string(error);free_capture(&unavailable);destroy_snapshot(before);destroy_snapshot(during);close_scene(engine,s);
+}
+
 int main(int argc,char **argv) {
   if(argc!=2)return 2;
   api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);
@@ -709,7 +866,7 @@ int main(int argc,char **argv) {
   }
   stale_target(engine,DAMAGE_UUID,FALSE,TRUE);
   stale_target(engine,FREEZE_UNDO,TRUE,FALSE);stale_target(engine,GROUP_UNDO,TRUE,FALSE);
-  late_nan(engine);wrong_modes_and_rgb(engine);
+  late_nan(engine);wrong_modes_and_rgb(engine);capture_contract(engine);
   Scene *last=create_scene(engine,GLIMS_COLOR_COMPONENT_FLOAT,1,HARD);
   WeakOwners *owners=g_new0(WeakOwners,1);GlimsStrokeID live=0;
   if(last){owners->scene=last;CHECK(begin(engine,last,&live)==GLIMS_STATUS_OK && live,"begin engine-stop cleanup witness");

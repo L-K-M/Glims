@@ -206,3 +206,4 @@ GLIMS_FACADE(image_lab_snapshot_begin, api_image_lab_snapshot_begin, IMAGE, COMP
 GLIMS_FACADE(image_lab_snapshot_curves, api_image_lab_snapshot_curves, IMAGE, COMPONENT)
 GLIMS_FACADE(image_lab_snapshot_apply_curves, api_image_lab_snapshot_apply_curves, IMAGE, COMPONENT)
 GLIMS_FACADE(image_lab_snapshot_end, api_image_lab_snapshot_end, IMAGE, CLEANUP)
+GLIMS_FACADE(stroke_begin_lab_with_capture_facts, api_stroke_begin_lab_with_capture_facts, IMAGE, COMPONENT)

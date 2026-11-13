@@ -60,3 +60,28 @@ work, not pointer-to-screen latency, selection snapshots or arbitrary brushes.
 Bundled launch and hosted qualification are still in progress. This does not
 enable Lab layers, conversion, external interchange, other paint tools or Recorder replay. It
 does not establish complete Photoshop 4 parity or installed-app qualification.
+
+## Recorder capture foundation (candidate)
+
+Additive slot207 captures the actual installed brush identity and a fingerprint
+of its mask content and effective physical paint settings in the same call as
+Begin. Guarded replay requires an explicit brush and verifies that fingerprint
+before the first dab. Live painting with an unrecordable brush still works and
+returns no capture facts. Axis ID, role, UUID and selected-target admission
+remain separate from resource/configuration identity. The ordinary slot193
+path keeps its prior behavior.
+
+The Swift transport checks the optional API prefix, owns returned strings and
+preserves V2 optional axes. A separate tablet trace retains accepted batches,
+absent versus explicit-zero optional inputs and modular timestamps, with a
+bounded total sample count. Recorder capture, file encoding and replay wiring
+remain subsequent work; this foundation alone does not enable recorded Lab
+brush gestures.
+
+The previous producer fails the new slot207 assertion. The pinned producer
+passes 1,268 expanded native checks, including independent old-route versus
+capture/replay pixel equality in all axes and precisions, exact Undo, changed
+mask/settings refusal, unavailable facts for live noncatalog brushes, and
+short/unaligned/future-sized output buffers. All four engines pass these 1,268
+checks plus conformance. All 1,702 Swift and 141 Python tests pass. Native
+source review and hosted CI remain open; the installed app is unchanged.
