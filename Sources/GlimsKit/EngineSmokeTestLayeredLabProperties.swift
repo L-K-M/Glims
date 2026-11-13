@@ -282,7 +282,8 @@ extension EngineSmokeTest {
                    let submit = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Fill" }),
                    let action = choice.action {
                     let oldError = opened.onError
-                    opened.onError = { _ in }
+                    var errors: [String] = []
+                    opened.onError = { errors.append($0) }
                     defer { opened.onError = oldError }
                     choice.selectItem(withTitle: "Custom")
                     NSApp.sendAction(action, to: choice.target, from: choice)
@@ -293,9 +294,9 @@ extension EngineSmokeTest {
                     let stillOpen = window.attachedSheet === sheet
                     sheet.contentView?.layoutSubtreeIfNeeded()
                     let message = controls.compactMap({ $0 as? NSTextField }).first { $0.stringValue == "Enter an opacity from 0 to 100%." }
-                    let messageFits = message.map { !$0.isHiddenOrHasHiddenAncestor && $0.bounds.width + 0.5 >= $0.fittingSize.width } ?? false
+                    let messageFits = message.map { !$0.isHiddenOrHasHiddenAncestor && $0.bounds.width + 0.5 >= $0.intrinsicContentSize.width } ?? false
                     check(stillOpen && choice.titleOfSelectedItem == "Custom" && well.color == .blue &&
-                          field.stringValue == "not a number" && messageFits &&
+                          field.stringValue == "not a number" && messageFits && errors.isEmpty &&
                           pixel(session, image, x: 1, y: 1) == beforeInvalidFill,
                           "invalid Fill opacity keeps the sheet and its choices without changing pixels")
                     if stillOpen {

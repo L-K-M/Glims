@@ -51,6 +51,7 @@ enum LayeredLabFillForm {
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 8
+        // Measure with the message present so the sheet reserves enough width.
         content.setFrameSize(content.fittingSize)
         validation.stringValue = ""
         let alert = NSAlert()
