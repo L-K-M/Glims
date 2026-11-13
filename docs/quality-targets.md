@@ -55,6 +55,18 @@ Language changes, incompatible bundled registries and temporary paths that
 GIMP cannot resolve unchanged still use the slower native scan, so the
 five-second target remains open for those cases.
 
+The real-locale regression `scripts/test-startup-real-locales.py APP` sets
+the process's macOS preferred language as well as its gettext locale. In a
+disposable cloned bundle it discovers an injected bundled plug-in in French,
+uses that seed in French, and confirms that a German launch discovers the
+German label rather than accepting the French seed. A deliberately mislabelled
+seed reproduces the stale French label as a negative control. On this Mac,
+the discovery probes took 12.12 and 10.31 seconds respectively; they are
+engine probes, not ordinary app launch timings. An earlier diagnostic that
+set only `LANGUAGE` did not change macOS's preferred-language list and must
+not be used as evidence of cross-language cache fidelity. The slow fallback
+remains open.
+
 
 ## Functional baseline
 
