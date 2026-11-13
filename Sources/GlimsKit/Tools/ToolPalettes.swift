@@ -33,6 +33,8 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
     private var shownMode: EngineSession.ColorMode?
     private var shownLabBrush = false
     private var shownLabSelections = false
+    private var shownLayeredLab = false
+    private var shownLayeredLabSelections = false
     /// The owned modeless color editor; a Foreground/Background click
     /// captures that global `ToolState` target in it.
     private var colorEditor: ToolColorEditorController { .shared }
@@ -88,10 +90,15 @@ final class ToolsPaletteController: NSViewController, PaletteContent {
         let mode = target?.colorInfo.mode
         let labBrush = target?.session.supportsLabBrush == true
         let labSelections = target?.session.supportsLabSelections == true
-        if shownMode != mode || shownLabBrush != labBrush || shownLabSelections != labSelections {
+        let layeredLab = target?.storage.layout == .layeredLab
+        let layeredLabSelections = target?.storage.allowsLabSelections == true
+        if shownMode != mode || shownLabBrush != labBrush || shownLabSelections != labSelections ||
+            shownLayeredLab != layeredLab || shownLayeredLabSelections != layeredLabSelections {
             shownMode = mode
             shownLabBrush = labBrush
             shownLabSelections = labSelections
+            shownLayeredLab = layeredLab
+            shownLayeredLabSelections = layeredLabSelections
             grid.slots = ToolID.paletteSlots.map { group in
                 ClassicToolGrid.Slot(tools: group.map {
                     ClassicToolGrid.Tool(id: $0.rawValue, name: $0.name, shortcut: $0.shortcut,

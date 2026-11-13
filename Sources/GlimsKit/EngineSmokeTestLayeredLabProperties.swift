@@ -48,7 +48,8 @@ extension EngineSmokeTest {
         check(windowController.window?.title.contains("Limited editing") == true,
               "document window identifies limited editing")
         let selectAll = NSMenuItem(title: "Select All", action: #selector(DocumentWindowController.selectAll(_:)), keyEquivalent: "")
-        check(!windowController.validateMenuItem(selectAll), "editing menu commands are disabled")
+        check(windowController.validateMenuItem(selectAll) == opened.storage.allowsLabSelections,
+              "Select All follows the layered Lab selection capability")
         let saveCopy = NSMenuItem(title: "Save a Copy", action: #selector(DocumentWindowController.saveDocumentCopy(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(saveCopy), "Save a Copy stays available")
         check(opened.storage.layout == .layeredLab && opened.storage.allowsLayerProperties,
@@ -61,10 +62,78 @@ extension EngineSmokeTest {
         check(opened.layers.count == 2, "document shows two logical layers")
         check(!opened.toolIsAvailable(.paintbrush) && opened.toolIsAvailable(.zoom),
               "editing tools are unavailable while zoom remains available")
+        let originalTool = ToolState.shared.current
+        defer { ToolState.shared.select(originalTool) }
+        let toolPalette = ToolsPaletteController()
+        _ = toolPalette.view
+        let flatImage = try session.newLabImage(width: 4, height: 4, component: .u8)
+        let flatDocument: ImageDocument
+        do { flatDocument = try ImageDocument(session: session, image: flatImage, name: "Flat Lab") }
+        catch { try? session.closeImage(flatImage); throw error }
+        defer {
+            toolPalette.retarget(to: nil)
+            flatDocument.closeImageWhenDrained()
+            let deadline = Date().addingTimeInterval(15)
+            while (try? session.info(flatImage)) != nil && Date() < deadline {
+                EngineSmokeTestHost.pumpEvents(for: 0.02)
+            }
+            check((try? session.info(flatImage)) == nil, "flat Lab palette fixture closes")
+        }
+        toolPalette.retarget(to: flatDocument)
+        toolPalette.retarget(to: opened)
+        if let grid = toolPalette.view.subviews.compactMap({ $0 as? ClassicToolGrid }).first {
+            let enabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.rectangleSelect.rawValue }?.isEnabled
+            check(enabled == opened.storage.allowsLabSelections,
+                  "Tools palette updates selection availability when switching between Lab layouts")
+        } else { check(false, "Tools palette contains its tool grid") }
         func drain(_ step: String) {
             let deadline = Date().addingTimeInterval(15)
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
             check(opened.pendingWork == 0, "engine work finishes after \(step)")
+        }
+        if opened.storage.allowsLabSelections {
+            check(opened.toolIsAvailable(.rectangleSelect) && opened.toolIsAvailable(.ellipseSelect) &&
+                  opened.toolIsAvailable(.lasso), "layered Lab selection tools are available")
+            windowController.selectAll(nil)
+            drain("Select All")
+            check(opened.selectionBounds == CGRect(x: 0, y: 0, width: 4, height: 4),
+                  "Select All changes the layered Lab root mask")
+            let undo = EngineUndoManager(document: opened)
+            check(undo.canUndo, "layered Lab selection offers Undo")
+            undo.undo(); drain("selection Undo")
+            check(opened.selectionBounds == nil, "Undo restores the empty selection")
+            let state = ToolState.shared
+            let oldTool = state.current, oldOptions = state.selectOptions
+            defer { state.selectOptions = oldOptions; state.select(oldTool) }
+            state.selectOptions = EngineSession.SelectOptions()
+            state.select(.rectangleSelect)
+            if let window = windowController.window {
+                let canvas = windowController.canvas
+                func mouse(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+                    NSEvent.mouseEvent(with: type,
+                        location: canvas.convert(CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale), to: nil),
+                        modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                }
+                if let down = mouse(.leftMouseDown, CGPoint(x: 1, y: 1)),
+                   let drag = mouse(.leftMouseDragged, CGPoint(x: 3, y: 3)),
+                   let up = mouse(.leftMouseUp, CGPoint(x: 3, y: 3)) {
+                    canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
+                    drain("rectangle selection gesture")
+                    check(opened.selectionBounds == CGRect(x: 1, y: 1, width: 2, height: 2),
+                          "canvas rectangle gesture edits the layered Lab selection")
+                    undo.undo(); drain("rectangle selection Undo")
+                    check(opened.selectionBounds == nil, "Undo removes the canvas selection")
+                } else { check(false, "canvas selection events can be created") }
+            } else { check(false, "layered Lab window exists for selection gesture") }
+            try opened.startRecording()
+            check(!windowController.validateMenuItem(selectAll), "layered Lab selection is disabled while recording")
+            windowController.selectAll(nil); drain("selection refusal during recording")
+            check(opened.selectionBounds == nil && opened.recorder.records.isEmpty,
+                  "a direct selection action during recording changes neither mask nor recording")
+            try opened.stopRecording()
+        } else {
+            check(!opened.toolIsAvailable(.rectangleSelect), "older engines keep layered Lab selection disabled")
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }

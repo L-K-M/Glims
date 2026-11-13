@@ -2586,6 +2586,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 break
             case #selector(duplicateLayer(_:)) where imageDocument.acceptsLayerDuplicate:
                 break
+            case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
+                guard imageDocument.acceptsLabSelections else { return false }
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
                  #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
@@ -2641,6 +2643,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         let editingBlocked = imageDocument.isClosing || imageDocument.isSavingForClose
             || imageDocument.isTransferringClipboard || PlugInCommands.isRunning || EngineActivity.shared.isBusy || window?.attachedSheet != nil
+        if imageDocument.storage.layout == .layeredLab, let action = menuItem.action,
+            [#selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:))].contains(action) {
+            return imageDocument.acceptsLabSelections && !editingBlocked && !previewBusy &&
+                !imageDocument.strokeIsActive && !imageDocument.targetCommandIsPending
+        }
         if imageDocument.storage.layout == .layeredLab, let action = menuItem.action,
             [#selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
              #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:))].contains(action) {
