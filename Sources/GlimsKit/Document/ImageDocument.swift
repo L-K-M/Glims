@@ -166,6 +166,7 @@ final class ImageDocument {
         let settings: RecorderStrokeCommand.Settings?
         var trace: RecorderStrokeAccumulator?
         var labSettings: RecorderLabStrokeCommand.Settings?
+        var inkSettings: RecorderStrokeCommand.Settings?
         var tabletTrace: RecorderTabletStrokeAccumulator?
         var facts: EngineSession.StrokeCaptureFacts?
         var failure: Error?
@@ -189,6 +190,15 @@ final class ImageDocument {
                     }
                     let command = try RecorderLabStrokeCommand(settings: labSettings, trace: result.get(), facts: facts).validated()
                     return .completeLabStroke(command)
+                }
+            }
+            if let inkSettings {
+                return Result {
+                    guard let facts, let result = tabletTrace?.finish() else {
+                        throw RecorderReplayError(message: "This ink brush or stroke could not be recorded.")
+                    }
+                    return .completeInkStroke(try RecorderInkStrokeCommand(settings: inkSettings,
+                        trace: result.get(), facts: facts).validated())
                 }
             }
             guard let settings, let facts, let result = trace?.finish() else {
@@ -502,10 +512,12 @@ final class ImageDocument {
     /// Touched only on `inputQueue`.
     private nonisolated(unsafe) var currentStroke: Int32?
     private nonisolated(unsafe) var currentStrokeUsesV2 = false
-    private nonisolated(unsafe) var currentStrokeIsLab = false
+    private enum CapturedStrokeKind { case lab, ink }
+    private nonisolated(unsafe) var currentCapturedStrokeKind: CapturedStrokeKind?
     private nonisolated(unsafe) var strokeRecordingDraft: StrokeRecordingDraft?
     private(set) var strokeIsActive = false
     private(set) var labBrushStrokeIsActive = false
+    private(set) var inkBrushStrokeIsActive = false
     private var strokeRecordingInterleaved = false
 
     /// Which plug-in commands can run on the selected layers, by name;
@@ -1203,6 +1215,13 @@ final class ImageDocument {
         // accept a stroke or close/change the captured target.
         guard !strokeIsActive, !isClosing, !targetCommandIsPending,
               activeDrawable == drawable, paintTarget == target else { return }
+        if colorInfo.mode.usesInkChannels, session.supportsInkBrushCapture,
+           brush.tool == .paintbrush || brush.tool == .pencil,
+           case .channel(let channel) = target, channel == drawable,
+           selectedChannelIDs == [channel], channels.contains(where: { $0.id == channel && !$0.isQuickMask }) {
+            beginInkBrushStroke(input: input, brush: brush, channel: channel)
+            return
+        }
         let capture: RecorderCapture?
         do {
             if recorder.isRecording {
@@ -1255,6 +1274,64 @@ final class ImageDocument {
         if capture != nil { notifyRecorderChanged() }
     }
 
+    private func beginInkBrushStroke(input: StrokeInput, brush: EngineSession.Brush, channel: Int32) {
+        let capture: RecorderCapture?
+        do {
+            capture = recorder.isRecording ? try reserveRecording(context: .ink(channel: channel, identity: nil)) : nil
+        } catch {
+            onError?("Recorder could not accept this stroke: \(error.localizedDescription)")
+            return
+        }
+        strokeIsActive = true
+        inkBrushStrokeIsActive = true
+        strokeRecordingInterleaved = false
+        enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
+            let sample: EngineSession.StrokeSampleV2
+            switch input {
+            case .tablet(let point): sample = point
+            case .v1(let point): sample = .init(point: point, rotationTurns: nil, tangentialPressure: nil)
+            }
+            do {
+                try self.requirePaintTarget()
+                let identity = try session.inkChannelIdentity(image, channel: channel)
+                let context = RecorderContext.ink(channel: channel, identity: try RecorderInkIdentity(identity))
+                try Self.requireRecorderContext(context, session: session, image: image)
+                if let capture {
+                    let confirmed = Self.confirmRecordingCapture(capture, session: session,
+                        image: image, confirmedContext: context)
+                    var draft = StrokeRecordingDraft(capture: capture, confirmed: confirmed, settings: nil, trace: nil)
+                    draft.inkSettings = RecorderStrokeCommand.Settings(brush)
+                    draft.tabletTrace = .init(first: try .init(native: sample))
+                    if case .ink = confirmed.binding {} else {
+                        draft.refuse(RecorderReplayError(message: "The ink stroke's target could not be recorded."))
+                    }
+                    self.strokeRecordingDraft = draft
+                }
+                self.currentStrokeUsesV2 = true
+                self.currentCapturedStrokeKind = .ink
+                let started = try session.beginInkStrokeCapturing(image: image, channel: channel,
+                    identity: identity, brush: brush, first: sample)
+                self.currentStroke = started.stroke
+                self.strokeRecordingDraft?.facts = started.facts
+                if started.facts == nil {
+                    self.strokeRecordingDraft?.refuse(RecorderReplayError(message:
+                        "This brush's content or configuration cannot be replayed by Recorder."))
+                }
+            } catch {
+                self.currentStroke = nil
+                self.currentStrokeUsesV2 = false
+                self.currentCapturedStrokeKind = nil
+                if self.strokeRecordingDraft == nil, let capture {
+                    let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                    self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed, settings: nil, trace: nil)
+                }
+                self.strokeRecordingDraft?.refuse(error)
+                self.report(error)
+            }
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
     private func beginLabBrushStroke(input: StrokeInput, brush: EngineSession.Brush) {
         guard !strokeIsActive, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
         // Admission observers may accept their own stroke or close/retarget
@@ -1298,7 +1375,7 @@ final class ImageDocument {
             }
             do {
                 self.currentStrokeUsesV2 = true
-                self.currentStrokeIsLab = true
+                self.currentCapturedStrokeKind = .lab
                 if capture != nil {
                     let started = try session.beginLabStrokeCapturing(image: image, axis: axis,
                         value: value, brush: brush, first: sample)
@@ -1315,7 +1392,7 @@ final class ImageDocument {
             } catch {
                 self.currentStroke = nil
                 self.currentStrokeUsesV2 = false
-                self.currentStrokeIsLab = false
+                self.currentCapturedStrokeKind = nil
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
             }
@@ -1327,23 +1404,39 @@ final class ImageDocument {
     /// The same serial input queue guarantees Cancel follows those writes.
     func cancelLabBrushStroke() {
         guard strokeIsActive, labBrushStrokeIsActive else { return }
+        cancelCapturedBrushStroke()
+    }
+
+    func cancelInkBrushStroke() {
+        guard strokeIsActive, inkBrushStrokeIsActive else { return }
+        cancelCapturedBrushStroke()
+    }
+
+    private func cancelCapturedBrushStroke() {
         strokeIsActive = false
         labBrushStrokeIsActive = false
+        inkBrushStrokeIsActive = false
         strokeRecordingInterleaved = false
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             let stroke = self.currentStroke
+            let kind = self.currentCapturedStrokeKind
             self.currentStroke = nil
             self.currentStrokeUsesV2 = false
-            self.currentStrokeIsLab = false
+            self.currentCapturedStrokeKind = nil
             let draft = self.strokeRecordingDraft
             self.strokeRecordingDraft = nil
-            if let stroke {
-                do { try session.cancelLabStroke(stroke) }
+            if let stroke, let kind {
+                do {
+                    switch kind {
+                    case .lab: try session.cancelLabStroke(stroke)
+                    case .ink: try session.cancelInkStroke(stroke)
+                    }
+                }
                 catch { self.report(error) }
             }
             if let draft {
                 self.settleRecording(draft.capture,
-                    result: .failure(RecorderReplayError(message: "Lab brush stroke cancelled.")),
+                    result: .failure(RecorderReplayError(message: "Brush stroke cancelled.")),
                     confirmed: draft.confirmed)
             }
         }
@@ -1354,7 +1447,7 @@ final class ImageDocument {
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             guard let stroke = self.currentStroke else { return }
             do {
-                if self.currentStrokeIsLab {
+                if self.currentCapturedStrokeKind != nil {
                     try session.continueTabletStroke(stroke, points: points.map {
                         .init(point: $0, rotationTurns: nil, tangentialPressure: nil)
                     })
@@ -1364,8 +1457,11 @@ final class ImageDocument {
                 }
             }
             catch {
-                if self.currentStrokeIsLab {
-                    try? session.cancelLabStroke(stroke)
+                if let kind = self.currentCapturedStrokeKind {
+                    switch kind {
+                    case .lab: try? session.cancelLabStroke(stroke)
+                    case .ink: try? session.cancelInkStroke(stroke)
+                    }
                     self.currentStroke = nil
                 }
                 self.strokeRecordingDraft?.refuse(error)
@@ -1374,7 +1470,7 @@ final class ImageDocument {
             }
             if self.strokeRecordingDraft?.facts != nil {
                 do {
-                    if self.currentStrokeIsLab {
+                    if self.currentCapturedStrokeKind != nil {
                         let samples = try points.map { try RecorderTabletStrokeTrace.Point(native:
                             .init(point: $0, rotationTurns: nil, tangentialPressure: nil)) }
                         self.strokeRecordingDraft?.tabletTrace?.appendAccepted(samples)
@@ -1394,15 +1490,18 @@ final class ImageDocument {
                 guard self.currentStrokeUsesV2 else { throw RecorderReplayError(message: "The stroke's input format changed.") }
                 try session.continueTabletStroke(stroke, points: points)
             } catch {
-                if self.currentStrokeIsLab {
-                    try? session.cancelLabStroke(stroke)
+                if let kind = self.currentCapturedStrokeKind {
+                    switch kind {
+                    case .lab: try? session.cancelLabStroke(stroke)
+                    case .ink: try? session.cancelInkStroke(stroke)
+                    }
                     self.currentStroke = nil
                 }
                 self.strokeRecordingDraft?.refuse(error)
                 self.report(error)
                 return
             }
-            if self.currentStrokeIsLab, self.strokeRecordingDraft?.facts != nil {
+            if self.currentCapturedStrokeKind != nil, self.strokeRecordingDraft?.facts != nil {
                 do {
                     let samples = try points.map { try RecorderTabletStrokeTrace.Point(native: $0) }
                     self.strokeRecordingDraft?.tabletTrace?.appendAccepted(samples)
@@ -1417,16 +1516,24 @@ final class ImageDocument {
         strokeRecordingInterleaved = false
         strokeIsActive = false
         labBrushStrokeIsActive = false
+        inkBrushStrokeIsActive = false
         enqueue(on: inputQueue, input: true, strokePart: true) { [session] in
             let stroke = self.currentStroke
             self.currentStroke = nil
             self.currentStrokeUsesV2 = false
-            self.currentStrokeIsLab = false
+            let kind = self.currentCapturedStrokeKind
+            self.currentCapturedStrokeKind = nil
             var draft = self.strokeRecordingDraft
             self.strokeRecordingDraft = nil
             if let stroke {
                 do { try session.endStroke(stroke) }
                 catch {
+                    if let kind {
+                        switch kind {
+                        case .lab: try? session.cancelLabStroke(stroke)
+                        case .ink: try? session.cancelInkStroke(stroke)
+                        }
+                    }
                     draft?.refuse(error)
                     self.report(error)
                 }
@@ -4839,7 +4946,7 @@ final class ImageDocument {
     /// imported image never written as XCF, edits still queued on their
     /// way to the engine, or a plug-in command still working on it.
     var hasUnsavedChanges: Bool {
-        fileState.hasUnsavedChanges || pendingInput > 0 || labBrushStrokeIsActive
+        fileState.hasUnsavedChanges || pendingInput > 0 || labBrushStrokeIsActive || inkBrushStrokeIsActive
             || PlugInCommands.running?.document === self
     }
 
@@ -6726,8 +6833,9 @@ final class ImageDocument {
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .channel(let channel)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
-                } else if case .ink(let channel, _)? = context {
-                    try step.command.apply(session: session, image: image, channel: channel)
+                } else if case .ink(let channel, let identity)? = context {
+                    guard let identity else { throw RecorderReplayError(message: "The bound ink identity is missing.") }
+                    try step.command.apply(session: session, image: image, channel: channel, inkIdentity: identity)
                 } else if case .lab(let axis, _)? = context {
                     try step.command.apply(session: session, image: image, labAxis: axis)
                 } else {
@@ -6763,7 +6871,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke: return true
+        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .completeLabStroke: return true
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke: return true
         default: return false
         }
@@ -6777,7 +6885,7 @@ final class ImageDocument {
             // Live Lab admission supplies its captured axis explicitly. Never
             // infer a Lab target from the current selection in this fallback.
             return .unavailable("The explicit Lab axis was unavailable when this edit was recorded.")
-        case .editInk, .applyInkLevels, .applyInkCurves:
+        case .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke:
             guard let channel = explicitChannel, channel > 0 else {
                 return .unavailable("The explicit ink channel was unavailable when this edit was recorded.")
             }
@@ -6992,9 +7100,9 @@ final class ImageDocument {
     }
 
     private nonisolated static func confirmRecordingCapture(_ capture: RecorderCapture?, session: EngineSession,
-                                                            image: Int32) -> ConfirmedRecorderCapture {
+                                                            image: Int32, confirmedContext: RecorderContext? = nil) -> ConfirmedRecorderCapture {
         guard let capture else { return ConfirmedRecorderCapture(context: nil, binding: .none, descriptions: [:]) }
-        let context = confirmRecordingContext(capture.context, session: session, image: image)
+        let context = confirmRecordingContext(confirmedContext ?? capture.context, session: session, image: image)
         var observations: [UUID: RecorderDescriptionObservation] = [:]
         do {
             if case .unavailable(let reason)? = context { throw RecorderReplayError(message: reason) }

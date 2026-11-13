@@ -191,6 +191,14 @@ dispatch (GlimsEngine *engine, gpointer data)
     }
   if (descriptor->policy == POLICY_COMPONENT_STROKE)
     {
+      /* Typed ink continuation validates and cancels its own captured target,
+       * including damaged storage. Early policy rejection would strand it. */
+      if (call->operation == GLIMS_FACADE_OP_stroke_continue_v2 &&
+          glims_stroke_is_ink (engine, call->target.id))
+        {
+          if (call->invoked) *call->invoked = TRUE;
+          return call->func (engine, call->data);
+        }
       if (stroke_references_lab_image (engine, call->target.id))
         {
           /* Typed Lab continuation owns target revalidation and whole-stroke

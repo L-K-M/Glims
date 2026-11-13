@@ -17,6 +17,7 @@ enum RecorderFileCodec {
     static let labVersion = 13
     static let labStrokeVersion = 14
     static let labSelectionVersion = 15
+    static let inkStrokeVersion = 16
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -93,7 +94,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...labSelectionVersion)
+        let fileVersion = try integer(root.get("version"), range: version...inkStrokeVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -124,6 +125,7 @@ enum RecorderFileCodec {
         var hasLabCommand = false
         var hasLabStrokeCommand = false
         var hasLabSelectionCommand = false
+        var hasInkStrokeCommand = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -147,6 +149,7 @@ enum RecorderFileCodec {
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
                 if case .applyInkCurves = command { hasInkCurves = true }
+                if case .completeInkStroke = command { hasInkStrokeCommand = true }
                 if case .fillLab = command { hasLabCommand = true }
                 if case .applyLabCurves = command { hasLabCommand = true }
                 if case .completeLabStroke = command { hasLabCommand = true; hasLabStrokeCommand = true }
@@ -188,6 +191,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == labSelectionVersion, !hasLabSelectionCommand {
             throw RecorderFileError.invalid("Version 15 requires a successful Lab selection command.")
+        }
+        if fileVersion == inkStrokeVersion, !hasInkStrokeCommand {
+            throw RecorderFileError.invalid("Version 16 requires a successful ink stroke.")
         }
         // Each extended version requires its own successful command, exactly
         // as version 2 always required a complete stroke.
@@ -410,6 +416,61 @@ enum RecorderFileCodec {
         return stroke
     }
 
+    private static func inkStroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderInkStrokeCommand {
+        let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
+        let settings = try Object(value.get("settings"),
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness"])
+        guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))),
+              tool == .paintbrush || tool == .pencil else {
+            throw RecorderFileError.invalid("Invalid recorded ink brush tool.")
+        }
+        guard let brush = try RecorderStrokeCommand.Settings(tool: tool, size: number(settings.get("size")),
+                  opacity: number(settings.get("opacity")), red: number(settings.get("red")),
+                  green: number(settings.get("green")), blue: number(settings.get("blue")),
+                  hardness: settings.optional("hardness").map { try number($0) },
+                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase"))),
+              !brush.antiErase else {
+            throw RecorderFileError.invalid("Invalid recorded ink brush settings.")
+        }
+        let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
+        let identity = try Object(facts.get("brush"), required: ["name", "isInternal"], optional: ["collection"])
+        let name = try string(identity.get("name"), native: true)
+        let collection = try identity.optional("collection").map { try string($0, native: true) }
+        let fingerprint = try string(facts.get("fingerprint"))
+        guard !name.isEmpty, fingerprint.utf8.count == 64,
+              fingerprint.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw RecorderFileError.invalid("Invalid recorded brush identity or fingerprint.")
+        }
+        let capture = EngineSession.StrokeCaptureFacts(brush: .init(name: name, collection: collection,
+            isInternal: try bool(identity.get("isInternal"))), fingerprint: fingerprint)
+
+        guard RecorderFileLimits.points - points >= 1 else { throw RecorderFileError.invalid("Invalid ink stroke point count.") }
+        let batchLimit = min(RecorderTabletStrokeAccumulator.maximumPoints - 1, RecorderFileLimits.points - points - 1)
+        let batchNodes = try array(value.get("batches"), maximum: batchLimit)
+        var count = 1
+        for batch in batchNodes {
+            let samples = try array(batch, maximum: 4096)
+            guard !samples.isEmpty, samples.count <= 4096, samples.count <= RecorderFileLimits.points - points - count else {
+                throw RecorderFileError.invalid("Invalid ink stroke batch or point count.")
+            }
+            count += samples.count
+        }
+        guard count <= RecorderTabletStrokeAccumulator.maximumPoints else {
+            throw RecorderFileError.invalid("Invalid ink stroke point count.")
+        }
+
+        let first = try labStrokePoint(value.get("first"))
+        let batches = try batchNodes.map { batch -> [RecorderTabletStrokeTrace.Point] in
+            try array(batch, maximum: 4096).map(labStrokePoint)
+        }
+        let trace = RecorderTabletStrokeTrace(first: first, batches: batches)
+        let consumed = try RecorderFileLimits.tabletStrokePointCount(trace, remaining: RecorderFileLimits.points - points)
+        let stroke = try RecorderInkStrokeCommand(settings: brush, trace: trace, facts: capture).validated()
+        points += consumed
+        return stroke
+    }
+
+
     private static func command(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderFileCommand {
         switch try tag(node) {
         case "selectionShape":
@@ -579,6 +640,9 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("Unknown selection operation.")
             }
             return .channelToSelection(operation)
+        case "completeInkStroke":
+            guard version >= inkStrokeVersion else { throw RecorderFileError.invalid("An ink stroke needs recording version 16.") }
+            return .completeInkStroke(try inkStroke(node, points: &points))
         case "completeLabStroke":
             guard version >= labStrokeVersion else { throw RecorderFileError.invalid("A Lab stroke needs recording version 14.") }
             return .completeLabStroke(try labStroke(node, points: &points))
@@ -849,6 +913,11 @@ enum RecorderFileCodec {
             guard descriptions[id]?.kind == .channel, identity.isValid, curves.isValid else {
                 throw RecorderFileError.invalid("Lab Curves needs valid samples and a Lab channel binding.")
             }
+            return
+        case (.completeInkStroke(let stroke), .ink(let id, let identity)):
+            guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("An ink stroke needs a channel description.") }
+            guard identity.isValid else { throw RecorderFileError.invalid("Invalid ink identity.") }
+            _ = try stroke.validated()
             return
         case (.completeLabStroke(let stroke), .lab(let id, let identity)):
             guard descriptions[id]?.kind == .channel, identity.isValid else {
