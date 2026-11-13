@@ -44,7 +44,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   CHECK(s==GLIMS_STATUS_OK&&layout.layout==GLIMS_IMAGE_LAYOUT_LAYERED_LAB&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES)&&!(layout.flags&GLIMS_IMAGE_STORAGE_READ_ONLY)&&
         (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_RENAME)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE)&&
-        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_CREATE)&&
+        (layout.flags&GLIMS_IMAGE_STORAGE_LAYER_CREATE)&&(layout.flags&GLIMS_IMAGE_STORAGE_LAYER_DELETE)&&
         info_bytes[0]==0xa5&&info_bytes[sizeof info_bytes-1]==0xa5,
         "size-versioned unaligned layout reports limited layer-property editing");
   guint8 short_info[sizeof(GlimsImageStorageInfo)+2],saved_short[sizeof short_info];
@@ -246,6 +246,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_NEW,&ambiguous,&error)==GLIMS_STATUS_UNSUPPORTED&&ambiguous==0,
          "implicit creation refuses an ambiguous multi-selection");
    if(error)api->free_string(error);error=NULL;
+   ambiguous=123;
+   CHECK(api->layer_command(engine,id,0,GLIMS_LAYER_DELETE,&ambiguous,&error)==GLIMS_STATUS_UNSUPPORTED&&ambiguous==0,
+         "implicit deletion refuses an ambiguous multi-selection");
+   if(error)api->free_string(error);error=NULL;
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"single logical selection restored");
    GlimsLayerChange visibility={.struct_size=sizeof visibility,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};
    error=NULL;GlimsStatus changed=api->layer_change(engine,id,rows[0].id,&visibility,&error);
@@ -325,6 +329,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_NEW,&hidden_copy,&error)==GLIMS_STATUS_UNSUPPORTED&&hidden_copy==0,
           "a private scalar plane cannot anchor a public layer creation");
     if(error)api->free_string(error);error=NULL;
+    hidden_copy=123;
+    CHECK(api->layer_command(engine,id,hidden,GLIMS_LAYER_DELETE,&hidden_copy,&error)==GLIMS_STATUS_UNSUPPORTED&&hidden_copy==0,
+          "a private scalar plane cannot be deleted through the public layer command");
+    if(error)api->free_string(error);error=NULL;
     GimpLayer *locked_root=current.layers[0].group;GimpItem *locked_item=GIMP_ITEM(locked_root);
     gboolean old_visible=gimp_item_get_visible(locked_item);gdouble old_opacity=gimp_layer_get_opacity(locked_root);
     gimp_item_set_lock_visibility(locked_item,TRUE,FALSE);
@@ -391,10 +399,53 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     CHECK(api->image_selected_layers(engine,id,selected,8,&selected_count)==GLIMS_STATUS_OK&&selected_count==1&&selected[0]==rows[0].id,
           "rejected hidden-plane selection preserves the logical root");
    }
-   GlimsItemID result=0;error=NULL;
-   CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DELETE,&result,&error)==GLIMS_STATUS_UNSUPPORTED,
-         "ordinary delete is quarantined for read-only layered Lab");
-   if(error)api->free_string(error);
+   GlimsItemID result=123;error=NULL;
+   CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_MERGE_DOWN,&result,&error)==GLIMS_STATUS_UNSUPPORTED&&result==0,
+         "unqualified logical layer commands remain refused");
+   if(error)api->free_string(error);error=NULL;result=123;
+   CHECK(api->layer_command(engine,id,rows[0].id,UINT32_MAX,&result,&error)==GLIMS_STATUS_UNSUPPORTED&&result==0,
+         "unknown logical layer commands fail closed");
+   if(error)api->free_string(error);error=NULL;result=123;
+   GlimsStatus deleted=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DELETE,&result,&error);
+   CHECK(deleted==GLIMS_STATUS_OK&&result==0,"public command deletes a logical Lab layer");
+   if(error)api->free_string(error);error=NULL;
+   if(deleted==GLIMS_STATUS_OK){
+    GlimsLayerInfo remaining[8];int32_t n=0;
+    CHECK(api->image_layers(engine,id,remaining,8,&n)==GLIMS_STATUS_OK&&n==1&&remaining[0].id==rows[1].id,
+          "deleting a logical root preserves the other layer");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,remaining,8,&n)==GLIMS_STATUS_OK&&
+          n==2&&remaining[0].id==rows[0].id&&remaining[1].id==rows[1].id,"Undo restores the deleted logical root");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,remaining,8,&n)==GLIMS_STATUS_OK&&
+          n==1&&remaining[0].id==rows[1].id,"Redo removes the same logical root");
+    GlimsStatus last=api->layer_command(engine,id,rows[1].id,GLIMS_LAYER_DELETE,NULL,&error);
+    CHECK(last==GLIMS_STATUS_OK,"last logical layer can be deleted");if(error)api->free_string(error);error=NULL;
+    if(last==GLIMS_STATUS_OK){
+     CHECK(api->image_layers(engine,id,remaining,8,&n)==GLIMS_STATUS_OK&&n==0,"last deletion leaves an empty logical layer tree");
+     guint8 empty[4]={1,1,1,1};
+     CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},empty,4)==GLIMS_STATUS_OK&&
+           empty[0]==0&&empty[1]==0&&empty[2]==0&&empty[3]==0,"empty logical document renders transparent black");
+     gchar *empty_path=g_build_filename((const gchar*)work,"layered-lab-empty.xcf",NULL);
+     GlimsStatus empty_saved=api->image_save_copy(engine,id,empty_path,&error);
+     CHECK(empty_saved==GLIMS_STATUS_OK,"empty logical document saves as XCF");if(error)api->free_string(error);error=NULL;
+     if(empty_saved==GLIMS_STATUS_OK){
+      GlimsImageID empty_copy=0;GlimsStatus empty_opened=api->image_open(engine,empty_path,&empty_copy,&error);
+      CHECK(empty_opened==GLIMS_STATUS_OK&&empty_copy,"empty logical XCF reopens");if(error)api->free_string(error);error=NULL;
+      if(empty_opened==GLIMS_STATUS_OK&&empty_copy){
+       CHECK(api->image_layers(engine,empty_copy,remaining,8,&n)==GLIMS_STATUS_OK&&n==0,
+             "reopened logical XCF has no layers");
+       CHECK(api->image_close(engine,empty_copy)==GLIMS_STATUS_OK,"empty logical copy closes");
+      }
+     }
+     g_free(empty_path);
+     GlimsItemID added=0;GlimsStatus recreated=api->layer_command(engine,id,0,GLIMS_LAYER_NEW,&added,&error);
+     CHECK(recreated==GLIMS_STATUS_OK&&added,"an empty logical document can create a layer");
+     if(error)api->free_string(error);error=NULL;
+     if(recreated==GLIMS_STATUS_OK)CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"Undo removes the newly created layer");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"Undo restores the last deleted layer");
+    }
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,remaining,8,&n)==GLIMS_STATUS_OK&&n==2,
+          "final Undo restores both original logical roots");
+   }
   }
   GlimsPixelBuffer copied={0};error=NULL;
   CHECK(api->image_copy_pixels(engine,id,TRUE,&copied,&error)==GLIMS_STATUS_UNSUPPORTED,

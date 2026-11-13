@@ -201,7 +201,9 @@ extension EngineSmokeTest {
         palette.reload()
         let newMenu = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
         let newButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "New Layer" }
-        if opened.storage.allowsLayerCreate && opened.storage.allowsLayerDuplicate,
+        let deleteMenu = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
+        let deleteButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Delete Layers" }
+        if opened.storage.allowsLayerCreate && opened.storage.allowsLayerDuplicate && opened.storage.allowsLayerDelete,
            let owner = windowController.window {
             let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 160, height: 90),
                                  styleMask: [.titled], backing: .buffered, defer: false)
@@ -210,11 +212,12 @@ extension EngineSmokeTest {
             owner.beginSheet(sheet)
             EngineSmokeTestHost.pumpEvents(for: 0.05)
             palette.reload()
-            check(!windowController.validateMenuItem(newMenu) && !windowController.validateMenuItem(duplicateMenu),
+            check(!windowController.validateMenuItem(newMenu) && !windowController.validateMenuItem(duplicateMenu) &&
+                  !windowController.validateMenuItem(deleteMenu),
                   "document menu refuses layer changes while a sheet is open")
-            check(newButton?.isEnabled == false && duplicateButton?.isEnabled == false,
+            check(newButton?.isEnabled == false && duplicateButton?.isEnabled == false && deleteButton?.isEnabled == false,
                   "palette disables layer changes while a document sheet is open")
-            for command in [EngineSession.LayerCommand.new, .duplicate] {
+            for command in [EngineSession.LayerCommand.new, .duplicate, .delete] {
                 let item = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
                 item.tag = Int(command.rawValue)
                 _ = palette.perform(item.action!, with: item)
@@ -250,6 +253,31 @@ extension EngineSmokeTest {
         } else {
             check(!windowController.validateMenuItem(newMenu) && newButton?.isEnabled == false,
                   "older engines keep logical layer creation disabled")
+        }
+        palette.reload()
+        if opened.storage.allowsLayerDelete {
+            check(windowController.validateMenuItem(deleteMenu), "Layer menu enables logical layer deletion")
+            check(deleteButton?.isEnabled == true, "palette enables logical layer deletion")
+            let originalIDs = opened.layers.map(\.id)
+            deleteButton?.performClick(nil)
+            drain("delete logical layer")
+            check(opened.layers.count == 1 && Set(opened.layers.map(\.id)).isSubset(of: Set(originalIDs)),
+                  "palette deletes one logical layer")
+            let undo = EngineUndoManager(document: opened)
+            check(undo.canUndo, "logical deletion offers Undo")
+            undo.undo()
+            drain("logical deletion Undo")
+            check(opened.layers.map(\.id) == originalIDs, "Undo restores both logical layers")
+            check(undo.canRedo, "logical deletion offers Redo")
+            undo.redo()
+            drain("logical deletion Redo")
+            check(opened.layers.count == 1, "Redo removes the same logical layer")
+            undo.undo()
+            drain("restore original layers after deletion")
+            check(opened.layers.map(\.id) == originalIDs, "final Undo restores both logical layers")
+        } else {
+            check(!windowController.validateMenuItem(deleteMenu) && deleteButton?.isEnabled == false,
+                  "older engines keep logical deletion disabled")
         }
         palette.reload()
         var editedOpacity = -1.0 // No valid layer opacity can satisfy the saved-copy check until an edit runs.
