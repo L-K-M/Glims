@@ -1054,6 +1054,10 @@ final class EngineSession: @unchecked Sendable {
         var isVisible: Bool?
         var opacity: Double?
         var mode: String?
+
+        var isLimitedLayerPropertyChange: Bool {
+            name == nil && mode == nil && (isVisible != nil || opacity != nil)
+        }
     }
 
     struct Progress: Equatable {
@@ -1342,8 +1346,11 @@ final class EngineSession: @unchecked Sendable {
             }
             let readOnly = info.flags & UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY) != 0
             let allowsLayerProperties = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) != 0
-            guard (layout == .layeredLab && readOnly != allowsLayerProperties) ||
-                  (layout != .layeredLab && !allowsLayerProperties) else {
+            guard layout == .layeredLab || !allowsLayerProperties else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This image uses an unsupported storage capability.")
+            }
+            guard layout != .layeredLab || readOnly != allowsLayerProperties else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This engine cannot safely open layered Lab documents.")
             }

@@ -30,11 +30,20 @@ final class ImageStorageTests: XCTestCase {
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(UInt32.max)))
-        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue, flags: 2)))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue, flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue)))
-        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue, flags: 3)))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)
         short.struct_size -= 1
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(short))
+    }
+
+    func testLimitedLayerChangesRequireOnlyVisibilityOrOpacity() {
+        XCTAssertFalse(EngineSession.LayerChange().isLimitedLayerPropertyChange)
+        XCTAssertTrue(EngineSession.LayerChange(isVisible: false).isLimitedLayerPropertyChange)
+        XCTAssertTrue(EngineSession.LayerChange(opacity: 0.5).isLimitedLayerPropertyChange)
+        XCTAssertFalse(EngineSession.LayerChange(name: "Other", opacity: 0.5).isLimitedLayerPropertyChange)
+        XCTAssertFalse(EngineSession.LayerChange(isVisible: true, mode: "normal").isLimitedLayerPropertyChange)
     }
 }

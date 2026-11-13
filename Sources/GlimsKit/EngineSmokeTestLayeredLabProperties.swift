@@ -61,6 +61,11 @@ extension EngineSmokeTest {
         check(opened.layers.count == 2, "document shows two logical layers")
         check(!opened.toolIsAvailable(.paintbrush) && opened.toolIsAvailable(.zoom),
               "editing tools are unavailable while zoom remains available")
+        func drain(_ step: String) {
+            let deadline = Date().addingTimeInterval(15)
+            while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(opened.pendingWork == 0, "engine work finishes after \(step)")
+        }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }
             return view.subviews.lazy.compactMap { outline(in: $0) }.first
@@ -87,18 +92,30 @@ extension EngineSmokeTest {
                (list.item(atRow: index) as? LayerTree.Node)?.layer.id == first.id
            }), let row = list.view(atColumn: 0, row: index, makeIfNecessary: true) as? LayerRowView {
             check(row.checkbox.isEnabled, "logical layer visibility control is enabled")
+            let initiallyVisible = first.isVisible
             row.checkbox.performClick(nil)
-            let deadline = Date().addingTimeInterval(15)
-            while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
-            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == false,
+            drain("visibility edit")
+            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == !initiallyVisible,
                   "visibility control changes the captured logical layer")
-            let manager = EngineUndoManager(document: opened)
-            check(manager.canUndo, "window Undo is available after the layer edit")
-            manager.undo()
-            let undoDeadline = Date().addingTimeInterval(15)
-            while opened.pendingWork > 0 && Date() < undoDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
-            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == true,
+            let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")
+            check(windowController.window?.validateMenuItem(undo) == true, "window Undo is available after the layer edit")
+            check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
+                  "window responder handles Undo")
+            drain("visibility Undo")
+            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == initiallyVisible,
                   "Undo restores logical visibility")
+            let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "")
+            check(windowController.window?.validateMenuItem(redo) == true, "window Redo is available after Undo")
+            check(windowController.window?.tryToPerform(Selector(("redo:")), with: redo) == true,
+                  "window responder handles Redo")
+            drain("visibility Redo")
+            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == !initiallyVisible,
+                  "Redo reapplies logical visibility")
+            check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
+                  "window responder handles a second Undo")
+            drain("second visibility Undo")
+            check(opened.layers.first(where: { $0.id == first.id })?.isVisible == initiallyVisible,
+                  "second Undo restores logical visibility")
         } else {
             check(false, "logical layer visibility control exists")
         }
@@ -109,26 +126,28 @@ extension EngineSmokeTest {
         func descendants<T: NSView>(_ view: NSView, as type: T.Type) -> [T] {
             ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants($0, as: type) }
         }
+        var editedOpacity = 0.5
         if let target = opened.activeLayer,
            let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),
-           let field = descendants(opacity, as: NSTextField.self).first(where: { $0.isEditable }) {
+           let field = descendants(opacity, as: NSTextField.self).first(where: { $0.isEditable }),
+           let originalOpacity = opened.layers.first(where: { $0.id == target })?.opacity {
             check(opacity.isEnabled, "logical layer opacity control is enabled")
-            field.stringValue = "50"
-            _ = field.sendAction(field.action, to: field.target)
-            let deadline = Date().addingTimeInterval(15)
-            while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
-            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - 0.5) < 0.0001,
+            editedOpacity = abs(originalOpacity - 0.5) < 0.0001 ? 0.75 : 0.5
+            field.stringValue = editedOpacity == 0.5 ? "50" : "75"
+            check(field.sendAction(field.action, to: field.target), "opacity field action is delivered")
+            drain("opacity edit")
+            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - editedOpacity) < 0.0001,
                   "opacity field changes the captured logical layer")
             let manager = EngineUndoManager(document: opened)
+            check(manager.canUndo, "Undo is available after the opacity edit")
             manager.undo()
-            let undoDeadline = Date().addingTimeInterval(15)
-            while opened.pendingWork > 0 && Date() < undoDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
-            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - 1) < 0.0001,
+            drain("opacity Undo")
+            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - originalOpacity) < 0.0001,
                   "Undo restores logical layer opacity")
+            check(manager.canRedo, "Redo is available after opacity Undo")
             manager.redo()
-            let redoDeadline = Date().addingTimeInterval(15)
-            while opened.pendingWork > 0 && Date() < redoDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
-            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - 0.5) < 0.0001,
+            drain("opacity Redo")
+            check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - editedOpacity) < 0.0001,
                   "Redo reapplies logical layer opacity")
         } else {
             check(false, "logical layer opacity field exists")
@@ -150,7 +169,7 @@ extension EngineSmokeTest {
         defer { try? session.closeImage(reopened) }
         check(try session.imageStorage(reopened).layout == .layeredLab,
               "saved XCF copy reopens as layered Lab")
-        check(try session.layers(reopened).contains(where: { abs($0.opacity - 0.5) < 0.0001 }),
+        check(try session.layers(reopened).contains(where: { abs($0.opacity - editedOpacity) < 0.0001 }),
               "saved XCF copy retains the edited opacity")
     }
 }

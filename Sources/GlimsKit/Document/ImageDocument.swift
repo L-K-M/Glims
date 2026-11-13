@@ -3259,8 +3259,7 @@ final class ImageDocument {
                      completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         let limited = storage.layout == .layeredLab
         if limited {
-            guard acceptsLayerProperties, change.name == nil, change.mode == nil,
-                  change.isVisible != nil || change.opacity != nil else {
+            guard acceptsLayerProperties, change.isLimitedLayerPropertyChange else {
                 completion?(.failure(DocumentError.busy)); return
             }
         }
@@ -4543,7 +4542,9 @@ final class ImageDocument {
                                                allowingLayerProperties: Bool = false) -> Bool {
         onUserCommand?()
         if (storage.readOnly || storage.layout == .layeredLab) && !allowingReplayRead && !allowingLayerProperties {
-            onError?("This layered Lab document supports viewing and limited layer-property edits.")
+            onError?(storage.layout == .layeredLab
+                     ? "This layered Lab document supports viewing and limited layer-property edits."
+                     : "This document is read-only. You can view it and save an XCF copy.")
             return true
         }
         if recorder.isReplaying && !allowingReplayRead {

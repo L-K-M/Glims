@@ -1035,6 +1035,7 @@ glims_layer_change (GlimsEngine            *engine,
     return GLIMS_STATUS_NOT_FOUND;
 
   GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
   if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
     {
       g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);

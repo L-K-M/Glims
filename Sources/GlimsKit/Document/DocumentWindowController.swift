@@ -2566,7 +2566,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if imageDocument.storage.layout == .layeredLab {
+        if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
@@ -2580,7 +2580,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                  #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
                 break
             default:
-                menuItem.toolTip = "This layered Lab document supports limited layer-property edits."
+                menuItem.toolTip = imageDocument.storage.layout == .layeredLab
+                    ? "This layered Lab document supports limited layer-property edits."
+                    : "This document is read-only."
                 return false
             }
         }

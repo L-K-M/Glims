@@ -980,7 +980,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// authoritative state again.
     private func commitLayerChange(_ context: LayerRowView.Context, _ change: EngineSession.LayerChange) -> Bool {
         guard let document, document.acceptsLayerProperties,
-              (document.acceptsEdits || (change.name == nil && change.mode == nil)),
+              (document.acceptsEdits || change.isLimitedLayerPropertyChange),
               LayerRowView.canChange(context, document: document, layers: document.layers) else { return false }
         document.changeLayer(context.layerID, change)
         return true
