@@ -408,6 +408,12 @@ final class EngineSession: @unchecked Sendable {
             && api.stroke_continue_v2 != nil && api.stroke_end != nil
     }
 
+    var supportsLabBrushCapture: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_begin_lab_with_capture_facts),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_begin_lab_with_capture_facts) else { return false }
+        return supportsLabBrush && api.stroke_begin_lab_with_capture_facts != nil
+    }
+
     var supportsLabSelections: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_select_lab_command),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_select_lab_command) else { return false }
@@ -445,21 +451,8 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                               message: "This image engine does not support the Lab brush.")
         }
-        let hardness = brush.hardness ?? 0.5
-        guard image > 0, axis.id > 0, brush.tool == .paintbrush,
-              value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
-              brush.opacity.isFinite, (0...1).contains(brush.opacity),
-              brush.size.isFinite, brush.size >= 1, brush.size <= 10_000,
-              hardness.isFinite, (0...1).contains(hardness), first.isValid else {
-            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
-                              message: "Choose a valid Lab axis, physical value and brush settings.")
-        }
+        var settings = try labBrushSettings(image: image, axis: axis, value: value, brush: brush, first: first)
         let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
-        var settings = GlimsLabBrushSettings()
-        settings.struct_size = UInt32(MemoryLayout<GlimsLabBrushSettings>.size)
-        settings.axis = axis.id; settings.role = axis.role.rawValue; settings.uuid = axis.uuid.uuid
-        settings.value = value; settings.opacity = brush.opacity
-        settings.size = brush.size; settings.hardness = hardness
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
         try withTabletPacket([first]) { packet in
@@ -469,6 +462,69 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab brush stroke did not start.")
         }
         return stroke
+    }
+
+    /// Captures the actual brush and physical paint configuration before the
+    /// first dab. Older engines can paint live, but cannot promise replay.
+    func beginLabStrokeCapturing(image: Int32, axis: LabAxis, value: Double,
+                                 brush: Brush, first: StrokeSampleV2,
+                                 expected: StrokeCaptureFacts? = nil) throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        guard supportsLabBrushCapture, let begin = api.stroke_begin_lab_with_capture_facts else {
+            guard expected == nil else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This engine cannot replay recorded Lab brush strokes.")
+            }
+            return (try beginLabStroke(image: image, axis: axis, value: value, brush: brush, first: first), nil)
+        }
+        var settings = try labBrushSettings(image: image, axis: axis, value: value, brush: brush, first: first)
+        let identity = expected?.brush ?? brush.resource
+        let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
+        var facts = GlimsStrokeCaptureFacts()
+        facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
+        var stroke: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        defer {
+            for pointer in [facts.brush_name, facts.brush_collection, facts.fingerprint].compactMap({ $0 }) {
+                api.free_string(pointer)
+            }
+        }
+        try withTabletPacket([first]) { packet in
+            let status: GlimsStatus
+            if let expected {
+                status = expected.fingerprint.withCString {
+                    begin(engine, image, resource, &settings, packet, $0, &stroke, &facts, &error)
+                }
+            } else {
+                status = begin(engine, image, resource, &settings, packet, nil, &stroke, &facts, &error)
+            }
+            try check(status, error)
+        }
+        guard stroke > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab brush stroke did not start.")
+        }
+        guard let name = facts.brush_name, let digest = facts.fingerprint else { return (stroke, nil) }
+        return (stroke, StrokeCaptureFacts(brush: .init(name: String(cString: name),
+            collection: facts.brush_collection.map { String(cString: $0) }, isInternal: facts.brush_internal),
+            fingerprint: String(cString: digest)))
+    }
+
+    private func labBrushSettings(image: Int32, axis: LabAxis, value: Double,
+                                  brush: Brush, first: StrokeSampleV2) throws -> GlimsLabBrushSettings {
+        let hardness = brush.hardness ?? 0.5
+        guard image > 0, axis.id > 0, brush.tool == .paintbrush,
+              value.isFinite, abs(value) <= Double(Float.greatestFiniteMagnitude),
+              brush.opacity.isFinite, (0...1).contains(brush.opacity),
+              brush.size.isFinite, brush.size >= 1, brush.size <= 10_000,
+              hardness.isFinite, (0...1).contains(hardness), first.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid Lab axis, physical value and brush settings.")
+        }
+        var settings = GlimsLabBrushSettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabBrushSettings>.size)
+        settings.axis = axis.id; settings.role = axis.role.rawValue; settings.uuid = axis.uuid.uuid
+        settings.value = value; settings.opacity = brush.opacity
+        settings.size = brush.size; settings.hardness = hardness
+        return settings
     }
 
     func cancelLabStroke(_ stroke: Int32) throws {

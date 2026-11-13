@@ -4430,6 +4430,62 @@ stroke_cancel_lab_on_engine (GlimsEngine *engine, gpointer data)
   return glims_stroke_cancel_lab (engine, *(GlimsStrokeID *) data);
 }
 
+typedef struct {
+  LabStrokeArgs begin;
+  const char *expected;
+  GlimsStrokeCaptureFacts facts;
+} LabStrokeCaptureArgs;
+
+static GlimsStatus
+stroke_begin_lab_capture_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabStrokeCaptureArgs *a = data;
+  return glims_stroke_begin_lab_with_capture_facts (engine, a->begin.image,
+    a->begin.brush, &a->begin.settings, a->begin.packet, a->expected,
+    &a->begin.stroke, &a->facts, a->begin.error);
+}
+
+static GlimsStatus
+api_stroke_begin_lab_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+    GlimsResourceID brush, const GlimsLabBrushSettings *settings,
+    const GlimsStrokePacketV2 *packet, const char *expected_fingerprint,
+    GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!facts) return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint32_t facts_size;
+  memcpy (&facts_size, facts, sizeof facts_size);
+  if (facts_size < sizeof *facts) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStrokeCaptureFacts empty = { .struct_size = facts_size };
+  memcpy (facts, &empty, sizeof empty);
+  if (!out || !settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint32_t settings_size;
+  memcpy (&settings_size, settings, sizeof settings_size);
+  if (settings_size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabStrokeCaptureArgs a = {
+    .begin = { .image = image, .brush = brush, .packet = packet, .error = error },
+    .expected = expected_fingerprint, .facts = { .struct_size = sizeof a.facts }
+  };
+  memcpy (&a.begin.settings, settings, sizeof a.begin.settings);
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_lab_with_capture_facts,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    stroke_begin_lab_capture_on_engine, &a, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      *out = a.begin.stroke;
+      a.facts.struct_size = facts_size;
+      memcpy (facts, &a.facts, sizeof a.facts);
+    }
+  else
+    {
+      g_free (a.facts.brush_name);
+      g_free (a.facts.brush_collection);
+      g_free (a.facts.fingerprint);
+    }
+  return status;
+}
+
 static GlimsStatus
 api_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID stroke)
 {

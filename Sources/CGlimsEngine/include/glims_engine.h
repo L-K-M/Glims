@@ -272,7 +272,7 @@ typedef struct GlimsStrokePacketV2 {
   size_t      byte_count;     /* count * sample_stride, at most 1 MiB */
 } GlimsStrokePacketV2;
 
-/* Owned facts for a supported deterministic V1 stroke. Initialize to zero
+/* Owned facts for a supported deterministic stroke. Initialize to zero
  * except struct_size. Free each non-NULL string with free_string. */
 typedef struct GlimsStrokeCaptureFacts {
   uint32_t struct_size;
@@ -4041,6 +4041,23 @@ typedef struct GlimsEngineAPI {
    * wrong/expired tokens. */
   GlimsStatus (*image_lab_snapshot_end) (GlimsEngine *engine, GlimsImageID image,
                                         uint64_t token);
+  /* Slot207: Lab Brush begin with same-call actual mask/configuration facts.
+   * Paint behavior and V2 input match slot193. A live call with NULL expected
+   * fingerprint may paint successfully without facts for an unsupported brush.
+   * Replay supplies an explicit brush and its captured 64-character lowercase
+   * SHA256 fingerprint: mismatch/unavailable facts refuse BEFORE first paint.
+   * Fingerprints bind mask content and effective physical paint settings, not
+   * a document handle or UUID. The separate settings target still validates
+   * selected axis identity. Initialize facts to zero except struct_size;
+   * release returned strings with free_string. Outputs are cleared on refusal.
+   * facts is required; undersized facts are not written beyond struct_size. */
+  GlimsStatus (*stroke_begin_lab_with_capture_facts) (GlimsEngine *engine, GlimsImageID image,
+                                   GlimsResourceID brush,
+                                   const GlimsLabBrushSettings *settings,
+                                   const GlimsStrokePacketV2 *first,
+                                   const char *expected_fingerprint,
+                                   GlimsStrokeID *result,
+                                   GlimsStrokeCaptureFacts *facts, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

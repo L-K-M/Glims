@@ -5503,3 +5503,15 @@ oracles, save/load, refusal and Undo. All 1,687 Swift tests pass; source review
 and the reproduced channel-reader correction are scoped in
 [lab-recorder.md](lab-recorder.md). Four-engine runtime and final installed
 qualification are still pending; Lab brush/selection recording stays open.
+
+### Physical Lab Brush capture foundation (candidate)
+
+Slot207 adds atomic actual-brush/configuration capture before physical Lab
+painting, with pre-dab mismatch refusal for guarded replay. Swift transports
+owned facts and V2 input without dropping optional axes; bounded tablet traces
+preserve accepted batch boundaries and timestamp semantics. The old producer
+fails the missing-slot regression. All four engines pass 1,268 native checks
+plus conformance, and all 1,702 Swift and 141 Python tests pass. Independent
+source review and hosted CI remain open. Recorder file and document wiring
+remain a subsequent slice.
+See [lab-brush.md](lab-brush.md).
