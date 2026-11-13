@@ -44,6 +44,18 @@ catalog. One ordinary launch showed a document window 1.51 seconds after a
 cache deletion. Corrupt caches, changed languages and incompatible packaged
 registries still require slower discovery; this does not close the target.
 
+The corrupt-cache recovery prototype preserves an unusable selected registry
+and uses a private bundled registry for that launch; native discovery still
+checks user plug-ins. A missing selected registry is created exclusively.
+On this Mac's engine probe, corrupt, truncated, alternate and symlinked cache
+recovery measured about one second. Default-cache recovery preserved a user
+plug-in across two concurrent launches. A single earlier candidate opened a document
+window in 1.52 seconds; this follow-on has not been qualified for release.
+Language changes, incompatible bundled registries and temporary paths that
+GIMP cannot resolve unchanged still use the slower native scan, so the
+five-second target remains open for those cases.
+
+
 ## Functional baseline
 
 Compare actual workflows, including their result, cancellation, Undo/Redo and
