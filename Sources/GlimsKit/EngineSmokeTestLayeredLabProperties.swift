@@ -201,6 +201,32 @@ extension EngineSmokeTest {
         palette.reload()
         let newMenu = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
         let newButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "New Layer" }
+        if opened.storage.allowsLayerCreate && opened.storage.allowsLayerDuplicate,
+           let owner = windowController.window {
+            let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 160, height: 90),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+            sheet.isReleasedWhenClosed = false
+            let before = opened.layers.map(\.id)
+            owner.beginSheet(sheet)
+            EngineSmokeTestHost.pumpEvents(for: 0.05)
+            palette.reload()
+            check(!windowController.validateMenuItem(newMenu) && !windowController.validateMenuItem(duplicateMenu),
+                  "document menu refuses layer changes while a sheet is open")
+            check(newButton?.isEnabled == false && duplicateButton?.isEnabled == false,
+                  "palette disables layer changes while a document sheet is open")
+            for command in [EngineSession.LayerCommand.new, .duplicate] {
+                let item = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
+                item.tag = Int(command.rawValue)
+                _ = palette.perform(item.action!, with: item)
+            }
+            drain("blocked layer commands")
+            check(opened.layers.map(\.id) == before, "stale palette actions cannot change layers behind a sheet")
+            owner.endSheet(sheet)
+            sheet.orderOut(nil)
+            sheet.close()
+            EngineSmokeTestHost.pumpEvents(for: 0.05)
+            palette.reload()
+        }
         if opened.storage.allowsLayerCreate {
             check(windowController.validateMenuItem(newMenu), "Layer menu enables logical layer creation")
             check(newButton?.isEnabled == true, "palette enables logical layer creation")

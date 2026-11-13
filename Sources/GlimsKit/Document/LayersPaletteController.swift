@@ -140,11 +140,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     private func bind(_ command: Command) -> ClassicPaletteButtonBar.Item {
         ClassicPaletteButtonBar.Item(id: command.id, title: command.title, image: command.image) { [weak self] in
-            guard let document = self?.document,
-                  !document.colorInfo.mode.usesNativeChannels ||
-                    (document.storage.layout == .layeredLab &&
-                     ((command.id == "duplicate" && document.acceptsLayerDuplicate) ||
-                      (command.id == "new" && document.acceptsLayerCreate))) else { return }
+            guard let self, let document = self.document else { return }
+            if document.storage.layout == .layeredLab {
+                switch command.id {
+                case "new": guard self.createAdmission(document) else { return }
+                case "duplicate": guard self.duplicateAdmission(document) else { return }
+                default: return
+                }
+            } else if document.colorInfo.mode.usesNativeChannels { return }
             command.run(document)
         }
     }
@@ -434,6 +437,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
         guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
+        if document?.storage.layout == .layeredLab && !validateMenuItem(sender) { return }
         guard document?.colorInfo.mode.usesNativeChannels != true ||
               (document?.storage.layout == .layeredLab &&
                ((command == .duplicate && document?.acceptsLayerDuplicate == true) ||
@@ -637,16 +641,18 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     private func duplicateAdmission(_ document: ImageDocument) -> Bool {
         if document.storage.layout == .layeredLab {
-            return document.acceptsLayerDuplicate && document.selectedLayerIDs.count == 1 &&
-                !document.targetCommandIsPending && !document.floatingState.isActive
+            guard let owner = sourceWindow(for: document) else { return false }
+            let item = NSMenuItem(title: "Duplicate Layer", action: #selector(DocumentWindowController.duplicateLayer(_:)), keyEquivalent: "")
+            return owner.validateMenuItem(item)
         }
         return layerBatchAdmission(document)
     }
 
     private func createAdmission(_ document: ImageDocument) -> Bool {
         if document.storage.layout == .layeredLab {
-            return document.acceptsLayerCreate && document.selectedLayerIDs.count <= 1 &&
-                !document.targetCommandIsPending && !document.floatingState.isActive
+            guard let owner = sourceWindow(for: document) else { return false }
+            let item = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
+            return owner.validateMenuItem(item)
         }
         return document.acceptsEdits && !document.colorInfo.mode.usesNativeChannels && !document.floatingState.isActive
     }
