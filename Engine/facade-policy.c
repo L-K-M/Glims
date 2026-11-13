@@ -23,8 +23,8 @@ typedef struct {
   gboolean *invoked;
 } FacadeCall;
 
-/* The initial layered Lab surface is read-only, except transient logical-root
- * selection and XCF saving. Never inherit flat Lab mutation permissions. */
+/* Layered Lab permits only qualified root properties and their history,
+ * selection, viewing and XCF saving. Other mutations need explicit admission. */
 static gboolean
 layered_lab_operation_allowed (GlimsFacadeOperation operation)
 {
@@ -39,6 +39,8 @@ layered_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_save:
     case GLIMS_FACADE_OP_image_save_copy:
     case GLIMS_FACADE_OP_image_undo_info:
+    case GLIMS_FACADE_OP_image_undo:
+    case GLIMS_FACADE_OP_image_redo:
     case GLIMS_FACADE_OP_image_history:
     case GLIMS_FACADE_OP_selection_bounds:
     case GLIMS_FACADE_OP_selection_outline:
@@ -51,6 +53,7 @@ layered_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_selected_items:
     case GLIMS_FACADE_OP_layer_select:
     case GLIMS_FACADE_OP_image_select_layers:
+    case GLIMS_FACADE_OP_layer_change:
       return TRUE;
     default:
       return FALSE;
@@ -212,7 +215,8 @@ dispatch (GlimsEngine *engine, gpointer data)
         ? glims_lookup_image (engine, call->target.id) : NULL;
       if (open && open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB &&
           (call->operation == GLIMS_FACADE_OP_layer_select ||
-           call->operation == GLIMS_FACADE_OP_image_select_layers) &&
+           call->operation == GLIMS_FACADE_OP_image_select_layers ||
+           call->operation == GLIMS_FACADE_OP_layer_change) &&
           !call->target.sources[0] && !call->target.sources[1])
         {
           GlimsStatus status = layered_lab_admission (open, call->operation);

@@ -52,6 +52,15 @@ extension EngineSmokeTest {
         check(windowController.validateMenuItem(saveCopy), "Save a Copy stays available")
         check(opened.storage.layout == .layeredLab && opened.storage.readOnly,
               "document recognizes read-only layered Lab storage")
+        check(!opened.storage.allowsLayerProperties, "legacy read-only document does not allow layer-property edits")
+        check(selectAll.toolTip == "This document is read-only.", "disabled command explains the read-only state")
+        let priorErrorHandler = opened.onError
+        var refusal: String?
+        opened.onError = { refusal = $0 }
+        opened.undo()
+        check(refusal == "This document is read-only. You can view it and save an XCF copy.",
+              "read-only edit refusal does not promise property edits")
+        opened.onError = priorErrorHandler
         check(!opened.acceptsEdits && opened.acceptsLayerSelection,
               "layer selection remains available while editing is disabled")
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,

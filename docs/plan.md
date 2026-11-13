@@ -5918,6 +5918,16 @@ and facade-bypass tests, complete independent review and latest-head CI before
 merging. Editing, interchange and soft proof for layered Lab remain future
 work; this does not establish Photoshop 4 parity.
 
+### Layered Lab properties (experimental follow-up)
+
+The follow-up adds narrowly scoped visibility and opacity changes on logical
+layer roots, grouped Undo/Redo, and a capability flag so the app exposes only
+those controls. A native four-engine probe checks edits, rejection of private
+planes and damaged storage, history, rendering, and XCF preservation of the
+map and scalar samples. A hosted palette test drives visibility and opacity,
+Undo/Redo and Save Copy. This is still under review and needs final CI and
+integration; pixel editing, other layer changes and soft proof remain open.
+
 ### Special temporary paths during cache recovery (candidate)
 
 When a private recovery registry's temporary path contains GIMP config-path

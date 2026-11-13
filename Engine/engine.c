@@ -5036,7 +5036,7 @@ image_storage_info_on_engine (GlimsEngine *engine, gpointer data)
     case GLIMS_COMPONENT_LAYOUT_FLAT: info.layout = GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT; break;
     case GLIMS_COMPONENT_LAYOUT_LAYERED_LAB:
       info.layout = GLIMS_IMAGE_LAYOUT_LAYERED_LAB;
-      info.flags = GLIMS_IMAGE_STORAGE_READ_ONLY;
+      info.flags = GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES;
       break;
     default: return GLIMS_STATUS_UNSUPPORTED;
     }

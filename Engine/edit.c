@@ -1034,6 +1034,36 @@ glims_layer_change (GlimsEngine            *engine,
   if (! layer)
     return GLIMS_STATUS_NOT_FOUND;
 
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!storage) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID ||
+          !layered_lab_contains_root (storage, layer)) return GLIMS_STATUS_UNSUPPORTED;
+      if (!change->properties || (change->properties & ~(GLIMS_LAYER_VISIBLE | GLIMS_LAYER_OPACITY)) ||
+          ((change->properties & GLIMS_LAYER_OPACITY) &&
+           (!isfinite (change->opacity) || change->opacity < 0 || change->opacity > 1)))
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+      status = glims_edit_ready (engine, open, error);
+      if (status != GLIMS_STATUS_OK) return status;
+      if (!gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_ITEM_PROPERTIES, "Lab Layer Properties"))
+        return GLIMS_STATUS_FAILED;
+      if ((change->properties & GLIMS_LAYER_VISIBLE) &&
+          !gimp_item_set_visible (GIMP_ITEM (layer), change->visible, TRUE))
+        {
+          gimp_image_undo_group_end (image);
+          return glims_fail (error, NULL, "The layer visibility could not be changed.");
+        }
+      if (change->properties & GLIMS_LAYER_OPACITY)
+        gimp_layer_set_opacity (layer, change->opacity, TRUE);
+      gimp_image_undo_group_end (image);
+      gimp_drawable_update_all (GIMP_DRAWABLE (layer));
+      gimp_image_flush (image);
+      return GLIMS_STATUS_OK;
+    }
+
   if (change->properties & GLIMS_LAYER_MODE)
     {
       GEnumClass           *modes = g_type_class_ref (GIMP_TYPE_LAYER_MODE);

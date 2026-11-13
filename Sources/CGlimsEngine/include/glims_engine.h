@@ -1225,7 +1225,12 @@ typedef enum GlimsImageStorageLayout {
 
 /* Absence of READ_ONLY does not promise that every editing operation is
  * supported for the layout. Individual operations may still refuse it. */
-enum { GLIMS_IMAGE_STORAGE_READ_ONLY = 1u << 0 };
+enum {
+  GLIMS_IMAGE_STORAGE_READ_ONLY = 1u << 0,
+  /* Logical layer visibility and opacity, plus their Undo/Redo, are supported.
+   * This does not grant other layer changes or pixel editing. */
+  GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES = 1u << 1
+};
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */
   uint32_t layout;      /* GlimsImageStorageLayout */
@@ -4147,7 +4152,7 @@ typedef struct GlimsEngineAPI {
                                                  uint64_t token,
                                                  const GlimsLabLevelsSettings *settings,
                                                  char **error);
-  /* Slot213: per-image storage layout and read-only capability. Caller sets
+  /* Slot213: per-image storage layout and capabilities. Caller sets
    * struct_size; unaligned pointers are supported. Short outputs are untouched.
    * The known prefix is filled on success and any extension tail is untouched. */
   GlimsStatus (*image_storage_info) (GlimsEngine *engine, GlimsImageID image,

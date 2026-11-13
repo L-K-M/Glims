@@ -477,7 +477,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let layeredLab = imageDocument.storage.layout == .layeredLab
         let count = layeredLab ? imageDocument.layers.count : lab ? 3 : multichannel ? imageDocument.channels.count : imageDocument.info.layerCount
         let item = lab && !layeredLab ? "Lab channel" : multichannel ? "ink channel" : "layer"
-        let readOnly = imageDocument.storage.readOnly ? " · Read-only" : ""
+        let readOnly = imageDocument.storage.readOnly ? " · Read-only" : layeredLab ? " · Limited editing" : ""
         let summary = "\(imageDocument.info.width) × \(imageDocument.info.height) px · \(count) \(item)\(count == 1 ? "" : "s")\(readOnly)\(undo)"
         let current = statusBar.message
         let message = ToolHintPolicy.status(current: current, isError: statusIsError,
@@ -569,7 +569,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    precision: ColorForms.precisionLabel(imageDocument.colorInfo),
                                    profileLabel: imageDocument.colorInfo.profileLabel,
                                    viewRotation: rotationView.rotationDegrees)
-            + (imageDocument.storage.readOnly ? " — Read-only" : "")
+            + (imageDocument.storage.readOnly ? " — Read-only" : imageDocument.storage.layout == .layeredLab ? " — Limited editing" : "")
         refreshStatusInformation()
         refreshIdleStatus(.stateChange)
         (PaletteCenter.shared.registeredPalette(for: LayersPaletteController.definition.kind))?.retarget()
@@ -2566,7 +2566,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if imageDocument.storage.readOnly {
+        if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
@@ -2580,7 +2580,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                  #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
                 break
             default:
-                menuItem.toolTip = "This layered Lab document is read-only."
+                menuItem.toolTip = imageDocument.storage.allowsLayerProperties
+                    ? "This layered Lab document supports limited layer-property edits."
+                    : "This document is read-only."
                 return false
             }
         }

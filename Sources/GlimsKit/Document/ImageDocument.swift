@@ -283,7 +283,7 @@ final class ImageDocument {
             role: axis.role, component: colorInfo.component).map(\.value)
     }
     func toolIsAvailable(_ tool: ToolID) -> Bool {
-        if storage.readOnly { return [.hand, .zoom].contains(tool) }
+        if storage.readOnly || storage.layout == .layeredLab { return [.hand, .zoom].contains(tool) }
         guard tool.isAvailable(in: colorInfo.mode) else { return false }
         guard colorInfo.mode == .lab else { return true }
         switch tool {
@@ -506,7 +506,10 @@ final class ImageDocument {
             && !EngineActivity.shared.isBusy
     }
 
-    var acceptsEdits: Bool { acceptsImageReads && !storage.readOnly && !recorder.isReplaying }
+    var acceptsEdits: Bool { acceptsImageReads && !storage.readOnly && storage.layout != .layeredLab && !recorder.isReplaying }
+    var acceptsLayerProperties: Bool {
+        acceptsEdits || (acceptsImageReads && storage.allowsLayerProperties && !recorder.isReplaying && !recorder.isRecording)
+    }
     var acceptsLayerSelection: Bool {
         acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
     }
@@ -3262,21 +3265,34 @@ final class ImageDocument {
 
     func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange,
                      completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
-        guard !refuseWhileEditingUnavailable() else {
+        let limited = storage.layout == .layeredLab
+        if limited {
+            guard acceptsLayerProperties, change.isLimitedLayerPropertyChange else {
+                completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+            }
+        }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: limited) else {
             completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
         }
         endPendingUserEdits()
         // Finishing a field can close the document or start exclusive work.
-        guard !refuseWhileEditingUnavailable() else {
+        if limited && !acceptsLayerProperties {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: limited) else {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
+        if limited && !acceptsLayerProperties {
             completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
         }
         let semantic = SemanticImageCommand.layerProperties(.init(change))
-        guard let completion else {
+        if completion == nil && !limited {
             run(semantic: semantic, recorderLayer: layer) { session, image in
                 try session.changeLayer(layer, image: image, change)
             }
             return
         }
+        let completion = completion ?? { _ in }
         let capture: RecorderCapture?
         do { capture = try reserveRecording(semantic, explicitLayer: layer) }
         catch {
@@ -4412,13 +4428,13 @@ final class ImageDocument {
     /// target commands and edits accepted meanwhile are refused instead
     /// of landing on the drawable the move is about to leave behind.
     func undo() {
-        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
         enqueueTargetCommand { session, image in try session.undo(image) }
     }
 
     func redo() {
-        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
         enqueueTargetCommand { session, image in try session.redo(image) }
     }
@@ -4530,10 +4546,11 @@ final class ImageDocument {
     /// while its own filter preview is open; say why instead of failing
     /// later. `forPreviewWork` lets the preview's own updates and its
     /// commit through.
-    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false, allowingReplayRead: Bool = false) -> Bool {
+    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false, allowingReplayRead: Bool = false,
+                                               allowingLayerProperties: Bool = false) -> Bool {
         onUserCommand?()
-        if storage.readOnly && !allowingReplayRead {
-            onError?("This layered Lab document is read-only. You can view it and save an XCF copy.")
+        if (storage.readOnly || storage.layout == .layeredLab) && !allowingReplayRead && !allowingLayerProperties {
+            onError?(storage.restrictedEditingMessage)
             return true
         }
         if recorder.isReplaying && !allowingReplayRead {
@@ -6246,6 +6263,7 @@ final class ImageDocument {
         }
         nextTargetCommandToken += 1
         let token = nextTargetCommandToken
+        let allowsPaintTarget = storage.layout != .layeredLab
         pendingTargetCommands.insert(token)
         // Hold the deferred cache/completion stage too, so an exclusive
         // operation admitted after this input cannot overtake its cleanup.
@@ -6260,7 +6278,7 @@ final class ImageDocument {
             self.paintTargetIsValid = false
             let result = Result { try work(session, image) }
             self.paintTargetIsValid = rejectFailedTarget ? false : targetWasValid
-            if case .success = result { self.paintTargetIsValid = true }
+            if case .success = result { self.paintTargetIsValid = allowsPaintTarget }
             self.dispatchReadWhenReady {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }
