@@ -555,6 +555,7 @@ final class ImageDocument {
     private(set) var labBrushStrokeIsActive = false
     private(set) var inkBrushStrokeIsActive = false
     private var strokeRecordingInterleaved = false
+    private var labLayerStrokeGeneration: UUID?
 
     /// Which plug-in commands can run on the selected layers, by name;
     /// nil until asked for after a change.
@@ -1364,6 +1365,8 @@ final class ImageDocument {
         strokeIsActive = true
         labBrushStrokeIsActive = true
         strokeRecordingInterleaved = false
+        let generation = UUID()
+        labLayerStrokeGeneration = generation
         enqueue(on: inputQueue, input: true, strokePart: true) { [session, image] in
             let sample: EngineSession.StrokeSampleV2
             switch input {
@@ -1379,6 +1382,13 @@ final class ImageDocument {
                 self.currentStroke = nil
                 self.currentStrokeUsesV2 = false
                 self.currentCapturedStrokeKind = nil
+                // Mouse-up may never arrive after an asynchronous failure.
+                // Finish only the gesture that scheduled this begin; a later
+                // gesture must not be cleared by an old completion.
+                DispatchQueue.main.async {
+                    guard self.labLayerStrokeGeneration == generation else { return }
+                    self.endStroke()
+                }
                 self.report(error)
             }
         }
@@ -1523,6 +1533,7 @@ final class ImageDocument {
     }
 
     private func cancelCapturedBrushStroke() {
+        labLayerStrokeGeneration = nil
         strokeIsActive = false
         labBrushStrokeIsActive = false
         inkBrushStrokeIsActive = false
@@ -1625,6 +1636,7 @@ final class ImageDocument {
 
     func endStroke() {
         guard strokeIsActive else { return }
+        labLayerStrokeGeneration = nil
         let interleaved = strokeRecordingInterleaved
         strokeRecordingInterleaved = false
         strokeIsActive = false

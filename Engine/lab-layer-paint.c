@@ -19,7 +19,7 @@ range_of(const void *pointer, size_t size, Range *range)
 static bool
 overlap(Range a, Range b)
 {
-  return a.start < b.end && b.start < a.end;
+  return a.start < a.end && b.start < b.end && a.start < b.end && b.start < a.end;
 }
 
 /* Round the exact encoded-alpha expression for this binary64 source alpha.
