@@ -270,6 +270,57 @@ extension EngineSmokeTest {
         palette.reload()
         let newMenu = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
         let newButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "New Layer" }
+        let deleteMenu = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
+        let deleteButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Delete Layers" }
+        if opened.storage.allowsLayerCreate && opened.storage.allowsLayerDuplicate && opened.storage.allowsLayerDelete,
+           let owner = windowController.window {
+            let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 160, height: 90),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+            sheet.isReleasedWhenClosed = false
+            defer {
+                if owner.attachedSheet === sheet { owner.endSheet(sheet) }
+                sheet.orderOut(nil)
+                sheet.close()
+            }
+            let before = opened.layers.map(\.id)
+            owner.beginSheet(sheet)
+            let deadline = Date().addingTimeInterval(3)
+            while owner.attachedSheet !== sheet && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(owner.attachedSheet === sheet, "document sheet is attached before palette checks")
+            // These controls still reflect the state from before the sheet.
+            // Their action closures must recheck admission at dispatch time.
+            newButton?.performClick(nil)
+            duplicateButton?.performClick(nil)
+            deleteButton?.performClick(nil)
+            drain("stale palette buttons")
+            check(opened.layers.map(\.id) == before, "stale palette buttons cannot change layers behind a sheet")
+            palette.reload()
+            check(!windowController.validateMenuItem(newMenu) && !windowController.validateMenuItem(duplicateMenu) &&
+                  !windowController.validateMenuItem(deleteMenu),
+                  "document menu refuses layer changes while a sheet is open")
+            check(newButton?.isEnabled == false && duplicateButton?.isEnabled == false && deleteButton?.isEnabled == false,
+                  "palette disables layer changes while a document sheet is open")
+            for command in [EngineSession.LayerCommand.new, .duplicate, .delete] {
+                let item = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
+                item.tag = Int(command.rawValue)
+                _ = palette.perform(item.action!, with: item)
+            }
+            drain("blocked layer commands")
+            check(opened.layers.map(\.id) == before, "stale palette actions cannot change layers behind a sheet")
+            owner.endSheet(sheet)
+            let detachDeadline = Date().addingTimeInterval(3)
+            while owner.attachedSheet === sheet && Date() < detachDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(owner.attachedSheet !== sheet, "document sheet detaches before palette menu checks")
+            palette.reload()
+            let newItem = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
+            newItem.tag = Int(EngineSession.LayerCommand.new.rawValue)
+            _ = palette.perform(newItem.action!, with: newItem)
+            drain("palette menu after sheet")
+            check(opened.layers.count == before.count + 1, "palette menu creates a layer after the sheet closes")
+            EngineUndoManager(document: opened).undo()
+            drain("restore palette menu fixture")
+            check(opened.layers.map(\.id) == before, "Undo restores the palette menu fixture")
+        }
         if opened.storage.allowsLayerCreate {
             check(windowController.validateMenuItem(newMenu), "Layer menu enables logical layer creation")
             check(newButton?.isEnabled == true, "palette enables logical layer creation")
@@ -295,8 +346,6 @@ extension EngineSmokeTest {
                   "older engines keep logical layer creation disabled")
         }
         palette.reload()
-        let deleteMenu = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
-        let deleteButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Delete Layers" }
         if opened.storage.allowsLayerDelete {
             check(windowController.validateMenuItem(deleteMenu), "Layer menu enables logical layer deletion")
             check(deleteButton?.isEnabled == true, "palette enables logical layer deletion")
