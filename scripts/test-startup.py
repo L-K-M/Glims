@@ -30,6 +30,9 @@ def main():
         # Native plug-in cache identity includes executable mtimes. A plain
         # recursive copy changes them and silently tests only requery fallback.
         subprocess.run(['cp', '-cpR', str(app), str(clone)], check=True)
+        # This suite deliberately invalidates the original host seed. Exercise
+        # alternate localized seeds separately in test-startup-localized-seeds.
+        shutil.rmtree(clone / 'Contents/Resources/Engine-Startup/localized', ignore_errors=True)
         probe = work / 'startup-tests'
         subprocess.run(['xcrun', 'clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I', str(ROOT / 'Sources/CGlimsEngine/include'),
