@@ -126,7 +126,7 @@ extension EngineSmokeTest {
         func descendants<T: NSView>(_ view: NSView, as type: T.Type) -> [T] {
             ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants($0, as: type) }
         }
-        var editedOpacity = 0.5
+        var editedOpacity = -1.0 // No valid layer opacity can satisfy the saved-copy check until an edit runs.
         if let target = opened.activeLayer,
            let opacity = descendants(palette.view, as: ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),
            let field = descendants(opacity, as: NSTextField.self).first(where: { $0.isEditable }),

@@ -148,10 +148,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     gimp_item_set_lock_visibility(locked_item,TRUE,FALSE);
     GlimsLayerChange locked={.struct_size=sizeof locked,.properties=GLIMS_LAYER_VISIBLE|GLIMS_LAYER_OPACITY,
                              .visible=!old_visible,.opacity=.25};error=NULL;
-    CHECK(api->layer_change(engine,id,gimp_item_get_id(locked_item),&locked,&error)==GLIMS_STATUS_UNSUPPORTED,
-          "a locked logical root refuses a combined property edit");
-    if(error)api->free_string(error);error=NULL;
+    GlimsStatus locked_status=api->layer_change(engine,id,gimp_item_get_id(locked_item),&locked,&error);
     gimp_item_set_lock_visibility(locked_item,FALSE,FALSE);
+    CHECK(locked_status==GLIMS_STATUS_UNSUPPORTED,"a locked logical root refuses a combined property edit");
+    if(error)api->free_string(error);error=NULL;
     CHECK(gimp_item_get_visible(locked_item)==old_visible && gimp_layer_get_opacity(locked_root)==old_opacity,
           "refused locked-root edit leaves visibility and opacity unchanged");
     CHECK(api->layer_select(engine,id,hidden)!=GLIMS_STATUS_OK,"private scalar plane cannot be selected as a public layer");
