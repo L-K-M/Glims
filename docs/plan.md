@@ -5528,3 +5528,16 @@ actual older producer preserves live paint and explicitly refuses recording.
 All 1,714 Swift and 141 Python tests pass; document/replay review is clear.
 Four-engine checks, codec/fixture review and hosted CI remain open.
 See [lab-recorder.md](lab-recorder.md). No installed-app change is claimed.
+
+
+### Lab selection Recorder integration (candidate)
+
+Version 15 adds explicit Lab-only Rectangle/Ellipse/Lasso and All/None/Invert
+recording. Geometry and meaningful selection options remain owned, with the
+root mask independent of selected axes; no RGB/ink fallback is admitted.
+The initial pinned app fixture passes 647 checks, including exact file values,
+independent native and Boolean-grid coverage oracles, Undo/Redo and wrong-mode
+refusal. All 1,721 Swift and 141 Python tests pass; document/value review is
+clear. Codec/fixture review, four-engine checks and hosted CI are pending.
+See [lab-recorder.md](lab-recorder.md); installed-app qualification is
+separate.

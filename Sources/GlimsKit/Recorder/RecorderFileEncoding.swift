@@ -16,6 +16,14 @@ extension RecorderFileCodec {
                     throw RecorderFileError.invalid("Invalid polygon point count.")
                 }
                 pointCount += points.count
+            case .success(.labSelection(let command), _):
+                if case .shape(.polygon(let points), _) = command {
+                    guard points.count >= 3, points.count <= RecorderFileLimits.points - pointCount else {
+                        throw RecorderFileError.invalid("Invalid Lab selection polygon point count.")
+                    }
+                    pointCount += points.count
+                }
+                fileVersion = max(fileVersion, labSelectionVersion)
             case .success(.completeLabStroke(let stroke), _):
                 let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -90,6 +98,12 @@ extension RecorderFileCodec {
         }) {
             throw RecorderFileError.invalid("Version 14 requires a successful Lab stroke.")
         }
+        if fileVersion == labSelectionVersion, !value.records.contains(where: {
+            if case .success(.labSelection, _) = $0.outcome { return true }
+            return false
+        }) {
+            throw RecorderFileError.invalid("Version 15 requires a successful Lab selection command.")
+        }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
         }
@@ -163,8 +177,29 @@ extension RecorderFileCodec {
                         "first": try strokePointJSON(value.trace.first), "batches": .array(batches)])
     }
 
+    private static func labSelectionJSON(_ command: RecorderLabSelectionCommand) throws -> RecorderJSON {
+        let command = try command.validated()
+        switch command {
+        case .shape(let shape, let options):
+            let source: RecorderJSON
+            switch shape {
+            case .rectangle(let rect): source = .object(["tag": .string("rectangle"), "rect": try rectJSON(rect)])
+            case .ellipse(let rect): source = .object(["tag": .string("ellipse"), "rect": try rectJSON(rect)])
+            case .polygon(let points): source = .object(["tag": .string("polygon"), "points": .array(try points.map { try pointJSON($0) })])
+            }
+            let optionsJSON = RecorderJSON.object(["operation": .string(options.operation.rawValue),
+                "antialias": .bool(options.antialias), "feather": try d(options.feather),
+                "cornerRadius": try d(options.cornerRadius)])
+            return .object(["tag": .string("labSelectionShape"), "shape": source, "options": optionsJSON])
+        case .command(let selection):
+            return .object(["tag": .string("labSelectCommand"), "command": .string(selection.rawValue)])
+        }
+    }
+
     private static func commandJSON(_ command: RecorderFileCommand) throws -> RecorderJSON {
         switch command {
+        case .labSelection(let command):
+            return try labSelectionJSON(command)
         case .selectionShape(let shape, let options):
             let source: RecorderJSON
             switch shape {

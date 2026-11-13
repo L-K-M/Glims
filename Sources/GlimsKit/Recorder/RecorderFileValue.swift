@@ -262,6 +262,7 @@ enum RecorderFileCommand: Equatable {
         let alpha: Channel
     }
 
+    case labSelection(RecorderLabSelectionCommand)
     case selectionShape(Shape, Options)
     case selectColor(Point, Options)
     case selectCommand(Selection, radius: Double)
@@ -318,7 +319,7 @@ enum RecorderFileCommand: Equatable {
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves, .completeLabStroke: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
         }
     }
 }
