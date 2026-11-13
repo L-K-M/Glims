@@ -222,10 +222,27 @@ extension EngineSmokeTest {
             state.foreground = .red
             state.update(.paintbrush) { $0.size = 4; $0.opacity = 1; $0.hardness = 1; $0.resource = nil }
             state.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: flatDocument); options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func descendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
+            let optionViews = descendants(options.view)
+            let optionText = optionViews.compactMap { ($0 as? NSTextField)?.stringValue }
+            let pressure = optionViews.compactMap { $0 as? NSButton }.first { $0.title == "Pen pressure sets size" }
+            check(optionText.contains(where: { $0.contains("foreground color") }) &&
+                  !optionText.contains(where: { $0.contains("Select one Lab channel") }) && pressure?.isEnabled == false,
+                  "layered Brush options show foreground color and fixed pressure behavior")
             let oldError = opened.onError
             var errors: [String] = []
             opened.onError = { errors.append($0) }
             defer { opened.onError = oldError }
+            let oldProjection = opened.onProjectionChange
+            var brushDamage: [CGRect] = []
+            opened.onProjectionChange = { rect in brushDamage.append(rect); oldProjection?(rect) }
+            defer { opened.onProjectionChange = oldProjection }
             let before = pixel(session, image, x: 1, y: 1)
             try opened.startRecording()
             opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
@@ -245,11 +262,17 @@ extension EngineSmokeTest {
             if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
                let drag = mouse(.leftMouseDragged, CGPoint(x: 2.5, y: 1.5)),
                let up = mouse(.leftMouseUp, CGPoint(x: 2.5, y: 1.5)) {
+                brushDamage.removeAll()
                 canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
                 drain("layered Lab canvas Brush gesture")
                 let painted = pixel(session, image, x: 1, y: 1)
+                if !errors.isEmpty || painted == before || pixel(session, image, x: 0, y: 0) != outside {
+                    print("BRUSH_DIAGNOSTIC errors=\(errors) before=\(String(describing: before)) painted=\(String(describing: painted)) outside=\(String(describing: outside)) outsideAfter=\(String(describing: pixel(session, image, x: 0, y: 0)))")
+                }
                 check(errors.isEmpty && painted != before && pixel(session, image, x: 0, y: 0) == outside,
                       "canvas Brush paints selected pixels and preserves outside pixels")
+                check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
+                      "canvas receives brush damage for the painted pixel")
                 let undo = EngineUndoManager(document: opened)
                 check(undo.canUndo, "layered Lab Brush offers Undo")
                 undo.undo(); drain("layered Lab Brush Undo")
@@ -266,14 +289,20 @@ extension EngineSmokeTest {
                     isARepeat: false, keyCode: 53) {
                 let undoBefore = try? session.undoInfo(image)
                 canvas.mouseDown(with: down); drain("begin canvas Brush cancellation")
+                if !opened.labBrushStrokeIsActive || pixel(session, image, x: 1, y: 1) == before {
+                    print("BRUSH_CANCEL_DIAGNOSTIC active=\(opened.labBrushStrokeIsActive) errors=\(errors) before=\(String(describing: before)) after=\(String(describing: pixel(session, image, x: 1, y: 1)))")
+                }
                 check(opened.labBrushStrokeIsActive && pixel(session, image, x: 1, y: 1) != before,
                       "cancellation fixture begins a visible Brush stroke")
+                brushDamage.removeAll()
                 window.makeFirstResponder(canvas); canvas.keyDown(with: escape)
                 drain("cancel canvas Brush with Escape")
                 let undoAfter = try? session.undoInfo(image)
                 check(undoBefore != nil && undoAfter != nil && !opened.strokeIsActive && pixel(session, image, x: 1, y: 1) == before &&
                       undoBefore?.undoCount == undoAfter?.undoCount && undoBefore?.redoCount == undoAfter?.redoCount,
                       "Escape restores the canvas Brush pixels and history")
+                check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
+                      "Escape invalidates the restored canvas pixels")
             } else { check(false, "canvas Brush cancellation events can be created") }
         }
         func outline(in view: NSView) -> NSOutlineView? {

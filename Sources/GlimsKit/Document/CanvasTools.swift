@@ -422,7 +422,9 @@ final class CanvasToolController {
         }
         let labSelectionTool = document.storage.layout == .layeredLab && document.acceptsLabSelections &&
             [.rectangleSelect, .ellipseSelect, .lasso].contains(tool)
-        guard document.acceptsEdits || labSelectionTool || [.hand, .zoom, .eyedropper].contains(tool) else {
+        let labLayerBrushTool = document.storage.layout == .layeredLab && tool == .paintbrush &&
+            document.toolIsAvailable(tool)
+        guard document.acceptsEdits || labSelectionTool || labLayerBrushTool || [.hand, .zoom, .eyedropper].contains(tool) else {
             onStatus?("Finish the current operation before editing the image.")
             return
         }
