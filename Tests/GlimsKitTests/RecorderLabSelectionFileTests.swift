@@ -356,16 +356,18 @@ final class RecorderLabSelectionFileTests: XCTestCase {
 
     func testPolygonCountsAndSharedPointBudgetBoundaries() throws {
         func polygonCommand(pointCount: Int) -> String {
-            let points = (0..<pointCount).map { index in
-                #"{"x":"# + String(index) + #","y":"# + String(index % 3) + "}"
-            }.joined(separator: ",")
+            let pointRows: [String] = (0..<pointCount).map { index -> String in
+                "{\"x\":\(index),\"y\":\(index % 3)}"
+            }
+            let points = pointRows.joined(separator: ",")
             let options = labOptionsJSON(operation: "replace", antialias: true, feather: "0", cornerRadius: "0")
             return labShapeJSON(shape: "polygon", payload: #""points":["# + points + "]", options: options)
         }
         func ordinaryPolygon(pointCount: Int, ordinal: Int) -> String {
-            let points = (0..<pointCount).map { index in
-                #"{"x":"# + String(index) + #","y":"# + String(index % 5) + "}"
-            }.joined(separator: ",")
+            let pointRows: [String] = (0..<pointCount).map { index -> String in
+                "{\"x\":\(index),\"y\":\(index % 5)}"
+            }
+            let points = pointRows.joined(separator: ",")
             let command = #"{"tag":"selectionShape","shape":{"tag":"polygon","points":["# + points + #"]},"options":{"operation":"replace","antialias":true,"feather":0,"cornerRadius":0,"threshold":0,"contiguous":true,"sampleMerged":true}}"#
             return success(command, ordinal: ordinal)
         }
