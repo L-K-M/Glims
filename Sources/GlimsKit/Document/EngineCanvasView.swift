@@ -57,6 +57,7 @@ final class EngineCanvasView: NSView {
     private var failedTiles: Set<TileKey> = []
     private var renderingStopped = false
     private var renderInFlight = false
+    private let busyRetry = CanvasBusyRetry()
     /// Bumped on zoom changes; results of an older generation are dropped.
     private var generation = 0
     /// The current display destination: an immutable main-actor snapshot of
@@ -307,7 +308,8 @@ final class EngineCanvasView: NSView {
 
     /// Renders whatever visible tiles are missing or stale.
     func setNeedsRender() {
-        guard !renderingStopped, !document.isClosing, !renderInFlight, let key = nextTileToRender() else { return }
+        guard !renderingStopped, !document.isClosing else { busyRetry.reset(); return }
+        guard !renderInFlight, !busyRetry.isPending, let key = nextTileToRender() else { return }
         renderInFlight = true
         let area = deviceRect(for: key)
         let session = document.session, image = document.image, scale = deviceScale, generation = generation
@@ -332,6 +334,12 @@ final class EngineCanvasView: NSView {
                             CanvasRenderMetrics.elapsedSeconds(start: started, end: finished))
                         self.setNeedsDisplay(self.viewRect(for: key))
                     case .failure(let error):
+                        if self.busyRetry.scheduleIfBusy(error, canRetry: { [weak self] in
+                            guard let self else { return false }
+                            return generation == self.generation && !self.renderingStopped && !self.document.isClosing
+                        }, retry: { [weak self] in self?.setNeedsRender() }) {
+                            return
+                        }
                         // Retry when the image or zoom changes, not in
                         // an unbounded background loop for the same bad tile.
                         self.failedTiles.insert(key)
@@ -346,6 +354,7 @@ final class EngineCanvasView: NSView {
     /// Drains any in-flight read before the engine image is destroyed.
     func stopRendering(completion: @escaping @MainActor () -> Void) {
         renderingStopped = true
+        busyRetry.reset()
         transformPixels.update(nil)
         inkLevelsPreviewToken = nil
         inkLevelsPixels.update(nil)
@@ -397,10 +406,9 @@ final class EngineCanvasView: NSView {
         return tiles.values.first?.colorSpace?.copyICCData() as Data?
     }
 
-    /// Test seam: read-only view of the existing single in-flight tile
-    /// admission, so the smoke can prove a render request is pending without
-    /// touching the queue. No behavior change, no native call.
-    var hasPendingRender: Bool { renderInFlight }
+    /// Test seam: an in-flight read or a delayed retry is still pending work.
+    /// Observes admission without touching the queue or making a native call.
+    var hasPendingRender: Bool { renderInFlight || busyRetry.isPending }
 
     /// Test seam: enqueues a barrier closure onto the existing private serial
     /// render queue, ordered after work already queued and before anything
@@ -413,6 +421,7 @@ final class EngineCanvasView: NSView {
     }
 
     private func store(_ image: CGImage, for key: TileKey, elapsedSeconds: TimeInterval?) {
+        busyRetry.reset()
         tiles[key] = image
         staleTiles.remove(key)
         if tiles.count > Self.maximumCachedTiles {
@@ -428,6 +437,7 @@ final class EngineCanvasView: NSView {
 
     private func advanceRenderGeneration(clearingTiles: Bool) {
         generation += 1
+        busyRetry.reset()
         if clearingTiles {
             tiles.removeAll()
             staleTiles.removeAll()

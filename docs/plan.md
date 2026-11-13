@@ -5780,9 +5780,47 @@ The combined workflow keeps one preview cache through create, duplicate,
 delete and three Undo/Redo transitions. Temporary sole-root alpha mutations
 prove that the cache recaptures the actual surviving source; each command's
 mask is compared directly with the original nonempty mask. Earlier weaker
-fixtures remain separate from the final 537-check matrix. Hosted CI and
-public layered editing remain pending. Contracts
+fixtures remain separate from the final 537-check matrix. PR #282 merged at
+`afcbee8a`, after both jobs in CI `43388309041` passed on `ac43147e`.
+Public layered editing remains pending. Contracts
 and limits are in [lab-layer-create.md](lab-layer-create.md),
 [lab-layer-duplicate.md](lab-layer-duplicate.md) and
 [lab-layer-delete.md](lab-layer-delete.md). The installed app remains
 qualified #277; no notarization is requested.
+
+### Alpha-aware profile and proof rendering (candidate)
+
+The display renderer now samples an image-owned associated-linear cache before
+ICC/proof conversion. This fixes reproduced transparent-edge contamination,
+missing fractional-magnification corner pixels and large-coordinate garbage.
+Integer tile reads and bounded sparse deep reductions avoid native floating
+ROI rounding and empty mip-tree traversal. Direct-write and projection damage
+invalidate the cache; exact source-key changes replace it. Viewing remains
+allowed while a plug-in's nested loop sets global busy. A transient per-image
+BUSY result schedules one cancellable canvas retry instead of permanently
+failing the tile. See [display-sampling.md](display-sampling.md).
+
+Each of the four engine sets passes conformance and 6,065 independent sampling
+checks (24,260 total).
+The unchanged fixture covers RGB/Gray/profile/proof reads, tiny alpha, signed
+values, cache damage/replacement, large coordinates, minimum zoom, source
+state and busy admission. Existing display, proof and gamut fixtures also pass
+on all four engines. Independent source reviews are clear. The Swift suite
+passes 1,761 tests and the Python suite 141 tests. Hosted CI and app
+qualification remain in progress.
+
+A facade-only 24 MP, 20-layer comparison on this Mac measured these cached
+viewport means (three reads, milliseconds):
+
+| Zoom | Previous renderer | Candidate |
+| --- | ---: | ---: |
+| Fit, 22.5% | 43.2 | 35.6 |
+| 50% | 12.6 | 28.1 |
+| 100% | 12.5 | 12.8 |
+| 130% | 41.7 | 36.4 |
+
+Correct linear/alpha filtering adds work at 50%; the exact-grid shortcut
+removes unnecessary interpolation but does not eliminate that cost. Cold fit
+was 1.28 versus 1.47 seconds. These are native viewport measurements with a
+linear RGB destination profile, not ordinary app startup or interaction
+guarantees. Installed #277 remains unchanged pending qualification.

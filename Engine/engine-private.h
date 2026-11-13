@@ -158,6 +158,8 @@ typedef struct
   GBytes    *component_cmyk_profile;
   gchar     *component_profile_label;
   struct _GlimsPlatePreview *component_preview;
+  struct GlimsDisplaySample *display_sample;
+  gboolean display_sample_active;
   struct _GlimsInkSnapshot *ink_snapshot;
   struct _GlimsLabSnapshot *lab_snapshot;
   GimpDrawable *component_planes[32];

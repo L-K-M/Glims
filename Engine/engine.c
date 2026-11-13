@@ -15,6 +15,7 @@
 #include "engine-private.h"
 #include "facade-policy.h"
 #include "plate-preview.h"
+#include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
 #include "operation-selective-color.h"
@@ -1028,6 +1029,9 @@ open_image_free (gpointer data)
 {
   GlimsOpenImage *open = data;
 
+  if (open->image)
+    gimp_projection_stop_rendering (gimp_image_get_projection (open->image));
+  glims_display_sample_free (open->display_sample);
   glims_ink_snapshot_free (open->ink_snapshot);
   glims_lab_snapshot_free (open->lab_snapshot);
   glims_item_sets_free (open->item_sets);
