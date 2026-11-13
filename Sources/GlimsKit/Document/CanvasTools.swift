@@ -416,11 +416,16 @@ final class CanvasToolController {
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
         let canSampleLabBrush = document.storage.layout == .layeredLab && tool == .paintbrush &&
             document.session.supportsLayeredLabSampling
-        guard document.toolIsAvailable(tool),
+        let toolAvailable = document.toolIsAvailable(tool)
+        guard toolAvailable,
               !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil && !canSampleLabBrush) else {
-            onStatus?(document.colorInfo.mode == .lab
-                ? "Choose an available Lab editing or navigation tool."
-                : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
+            if toolAvailable && document.storage.layout == .layeredLab && tool == .paintbrush && optionDown {
+                onStatus?("Release Option to paint the selected Lab layer.")
+            } else {
+                onStatus?(document.colorInfo.mode == .lab
+                    ? "Choose an available Lab editing or navigation tool."
+                    : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
+            }
             return
         }
         let labSelectionTool = document.storage.layout == .layeredLab && document.acceptsLabSelections &&

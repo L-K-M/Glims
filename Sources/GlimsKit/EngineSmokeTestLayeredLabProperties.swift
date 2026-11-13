@@ -246,8 +246,14 @@ extension EngineSmokeTest {
                         let history = try session.undoInfo(image)
                         ToolState.shared.foreground = .blue
                         ToolState.shared.select(.paintbrush)
-                        canvas.mouseDown(with: down); canvas.mouseUp(with: up)
+                        canvas.mouseDown(with: down)
+                        let blockedStatus = windowController.statusBar.message
+                        canvas.mouseUp(with: up)
                         EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Option-click layered Lab Brush")
+                        if !session.supportsLayeredLabSampling {
+                            check(blockedStatus == "Release Option to paint the selected Lab layer.",
+                                  "unsupported Option Brush explains how to resume painting")
+                        }
                         let sampled = ToolState.shared.foreground.usingColorSpace(.sRGB)
                         let expectedColor = session.supportsLayeredLabSampling
                             ? (sampled?.redComponent ?? 0) > 0.95 && (sampled?.blueComponent ?? 1) < 0.08
@@ -258,6 +264,56 @@ extension EngineSmokeTest {
                         ToolState.shared.select(priorTool)
                         ToolState.shared.foreground = .red
                     } else { check(false, "layered Lab Option-click events can be created") }
+                }
+                // Option sampling owns the entire gesture, even if Option is released
+                // before the pointer. Moving to a different pixel must update the color.
+                do {
+                    let canvas = windowController.canvas
+                    let redLocation = canvas.convert(CGPoint(x: 1.5 * canvas.scale, y: 1.5 * canvas.scale), to: nil)
+                    let otherLocation = canvas.convert(CGPoint(x: 0.5 * canvas.scale, y: 0.5 * canvas.scale), to: nil)
+                    func event(_ type: NSEvent.EventType, _ location: NSPoint, _ flags: NSEvent.ModifierFlags) -> NSEvent? {
+                        NSEvent.mouseEvent(with: type, location: location, modifierFlags: flags,
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 5, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+                    }
+                    if let down = event(.leftMouseDown, redLocation, [.option]),
+                       let move = event(.leftMouseDragged, otherLocation, [.option]),
+                       let releaseOption = event(.leftMouseDragged, redLocation, []),
+                       let up = event(.leftMouseUp, redLocation, []) {
+                        let priorTool = ToolState.shared.current
+                        let priorForeground = ToolState.shared.foreground
+                        let history = try session.undoInfo(image)
+                        let outsideBeforeDrag = pixel(session, image, x: 0, y: 0)
+                        let native = session.supportsLayeredLabSampling
+                            ? try session.sampleLayeredLabColor(image, x: 0, y: 0) : nil
+                        ToolState.shared.foreground = .blue
+                        ToolState.shared.select(.paintbrush)
+                        canvas.mouseDown(with: down)
+                        let first = ToolState.shared.foreground.usingColorSpace(.sRGB)
+                        canvas.mouseDragged(with: move)
+                        let moved = ToolState.shared.foreground.usingColorSpace(.sRGB)
+                        canvas.mouseDragged(with: releaseOption)
+                        let released = ToolState.shared.foreground.usingColorSpace(.sRGB)
+                        canvas.mouseUp(with: up)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Option-drag layered Lab Brush")
+                        let afterHistory = try session.undoInfo(image)
+                        let expected = native.map { $0.alpha > 0 ? [$0.red, $0.green, $0.blue].map { min(1, max(0, $0)) } : [0, 0, 0] }
+                        let movedMatches = expected.map { values in
+                            guard let moved else { return false }
+                            return abs(moved.redComponent - values[0]) < 0.01 &&
+                                abs(moved.greenComponent - values[1]) < 0.01 && abs(moved.blueComponent - values[2]) < 0.01
+                        } ?? ((moved?.blueComponent ?? 0) > 0.95)
+                        let firstMatches = session.supportsLayeredLabSampling
+                            ? (first?.redComponent ?? 0) > 0.95 : (first?.blueComponent ?? 0) > 0.95
+                        let releaseMatches = session.supportsLayeredLabSampling
+                            ? (released?.redComponent ?? 0) > 0.95 : (released?.blueComponent ?? 0) > 0.95
+                        check(firstMatches && movedMatches && releaseMatches && !opened.strokeIsActive &&
+                              history == afterHistory && pixel(session, image, x: 1, y: 1) == insideAfter &&
+                              pixel(session, image, x: 0, y: 0) == outsideBeforeDrag,
+                              "Option-drag samples its whole gesture without painting or changing history")
+                        ToolState.shared.select(priorTool)
+                        ToolState.shared.foreground = priorForeground
+                    } else { check(false, "layered Lab Option-drag events can be created") }
                 }
                 let undo = EngineUndoManager(document: opened)
                 check(undo.canUndo, "Lab color fill offers Undo")
