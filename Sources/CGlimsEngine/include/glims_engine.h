@@ -1247,6 +1247,11 @@ typedef struct GlimsImageStorageInfo {
   uint64_t flags;       /* GLIMS_IMAGE_STORAGE_* */
 } GlimsImageStorageInfo;
 
+typedef struct GlimsLabLayerIdentity {
+  uint32_t struct_size;
+  uint8_t uuid[16]; /* Durable root identity within this document. */
+} GlimsLabLayerIdentity;
+
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
  * release. `component` and `trc` together are the image's precision;
@@ -4167,6 +4172,15 @@ typedef struct GlimsEngineAPI {
    * The known prefix is filled on success and any extension tail is untouched. */
   GlimsStatus (*image_storage_info) (GlimsEngine *engine, GlimsImageID image,
                                      GlimsImageStorageInfo *info);
+  /* Slot214: read the durable identity of one explicit logical Lab root.
+   * This metadata read is allowed while busy and changes no image state.
+   * Other layouts, hidden planes and damaged storage refuse. The UUID is
+   * document-scoped, not a cross-document identity. NULL/short output is
+   * INVALID_ARGUMENT and untouched. Unaligned outputs are accepted; for an
+   * accepted size, struct_size and extension bytes are preserved and every
+   * failure clears the known UUID payload. */
+  GlimsStatus (*image_lab_layer_identity) (GlimsEngine *engine, GlimsImageID image,
+                                           GlimsItemID root, GlimsLabLayerIdentity *out);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
