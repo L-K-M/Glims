@@ -133,6 +133,34 @@ def main():
             unchanged('corrupt alternate cache with user plug-in', with_custom, temporary=True)
             assert selected_alternate.read_text() == 'invalid registry\n', 'custom alternate registry was replaced'
             assert registry.read_text() == 'invalid registry\n', 'unselected default registry was replaced'
+            selected_alternate.unlink()
+            alternate_processes = []
+            try:
+                for index in range(2):
+                    concurrent_env = environment.copy()
+                    concurrent_env['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / f'alternate-concurrent-{index}.txt')
+                    alternate_processes.append(subprocess.Popen(
+                        [str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
+                         str(work / 'user'), str(work / 'cache')],
+                        env=concurrent_env, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        text=True, start_new_session=True))
+                for index, process in enumerate(alternate_processes):
+                    stdout, stderr = process.communicate(timeout=180)
+                    assert process.returncode == 0, f'concurrent alternate launch {index}: {stdout}\n{stderr}'
+                    fonts, commands = (work / f'alternate-concurrent-{index}.txt').read_text().split('[procedures]\n', 1)
+                    assert (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines())) == with_custom, \
+                        'concurrent alternate launch changed the font or command catalog'
+            finally:
+                for process in alternate_processes:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait()
+            assert selected_alternate.is_file(), 'concurrent launch did not create the selected registry'
+            assert registry.read_text() == 'invalid registry\n', 'concurrent alternate launch replaced the default registry'
+            print('concurrent missing alternate recovery: both catalogs preserved', flush=True)
         finally:
             selected_rc.write_bytes(prior_rc)
             selected_alternate.unlink(missing_ok=True)
