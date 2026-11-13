@@ -63,6 +63,8 @@ jobs:
         run: python3 scripts/test-lab-layer-composite.py
       - name: Check optimized and sanitized Lab brush coverage
         run: python3 scripts/test-lab-brush-coverage.py
+      - name: Check physical layered Lab paint against the rational oracle
+        run: python3 scripts/test-lab-layer-paint.py
 
   build-test:
     name: Build, Test & Package
@@ -144,6 +146,10 @@ jobs:
       - name: Check Lab brush coverage
         timeout-minutes: 5
         run: python3 scripts/test-lab-brush-coverage.py optimized
+
+      - name: Check physical layered Lab paint against the rational oracle
+        timeout-minutes: 5
+        run: python3 scripts/test-lab-layer-paint.py
 
       - name: Check physical Lab Levels
         timeout-minutes: 5
