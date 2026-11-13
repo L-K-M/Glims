@@ -5501,6 +5501,19 @@ panel matrix and independent reviews are running. Lab Recorder replay and
 standalone release qualification remain separate follow-up work. See
 [lab-curves-ui.md](lab-curves-ui.md).
 
+
+### Qualified Lab Curves/CMYK import installed (2026-11-13)
+
+PR #266 merged as `e1be7354` after exact-head CI passed. Qualified source
+`b6840eea` was published to `dist/Glims.app` and `/Applications/Glims.app`,
+with the prior apps and receipts preserved. Its standalone 23-case suite,
+source/payload provenance and fresh/cached/relocated launches passed; the
+installed ordinary launch reached the editor in 3.222 seconds and closed
+cleanly. No notarization was performed. See [completion.md](completion.md)
+for the five per-engine case counts and exact qualification coverage. Lab
+Recorder work in #267–#270 is separately reviewed and tested work, not part
+of this installed `b6840eea` build.
+
 ### Physical Lab Recorder capture and replay (2026-11-13)
 
 A candidate adds version 13 Lab Fill/Curves recording, explicit axis/precision
@@ -5559,6 +5572,19 @@ Its other pixel, Undo, save, recovery and close assertions remain in place.
 The failed release evidence is preserved; a fresh release qualification is
 required after this fixture-only change. No installed app is replaced here.
 
+
+### Qualified Lab Recorder release installed (2026-11-13)
+
+Source `9f3d0c5` is now installed in `dist/Glims.app` and
+`/Applications/Glims.app`, preserving the preceding apps and receipts. PR #272
+merged as `80f3c0ba` after latest-head CI `43356390197` passed on `4345e136`;
+the only qualified-source delta is the reviewed Xcode 26 test-expression fix.
+All 1,721 Swift/141 Python tests and 26 standalone bundle cases pass. An
+ordinary installed launch reached the ready document window in 3.088 seconds.
+No notarization. See [completion.md](completion.md) for exact scope and evidence.
+At that checkpoint, combined Ink controls/Recorder #276 was being qualified
+separately. The following dated entry records its later installation.
+
 ### Typed ink brush capture foundation (candidate)
 
 Slots 208–209 add captured CMYK/Multichannel Brush/Pencil begin and rollback,
@@ -5599,6 +5625,17 @@ drafts, invalid text, independent opacity and stale callbacks. Independent
 production review found no important issue. Latest-head CI and the remaining
 engine checks are pending; this has not changed the installed app.
 
+### Qualified Ink controls and Recorder installed (2026-11-13)
+
+Source `e887259` is installed in both app locations after PR #276 merged as
+`e84d2017` and exact-head CI `43359370740` passed both required jobs. This
+adds explicit Ink coverage controls and typed CMYK/Multichannel Brush/Pencil
+recording with version 16 files. All 1,740 Swift tests and 28 standalone
+bundle cases pass. Ordinary fresh/cached/relocated launches measured
+1.751/1.411/3.100 seconds; the installed app opened a ready document in
+2.913 seconds. Both prior apps and receipts are retained. No notarization.
+Lab Levels #277 and layered Lab/CMYK remain separate unfinished work.
+See [completion.md](completion.md) for evidence and remaining scope.
 
 ### Physical Lab Levels (candidate)
 
@@ -5613,6 +5650,23 @@ conformance/Ink/Lab regressions. All 1,755 Swift tests and 375 pinned actual-app
 checks pass, including bound loaded-file replay and Undo. Native, lifecycle,
 Recorder and app-fixture source reviews are complete. Four-engine app checks
 and latest-head CI remain pending. See [lab-levels.md](lab-levels.md).
+
+### Qualified Lab Levels installed (2026-11-13)
+
+Source `1edb79c` is installed in both app locations after PR #277 merged as
+`59f93da4` and exact-head CI `43365872812` passed both required jobs. All
+1,755 Swift and 141 Python tests pass, along with 28 current native matrix
+runs, four-engine 21-check first-start controls, eight clean app cases and
+29 standalone pinned release cases. The app matrix includes 375 Lab Levels
+checks per engine; loaded-file Recorder replay and Undo are covered.
+Fresh/cached/relocated launches measured 2.246/1.473/3.584 seconds; a separate
+ordinary installed launch reached its ready document in 3.291 seconds and
+quit cleanly. Prior apps and receipts are preserved. No notarization.
+Direct Recorder/service and Ink-control fixtures retain their narrower
+scope rather than being relabeled as ordinary hosted app workflows.
+Layered Lab/CMYK and full editor parity remain open; foundation #278 is not
+included in this installation. See [completion.md](completion.md) for exact
+evidence and historical checkpoints.
 
 ### Layered Lab storage and composition foundation (candidate)
 
@@ -5659,6 +5713,16 @@ Source bytes, map, selection, history and dirty state remain unchanged by the
 tested renders. Source review found no important issue under the documented
 lifetime and nonaliasing contract. Existing older-engine/master diagnostics
 remain recorded; no final compiler warning, critical or failed check occurred.
+
+### Private layered Lab foundations merged (2026-11-13)
+
+PR #278 merged the map/compositor foundation. PR #280 integrated the exact
+#279 storage tip and the row renderer at `7dc70835`, after both jobs in
+CI `43374607164` passed on source `1d3602b`. Native evidence is 584 storage
+checks and 4,984 row-render checks across the four engines, with independent
+reviews and unchanged producer inputs. These private modules are not part of
+the installed #277 build and do not yet enable layered document adoption or
+editing. The tiled preview and its alpha-aware sampling remain in progress.
 
 ### Private tiled Lab layer preview (candidate)
 

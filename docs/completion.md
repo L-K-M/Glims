@@ -5,29 +5,138 @@ opened a disabled placeholder. This ledger distinguishes working features
 from the remaining design in `design.md`. Compilation alone does not close
 an item. Work proceeds in reviewable slices with engine and on-screen checks.
 
-## Implemented and checked (including the current integration candidate)
+## Implemented and checked
 
-The installed editor uses qualified source `c13a1c97`, integrated through
-[#258](https://github.com/L-K-M/Glims/pull/258) at `64bfc5dc`. It includes
-CMYK/Multichannel Curves with Freehand/Smooth controls, captured preview,
-Undo and Recorder commands, alongside the previously qualified physical Lab
-Fill/Brush and selections, explicit merged RGB/Lab converted copies, and
-preserving flat raw CMYK PSD import.
+The current installed release is qualified source `1edb79c`, integrated through
+[#277](https://github.com/L-K-M/Glims/pull/277) at `59f93da4` on 2026-11-13.
+It adds physical Lab Levels with selected-axis previews, Cancel/Apply/Undo,
+physical L*/a*/b* fields and version 17 Recorder files with explicit Lab
+bindings and loaded-file replay. It also includes the GIMP 3.2.0 first-start
+compatibility fix. Layered Lab/CMYK remains unfinished; the layered-storage
+foundations in #278–#280 are not part of this installed build.
 
-All 1,672 Swift and 130 Python tests pass on this source. The combined app
-passes 255 selected-ink Curves, 423 Recorder and 32 ordinary Curves checks on
-each of four engines. Its standalone pinned release bundle passed all 22
-cases with development paths denied, including 2,268 native and 3,355 full
-workflow checks (these two totals are unchanged from the previous
-qualification). Payloads, signatures, release-compiler output and desktop
-evidence are verified. Exact-head CI
-[43322205774](https://github.com/L-K-M/Glims/actions/runs/43322205774) passed.
-Fresh/cached/relocated-fresh launches measured 1.781/1.423/3.052 seconds;
+All 1,755 Swift and 141 Python tests pass. The current native matrix covers
+seven cases on each of four engines (28 runs), including 1,576 Lab Levels
+checks per engine and surrounding conformance, Fill, Curves, snapshots and
+ink-adjustment regressions. A separate first-start regression passes 21
+checks per engine for absent, empty and present SNAP values. The clean app
+matrix passes 375 Lab Levels checks on each engine plus four pinned
+regression cases (eight runs total). The self-contained pinned release
+passes all 29 standalone cases with development paths denied.
+
+The Lab Levels and Lab Recorder cases run through the smoke host. Lab Brush
+Recorder, Lab Selection Recorder, Ink Brush Recorder and Ink-controls cases
+use direct document/service or AppKit-control fixtures. Those direct cases
+do not establish physical pointer/tablet delivery or the ordinary outer
+application lifecycle for those workflows.
+
+[CI 43365872812](https://github.com/L-K-M/Glims/actions/runs/43365872812)
+passed both required jobs on the exact qualified source. Full payloads,
+signatures and release-compiler output are verified. Fresh/cached/relocated
+launches measured 2.246/1.473/3.584 seconds. A separate ordinary launch of
+the installed `/Applications/Glims.app` opened its ready document in
+**3.291 seconds**, without arguments or an engine override and with a private
+home. Its owned process exited and the desktop was released. Both prior
+apps and receipts are preserved; no notarization was performed or requested.
+Evidence is under `/tmp/glims-lab-levels-final`; its qualification receipt
+hash is `313b0d98b1c731480833c44a3aff8dff8ec22107b3656722658ba98204bb33f5`.
+The Applications receipt is
+`/Applications/.Glims-lab-levels-1b45f97ab8554ab281f9f4c9d433f963/installation.json`;
+the dist receipt is
+`dist/.Glims-lab-levels-6ec434ee0ce0498d9b29b61b471c7438/installation.json`.
+
+### Previous Ink controls and Recorder installation
+
+Qualified source `e887259` was installed through
+[#276](https://github.com/L-K-M/Glims/pull/276) at `e84d2017` on 2026-11-13.
+It added explicit Ink coverage controls and complete CMYK/Multichannel
+Brush/Pencil recording with version 16 files, alongside the Lab Recorder
+work below. Airbrush remains live but unrecordable. Lab Levels #277 was a
+separate candidate at this checkpoint and was not included in that installation.
+
+All 1,740 Swift tests pass. The self-contained pinned release passed all 28
+standalone cases with development paths denied, retaining the previous 26
+cases and adding 383 Ink Brush Recorder and 38 actual Ink-controls checks.
+Historical four-engine native evidence has unchanged production: 921 Ink
+capture and 1,268 Lab brush checks per engine plus conformance. Frontend
+matrices retain their separately identified sources and binary hashes.
+The older pinned Ink-controls run lacks a same-run adapter/binary hash and
+is context only; the fresh combined release run supplies current coverage.
+
+[CI 43359370740](https://github.com/L-K-M/Glims/actions/runs/43359370740)
+passed both required jobs on the exact qualified source. Payloads, signatures
+and release-compiler output are verified. Fresh/cached/relocated launches
+measured 1.751/1.411/3.100 seconds. The installed `/Applications/Glims.app`
+opened a ready document in **2.913 seconds**, without arguments or an engine
+override. Its owned process exited and the desktop was released. Both prior
+apps and receipts are preserved; no notarization was performed or requested.
+Evidence is under `/tmp/glims-ink-recorder-integration`; the Applications
+receipt is `/Applications/.Glims-ink-recorder-e3ee09f50d4144e59199986047cd96d5/installation.json`.
+
+### Previous Lab Recorder installation
+
+Qualified source `9f3d0c5` was installed through
+[#272](https://github.com/L-K-M/Glims/pull/272) at `80f3c0ba` on 2026-11-13.
+It includes typed Lab Fill/Curves, Brush and selection Recorder commands,
+with explicit Lab identity/precision bindings and exact file values. Versions
+through 15 are supported. Ink Brush/Pencil recording and direct Ink coverage
+controls were candidates in #273–#276 at this checkpoint; Lab Levels was
+still being implemented.
+
+All 1,721 Swift and 141 Python tests pass. The self-contained pinned release
+passed 26 standalone cases with development paths denied, including 2,268
+native, 3,355 full workflow, 355 Lab Recorder, 325 Lab Brush Recorder and 647
+Lab Selection Recorder checks. The four-engine selection matrix passed 647
+checks per engine; native Lab Brush checks passed 1,268 per engine. Historical
+Curves/import matrices retain their original tested source and are separately
+identified in the qualification receipt.
+
+[CI 43356390197](https://github.com/L-K-M/Glims/actions/runs/43356390197)
+passed on `4345e136`. Its only difference from qualified `9f3d0c5` is the
+reviewed Xcode 26 JSON-expression fix in one test file; release sources match.
+Fresh/cached/relocated-fresh launches took 1.694/1.406/3.070 seconds. A separate
+ordinary launch of the installed `/Applications/Glims.app` reached its ready
+document window in **3.088 seconds**, without arguments or an engine override.
+Both installed copies retain their prior app and an installation receipt.
+No notarization was performed or requested. Qualification and installation
+records are under `/tmp/glims-recorder-integration-v2`; the installed receipt
+is `/Applications/.Glims-recorder-402274e2e3ca4b79b30524aa1ce0baa3/installation.json`.
+
+### Previous installed qualification
+
+Qualified source `b6840eea` was installed on 2026-11-13 through
+[#266](https://github.com/L-K-M/Glims/pull/266) at `e1be7354`. It adds physical
+Lab Curves with captured previews and preserving flat PackBits CMYK PSD
+import. It also includes CMYK/Multichannel Curves (Freehand/Smooth controls,
+captured preview, Undo and Recorder commands), physical Lab Fill/Brush and
+selections, explicit merged RGB/Lab converted copies, and ink Recorder controls.
+Lab Recorder extensions (#267–#270) were separate at this qualification;
+they are not part of this previous `b6840eea` build.
+
+All 1,682 Swift and 141 Python tests pass on this source. The combined app
+matrix passed five cases on each of four engines (20 engine/case runs), with
+these check counts per engine:
+
+| Engine | Lab Curves | Selected-ink Curves | CMYK import | Ink Recorder | Ordinary Curves |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GIMP 3.2.8 | 251 | 255 | 102 | 483 | 32 |
+| GIMP 3.0.8 | 251 | 255 | 102 | 483 | 32 |
+| GIMP 3.2.0 | 251 | 255 | 102 | 483 | 32 |
+| master | 251 | 255 | 102 | 483 | 32 |
+
+The recorded matrix is `/tmp/glims-lab-curves-rle/ui-matrix/results.json`;
+its `run` entries identify the raw `test.log` evidence. The standalone pinned
+release bundle passed 23 cases with development paths denied, including 2,268 native,
+3,355 full workflow, 251 Lab Curves, 102 CMYK import and 483 ink Recorder
+checks. Payloads, signatures, release-compiler output and desktop evidence
+are verified. Exact-head CI
+[43338125383](https://github.com/L-K-M/Glims/actions/runs/43338125383) passed.
+Fresh/cached/relocated-fresh launches measured 1.743/1.459/3.305 seconds;
 the installed `/Applications/Glims.app` reached its usable editor in
-3.746 seconds on this Mac. Both the build copy and `/Applications` installation
+3.222 seconds on this Mac at that qualification. Both installations
 have receipts and preserve their previous app. No notarization is requested.
 
-This is not complete Photoshop 4 parity. Physical Lab adjustments, further
+This is not complete Photoshop 4 parity. Further physical Lab adjustments and
 ink adjustments, layered Lab/CMYK editing and interchange, Bitmap/duotone,
 broader Recorder/PSD preservation and physical-tablet/VoiceOver qualification
 remain open. These measurements do not establish every machine's latency.
