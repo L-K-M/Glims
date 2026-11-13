@@ -5745,3 +5745,23 @@ viewports. These are native timings on this Mac, not app latency guarantees.
 This remains private infrastructure: facade adoption, layered editing and
 whole-editor qualification are pending. See [lab-layer-preview.md](lab-layer-preview.md)
 and `/tmp/glims-lab-layer-preview` for contracts and retained evidence.
+
+### Private logical Lab layer duplication (candidate)
+
+The tiled preview merged through #281 at `3d51a561`, after both jobs in
+latest-head CI `43379560878` passed with independent review complete.
+
+The next private command duplicates an explicit logical root above its
+source, preserving raw roles and attributes while assigning five fresh
+identities. Detached staging and insertion preflight finish before native
+Undo starts. One Undo restores the original map, tree and ordered selection;
+Redo retains the copied identities. Ordinary refusals preserve existing
+Redo and all recorded state.
+
+All four engines pass 109 checks each, including plural selection, a partial
+selection mask, a real Redo branch, permuted storage, raw-plane independence
+and XCF reopening. Producer inputs remain unchanged. Independent source
+review has no important findings under the documented serialized caller
+contract. Hosted CI and public layered editing remain pending. See
+[lab-layer-duplicate.md](lab-layer-duplicate.md). The installed app remains
+qualified #277; no notarization is requested.
