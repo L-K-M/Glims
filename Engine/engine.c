@@ -16,6 +16,7 @@
 #include "facade-policy.h"
 #include "plate-preview.h"
 #include "lab-layer-preview.h"
+#include "lab-layer-storage.h"
 #include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
@@ -50,6 +51,7 @@
 #include "core/gimp-user-install.h"
 #include "core/gimpgrid.h"
 #include "core/gimpimage.h"
+#include "core/gimpitem.h"
 #include "core/gimpprojection.h"
 
 #include "paint/gimppaintcore.h"
@@ -5054,6 +5056,54 @@ api_image_storage_info (GlimsEngine *engine, GlimsImageID image, GlimsImageStora
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_storage_info,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_storage_info_on_engine, &args, NULL);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID root;
+  GlimsLabLayerIdentity *out;
+} LabLayerIdentityArgs;
+
+static GlimsStatus
+image_lab_layer_identity_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLayerIdentityArgs *args = data;
+  GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (args->root <= 0) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    return GLIMS_STATUS_UNSUPPORTED;
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  if (!storage) return GLIMS_STATUS_FAILED;
+  if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  for (guint i = 0; i < storage->map.count; i++)
+    if (gimp_item_get_id (GIMP_ITEM (storage->layers[i].group)) == args->root)
+      {
+        guint index = storage->layers[i].map_index;
+        if (index >= storage->map.count) return GLIMS_STATUS_UNSUPPORTED;
+        memcpy (args->out->uuid, storage->map.entries[index].group, sizeof args->out->uuid);
+        return GLIMS_STATUS_OK;
+      }
+  return GLIMS_STATUS_NOT_FOUND;
+}
+
+static GlimsStatus
+api_image_lab_layer_identity (GlimsEngine *engine, GlimsImageID image,
+                              GlimsItemID root, GlimsLabLayerIdentity *out)
+{
+  uint32_t size;
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, out, sizeof size);
+  if (size < sizeof (GlimsLabLayerIdentity)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsLabLayerIdentity result = { .struct_size = size };
+  memcpy (out, &result, sizeof result);
+  LabLayerIdentityArgs args = { image, root, &result };
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_layer_identity,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_layer_identity_on_engine, &args, NULL);
+  if (status == GLIMS_STATUS_OK) memcpy (out, &result, sizeof result);
+  return status;
 }
 
 static const GlimsEngineAPI api_v1 = {

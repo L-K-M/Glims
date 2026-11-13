@@ -36,6 +36,7 @@ layered_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_storage_info:
     case GLIMS_FACADE_OP_image_select_lab_shape:
     case GLIMS_FACADE_OP_image_select_lab_command:
+    case GLIMS_FACADE_OP_image_lab_layer_identity:
     case GLIMS_FACADE_OP_image_render:
     case GLIMS_FACADE_OP_image_render_to_profile:
     case GLIMS_FACADE_OP_image_save:
