@@ -5642,3 +5642,20 @@ and master's missing cached-XML cleanup messages remain recorded, as in the
 earlier raw-storage probe. Native producer objects and matching facade/private
 headers are attested before compilation and remain unchanged. This is private
 storage evidence, not layered Lab editing or whole-editor qualification.
+
+### Private Lab layer row rendering (candidate)
+
+A bounded private renderer captures validated layer order, visibility and
+opacity, owns the live native buffers, and composites physical Lab before
+converting to straight linear RGB. Derived alpha is retained, with canonical
+transparent output after float narrowing; authoritative samples are untouched.
+Rows use fixed heap scratch and explicitly serialized access. This primitive
+does not add document adoption, a canvas cache, editing commands or UI.
+
+An independent native fixture passes 1,246 checks on each of four engines,
+using literal physical blends, a separate LittleCMS RGB oracle, exact alpha,
+permuted layer/child order, bounds/canaries, live writes and explicit recapture.
+Source bytes, map, selection, history and dirty state remain unchanged by the
+tested renders. Source review found no important issue under the documented
+lifetime and nonaliasing contract. Existing older-engine/master diagnostics
+remain recorded; no final compiler warning, critical or failed check occurred.

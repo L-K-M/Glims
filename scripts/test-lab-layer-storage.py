@@ -24,6 +24,7 @@ spec.loader.exec_module(runner)
 SOURCES = [ROOT / name for name in (
     "Engine/lab-layer-map.c", "Engine/lab-layer-storage.c",
     "Engine/tests/lab-layer-storage-tests.c")]
+EXTRA_INPUTS = []  # Wrappers add their own immutable source/evidence inputs.
 HEADERS = ["Engine/engine-private.h", "Sources/CGlimsEngine/include/glims_engine.h"]
 
 
@@ -55,6 +56,7 @@ def run(args, work):
     inputs = {p.resolve() for p in objects}
     responses = runner.checked_responses(producer, inputs)
     inputs.update(p.resolve() for p in SOURCES)
+    inputs.update(Path(p).resolve() for p in EXTRA_INPUTS)
     inputs.update(p.resolve() for p in (ROOT / "Engine").glob("*.h"))
     inputs.update((ROOT / relative).resolve() for relative in HEADERS)
     inputs.update([Path(__file__).resolve(), Path(runner.__file__).resolve(),
