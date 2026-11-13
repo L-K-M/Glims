@@ -6,17 +6,22 @@ import subprocess
 import sys
 
 sys.dont_write_bytecode = True
-root = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('carrier_runner', root / 'scripts/test-lab-layer-storage.py')
-runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
-runner.SOURCES = [root / 'Engine/tests/lab-layer-preview-tests.c']
-runner.EXTRA_INPUTS = [Path(__file__).resolve()] + [root / name for name in (
-    'Engine/lab-layer-preview.c', 'Engine/lab-layer-preview-read.c',
-    'Engine/display-sample.c')]
+def main():
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location('carrier_runner', root / 'scripts/test-lab-layer-storage.py')
+    if spec is None or spec.loader is None:
+        raise RuntimeError('cannot load the carrier runner')
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    runner.SOURCES = [root / 'Engine/tests/lab-layer-preview-tests.c']
+    runner.EXTRA_INPUTS = [Path(__file__).resolve()] + [root / name for name in (
+        'Engine/lab-layer-preview.c', 'Engine/lab-layer-preview-read.c',
+        'Engine/display-sample.c')]
+    return runner.main()
+
 if __name__ == '__main__':
     try:
-        raise SystemExit(runner.main())
+        raise SystemExit(main())
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(f'test-lab-layer-preview-linked: {error}', file=sys.stderr)
         raise SystemExit(1)

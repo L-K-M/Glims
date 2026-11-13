@@ -268,6 +268,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer unused) {
    for(guint c=0;c<3;c++)CHECK(status==GLIMS_STATUS_OK && fabs(deep[c]-expected[c])<2e-5,
        "minimum-scale Lab preview preserves straight linear color");
    preserved(image,&deep_before);}
+  {float edge[4]={0};GlimsStatus status=glims_lab_layer_preview_read(image,&cache,0x1p-4,
+      (GlimsRect){0,0,1,1},edge,sizeof edge);
+   CHECK(status==GLIMS_STATUS_OK && fabs((double)edge[3]-16.0/256.0)<1e-9,
+         "level-four cutoff averages the covered checker pixels and transparent abyss");}
   /* An actual partial native selection must not be applied a second time. */
   GimpDrawable *mask=GIMP_DRAWABLE(gimp_image_get_mask(image));float coverage=.375f;
   gegl_buffer_set(gimp_drawable_get_buffer(mask),GEGL_RECTANGLE(1,1,1,1),0,babl_format("Y float"),&coverage,GEGL_AUTO_ROWSTRIDE);
@@ -340,7 +344,8 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer unused) {
   GimpDrawable *d=GIMP_DRAWABLE(st.layers[1].planes[0]);const Babl *format=gimp_drawable_get_format(d);
   GeglBuffer *replacement=gegl_buffer_new(GEGL_RECTANGLE(0,0,W,H),format);CHECK(replacement!=NULL,"replacement buffer creates");
   if(replacement){memset(data,255,N);gegl_buffer_set(replacement,GEGL_RECTANGLE(0,0,W,H),0,format,data,GEGL_AUTO_ROWSTRIDE);gimp_drawable_set_buffer(d,FALSE,NULL,replacement);g_object_unref(replacement);
-    g_clear_object(&ref);ref=reference(&o,TRUE,TRUE,.5,FALSE,TRUE);CHECK(snapshot(image,&before),"replacement snapshot");compare_read(image,&cache,ref,1,(GlimsRect){1,1,1,1});preserved(image,&before);}
+    g_clear_object(&ref);ref=reference(&o,TRUE,TRUE,.5,FALSE,TRUE);CHECK(snapshot(image,&before),"replacement snapshot");compare_read(image,&cache,ref,1,(GlimsRect){1,1,1,1});
+    compare_read(image,&cache,ref,.75,(GlimsRect){0,0,4,2});preserved(image,&before);}
   gimp_image_parasite_detach(image,GLIMS_PLATE_MAP_PARASITE,FALSE);borrowed=(GeglBuffer*)image;
   CHECK(glims_lab_layer_preview_prepare(image,&cache,&borrowed)!=GLIMS_STATUS_OK&&cache==NULL&&borrowed==NULL,"invalid metadata refuses and clears existing cache/output");
   {GlimsLabLayerMap m=map_for(2);guint8 bytes[GLIMS_LAB_LAYER_MAP_MAX_SIZE];size_t length=0;
