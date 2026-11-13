@@ -5482,3 +5482,13 @@ all axes/precisions and pending-work cancellation. The four-engine Lab/ink
 panel matrix and independent reviews are running. Lab Recorder replay and
 standalone release qualification remain separate follow-up work. See
 [lab-curves-ui.md](lab-curves-ui.md).
+
+### Physical Lab Recorder capture and replay (2026-11-13)
+
+A candidate adds version 13 Lab Fill/Curves recording, explicit axis/precision
+binding, typed Lab descriptions and queued UUID admission. The pinned fixture
+passes 355 checks, including actual binding-sheet choices, physical Fill
+oracles, save/load, refusal and Undo. All 1,687 Swift tests pass; source review
+and the reproduced channel-reader correction are scoped in
+[lab-recorder.md](lab-recorder.md). Four-engine runtime and final installed
+qualification are still pending; Lab brush/selection recording stays open.

@@ -12,11 +12,13 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         var hasMask = false
         var inkMode: RecorderInkIdentity.Mode?
         var inkRole: RecorderInkIdentity.Role?
+        var labIdentity: RecorderLabIdentity?
     }
 
     private let symbols: [RecorderFileValue.Symbol]
     private let maskOwners: Set<UUID>
     private let inkTargets: [UUID: RecorderInkIdentity]
+    private let labTargets: [UUID: RecorderLabIdentity]
     private let layers: [Candidate]
     private let channels: [Candidate]
     private let quickMask: [Candidate]
@@ -34,6 +36,7 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
     init(file: RecorderFileValue, document: ImageDocument) throws {
         var required: Set<UUID> = [], masks: Set<UUID> = []
         var inks: [UUID: RecorderInkIdentity] = [:]
+        var labs: [UUID: RecorderLabIdentity] = [:]
         for row in file.records {
             guard case .success(_, let binding) = row.outcome else { continue }
             required.formUnion(try RecorderFileCodec.referencedSymbols(binding))
@@ -41,10 +44,12 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
                 masks.formUnion(context.masks.filter(\.isPresent).map(\.owner))
             }
             if case .ink(let symbol, let identity) = binding { inks[symbol] = identity }
+            if case .lab(let symbol, let identity) = binding { labs[symbol] = identity }
         }
         symbols = file.symbols.filter { required.contains($0.id) }
         maskOwners = masks
         inkTargets = inks
+        labTargets = labs
         let layerRows = document.layers
         var paths: [Int32: String] = [:]
         var siblingCounts: [Int32: Int] = [:]
@@ -57,21 +62,28 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
             return Candidate(choice: .layer(row.id), title: "\(ordinal + 1). \(full)",
                              hasMask: (document.maskStates[row.id]?.mask ?? 0) > 0)
         }
-        channels = document.channels.filter { !$0.isQuickMask }.enumerated().map { index, row in
-            var candidate = Candidate(choice: .channel(row.id), title: "\(index + 1). \(Self.label(row.name))")
-            // Cached enumeration is in canonical ink-map order. These hints
-            // only narrow the picker; installation re-reads identity natively.
-            if document.colorInfo.mode == .cmyk {
-                let roles: [RecorderInkIdentity.Role] = [.cyan, .magenta, .yellow, .black]
-                if roles.indices.contains(index) {
-                    candidate.inkMode = .cmyk
-                    candidate.inkRole = roles[index]
-                }
-            } else if document.colorInfo.mode == .multichannel {
-                candidate.inkMode = .multichannel
-                candidate.inkRole = .unspecified
+        if let axes = document.labAxes {
+            channels = axes.axes.enumerated().map { index, axis in
+                Candidate(choice: .channel(axis.id), title: "\(index + 1). \(Self.label(axis.name))",
+                          labIdentity: try? RecorderLabIdentity(axis: axis, component: axes.component))
             }
-            return candidate
+        } else {
+            channels = document.channels.filter { !$0.isQuickMask }.enumerated().map { index, row in
+                var candidate = Candidate(choice: .channel(row.id), title: "\(index + 1). \(Self.label(row.name))")
+                // Cached enumeration is in canonical ink-map order. These hints
+                // only narrow the picker; installation re-reads identity natively.
+                if document.colorInfo.mode == .cmyk {
+                    let roles: [RecorderInkIdentity.Role] = [.cyan, .magenta, .yellow, .black]
+                    if roles.indices.contains(index) {
+                        candidate.inkMode = .cmyk
+                        candidate.inkRole = roles[index]
+                    }
+                } else if document.colorInfo.mode == .multichannel {
+                    candidate.inkMode = .multichannel
+                    candidate.inkRole = .unspecified
+                }
+                return candidate
+            }
         }
         if let mask = document.quickMaskState, mask.enabled, mask.channel > 0 {
             quickMask = [Candidate(choice: .quickMask(mask.channel), title: "Quick Mask")]
@@ -223,6 +235,9 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         if let ink = inkTargets[symbol.id] {
             candidates = channels.filter { $0.inkMode == ink.mode && $0.inkRole == ink.role }
             details.stringValue += "\nChoose the destination ink explicitly. Select it before replay."
+        } else if let lab = labTargets[symbol.id] {
+            candidates = channels.filter { $0.labIdentity.map { lab.permitsExplicitBinding(to: $0) } == true }
+            details.stringValue += "\nChoose the matching Lab axis explicitly. Select it before replay."
         } else {
             switch descriptor.kind {
             case .channel: candidates = channels
@@ -251,6 +266,7 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
 
     private func role(_ symbol: RecorderFileValue.Symbol) -> String {
         if let ink = inkTargets[symbol.id] { return ink.targetTitle }
+        if let lab = labTargets[symbol.id] { return lab.targetTitle }
         if maskOwners.contains(symbol.id) { return "Layer with mask" }
         switch symbol.description.kind {
         case .pixel: return "Pixel layer"

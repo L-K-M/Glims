@@ -172,6 +172,11 @@ extension RecorderFileCommand {
                                          gamma: settings.value.gamma, lowOutput: settings.value.lowOutput,
                                          highOutput: settings.value.highOutput,
                                          clampInput: settings.clampInput, clampOutput: settings.clampOutput))
+        case .fillLab(let value, let opacity):
+            self = .fillLab(.init(value: value, opacity: opacity))
+        case .applyLabCurves(let settings):
+            guard settings.isValid else { throw RecorderFileError.invalid("A recorded Lab Curves adjustment has invalid settings.") }
+            self = .applyLabCurves(.init(samples: settings.samples))
         case .applyInkCurves(let settings):
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Curves adjustment has invalid settings.") }
             self = .applyInkCurves(.init(samples: settings.samples))

@@ -92,6 +92,7 @@ final class ImageDocument {
         /// native read. Settled replay contexts always retain the validated
         /// identity of this document's explicit channel.
         case ink(channel: Int32, identity: RecorderInkIdentity?)
+        case lab(axis: EngineSession.LabAxis, identity: RecorderLabIdentity?)
         case unavailable(String)
     }
 
@@ -2447,13 +2448,12 @@ final class ImageDocument {
         if let reason = labFillRefusal(axis: axis) { refuse(reason); return false }
         let admission = InkEditAdmission()
         var rejection = "Wait for the current image operation to finish."
-        let unsupported = "Physical Lab fills cannot be replayed by Recorder yet."
         let accepted = enqueueExclusive(label: "Fill Lab Channel", admission: {
             if let reason = self.labFillRefusal(axis: axis) { rejection = reason; return false }
             return true
         }, didAdmit: {
             if self.recorder.isRecording {
-                do { admission.capture = try self.reserveRecording(context: .unavailable(unsupported)) }
+                do { admission.capture = try self.reserveRecording(context: .lab(axis: axis, identity: nil)) }
                 catch { admission.error = error }
             }
         }, rejected: {
@@ -2464,9 +2464,7 @@ final class ImageDocument {
                 if let error = admission.error { throw error }
                 try session.fillLab(image, axis: axis, value: value, opacity: opacity)
             }
-            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
-                .failure(RecorderReplayError(message: unsupported))
-            }
+            let recording = result.map { SemanticImageCommand.fillLab(value: value, opacity: opacity) }
             self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
             self.dispatchReadWhenReady {
                 if !self.isClosing {
@@ -5381,8 +5379,7 @@ final class ImageDocument {
         }, didAdmit: {
             if self.recorder.isRecording {
                 do {
-                    admission.capture = try self.reserveRecording(context: .unavailable(
-                        "Lab Curves cannot be replayed by Recorder yet."))
+                    admission.capture = try self.reserveRecording(context: .lab(axis: axis, identity: nil))
                 }
                 catch { admission.error = error }
             }
@@ -5392,9 +5389,7 @@ final class ImageDocument {
                 if let error = admission.error { throw error }
                 try session.applyLabCurvesSnapshot(image, token: token, axis: axis, settings: settings)
             }
-            let recording: Result<SemanticImageCommand, Error> = result.flatMap { _ in
-                .failure(RecorderReplayError(message: "Lab Curves cannot be replayed by Recorder yet."))
-            }
+            let recording = result.map { SemanticImageCommand.applyLabCurves(settings) }
             self.settleRecording(admission.capture, result: recording, confirmed: confirmed)
             self.dispatchReadWhenReady {
                 if case .success = result, self.labPreviewToken == token {
@@ -6147,7 +6142,6 @@ final class ImageDocument {
     }
 
     func startRecording() throws {
-        guard colorInfo.mode != .lab else { throw RecorderReplayError(message: "Recording Lab edits is not available.") }
         guard !isClosing else { throw DocumentError.closed }
         guard !strokeIsActive else { throw RecorderReplayError(message: "Finish the current stroke before starting Recorder.") }
         try recorder.startRecording()
@@ -6388,7 +6382,12 @@ final class ImageDocument {
         let needsChannels = choices.values.contains { if case .channel = $0 { return true }; return false }
         let needsQuickMask = choices.values.contains { if case .quickMask = $0 { return true }; return false }
         let layerIDs = needsLayers ? Set(try session.layers(image).map(\.id)) : []
-        let channelIDs = needsChannels ? Set(try session.channels(image).filter { !$0.isQuickMask }.map(\.id)) : []
+        let channelIDs: Set<Int32>
+        if needsChannels, try session.colorInfo(image).mode == .lab {
+            channelIDs = Set(try session.labAxes(image).axes.map(\.id))
+        } else {
+            channelIDs = needsChannels ? Set(try session.channels(image).filter { !$0.isQuickMask }.map(\.id)) : []
+        }
         let liveQuickMask = needsQuickMask ? try session.quickMask(image) : nil
 
         var targets: [UUID: RecorderRuntimeTarget] = [:]
@@ -6448,6 +6447,17 @@ final class ImageDocument {
                 // document's UUID for later fresh replay admission; never
                 // pretend the recording's source UUID identifies this image.
                 contexts[row.ordinal] = .ink(channel: id, identity: destination)
+            case .lab(let symbol, let recorded):
+                let id = try channel(symbol)
+                let axes = try session.labAxes(image)
+                guard let axis = axes.axes.first(where: { $0.id == id }) else {
+                    throw RecorderInstallError.unavailableTarget(recorded.targetTitle)
+                }
+                let destination = try RecorderLabIdentity(axis: axis, component: axes.component)
+                guard recorded.permitsExplicitBinding(to: destination) else {
+                    throw RecorderInstallError.unavailableTarget(recorded.targetTitle)
+                }
+                contexts[row.ordinal] = .lab(axis: axis, identity: destination)
             case .context(let saved):
                 var masks: [Int32: EngineSession.MaskState] = [:]
                 for mask in saved.masks {
@@ -6520,7 +6530,6 @@ final class ImageDocument {
     var replayStatus: RecorderLog<SemanticImageCommand>.ReplayStatus { recorder.replayStatus }
 
     private func recorderReplayBlockReason(continuing: Bool = false) -> String? {
-        if colorInfo.mode == .lab { return "Recorder replay is not available for Lab documents." }
         if isClosing { return DocumentError.closed.localizedDescription }
         if recorder.isReplaying && !continuing { return "Recorder replay is already running." }
         if EngineActivity.shared.isBusy || PlugInCommands.isRunning || filterPreviewIsOpen
@@ -6598,6 +6607,12 @@ final class ImageDocument {
                           channels.contains(where: { $0.id == channel && !$0.isQuickMask }) else {
                         throw RecorderReplayError(message: "Select the bound ink channel before replaying this command.")
                     }
+                case .lab(let axis, let identity):
+                    guard identity != nil, colorInfo.mode == .lab,
+                          selectedLabAxis?.id == axis.id, selectedLabAxis?.uuid == axis.uuid,
+                          selectedLabAxis?.role == axis.role else {
+                        throw RecorderReplayError(message: "Select the bound Lab channel before replaying this command.")
+                    }
                 case .target:
                     guard captureRecorderContext(for: step.command).map({ Self.recorderContextsMatch($0, context) }) == true else {
                         throw RecorderReplayError(message: "The recorded layer, channel, mask or Quick Mask target has changed.")
@@ -6674,6 +6689,8 @@ final class ImageDocument {
                     try step.command.apply(session: session, image: image, channel: channel)
                 } else if case .ink(let channel, _)? = context {
                     try step.command.apply(session: session, image: image, channel: channel)
+                } else if case .lab(let axis, _)? = context {
+                    try step.command.apply(session: session, image: image, labAxis: axis)
                 } else {
                     try step.command.apply(session: session, image: image)
                 }
@@ -6707,7 +6724,7 @@ final class ImageDocument {
         switch command {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
-        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves: return true
+        case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .fillLab, .applyLabCurves: return true
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke: return true
         default: return false
         }
@@ -6717,6 +6734,10 @@ final class ImageDocument {
                                         explicitChannel: Int32? = nil) -> RecorderContext? {
         guard Self.recorderCommandNeedsTarget(command) else { return nil }
         switch command {
+        case .fillLab, .applyLabCurves:
+            // Live Lab admission supplies its captured axis explicitly. Never
+            // infer a Lab target from the current selection in this fallback.
+            return .unavailable("The explicit Lab axis was unavailable when this edit was recorded.")
         case .editInk, .applyInkLevels, .applyInkCurves:
             guard let channel = explicitChannel, channel > 0 else {
                 return .unavailable("The explicit ink channel was unavailable when this edit was recorded.")
@@ -6810,6 +6831,20 @@ final class ImageDocument {
 
     private nonisolated static func requireRecorderContext(_ context: RecorderContext,
                                                            session: EngineSession, image: Int32) throws {
+        if case .lab(let axis, let expected) = context {
+            guard let expected,
+                  try session.selectedItems(.channel, image: image) == [axis.id],
+                  try !session.quickMask(image).enabled else {
+                throw RecorderReplayError(message: "Select the bound Lab channel before replaying this command.")
+            }
+            let axes = try session.labAxes(image)
+            guard let actualAxis = axes.axes.first(where: { $0.id == axis.id }),
+                  actualAxis.role == axis.role, actualAxis.uuid == axis.uuid,
+                  expected.matchesInOwningDocument(try RecorderLabIdentity(axis: actualAxis, component: axes.component)) else {
+                throw RecorderReplayError(message: "The bound Lab channel's identity or precision has changed.")
+            }
+            return
+        }
         if case .ink(let channel, let expected) = context {
             guard channel > 0, let expected,
                   try session.selectedItems(.channel, image: image) == [channel],
@@ -6873,6 +6908,7 @@ final class ImageDocument {
         switch context {
         case .layer(let layer)?: targets = [.layer(layer)]
         case .channel(let channel)?, .ink(let channel, _)?: targets = [.channel(channel)]
+        case .lab(let axis, _)?: targets = [.channel(axis.id)]
         case .target(let target)?:
             targets = target.layers.map { .layer($0) } + target.channels.map { .channel($0) }
             switch target.target {
@@ -6899,6 +6935,12 @@ final class ImageDocument {
             if case .ink(let channel, nil) = context {
                 confirmed = .ink(channel: channel,
                     identity: try RecorderInkIdentity(session.inkChannelIdentity(image, channel: channel)))
+            } else if case .lab(let axis, nil) = context {
+                let axes = try session.labAxes(image)
+                guard let current = axes.axes.first(where: { $0.id == axis.id && $0.role == axis.role && $0.uuid == axis.uuid }) else {
+                    throw RecorderReplayError(message: "The original Lab axis could not be confirmed.")
+                }
+                confirmed = .lab(axis: axis, identity: try RecorderLabIdentity(axis: current, component: axes.component))
             } else { confirmed = context }
             try requireRecorderContext(confirmed, session: session, image: image)
             return confirmed
@@ -6923,10 +6965,13 @@ final class ImageDocument {
                 layers = try session.layers(image)
             } else { layers = [] }
             let needsChannels = capture.symbols.keys.contains { if case .channel = $0 { return true }; return false }
+            let labAxes: EngineSession.LabAxes?
+            if case .lab = context { labAxes = try session.labAxes(image) }
+            else { labAxes = nil }
             let channels: [EngineSession.Channel]
             let info: EngineSession.ImageInfo?
             if needsChannels {
-                channels = try session.channels(image)
+                channels = labAxes == nil ? try session.channels(image) : []
                 info = try session.info(image)
             } else { channels = []; info = nil }
             for (target, symbol) in capture.symbols {
@@ -6939,7 +6984,16 @@ final class ImageDocument {
                         quickMask = expected.quickMask.enabled && expected.quickMask.channel == id
                     } else { quickMask = false }
                     guard let info else { throw RecorderReplayError(message: "The recorded channel dimensions were unavailable.") }
-                    description = try describeRecordedChannel(id, quickMask: quickMask, in: channels, info: info)
+                    if let labAxes {
+                        guard let index = labAxes.axes.firstIndex(where: { $0.id == id }) else {
+                            throw RecorderReplayError(message: "The recorded Lab axis description was unavailable.")
+                        }
+                        description = RecorderTargetDescription(name: labAxes.axes[index].name, kind: .channel,
+                            ancestors: [], siblingIndex: index,
+                            bounds: .init(x: 0, y: 0, width: Double(info.width), height: Double(info.height)))
+                    } else {
+                        description = try describeRecordedChannel(id, quickMask: quickMask, in: channels, info: info)
+                    }
                 }
                 observations[symbol] = .available(description)
             }
@@ -7013,6 +7067,9 @@ final class ImageDocument {
         case .ink(let channel, let identity):
             guard let identity else { throw RecorderReplayError(message: "The original ink identity was unavailable.") }
             return .ink(symbol: try symbol(.channel(channel)), identity: identity)
+        case .lab(let axis, let identity):
+            guard let identity else { throw RecorderReplayError(message: "The original Lab identity was unavailable.") }
+            return .lab(symbol: try symbol(.channel(axis.id)), identity: identity)
         case .target(let expected):
             let target: RecorderBindingDescription.Target
             switch expected.target {
