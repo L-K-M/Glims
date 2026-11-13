@@ -5236,6 +5236,7 @@ typedef struct {
   GlimsStrokeID stroke;
   gboolean pressure_size;
   gboolean capture;
+  gboolean require_empty_selection;
   const char *expected;
   GlimsStrokeCaptureFacts facts;
   char **error;
@@ -5247,8 +5248,8 @@ stroke_begin_lab_layer_on_engine (GlimsEngine *engine, gpointer data)
   LabLayerStrokeArgs *args = data;
   return glims_stroke_begin_lab_layer (engine, args->image, args->brush,
                                       &args->settings, args->packet, &args->stroke,
-                                      args->pressure_size, args->expected,
-                                      args->capture ? &args->facts : NULL, args->error);
+                                      args->pressure_size, args->require_empty_selection,
+                                      args->expected, args->capture ? &args->facts : NULL, args->error);
 }
 
 static GlimsStatus
@@ -5293,10 +5294,11 @@ api_stroke_begin_lab_layer_pressure (GlimsEngine *engine, GlimsImageID image, Gl
 }
 
 static GlimsStatus
-api_stroke_begin_lab_layer_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+stroke_begin_lab_layer_capture_common (GlimsEngine *engine, GlimsImageID image,
     GlimsResourceID brush, const GlimsLabLayerBrushSettings *settings, bool pressure_size,
     const GlimsStrokePacketV2 *packet, const char *expected_fingerprint,
-    GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error)
+    GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error,
+    gboolean require_empty_selection, GlimsFacadeOperation operation)
 {
   if (out) *out = 0;
   if (error) *error = NULL;
@@ -5311,10 +5313,10 @@ api_stroke_begin_lab_layer_with_capture_facts (GlimsEngine *engine, GlimsImageID
   memcpy (&settings_size, settings, sizeof settings_size);
   if (settings_size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
   LabLayerStrokeArgs args = { .image = image, .brush = brush, .packet = packet,
-    .pressure_size = pressure_size, .capture = TRUE, .expected = expected_fingerprint,
-    .facts = { .struct_size = sizeof args.facts }, .error = error };
+    .pressure_size = pressure_size, .capture = TRUE, .require_empty_selection = require_empty_selection,
+    .expected = expected_fingerprint, .facts = { .struct_size = sizeof args.facts }, .error = error };
   memcpy (&args.settings, settings, sizeof args.settings);
-  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_lab_layer_with_capture_facts,
+  GlimsStatus status = glims_facade_call (engine, operation,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     stroke_begin_lab_layer_on_engine, &args, error);
   if (status == GLIMS_STATUS_OK)
@@ -5330,6 +5332,28 @@ api_stroke_begin_lab_layer_with_capture_facts (GlimsEngine *engine, GlimsImageID
       g_free (args.facts.fingerprint);
     }
   return status;
+}
+
+static GlimsStatus
+api_stroke_begin_lab_layer_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+    GlimsResourceID brush, const GlimsLabLayerBrushSettings *settings, bool pressure_size,
+    const GlimsStrokePacketV2 *packet, const char *expected_fingerprint,
+    GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error)
+{
+  return stroke_begin_lab_layer_capture_common (engine, image, brush, settings, pressure_size,
+    packet, expected_fingerprint, out, facts, error, FALSE,
+    GLIMS_FACADE_OP_stroke_begin_lab_layer_with_capture_facts);
+}
+
+static GlimsStatus
+api_stroke_begin_lab_layer_empty_selection (GlimsEngine *engine, GlimsImageID image,
+    GlimsResourceID brush, const GlimsLabLayerBrushSettings *settings, bool pressure_size,
+    const GlimsStrokePacketV2 *packet, const char *expected_fingerprint,
+    GlimsStrokeID *out, GlimsStrokeCaptureFacts *facts, char **error)
+{
+  return stroke_begin_lab_layer_capture_common (engine, image, brush, settings, pressure_size,
+    packet, expected_fingerprint, out, facts, error, TRUE,
+    GLIMS_FACADE_OP_stroke_begin_lab_layer_empty_selection);
 }
 
 static GlimsStatus
