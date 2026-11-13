@@ -27,6 +27,14 @@ static void on_event(void *context,const GlimsEvent *event)
   if(event->kind==GLIMS_EVENT_PROJECTION_CHANGED){projection_events++;last_damage=event->rect;}
 }
 
+typedef struct { GimpImage *image; gboolean frozen; } FreezeOnUpdate;
+static void freeze_on_update(GimpDrawable *drawable, gint x, gint y, gint width, gint height, gpointer data)
+{
+  (void)drawable; (void)x; (void)y; (void)width; (void)height;
+  FreezeOnUpdate *probe = data;
+  if (!probe->frozen) probe->frozen = gimp_image_undo_freeze(probe->image);
+}
+
 static gboolean read_planes(GimpImage *image, guint root, guint8 bytes[4][6])
 {
   GlimsLabLayerStorage storage;
@@ -161,6 +169,33 @@ static GlimsStatus worker(GlimsEngine *engine, gpointer context)
     }
    }
    g_object_unref(wide);
+  }
+  /* Force a native reentrant Undo freeze after publication begins. Even if
+   * closing the group fails, the caller must hear that pixels changed. */
+  map.width=3;map.height=2;map.count=1;error=NULL;
+  GimpImage *interrupted=glims_lab_layer_storage_create(engine,&map,&error);
+  CHECK(interrupted&&!error,"post-write failure fixture creates");
+  if(error)api->free_string(error);error=NULL;
+  if(interrupted){
+    GlimsLabLayerStorage state;
+    gboolean ready=glims_lab_layer_storage_read(interrupted,&state)==GLIMS_LAB_LAYER_STORAGE_VALID;
+    CHECK(ready,"post-write failure fixture validates");
+    if(ready){
+      GimpLayer *target=state.layers[0].group;
+      GList *one=g_list_prepend(NULL,target);gimp_image_set_selected_layers(interrupted,one);g_list_free(one);
+      GimpDrawable *plane=GIMP_DRAWABLE(state.layers[0].planes[0]);
+      FreezeOnUpdate probe={interrupted,FALSE};
+      gulong handler=g_signal_connect(plane,"update",G_CALLBACK(freeze_on_update),&probe);
+      unsigned event_before=projection_events;changed=FALSE;
+      status=glims_lab_layer_fill(engine,interrupted,target,50,0,0,1,&changed,&error);
+      g_signal_handler_disconnect(plane,handler);
+      CHECK(probe.frozen&&status==GLIMS_STATUS_FAILED&&changed&&projection_events>event_before,
+            "post-write Undo failure reports changed pixels and canvas damage");
+      if(error)api->free_string(error);error=NULL;
+      if(probe.frozen){CHECK(gimp_image_undo_thaw(interrupted),"failure fixture thaws Undo");
+        CHECK(gimp_image_undo_group_end(interrupted),"failure fixture closes interrupted Undo group");}
+    }
+    g_object_unref(interrupted);
   }
   return GLIMS_STATUS_OK;
 }

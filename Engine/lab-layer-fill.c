@@ -127,11 +127,14 @@ glims_lab_layer_fill (GlimsEngine *engine, GimpImage *image, GimpLayer *root,
       gegl_buffer_copy (candidate[role], &damage, GEGL_ABYSS_NONE, source[role], &damage);
       gimp_drawable_update (planes[role], damage.x, damage.y, damage.width, damage.height);
     }
-  if (!gimp_image_undo_group_end (image))
-    { if (error) *error = g_strdup ("The Lab fill could not finish its Undo group; pixels may have changed."); goto done; }
+  gboolean group_closed = gimp_image_undo_group_end (image);
+  /* Pixels have already been published, even if a native callback prevented
+   * the Undo group from closing. Report and redraw that partial failure. */
   gimp_image_flush (image);
   glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &damage, NULL);
   *changed = TRUE;
+  if (!group_closed)
+    { if (error) *error = strdup ("The Lab fill could not finish its Undo group; pixels changed."); goto done; }
   status = GLIMS_STATUS_OK;
 done:
   g_clear_object (&mask);
