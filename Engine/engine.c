@@ -35,6 +35,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <glib/gstdio.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "libgimpbase/gimpbase-private.h"
 
@@ -665,70 +668,56 @@ check_engine_interface (Gimp    *gimp,
 
 /* ---- Start-up and shut-down (engine thread) --------------------------- */
 
-/* Never seed a user-selected alternate registry. A missing default file is
- * checked only as an optimization; the later exclusive create is the actual
- * race and symlink guard. */
-static gboolean
-default_plugin_cache_selected (Gimp *gimp)
+/* Resolve exactly the registry path that GIMP's plug-in manager will read. */
+static GFile *
+configured_plugin_cache (Gimp *gimp)
 {
   gchar *path = NULL;
   gchar *expanded = NULL;
   GFile *configured = NULL;
-  GFile *standard = gimp_directory_file ("pluginrc", NULL);
-  gboolean selected = FALSE;
   g_object_get (gimp->config, "pluginrc-path", &path, NULL);
   if (!path)
-    configured = g_object_ref (standard);
+    configured = gimp_directory_file ("pluginrc", NULL);
   else if ((expanded = gimp_config_path_expand (path, TRUE, NULL)))
     configured = g_path_is_absolute (expanded) ? g_file_new_for_path (expanded)
                                                 : gimp_directory_file (expanded, NULL);
-  if (configured && g_file_equal (configured, standard))
-    selected = TRUE;
-  g_clear_object (&configured);
-  g_object_unref (standard);
   g_free (expanded);
   g_free (path);
-  return selected;
+  return configured;
 }
 
+/* Parse the selected registry from one already-open descriptor. The
+ * nonblocking open and fstat refuse FIFOs and other special files even when a
+ * symlink changes concurrently; GIMP's ordinary path handles every refusal. */
 static gboolean
-default_plugin_cache_missing (Gimp *gimp)
+configured_plugin_cache_unusable (Gimp *gimp)
 {
-  if (!default_plugin_cache_selected (gimp)) return FALSE;
-  GFile *file = gimp_directory_file ("pluginrc", NULL);
-  gboolean missing = !g_file_query_exists (file, NULL);
-  g_object_unref (file);
-  return missing;
-}
-
-/* A parsed empty registry triggers a complete native query just like a parse
- * error. Probe only the default regular file, bounded in size; anything else
- * keeps the ordinary GIMP path and its original semantics. */
-static gboolean
-default_plugin_cache_unusable (Gimp *gimp)
-{
-  if (!default_plugin_cache_selected (gimp)) return FALSE;
-  GFile *file = gimp_directory_file ("pluginrc", NULL);
-  GFileInfo *info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_TYPE "," G_FILE_ATTRIBUTE_STANDARD_SIZE,
-                                       G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL, NULL);
+  GFile *file = configured_plugin_cache (gimp);
+  gchar *path = file ? g_file_get_path (file) : NULL;
+  int fd = path ? open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC) : -1;
   gboolean unusable = FALSE;
-  if (info && g_file_info_get_file_type (info) == G_FILE_TYPE_REGULAR &&
-      g_file_info_get_size (info) >= 0 &&
-      g_file_info_get_size (info) <= 16 * 1024 * 1024)
+  struct stat statbuf;
+  if (fd >= 0 && fstat (fd, &statbuf) == 0 && S_ISREG (statbuf.st_mode) &&
+      statbuf.st_size >= 0 && statbuf.st_size <= 16 * 1024 * 1024)
     {
+      gchar *fd_path = g_strdup_printf ("/dev/fd/%d", fd);
+      GFile *snapshot = g_file_new_for_path (fd_path);
       GError *parse_error = NULL;
-      GSList *defs = plug_in_rc_parse (gimp, file, &parse_error);
+      GSList *defs = plug_in_rc_parse (gimp, snapshot, &parse_error);
       unusable = defs == NULL;
       g_slist_free_full (defs, g_object_unref);
       g_clear_error (&parse_error);
+      g_object_unref (snapshot);
+      g_free (fd_path);
     }
-  g_clear_object (&info);
-  g_object_unref (file);
+  if (fd >= 0) close (fd);
+  g_free (path);
+  g_clear_object (&file);
   return unusable;
 }
 
 /* The bundle contains a registry captured for one engine and language.
- * Seed a missing default per-user registry when that identity matches. GIMP
+ * Seed the missing selected registry when that identity matches. GIMP
  * still checks every executable's path/mtime and runs init
  * procedures, so changed and user-installed plug-ins are discovered normally.
  * Existing registries and preferences always belong to the user. */
@@ -989,18 +978,17 @@ engine_initialize (GlimsEngine  *engine,
                      g_strcmp0 (prev_language, current_language) != 0);
   if (!prev_language || g_strcmp0 (prev_language, current_language) == 0)
     {
-      if (default_plugin_cache_missing (gimp))
+      GFile *selected = configured_plugin_cache (gimp);
+      if (selected && !g_file_query_exists (selected, NULL))
         {
-          GFile *file = gimp_directory_file ("pluginrc", NULL);
-          if (seed_bundle_plugin_cache (contents, current_language, file))
+          if (seed_bundle_plugin_cache (contents, current_language, selected))
             {
               gimp->query_all = FALSE;
               if (g_getenv ("GLIMS_STARTUP_TRACE"))
                 g_printerr ("Glims: seeded bundled command cache\n");
             }
-          g_object_unref (file);
         }
-      else if (default_plugin_cache_unusable (gimp))
+      else if (configured_plugin_cache_unusable (gimp))
         {
           temporary_registry_dir = g_dir_make_tmp ("glims-pluginrc-XXXXXX", NULL);
           if (temporary_registry_dir)
@@ -1027,6 +1015,7 @@ engine_initialize (GlimsEngine  *engine,
               g_object_unref (file);
             }
         }
+      g_clear_object (&selected);
     }
   g_free (prev_language);
   g_free (contents);

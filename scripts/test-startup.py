@@ -124,6 +124,48 @@ def main():
         assert not list((work / 'tmp').glob('glims-pluginrc-*')), 'concurrent recovery left a temporary registry'
         assert 'glims-pluginrc-' not in (work / 'user/gimprc').read_text(), 'concurrent recovery leaked a temporary path'
         print('concurrent corrupt-cache recovery: both catalogs preserved', flush=True)
+        selected_rc = work / 'user/gimprc'
+        prior_rc = selected_rc.read_bytes()
+        selected_alternate = work / 'user/custom-alternate-pluginrc'
+        selected_alternate.write_text('invalid registry\n')
+        try:
+            selected_rc.write_bytes(prior_rc + b'\n(pluginrc-path "${gimp_dir}/custom-alternate-pluginrc")\n')
+            unchanged('corrupt alternate cache with user plug-in', with_custom, temporary=True)
+            assert selected_alternate.read_text() == 'invalid registry\n', 'custom alternate registry was replaced'
+            assert registry.read_text() == 'invalid registry\n', 'unselected default registry was replaced'
+            selected_alternate.unlink()
+            alternate_processes = []
+            try:
+                for index in range(2):
+                    concurrent_env = environment.copy()
+                    concurrent_env['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / f'alternate-concurrent-{index}.txt')
+                    alternate_processes.append(subprocess.Popen(
+                        [str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
+                         str(work / 'user'), str(work / 'cache')],
+                        env=concurrent_env, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        text=True, start_new_session=True))
+                for index, process in enumerate(alternate_processes):
+                    stdout, stderr = process.communicate(timeout=180)
+                    assert process.returncode == 0, f'concurrent alternate launch {index}: {stdout}\n{stderr}'
+                    fonts, commands = (work / f'alternate-concurrent-{index}.txt').read_text().split('[procedures]\n', 1)
+                    assert (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines())) == with_custom, \
+                        'concurrent alternate launch changed the font or command catalog'
+            finally:
+                for process in alternate_processes:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait()
+            assert selected_alternate.is_file(), 'concurrent launch did not create the selected registry'
+            assert registry.read_text() == 'invalid registry\n', 'concurrent alternate launch replaced the default registry'
+            assert not list((work / 'tmp').glob('glims-pluginrc-*')), 'concurrent alternate recovery left a temporary registry'
+            assert 'glims-pluginrc-' not in selected_rc.read_text(), 'concurrent alternate recovery leaked a temporary path'
+            print('concurrent missing alternate recovery: both catalogs preserved', flush=True)
+        finally:
+            selected_rc.write_bytes(prior_rc)
+            selected_alternate.unlink(missing_ok=True)
         registry.write_bytes(valid_with_custom)
         rc = work / 'user/gimprc'
         previous_rc = rc.read_bytes()
@@ -151,15 +193,35 @@ def main():
             unchanged('alternate user registry', baseline, False)
             assert not (work / 'user/pluginrc').exists(), 'created default cache despite alternate registry'
             alternate.write_text('invalid registry\n')
-            unchanged('corrupt alternate user registry', baseline, False)
+            unchanged('corrupt alternate user registry', baseline, temporary=True)
+            assert alternate.read_text() == 'invalid registry\n', 'corrupt alternate registry was replaced'
             assert not (work / 'user/pluginrc').exists(), 'created default cache for corrupt alternate registry'
+            alternate.unlink()
+            unchanged('missing alternate user registry', baseline, True)
+            assert alternate.is_file(), 'selected alternate registry was not created'
+            assert not (work / 'user/pluginrc').exists(), 'created default cache for missing alternate registry'
         finally:
             rc.write_bytes(original_rc)
             alternate.unlink(missing_ok=True)
+        relative = work / 'user/relative-pluginrc'
+        relative.write_text('invalid registry\n')
+        try:
+            rc.write_bytes(original_rc + b'\n(pluginrc-path "relative-pluginrc")\n')
+            unchanged('corrupt relative user registry', baseline, temporary=True)
+            assert relative.read_text() == 'invalid registry\n', 'relative registry was replaced'
+            relative.unlink()
+            unchanged('missing relative user registry', baseline, True)
+            assert relative.is_file(), 'relative registry was not created in the user directory'
+            assert not (work / 'user/pluginrc').exists(), 'created default cache for a relative registry'
+        finally:
+            rc.write_bytes(original_rc)
+            relative.unlink(missing_ok=True)
         link_target = work / 'linked-pluginrc'
         link_target.write_text('invalid registry\n')
         (work / 'user/pluginrc').symlink_to(link_target)
-        unchanged('corrupt symlinked registry', baseline, False)
+        unchanged('corrupt symlinked registry', baseline, temporary=True)
+        assert (work / 'user/pluginrc').is_symlink(), 'registry symlink was replaced'
+        assert link_target.read_text() == 'invalid registry\n', 'registry symlink target was replaced'
         (work / 'user/pluginrc').unlink(missing_ok=True)
         special_tmp = work / 'temporary ${GLIMS_TEST_UNDEFINED_PATH_TOKEN} ~ space'
         special_tmp.mkdir()
