@@ -38,6 +38,7 @@ static gboolean cancel_on_engine(gpointer unused)
 static gboolean retarget_on_engine(gpointer unused)
 {
   (void)unused;
+  if(!retarget_image||!retarget_layer) return G_SOURCE_REMOVE;
   GList *selection=g_list_prepend(NULL,retarget_layer);
   gimp_image_set_selected_layers(retarget_image,selection);
   g_list_free(selection);
@@ -124,6 +125,9 @@ static GlimsStatus worker(GlimsEngine *engine, gpointer context)
         !gimp_image_get_undo_group_count(image)&&!engine->busy&&!engine->progress&&projection_events==before_cancel_events,
         "cancelled staged fill leaves planes, history, redraw and engine admission unchanged");
   if(error)api->free_string(error);error=NULL;
+  retarget_fired=FALSE;
+  CHECK(retarget_on_engine(NULL)==G_SOURCE_REMOVE&&!retarget_fired,
+        "a delayed retarget callback with cleared targets safely expires");
   retarget_image=image;retarget_layer=other;
   request_retarget=TRUE;retarget_scheduled=FALSE;retarget_fired=FALSE;
   status=glims_lab_layer_fill(engine,image,root,50,0,0,1,&changed,&error);
