@@ -5939,3 +5939,16 @@ planes and damaged storage, history, rendering, and XCF preservation of the
 map and scalar samples. A hosted palette test drives visibility and opacity,
 Undo/Redo and Save Copy. This is still under review and needs final CI and
 integration; pixel editing, other layer changes and soft proof remain open.
+
+### Special temporary paths during cache recovery (candidate)
+
+When a private recovery registry's temporary path contains GIMP config-path
+metacharacters, the adapter can refer to it through the existing TMPDIR
+variable. It still requires the expanded path to equal the created path
+exactly before use; otherwise it falls back to native discovery. The corrupt
+user registry remains untouched and user plug-ins are still discovered.
+Four engine conformance suites pass. A diagnostic bundle preserved the custom
+plug-in catalog with a temporary path containing both a variable token and a
+tilde, including a trailing slash; local engine readiness was about 1.4
+seconds. Full package qualification, review and CI remain open. Language
+changes and an incompatible bundled registry still require native discovery.
