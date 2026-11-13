@@ -283,7 +283,11 @@ final class ImageDocument {
             role: axis.role, component: colorInfo.component).map(\.value)
     }
     func toolIsAvailable(_ tool: ToolID) -> Bool {
-        if storage.readOnly || storage.layout == .layeredLab { return [.hand, .zoom].contains(tool) }
+        if storage.layout == .layeredLab {
+            return [.hand, .zoom].contains(tool) || (storage.allowsLabSelections && session.supportsLabSelections &&
+                [.rectangleSelect, .ellipseSelect, .lasso].contains(tool))
+        }
+        if storage.readOnly { return [.hand, .zoom].contains(tool) }
         guard tool.isAvailable(in: colorInfo.mode) else { return false }
         guard colorInfo.mode == .lab else { return true }
         switch tool {
@@ -524,6 +528,10 @@ final class ImageDocument {
     }
     var acceptsLayerReorder: Bool {
         acceptsEdits || (acceptsLayerProperties && storage.allowsLayerReorder)
+    }
+    var acceptsLabSelections: Bool {
+        acceptsEdits || (storage.layout == .layeredLab && storage.allowsLabSelections &&
+                         session.supportsLabSelections && acceptsImageReads && !recorder.isReplaying && !recorder.isRecording)
     }
     var acceptsLayerSelection: Bool {
         acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
@@ -1667,9 +1675,14 @@ final class ImageDocument {
     /// Only these typed requests may bypass the general Lab mutation gate.
     /// They change the root selection mask without interpreting Lab samples.
     private func runLabSelection(_ request: LabSelectionRequest) {
-        guard !isClosing, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        let layered = storage.layout == .layeredLab && storage.allowsLabSelections
+        if layered && recorder.isRecording {
+            onError?("Stop recording before changing a layered Lab selection.")
+            return
+        }
+        guard !isClosing, !refuseWhileEditingUnavailable(allowingLayerProperties: layered), !refuseWhileTargetPending() else { return }
         // Admission observers can synchronously start a stroke or close.
-        guard !isClosing, acceptsEdits, !targetCommandIsPending else { return }
+        guard !isClosing, acceptsLabSelections, !targetCommandIsPending else { return }
         guard !strokeIsActive else {
             onError?("Finish the current stroke before changing the selection.")
             return

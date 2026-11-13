@@ -1215,8 +1215,8 @@ typedef struct GlimsProofSettings {
   uint32_t flags;           /* GlimsProofFlags; unknown bits are invalid */
 } GlimsProofSettings;
 
-/* Storage layout is independent of color mode. A layered Lab carrier is
- * initially read-only except logical-root selection and native XCF saving. */
+/* Storage layout is independent of color mode. Layered Lab carriers expose
+ * only the editing capabilities advertised in GlimsImageStorageInfo. */
 typedef enum GlimsImageStorageLayout {
   GLIMS_IMAGE_LAYOUT_ORDINARY = 0,
   GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT = 1,
@@ -1239,7 +1239,9 @@ enum {
   /* A single logical root can be deleted with Undo/Redo. */
   GLIMS_IMAGE_STORAGE_LAYER_DELETE = 1u << 5,
   /* One logical root can move among top-level roots with Undo/Redo. */
-  GLIMS_IMAGE_STORAGE_LAYER_REORDER = 1u << 6
+  GLIMS_IMAGE_STORAGE_LAYER_REORDER = 1u << 6,
+  /* Typed Lab shape and All/None/Invert commands edit the root mask. */
+  GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7
 };
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */
@@ -3973,7 +3975,8 @@ typedef struct GlimsEngineAPI {
    * without Undo, even if axis metadata/selection changed. Ordinary strokes
    * refuse; expired handles return NOT_FOUND. */
   GlimsStatus (*stroke_cancel_lab) (GlimsEngine *engine, GlimsStrokeID stroke);
-  /* Slot195: native Lab root selection mask only. Rectangle/ellipse require
+  /* Slot195: native Lab root selection mask only. Layered Lab additionally
+   * requires GLIMS_IMAGE_STORAGE_LAB_SELECTIONS. Rectangle/ellipse require
    * exactly two opposite corners; polygon requires 3..MAX_POINTS vertices.
    * Every coordinate must be finite within +/-COORDINATE_LIMIT; rounded
    * rectangle/ellipse bounds must have positive width and height. Settings
