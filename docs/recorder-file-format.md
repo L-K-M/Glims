@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 15
+# Recorder file format, versions 1 to 16
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is integer `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `10`, `11`, `12`, `13`, `14` or `15`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `16`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -16,11 +16,12 @@ The writer chooses the highest version required by a successful record:
 `applyLevels` 5, `transformProjectiveLayer` 6, `applyCurves` 7,
 `applyColorBalance` 8, `applyHueSaturation` 9, `applyBrightnessContrast` 10, `editInk` or
 `applyInkLevels` 11, `applyInkCurves` 12, `fillLab`/`applyLabCurves` 13,
-`completeLabStroke` 14, and `labSelectionShape`/`labSelectCommand` 15. A file declaring one of those versions must contain at least one
+`completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15, and
+`completeInkStroke` 16. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...15 refuse the file.
+version 1. Integers outside 1...16 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -474,3 +475,20 @@ Lab selection APIs, so loading on an incompatible document does not permit an
 ordinary selection fallback. Version 15 requires a successful new Lab selection
 command. Earlier versions and ordinary selection tags retain their existing
 semantics; unknown fields, unsupported commands and axis/layer bindings refuse.
+
+## Ink Brush and Pencil gestures (version 16)
+
+`completeInkStroke` owns effective Brush/Pencil settings, native brush facts
+and a complete V2 trace. Its strict settings contain `tool`, `size`, `opacity`,
+`red`, `green`, `blue`, `pressureSize`, and false `antiErase`, plus optional
+`hardness`. RGB remains the originally accepted normalized color, even though
+the component painter derives a scalar intensity from it. Facts retain the
+actual brush identity and configuration fingerprint. `first` and `batches`
+preserve packet boundaries, timestamps and absent versus explicitly zero
+optional tablet axes, under the existing packet, gesture and shared file caps.
+
+The record requires an explicit valid `ink` binding. Load may rebind to a
+compatible ink mode and role; replay then validates the owning document's UUID
+and actual brush before painting. It never infers the current target. Version
+16 requires a successful `completeInkStroke`; older commands retain their
+existing version selection and versions 1–15 retain their schemas.

@@ -4697,6 +4697,95 @@ api_image_lab_snapshot_end (GlimsEngine *engine, GlimsImageID image, uint64_t to
                             image_lab_snapshot_end_on_engine, &a, NULL);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsResourceID brush;
+  GlimsInkStrokeTarget target;
+  GlimsBrushSettings settings;
+  GlimsStrokePacketV2 packet;
+  const char *expected;
+  GlimsStrokeID stroke;
+  GlimsStrokeCaptureFacts facts;
+  char **error;
+} InkStrokeCaptureArgs;
+
+static GlimsStatus
+stroke_begin_ink_with_capture_facts_on_engine (GlimsEngine *engine, gpointer data)
+{
+  InkStrokeCaptureArgs *a = data;
+  return glims_stroke_begin_ink_with_capture_facts (engine, a->image, a->brush,
+    &a->target, &a->settings, &a->packet, a->expected,
+    &a->stroke, &a->facts, a->error);
+}
+
+static GlimsStatus
+api_stroke_begin_ink_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+    GlimsResourceID brush, const GlimsInkStrokeTarget *target,
+    const GlimsBrushSettings *settings, const GlimsStrokePacketV2 *first,
+    const char *expected_fingerprint, GlimsStrokeID *result,
+    GlimsStrokeCaptureFacts *facts, char **error)
+{
+  if (result) *result = 0;
+  if (error) *error = NULL;
+  if (!facts) return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint32_t facts_size;
+  memcpy (&facts_size, facts, sizeof facts_size);
+  if (facts_size < sizeof *facts) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsStrokeCaptureFacts empty = { .struct_size = facts_size };
+  memcpy (facts, &empty, sizeof empty);
+  if (!result || !target || !settings || !first)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  uint32_t target_size, settings_size, packet_size;
+  memcpy (&target_size, target, sizeof target_size);
+  if (target_size < sizeof *target) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&settings_size, settings, sizeof settings_size);
+  if (settings_size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&packet_size, first, sizeof packet_size);
+  if (packet_size < sizeof *first) return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  InkStrokeCaptureArgs a = {
+    .image = image, .brush = brush, .expected = expected_fingerprint,
+    .facts = { .struct_size = sizeof a.facts }, .error = error
+  };
+  memcpy (&a.target, target, sizeof a.target);
+  memcpy (&a.settings, settings, sizeof a.settings);
+  memcpy (&a.packet, first, sizeof a.packet);
+  /* The borrowed samples remain immutable until this synchronous call returns;
+   * the local header exposes only the copied known prefix to native validation. */
+  a.packet.struct_size = sizeof a.packet;
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_ink_with_capture_facts,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    stroke_begin_ink_with_capture_facts_on_engine, &a, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      *result = a.stroke;
+      a.facts.struct_size = facts_size;
+      memcpy (facts, &a.facts, sizeof a.facts);
+    }
+  else
+    {
+      g_free (a.facts.brush_name);
+      g_free (a.facts.brush_collection);
+      g_free (a.facts.fingerprint);
+    }
+  return status;
+}
+
+static GlimsStatus
+stroke_cancel_ink_on_engine (GlimsEngine *engine, gpointer data)
+{
+  return glims_stroke_cancel_ink (engine, *(GlimsStrokeID *) data);
+}
+
+static GlimsStatus
+api_stroke_cancel_ink (GlimsEngine *engine, GlimsStrokeID stroke)
+{
+  return glims_facade_call (engine, GLIMS_FACADE_OP_stroke_cancel_ink,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
+    stroke_cancel_ink_on_engine, &stroke, NULL);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

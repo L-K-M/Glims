@@ -9,6 +9,7 @@ extension RecorderFileCodec {
         var fileVersion = version
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         var hasInkCurves = false
+        var hasInkStroke = false
         for record in value.records {
             switch record.outcome {
             case .success(.selectionShape(.polygon(let points), _), _):
@@ -28,6 +29,17 @@ extension RecorderFileCodec {
                 let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
                 fileVersion = max(fileVersion, labStrokeVersion)
+            case .success(.completeInkStroke(let stroke), let binding):
+                let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                pointCount += count
+                fileVersion = max(fileVersion, inkStrokeVersion)
+                hasInkStroke = true
+                if case .ink(let symbol, let identity) = binding {
+                    if let seen = inkIdentities[symbol], seen != identity {
+                        throw RecorderFileError.invalid("Ink identity is inconsistent across records.")
+                    }
+                    inkIdentities[symbol] = identity
+                }
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -104,6 +116,9 @@ extension RecorderFileCodec {
         }) {
             throw RecorderFileError.invalid("Version 15 requires a successful Lab selection command.")
         }
+        if fileVersion == inkStrokeVersion, !hasInkStroke {
+            throw RecorderFileError.invalid("Version 16 requires a successful ink stroke.")
+        }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
         }
@@ -160,6 +175,25 @@ extension RecorderFileCodec {
         return .object(["tag": .string("completeLabStroke"), "settings": .object(brushSettings), "facts": facts,
                         "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
     }
+    private static func inkStrokeJSON(_ value: RecorderInkStrokeCommand) throws -> RecorderJSON {
+        let stroke = try value.validated()
+        _ = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points)
+        let brush = stroke.settings
+        var settings: [String: RecorderJSON] = [
+            "tool": .string(brush.tool.rawValue), "size": try d(brush.size), "opacity": try d(brush.opacity),
+            "red": try d(brush.red), "green": try d(brush.green), "blue": try d(brush.blue),
+            "pressureSize": .bool(brush.pressureSize), "antiErase": .bool(brush.antiErase),
+        ]
+        if let hardness = brush.hardness { settings["hardness"] = try d(hardness) }
+        let identity = stroke.facts.brush
+        var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
+        if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
+        let facts = RecorderJSON.object(["brush": .object(brushIdentity), "fingerprint": .string(stroke.facts.fingerprint)])
+        let batches = try stroke.trace.batches.map { RecorderJSON.array(try $0.map(labStrokePointJSON)) }
+        return .object(["tag": .string("completeInkStroke"), "settings": .object(settings), "facts": facts,
+                        "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
+    }
+
     private static func strokeJSON(_ value: RecorderStrokeCommand) throws -> RecorderJSON {
         let brush = value.settings
         var settings: [String: RecorderJSON] = [
@@ -301,6 +335,7 @@ extension RecorderFileCodec {
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
             return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
         case .completeLabStroke(let stroke): return try labStrokeJSON(stroke)
+        case .completeInkStroke(let stroke): return try inkStrokeJSON(stroke)
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
     }

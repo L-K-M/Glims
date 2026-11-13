@@ -29,6 +29,8 @@ extension RecorderFileCodec {
                     pointCount += points.count
                 case .completeLabStroke(let stroke):
                     pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                case .completeInkStroke(let stroke):
+                    pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 case .completeStroke(let stroke):
                     let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                     pointCount += count
@@ -188,6 +190,7 @@ extension RecorderFileCommand {
         case .applyInkCurves(let settings):
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Curves adjustment has invalid settings.") }
             self = .applyInkCurves(.init(samples: settings.samples))
+        case .completeInkStroke(let value): self = .completeInkStroke(try value.validated())
         case .completeStroke(let value): self = .completeStroke(value)
         case .completeLabStroke(let value): self = .completeLabStroke(try value.validated())
         }
