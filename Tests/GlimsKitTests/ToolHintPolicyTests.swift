@@ -63,6 +63,20 @@ final class ToolHintPolicyTests: XCTestCase {
             "Drag to apply brush; release to finish.")
     }
 
+    func testLayeredLabBrushHintsMatchSamplingCapability() {
+        XCTAssertEqual(ToolHintPolicy.hint(tool: .paintbrush, phase: .idle, flags: .option,
+            mode: .lab, layout: .layeredLab, canSampleLayeredLab: true),
+            "Option-click or drag to sample the foreground color.")
+        XCTAssertEqual(ToolHintPolicy.hint(tool: .paintbrush, phase: .idle, flags: .option,
+            mode: .lab, layout: .layeredLab, canSampleLayeredLab: false),
+            "Release Option to paint the selected Lab layer.")
+        XCTAssertEqual(ToolHintPolicy.hint(tool: .paintbrush, phase: .idle, flags: [],
+            mode: .lab, layout: .layeredLab, canSampleLayeredLab: true),
+            "Paint the selected Lab layer. Option samples color; [ ] changes size.")
+        XCTAssertTrue(ToolHintPolicy.hint(tool: .paintbrush, phase: .idle, flags: [],
+            mode: .lab).contains("physical Lab value"))
+    }
+
     func testActualTemporaryToolPrecedenceAndModifierRelease() {
         XCTAssertFalse(CanvasKeyboardPolicy.allowsPlainKey([.command, .option]),
                        "Command-Space remains reserved; hold plain Space before adding Command")

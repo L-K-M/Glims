@@ -10,7 +10,18 @@ enum ToolHintPolicy {
     enum Refresh: Equatable { case context, afterAction, stateChange }
 
     static func hint(tool: ToolID, phase: Phase, flags: NSEvent.ModifierFlags,
-                     mode: EngineSession.ColorMode = .rgb) -> String {
+                     mode: EngineSession.ColorMode = .rgb,
+                     layout: EngineSession.ImageStorageLayout = .ordinary,
+                     canSampleLayeredLab: Bool = false) -> String {
+        if mode == .lab, layout == .layeredLab, tool == .paintbrush {
+            if phase == .dragging { return "Paint the selected Lab layer; release to finish. Escape cancels the stroke." }
+            if flags.contains(.option) {
+                return canSampleLayeredLab ? "Option-click or drag to sample the foreground color."
+                    : "Release Option to paint the selected Lab layer."
+            }
+            return canSampleLayeredLab ? "Paint the selected Lab layer. Option samples color; [ ] changes size."
+                : "Paint the selected Lab layer; [ ] changes size."
+        }
         if mode == .lab, tool == .paintbrush {
             if phase == .dragging { return "Paint the captured Lab axis; release to finish. Escape cancels the stroke." }
             return flags.contains(.option)

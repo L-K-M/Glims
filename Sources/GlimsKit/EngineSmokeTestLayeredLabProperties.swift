@@ -233,6 +233,32 @@ extension EngineSmokeTest {
                         ToolState.shared.foreground = .red
                     } else { check(false, "layered Lab Eyedropper mouse events can be created") }
                 }
+                do {
+                    let canvas = windowController.canvas
+                    let location = canvas.convert(CGPoint(x: 1.5 * canvas.scale, y: 1.5 * canvas.scale), to: nil)
+                    if let down = NSEvent.mouseEvent(with: .leftMouseDown, location: location, modifierFlags: [.option],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 3, clickCount: 1, pressure: 1),
+                       let up = NSEvent.mouseEvent(with: .leftMouseUp, location: location, modifierFlags: [.option],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 4, clickCount: 1, pressure: 0) {
+                        let priorTool = ToolState.shared.current
+                        let history = try session.undoInfo(image)
+                        ToolState.shared.foreground = .blue
+                        ToolState.shared.select(.paintbrush)
+                        canvas.mouseDown(with: down); canvas.mouseUp(with: up)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Option-click layered Lab Brush")
+                        let sampled = ToolState.shared.foreground.usingColorSpace(.sRGB)
+                        let expectedColor = session.supportsLayeredLabSampling
+                            ? (sampled?.redComponent ?? 0) > 0.95 && (sampled?.blueComponent ?? 1) < 0.08
+                            : (sampled?.blueComponent ?? 0) > 0.95 && (sampled?.redComponent ?? 1) < 0.08
+                        let afterHistory = try session.undoInfo(image)
+                        check(expectedColor && !opened.strokeIsActive && history == afterHistory,
+                              "Option-click samples only on capable layered Lab engines without painting")
+                        ToolState.shared.select(priorTool)
+                        ToolState.shared.foreground = .red
+                    } else { check(false, "layered Lab Option-click events can be created") }
+                }
                 let undo = EngineUndoManager(document: opened)
                 check(undo.canUndo, "Lab color fill offers Undo")
                 undo.undo(); drain("Lab color fill Undo")
