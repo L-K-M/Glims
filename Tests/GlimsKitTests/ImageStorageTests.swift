@@ -55,6 +55,7 @@ final class ImageStorageTests: XCTestCase {
         XCTAssertTrue(EngineSession.LayerChange(opacity: 0.5).isLimitedLayerPropertyChange)
         XCTAssertTrue(EngineSession.LayerChange(name: "Other").isLimitedLayerPropertyChange)
         XCTAssertFalse(EngineSession.LayerChange(name: "Other", opacity: 0.5).isLimitedLayerPropertyChange)
+        XCTAssertFalse(EngineSession.LayerChange(name: "Other", isVisible: false).isLimitedLayerPropertyChange)
         XCTAssertFalse(EngineSession.LayerChange(isVisible: true, mode: "normal").isLimitedLayerPropertyChange)
     }
 }

@@ -123,29 +123,41 @@ extension EngineSmokeTest {
            let index = (0..<list.numberOfRows).first(where: { index in
                (list.item(atRow: index) as? LayerTree.Node)?.layer.id == first.id
            }), let row = list.view(atColumn: 0, row: index, makeIfNecessary: true) as? LayerRowView {
-            check(opened.storage.allowsLayerRename && row.nameField.isEditable,
-                  "logical layer name is editable when the engine advertises it")
-            let originalName = first.name
-            row.nameField.stringValue = "Retouched Lab"
-            row.finishNameEditing()
-            drain("layer rename")
-            check(opened.layers.first(where: { $0.id == first.id })?.name == "Retouched Lab",
-                  "palette rename reaches the logical layer")
-            let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")
-            let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "")
-            check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
-                  "window handles rename Undo")
-            drain("rename Undo")
-            check(opened.layers.first(where: { $0.id == first.id })?.name == originalName,
-                  "Undo restores logical layer name")
-            check(windowController.window?.tryToPerform(Selector(("redo:")), with: redo) == true,
-                  "window handles rename Redo")
-            drain("rename Redo")
-            check(opened.layers.first(where: { $0.id == first.id })?.name == "Retouched Lab",
-                  "Redo restores logical layer name")
-            check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
-                  "window restores original layer name")
-            drain("restore layer name")
+            if opened.storage.allowsLayerRename {
+                check(row.nameField.isEditable, "logical layer name is editable when advertised")
+                let originalName = first.name
+                row.nameField.stringValue = "Retouched Lab"
+                row.finishNameEditing()
+                drain("layer rename")
+                check(opened.layers.first(where: { $0.id == first.id })?.name == "Retouched Lab",
+                      "palette rename reaches the logical layer")
+                let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")
+                let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "")
+                check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
+                      "window handles rename Undo")
+                drain("rename Undo")
+                check(opened.layers.first(where: { $0.id == first.id })?.name == originalName,
+                      "Undo restores logical layer name")
+                check(windowController.window?.tryToPerform(Selector(("redo:")), with: redo) == true,
+                      "window handles rename Redo")
+                drain("rename Redo")
+                check(opened.layers.first(where: { $0.id == first.id })?.name == "Retouched Lab",
+                      "Redo restores logical layer name")
+                check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
+                      "window restores original layer name")
+                drain("restore layer name")
+                check(opened.layers.first(where: { $0.id == first.id })?.name == originalName,
+                      "final Undo restores the original layer name")
+            } else {
+                check(!row.nameField.isEditable, "logical layer name stays disabled on older engines")
+                var rejected = false
+                opened.changeLayer(first.id, .init(name: "Must not change")) { result in
+                    if case .failure = result { rejected = true }
+                }
+                drain("legacy rename refusal")
+                check(rejected && opened.layers.first(where: { $0.id == first.id })?.name == first.name,
+                      "older engine refuses rename without changing the layer")
+            }
         } else {
             check(false, "logical layer name control exists")
         }
