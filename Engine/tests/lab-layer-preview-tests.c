@@ -132,7 +132,7 @@ static GeglBuffer *reference(Oracle *o,gboolean bottom_visible,gboolean reordere
 static void sample_reference(GeglBuffer *ref,double scale,GlimsRect area,float *out) {
   /* The half-scale native box read is covered explicitly below. Deeper
    * scales need a separate oracle; do not invoke GEGL's deep traversal. */
-  if(scale < .5) g_error("sample_reference has no oracle below half scale");
+  if(scale < .5) g_error("sample_reference has no oracle below half scale (scale=%g)", scale);
   if(!(scale>.5&&scale<2&&scale!=1)) {
     gegl_buffer_get(ref,GEGL_RECTANGLE(area.x,area.y,area.width,area.height),scale,babl_format("RaGaBaA float"),out,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);return;
   }
