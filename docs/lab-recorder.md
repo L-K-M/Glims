@@ -23,8 +23,14 @@ per-symbol identities and mixed Lab/ink identity for one symbol. Integer
 Fill values stay inside the nominal physical range; float Fill may use finite
 values representable by Float. Existing recording versions remain readable.
 
-This slice covers Fill and Curves. Lab brush strokes and Lab selection changes
-still produce explicit unsupported Recorder rows; they are not replayable.
+Complete physical Lab Brush gestures use version 14. Capture keeps the value,
+mask settings, actual brush identity/fingerprint and exact accepted V2 sample
+batches, including absent versus zero rotation/tangential pressure. Live
+painting remains available when an older engine or an unsupported brush cannot
+supply replay facts; Recorder marks that row as failed. Cancel restores the
+whole gesture and cannot create a replayable edit. Guarded replay checks brush
+content/configuration before its first dab and cancels if a later native call
+fails. Lab selection changes still produce unsupported Recorder rows.
 
 ## Verification in progress
 
@@ -41,3 +47,17 @@ clean. The original document review missed the channel-reader defect; a
 separate post-fix source check covers the corrected paths. Four-engine app
 checks, hosted CI and combined release qualification remain pending. This is
 not evidence that the installed app includes this slice.
+
+
+## Brush integration candidate
+
+The initial pinned fixture passes 325 native app checks across all three axes,
+precisions and mouse/tablet input. It compares captured and loaded replay with
+an independent ordinary native Lab stroke, then checks Undo, cancellation,
+physical settings, exact sample/batch ownership, changed brush fingerprints,
+and incompatible destination role/precision/selection. The actual older
+206-slot producer passes 73 fallback checks: live painting works and Recorder
+refuses unavailable capture facts. All 1,714 Swift and 141 Python tests pass.
+Document/replay source review is clear. Codec/fixture review, four-engine
+replay checks and hosted CI remain in progress. This does not qualify an
+installed app or establish complete editor parity.
