@@ -1005,6 +1005,14 @@ glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID id)
   return GLIMS_STATUS_OK;
 }
 
+/* A missing native mask cannot prove that selection-dependent replay is safe. */
+static gboolean
+lab_layer_selection_is_empty (GimpImage *image)
+{
+  GimpChannel *mask = gimp_image_get_mask (image);
+  return mask && gimp_channel_is_empty (mask);
+}
+
 static GlimsStatus
 lab_layer_stroke_target_ready (GlimsEngine *engine, GlimsStroke *stroke, char **error)
 {
@@ -1024,7 +1032,7 @@ lab_layer_stroke_target_ready (GlimsEngine *engine, GlimsStroke *stroke, char **
   GList *selected = gimp_image_get_selected_layers (stroke->image);
   if (!selected || selected->next || selected->data != stroke->lab_layer_root) goto changed;
   if (stroke->lab_layer_require_empty_selection &&
-      (!gimp_image_get_mask (stroke->image) || !gimp_channel_is_empty (gimp_image_get_mask (stroke->image))))
+      !lab_layer_selection_is_empty (stroke->image))
     {
       if (error) *error = g_strdup ("The selection changed. The Lab brush stroke was cancelled.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
@@ -1120,7 +1128,7 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
   GList *selected = gimp_image_get_selected_layers (open->image);
   if (!selected || selected->next || selected->data != root) return GLIMS_STATUS_INVALID_ARGUMENT;
   if (require_empty_selection &&
-      (!gimp_image_get_mask (open->image) || !gimp_channel_is_empty (gimp_image_get_mask (open->image))))
+      !lab_layer_selection_is_empty (open->image))
     return glims_fail (error, NULL, "Deselect the image before recording or replaying this Lab brush.");
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (open->image);
   if (!symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY) return GLIMS_STATUS_UNSUPPORTED;
@@ -1213,7 +1221,7 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
       return glims_fail (error, native_error, "The Lab layer brush could not start.");
     }
   if (require_empty_selection &&
-      (!gimp_image_get_mask (open->image) || !gimp_channel_is_empty (gimp_image_get_mask (open->image))))
+      !lab_layer_selection_is_empty (open->image))
     {
       glims_strokes_free (stroke);
       gimp_image_flush (open->image);
