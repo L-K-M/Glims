@@ -93,6 +93,22 @@ extension EngineSmokeTest {
             check(brushEnabled == opened.storage.allowsLabLayerBrush,
                   "Tools palette updates Brush availability for the layered Lab layout")
         } else { check(false, "Tools palette contains its tool grid") }
+        do {
+            let previousTool = ToolState.shared.current
+            defer { ToolState.shared.select(previousTool) }
+            ToolState.shared.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func optionDescendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap { optionDescendants($0) }
+            }
+            let labels = optionDescendants(options.view).compactMap { ($0 as? NSTextField)?.stringValue }
+            let activeHint = labels.contains { $0.contains("Paint the selected Lab layer") }
+            check(activeHint == opened.toolIsAvailable(.paintbrush),
+                  "Brush hint matches layered Lab tool availability")
+        }
         func drain(_ step: String) {
             let deadline = Date().addingTimeInterval(15)
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
@@ -145,6 +161,9 @@ extension EngineSmokeTest {
         let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
               "Fill menu follows the layered Lab color capability")
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COLOR_FILL"] == "1" {
+            check(opened.storage.allowsLabLayerColorFill, "test adapter advertises layered Lab color Fill")
+        }
         if opened.storage.allowsLabLayerColorFill, let window = windowController.window,
            let originalRoot = opened.selectedLayerIDs.first {
             let oldForeground = ToolState.shared.foreground
@@ -154,6 +173,7 @@ extension EngineSmokeTest {
             let previousError = opened.onError
             var recordingErrors: [String] = []
             opened.onError = { recordingErrors.append($0) }
+            defer { opened.onError = previousError }
             try opened.startRecording()
             check(!windowController.validateMenuItem(fillMenu), "Lab Fill is disabled while recording")
             windowController.fill(nil)
@@ -192,6 +212,34 @@ extension EngineSmokeTest {
                 undo.undo(); drain("restore selection after Lab color fill")
                 check(opened.selectionBounds == nil, "fill fixture restores its empty selection")
             } else { check(false, "captured Lab layer Fill sheet opens") }
+            let beforeCustom = pixel(session, image, x: 1, y: 1)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap { descendants($0) }
+                }
+                let controls = sheet.contentView.map { descendants($0) } ?? []
+                if let choice = controls.compactMap({ $0 as? NSPopUpButton }).first(where: { $0.itemTitles.contains("Custom") }),
+                   let well = controls.compactMap({ $0 as? NSColorWell }).first,
+                   let action = choice.action {
+                    choice.selectItem(withTitle: "Custom")
+                    NSApp.sendAction(action, to: choice.target, from: choice)
+                    check(well.isEnabled, "Custom Fill enables the color well")
+                    well.color = .blue
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("custom Lab color fill")
+                    let result = pixel(session, image, x: 1, y: 1)
+                    check(result?.count == 4 && (result?[0] ?? 255) < 20 &&
+                          (result?[1] ?? 255) < 20 && (result?[2] ?? 0) > 245,
+                          "Custom Fill uses the selected blue rather than the red foreground")
+                    opened.undo(); drain("custom Lab color fill Undo")
+                    check(pixel(session, image, x: 1, y: 1) == beforeCustom,
+                          "Undo restores pixels before Custom Fill")
+                } else {
+                    check(false, "Custom Fill exposes its choice and color well")
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+            } else { check(false, "Lab Fill sheet opens for custom color") }
             let beforeCancel = pixel(session, image, x: 1, y: 1)
             windowController.fill(nil)
             if let sheet = waitForSheet() {
@@ -203,10 +251,13 @@ extension EngineSmokeTest {
                 var errors: [String] = []
                 let oldError = opened.onError
                 opened.onError = { errors.append($0) }
+                defer { opened.onError = oldError }
                 windowController.fill(nil)
                 if let sheet = waitForSheet() {
                     opened.selectLayer(other.id); drain("retarget while Fill is open")
-                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    if window.attachedSheet === sheet {
+                        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    }
                     EngineSmokeTestHost.pumpEvents(for: 0.1); drain("refuse retargeted Lab Fill")
                     check(!errors.isEmpty && pixel(session, image, x: 1, y: 1) == beforeCancel,
                           "Fill refuses a layer changed while its sheet was open")
@@ -214,6 +265,8 @@ extension EngineSmokeTest {
                 } else { check(false, "Lab Fill sheet opens for retarget test") }
                 opened.onError = oldError
             }
+        } else if opened.storage.allowsLabLayerColorFill {
+            check(false, "layered Lab Fill fixture has a window and selected root")
         }
         if opened.storage.allowsLabLayerBrush, let window = windowController.window {
             let state = ToolState.shared
@@ -244,6 +297,21 @@ extension EngineSmokeTest {
             opened.onProjectionChange = { rect in brushDamage.append(rect); oldProjection?(rect) }
             defer { opened.onProjectionChange = oldProjection }
             let before = pixel(session, image, x: 1, y: 1)
+            var invalidBrush = state.brush(for: .paintbrush)
+            invalidBrush.size = .nan
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: invalidBrush)
+            drain("failed layered Brush begin")
+            check(!opened.strokeIsActive && !opened.labBrushStrokeIsActive && !errors.isEmpty,
+                  "a failed layered Brush begin releases gesture admission without mouse-up")
+            if opened.strokeIsActive { opened.endStroke(); drain("clean up failed Brush begin") }
+            errors.removeAll()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            drain("Brush begin after failure")
+            check(opened.labBrushStrokeIsActive && errors.isEmpty,
+                  "a valid layered Brush begins after a failed begin")
+            opened.cancelLabBrushStroke(); drain("cancel Brush after failed begin")
+            check(pixel(session, image, x: 1, y: 1) == before,
+                  "the recovery stroke cancels without changing pixels")
             try opened.startRecording()
             opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
             check(!opened.strokeIsActive && !errors.isEmpty && opened.recorder.records.isEmpty,
@@ -454,6 +522,57 @@ extension EngineSmokeTest {
         palette.reload()
         let newMenu = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
         let newButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "New Layer" }
+        let deleteMenu = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
+        let deleteButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Delete Layers" }
+        if opened.storage.allowsLayerCreate && opened.storage.allowsLayerDuplicate && opened.storage.allowsLayerDelete,
+           let owner = windowController.window {
+            let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 160, height: 90),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+            sheet.isReleasedWhenClosed = false
+            defer {
+                if owner.attachedSheet === sheet { owner.endSheet(sheet) }
+                sheet.orderOut(nil)
+                sheet.close()
+            }
+            let before = opened.layers.map(\.id)
+            owner.beginSheet(sheet)
+            let deadline = Date().addingTimeInterval(3)
+            while owner.attachedSheet !== sheet && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(owner.attachedSheet === sheet, "document sheet is attached before palette checks")
+            // These controls still reflect the state from before the sheet.
+            // Their action closures must recheck admission at dispatch time.
+            newButton?.performClick(nil)
+            duplicateButton?.performClick(nil)
+            deleteButton?.performClick(nil)
+            drain("stale palette buttons")
+            check(opened.layers.map(\.id) == before, "stale palette buttons cannot change layers behind a sheet")
+            palette.reload()
+            check(!windowController.validateMenuItem(newMenu) && !windowController.validateMenuItem(duplicateMenu) &&
+                  !windowController.validateMenuItem(deleteMenu),
+                  "document menu refuses layer changes while a sheet is open")
+            check(newButton?.isEnabled == false && duplicateButton?.isEnabled == false && deleteButton?.isEnabled == false,
+                  "palette disables layer changes while a document sheet is open")
+            for command in [EngineSession.LayerCommand.new, .duplicate, .delete] {
+                let item = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
+                item.tag = Int(command.rawValue)
+                _ = palette.perform(item.action!, with: item)
+            }
+            drain("blocked layer commands")
+            check(opened.layers.map(\.id) == before, "stale palette actions cannot change layers behind a sheet")
+            owner.endSheet(sheet)
+            let detachDeadline = Date().addingTimeInterval(3)
+            while owner.attachedSheet === sheet && Date() < detachDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(owner.attachedSheet !== sheet, "document sheet detaches before palette menu checks")
+            palette.reload()
+            let newItem = NSMenuItem(title: "", action: NSSelectorFromString("runLayerCommand:"), keyEquivalent: "")
+            newItem.tag = Int(EngineSession.LayerCommand.new.rawValue)
+            _ = palette.perform(newItem.action!, with: newItem)
+            drain("palette menu after sheet")
+            check(opened.layers.count == before.count + 1, "palette menu creates a layer after the sheet closes")
+            EngineUndoManager(document: opened).undo()
+            drain("restore palette menu fixture")
+            check(opened.layers.map(\.id) == before, "Undo restores the palette menu fixture")
+        }
         if opened.storage.allowsLayerCreate {
             check(windowController.validateMenuItem(newMenu), "Layer menu enables logical layer creation")
             check(newButton?.isEnabled == true, "palette enables logical layer creation")
@@ -479,8 +598,6 @@ extension EngineSmokeTest {
                   "older engines keep logical layer creation disabled")
         }
         palette.reload()
-        let deleteMenu = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
-        let deleteButton = descendants(palette.view, as: NSButton.self).first { $0.accessibilityLabel() == "Delete Layers" }
         if opened.storage.allowsLayerDelete {
             check(windowController.validateMenuItem(deleteMenu), "Layer menu enables logical layer deletion")
             check(deleteButton?.isEnabled == true, "palette enables logical layer deletion")
@@ -548,13 +665,19 @@ extension EngineSmokeTest {
             check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - editedOpacity) < 0.0001,
                   "opacity field changes the captured logical layer")
             let manager = EngineUndoManager(document: opened)
-            check(manager.canUndo, "Undo is available after the opacity edit")
-            manager.undo()
+            let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")
+            check(manager.canUndo, "document Undo is available after the opacity edit")
+            check(windowController.window?.validateMenuItem(undo) == true, "window Undo is available after the opacity edit")
+            check(windowController.window?.tryToPerform(Selector(("undo:")), with: undo) == true,
+                  "window responder handles opacity Undo")
             drain("opacity Undo")
             check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - originalOpacity) < 0.0001,
                   "Undo restores logical layer opacity")
-            check(manager.canRedo, "Redo is available after opacity Undo")
-            manager.redo()
+            let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "")
+            check(manager.canRedo, "document Redo is available after opacity Undo")
+            check(windowController.window?.validateMenuItem(redo) == true, "window Redo is available after opacity Undo")
+            check(windowController.window?.tryToPerform(Selector(("redo:")), with: redo) == true,
+                  "window responder handles opacity Redo")
             drain("opacity Redo")
             check(abs((opened.layers.first(where: { $0.id == target })?.opacity ?? -1) - editedOpacity) < 0.0001,
                   "Redo reapplies logical layer opacity")
