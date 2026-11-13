@@ -5575,3 +5575,19 @@ checks exact command equality after actual disk Save/Load. Seven new codec
 tests and seven Lab selection regressions pass. Document and codec reviews
 are clear; final fixture review, four-engine checks and full unit tests are
 pending. No installation or complete Photoshop 4 parity claim is made.
+
+### Explicit ink coverage in Tool Options (candidate)
+
+CMYK and Multichannel Brush, Pencil and Airbrush show an Ink percentage
+slider and numeric field: 0% is paper and 100% is full ink. Colored foregrounds
+are displayed using the component painter's normalized display-sRGB Rec.709
+luma; opening or refreshing the palette does not neutralize the foreground.
+Only a valid explicit edit sets an opaque neutral sRGB gray. Opacity stays
+independent. The row keeps active drafts and refuses stale document/tool
+callbacks; Lab physical-value controls and ordinary tools retain their routes.
+Pure endpoint, colored-luma, invalid-input and locale-parser tests are added.
+The build and four focused pure tests pass. A real AppKit field-editor
+fixture passes 38 checks across CMYK and Multichannel, including preserved
+drafts, invalid text, independent opacity and stale callbacks. Independent
+production review found no important issue. Latest-head CI and the remaining
+engine checks are pending; this has not changed the installed app.

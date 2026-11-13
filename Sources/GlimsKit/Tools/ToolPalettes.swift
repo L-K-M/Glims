@@ -209,6 +209,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     private var labValueMessage: NSTextField?
     private var labFieldAxis: EngineSession.LabAxis?
     private weak var labFieldOwner: ImageDocument?
+    private var inkValueBinding: InkValueBinding?
 
     /// Everything the gradient rows show, so a change rebuilds them.
     private struct GradientPresentation: Equatable {
@@ -303,6 +304,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         // A different (or closing) document invalidates an open chooser, so
         // its late native results cannot restore a stale sheet.
         let modeChanged = document?.colorInfo.mode != target?.colorInfo.mode
+        let inkOwnerChanged = target !== document &&
+            (document?.colorInfo.mode.usesInkChannels == true || target?.colorInfo.mode.usesInkChannels == true)
         let labTargetChanged = target?.colorInfo.mode == .lab &&
             (target !== document || labFieldAxis?.id != target?.selectedLabAxis?.id ||
              labFieldAxis?.uuid != target?.selectedLabAxis?.uuid)
@@ -312,7 +315,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
             rebindTransformObserver()
         }
-        if (modeChanged || labTargetChanged) && isViewLoaded { rebuild() }
+        if (modeChanged || labTargetChanged || inkOwnerChanged) && isViewLoaded { rebuild() }
     }
 
     private var targetWindowController: DocumentWindowController? {
@@ -397,6 +400,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         labValueMessage = nil
         labFieldAxis = nil
         labFieldOwner = nil
+        inkValueBinding = nil
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionBindings.removeAll()
 
@@ -406,6 +410,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
 
         if tool.paintTool != nil {
             if document?.colorInfo.mode == .lab { addLabBrushValueRow() }
+            if document?.colorInfo.mode.usesInkChannels == true,
+               [.paintbrush, .pencil, .airbrush].contains(tool) { addInkCoverageRow(for: tool) }
             addPaintRows(for: tool, brush: state.brush(for: tool))
             if document?.colorInfo.mode.usesInkChannels == true {
                 stack.addArrangedSubview(hint("Paint the selected ink channel. Black adds full ink; white removes ink. Gray sets intermediate coverage."))
@@ -1051,6 +1057,92 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                 ToolState.shared.selectOptions.sampleMerged = on
             })
         }
+    }
+
+    /// Rigi owns slider tracking and silent model refresh; validate field
+    /// commits before its ordinary clamping can turn an invalid draft into ink.
+    @MainActor
+    private final class InkValueBinding: NSObject, NSTextFieldDelegate {
+        weak var slider: ClassicValueSlider?
+        weak var field: NSTextField?
+        var displayedText: String
+        let commitValue: (Double) -> Void
+        let reject: () -> Void
+
+        init(slider: ClassicValueSlider, field: NSTextField,
+             commit: @escaping (Double) -> Void, reject: @escaping () -> Void) {
+            self.slider = slider; self.field = field
+            self.displayedText = field.stringValue
+            self.commitValue = commit; self.reject = reject
+            super.init()
+            field.delegate = self; field.target = self
+            field.action = #selector(commitField(_:))
+        }
+        @objc private func commitField(_ sender: Any?) {
+            guard let slider, let field else { return }
+            let text = field.currentEditor()?.string ?? field.stringValue
+            // Merely leaving a rounded display must not neutralize a color.
+            guard text != displayedText else { return }
+            guard let percent = InkBrushCoverage.parsePercent(text) else { reject(); return }
+            slider.value = percent
+            displayedText = field.stringValue
+            field.currentEditor()?.string = displayedText
+            commitValue(slider.value)
+        }
+        func controlTextDidEndEditing(_ notification: Notification) { commitField(nil) }
+        func control(_ control: NSControl, textView: NSTextView,
+                     doCommandBy selector: Selector) -> Bool {
+            slider?.control(control, textView: textView, doCommandBy: selector) ?? false
+        }
+
+        func committedFromSlider(_ value: Double) {
+            guard let field else { return }
+            displayedText = field.stringValue
+            commitValue(value)
+        }
+
+        func refresh(_ percent: Double) {
+            guard let slider, let field else { return }
+            if let editor = field.currentEditor(), editor.string != displayedText { return }
+            slider.value = percent
+            displayedText = field.stringValue
+            field.currentEditor()?.string = displayedText
+        }
+    }
+
+    private func addInkCoverageRow(for tool: ToolID) {
+        guard let owner = document else { return }
+        let brush = ToolState.shared.brush(for: tool)
+        guard let percent = InkBrushCoverage.percent(red: brush.red, green: brush.green, blue: brush.blue) else { return }
+        let message = hint("0% is paper (white); 100% is full ink (black). Opacity is separate.")
+        let commit: (Double) -> Void = { [weak self, weak owner, weak message] value in
+            guard let self, let owner, owner === self.document, !owner.isClosing,
+                  ToolState.shared.current == tool, owner.colorInfo.mode.usesInkChannels,
+                  owner.toolIsAvailable(tool), let gray = InkBrushCoverage.intensity(forPercent: value) else { return }
+            ToolState.shared.foreground = NSColor(srgbRed: CGFloat(gray), green: CGFloat(gray), blue: CGFloat(gray), alpha: 1)
+            message?.stringValue = "0% is paper (white); 100% is full ink (black). Opacity is separate."
+            message?.textColor = .secondaryLabelColor
+            ToolState.shared.notifyChange()
+        }
+        let row = slider("Ink", 0...100, percent, unit: "%", fractionDigits: 2, commit)
+        if let control = row as? ClassicValueSlider, let field = Self.numberField(in: control) {
+            control.accessibilityTitle = "Ink percentage"
+            let binding = InkValueBinding(slider: control, field: field, commit: commit) { [weak message] in
+                message?.stringValue = "Enter an ink percentage from 0 to 100."
+                message?.textColor = .systemRed
+            }
+            inkValueBinding = binding
+            control.onChange = { [weak binding] value, phase in
+                if phase == .committed { binding?.committedFromSlider(value) }
+            }
+            brushRefreshers.append { [weak binding] brush in
+                if let value = InkBrushCoverage.percent(red: brush.red, green: brush.green, blue: brush.blue) {
+                    binding?.refresh(value)
+                }
+            }
+        }
+        stack.addArrangedSubview(row)
+        stack.addArrangedSubview(message)
     }
 
     // MARK: Controls
