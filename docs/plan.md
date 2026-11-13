@@ -5788,6 +5788,25 @@ and limits are in [lab-layer-create.md](lab-layer-create.md),
 [lab-layer-delete.md](lab-layer-delete.md). The installed app remains
 qualified #277; no notarization is requested.
 
+### Quarantine stripped layered Lab metadata (candidate)
+
+The flat component reader checks channel identities when a map is missing, but
+does not inspect layer identities. Consequently a layered Lab carrier whose
+map had been removed could be adopted as ordinary grayscale and edited as the
+wrong data. Adoption now checks the strict layered reader when the flat reader
+reports no component storage. Any surviving reserved layer or path identity
+causes a refusal; existing valid flat component documents keep their existing
+admission path. If all identifying metadata is removed, the format cannot be
+distinguished from an ordinary image by this check.
+
+An actual stripped-metadata XCF reproduced both direct adoption and public
+open incorrectly succeeding before this change. The candidate refuses both,
+leaves the XCF byte-identical and still adopts ordinary grayscale and flat Lab.
+The fixture also checks each root and plane identity in isolation. All four
+engine sets pass adapter conformance and 35 fixture checks each. Independent
+review, hosted CI and installed-app qualification remain pending. This guard
+does not yet enable opening valid layered Lab documents.
+
 ### Alpha-aware profile and proof rendering (candidate)
 
 The display renderer now samples an image-owned associated-linear cache before
