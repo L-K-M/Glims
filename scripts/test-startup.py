@@ -44,11 +44,15 @@ def main():
         environment['GLIMS_STARTUP_CATALOG_REPORT'] = str(work / 'catalog.txt')
         environment['GLIMS_STARTUP_TRACE'] = '1'
 
-        def run(label, seeded=False, temporary=False):
+        def run(label, seeded=False, temporary=False, tmpdir=None):
             (work / 'catalog.txt').unlink(missing_ok=True)
+            run_env = environment.copy()
+            if tmpdir is not None:
+                run_env['TMPDIR'] = str(tmpdir)
+                run_env.pop('GLIMS_TEST_UNDEFINED_PATH_TOKEN', None)
             result = subprocess.run([str(probe), str(clone / 'Contents/Frameworks/libglimsengine.dylib'),
                                      str(work / 'user'), str(work / 'cache')],
-                                    env=environment, cwd=work, capture_output=True, text=True, timeout=180)
+                                    env=run_env, cwd=work, capture_output=True, text=True, timeout=180)
             if result.returncode:
                 raise AssertionError(f'{label}: {result.stdout}\n{result.stderr}')
             marker = 'Glims: seeded bundled command cache' in result.stderr
@@ -59,14 +63,16 @@ def main():
             assert not rc_file.exists() or 'glims-pluginrc-' not in rc_file.read_text(), \
                 f'{label}: temporary registry path leaked into preferences'
             assert not list((work / 'tmp').glob('glims-pluginrc-*')), f'{label}: temporary registry left behind'
+            if tmpdir is not None:
+                assert not list(tmpdir.glob('glims-pluginrc-*')), f'{label}: temporary registry left behind'
             fonts, commands = (work / 'catalog.txt').read_text().split('[procedures]\n', 1)
             catalog = (frozenset(fonts.splitlines()[1:]), frozenset(commands.splitlines()))
             assert catalog[0] and catalog[1], f'{label}: empty catalog'
             print(f'{label}: {result.stdout.strip()}', flush=True)
             return catalog
 
-        def unchanged(label, reference, seeded=False, temporary=False):
-            actual = run(label, seeded, temporary)
+        def unchanged(label, reference, seeded=False, temporary=False, tmpdir=None):
+            actual = run(label, seeded, temporary, tmpdir)
             assert actual == reference, f'{label}: changed font or command catalog'
 
         baseline = run('fresh relocated bundle', True)
@@ -155,6 +161,10 @@ def main():
         (work / 'user/pluginrc').symlink_to(link_target)
         unchanged('corrupt symlinked registry', baseline, False)
         (work / 'user/pluginrc').unlink(missing_ok=True)
+        special_tmp = work / 'temporary ${GLIMS_TEST_UNDEFINED_PATH_TOKEN} ~ space'
+        special_tmp.mkdir()
+        (work / 'user/pluginrc').write_text('invalid registry\n')
+        unchanged('corrupt cache with special temporary path', baseline, tmpdir=special_tmp)
         identity = clone / 'Contents/Resources/Engine-Startup/identity'
         compatible_identity = identity.read_bytes()
         identity.write_text('0.0.0\nincompatible-language\n')

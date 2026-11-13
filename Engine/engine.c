@@ -1007,15 +1007,23 @@ engine_initialize (GlimsEngine  *engine,
             {
               temporary_registry_path = g_build_filename (temporary_registry_dir, "pluginrc", NULL);
               GFile *file = g_file_new_for_path (temporary_registry_path);
-              if (seed_bundle_plugin_cache (contents, current_language, file))
+              /* GIMP treats '~' and ${tokens} specially in config paths.
+               * Use this temporary path only if that parser resolves it back
+               * to the exact filesystem name, including filename encoding. */
+              gchar *config_path = g_filename_to_utf8 (temporary_registry_path, -1, NULL, NULL, NULL);
+              gchar *expanded = config_path ? gimp_config_path_expand (config_path, TRUE, NULL) : NULL;
+              if (expanded && g_strcmp0 (expanded, temporary_registry_path) == 0 &&
+                  seed_bundle_plugin_cache (contents, current_language, file))
                 {
                   g_object_get (gimp->config, "pluginrc-path", &original_pluginrc_path, NULL);
-                  g_object_set (gimp->config, "pluginrc-path", temporary_registry_path, NULL);
+                  g_object_set (gimp->config, "pluginrc-path", config_path, NULL);
                   gimp->query_all = FALSE;
                   temporary_registry_active = TRUE;
                   if (g_getenv ("GLIMS_STARTUP_TRACE"))
                     g_printerr ("Glims: using temporary bundled command cache\n");
                 }
+              g_free (expanded);
+              g_free (config_path);
               g_object_unref (file);
             }
         }
