@@ -211,6 +211,13 @@ extension EngineSmokeTest {
             let before = opened.layers.map(\.id)
             owner.beginSheet(sheet)
             EngineSmokeTestHost.pumpEvents(for: 0.05)
+            // These controls still reflect the state from before the sheet.
+            // Their action closures must recheck admission at dispatch time.
+            newButton?.performClick(nil)
+            duplicateButton?.performClick(nil)
+            deleteButton?.performClick(nil)
+            drain("stale palette buttons")
+            check(opened.layers.map(\.id) == before, "stale palette buttons cannot change layers behind a sheet")
             palette.reload()
             check(!windowController.validateMenuItem(newMenu) && !windowController.validateMenuItem(duplicateMenu) &&
                   !windowController.validateMenuItem(deleteMenu),
