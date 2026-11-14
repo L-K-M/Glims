@@ -1305,7 +1305,19 @@ extension EngineSmokeTest {
             check(opened.acceptsLayerProperties && !opened.acceptsLayerCreate && !opened.acceptsLayerDelete &&
                   !opened.acceptsLayerDuplicate && !opened.acceptsLayerReorder && !opened.acceptsLayerHistory,
                   "recording admits guarded Lab properties but keeps structure and history disabled")
+            let undoMenu = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "")
+            let redoMenu = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "")
+            check(windowController.window?.validateMenuItem(undoMenu) == false &&
+                  windowController.window?.validateMenuItem(redoMenu) == false,
+                  "Undo and Redo menu items are disabled while recording Lab properties")
             let priorHistory = try session.undoInfo(image)
+            var missingRefused = false
+            opened.changeLayer(other.id, .init(opacity: 0.25)) {
+                if case .failure = $0 { missingRefused = true }
+            }
+            check(missingRefused && errors == ["The displayed Lab layer could not be identified for recording."],
+                  "a missing displayed identity is explained before recording a Lab property")
+            errors.removeAll()
             var staleRefused = false
             opened.changeLayer(other.id, .init(opacity: 0.25), labIdentity: UUID()) {
                 if case .failure = $0 { staleRefused = true }
