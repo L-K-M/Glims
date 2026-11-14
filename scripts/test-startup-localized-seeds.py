@@ -25,6 +25,9 @@ def main():
         subprocess.run(['cp', '-cpR', str(args.app.resolve()), str(clone)], check=True)
         contents = clone / 'Contents'
         startup = contents / 'Resources/Engine-Startup'
+        # This suite specifically tests localized clean seeds and native
+        # override fallback; exact override seeds have a separate suite.
+        shutil.rmtree(startup / 'overrides', ignore_errors=True)
         version, host_language = (startup / 'identity').read_text().splitlines()[:2]
         probe = work / 'startup-tests'
         subprocess.run(['xcrun', 'clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',

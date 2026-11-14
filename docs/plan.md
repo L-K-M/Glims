@@ -6030,6 +6030,21 @@ ordinary application-launch measurements. Full editor compatibility, hosted
 review, CI and integration remain open, and the five-second target is not
 established for first-time overrides or incompatible seeds.
 
+### Exact locale override seeds (candidate)
+
+The bundle can also prepare six exact `LANGUAGE` and `LC_ALL` pairs for the
+packager's complete macOS preferred-language list, both alone and with the
+`LANG` and `LC_CTYPE` defaults observed from LaunchServices. The complete
+locale environment and language identity must match before an override seed
+is used; other configurations still perform native discovery. Cache keys include
+the matching override seed contents so replacing a seed refreshes warm caches.
+The startup regression checks all twelve seeded catalogs against fresh native
+discovery with a newly added plug-in. It also checks changed seed contents,
+unmatched locale categories and invalid identities on the reference override;
+bundle qualification runs this regression. A matching engine probe took about 3.8 seconds under load; this
+is not an ordinary app-launch measurement or a five-second guarantee. The final
+bundle, four-engine editor checks and review remain open.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels

@@ -798,6 +798,19 @@ startup_locale_environment_is_clean (void)
   return clean;
 }
 
+/* The escaped macOS language identity and the complete locale-environment
+ * fingerprint are both required; neither alone identifies a safe seed. */
+static gchar *
+startup_override_seed_key (const gchar *escaped_language, const gchar *fingerprint)
+{
+  GChecksum *sum = g_checksum_new (G_CHECKSUM_SHA256);
+  g_checksum_update (sum, (const guchar *) escaped_language, strlen (escaped_language) + 1);
+  g_checksum_update (sum, (const guchar *) fingerprint, strlen (fingerprint) + 1);
+  gchar *key = g_strdup (g_checksum_get_string (sum));
+  g_checksum_free (sum);
+  return key;
+}
+
 static gboolean
 startup_checksum_seed_file (GChecksum *sum, const gchar *path, const gchar *tag)
 {
@@ -847,18 +860,24 @@ startup_override_registry_path (const gchar *cache_directory,
   const gchar *parts[] = { GIMP_VERSION, language, contents, user_directory, selected_registry, fingerprint };
   for (guint i = 0; i < G_N_ELEMENTS (parts); i++)
     g_checksum_update (sum, (const guchar *) parts[i], strlen (parts[i]) + 1);
-  /* Both the host and matching localized seeds affect registry provenance. */
+  /* Bind registry provenance to the host and matching locale seeds,
+   * including the presence, length and contents of every bounded file. */
   g_autofree gchar *escaped_language = g_strescape (language, NULL);
+  g_autofree gchar *override_key = startup_override_seed_key (escaped_language, fingerprint);
   g_autofree gchar *localized_key = g_compute_checksum_for_string (G_CHECKSUM_SHA256, escaped_language, -1);
   const gchar *leaves[] = { "identity", "environment", "pluginrc" };
   for (guint i = 0; i < G_N_ELEMENTS (leaves); i++)
     {
-      g_autofree gchar *host_path = g_build_filename (contents, "Resources", "Engine-Startup", leaves[i], NULL);
+      g_autofree gchar *seed_path = g_build_filename (contents, "Resources", "Engine-Startup", leaves[i], NULL);
+      g_autofree gchar *override_path = g_build_filename (contents, "Resources", "Engine-Startup",
+                                                          "overrides", override_key, leaves[i], NULL);
       g_autofree gchar *localized_path = g_build_filename (contents, "Resources", "Engine-Startup",
                                                            "localized", localized_key, leaves[i], NULL);
       g_autofree gchar *host_tag = g_strconcat ("host/", leaves[i], NULL);
+      g_autofree gchar *override_tag = g_strconcat ("override/", leaves[i], NULL);
       g_autofree gchar *localized_tag = g_strconcat ("localized/", leaves[i], NULL);
-      if (!startup_checksum_seed_file (sum, host_path, host_tag) ||
+      if (!startup_checksum_seed_file (sum, seed_path, host_tag) ||
+          !startup_checksum_seed_file (sum, override_path, override_tag) ||
           !startup_checksum_seed_file (sum, localized_path, localized_tag))
         { g_checksum_free (sum); return NULL; }
     }
@@ -998,10 +1017,31 @@ seed_bundle_plugin_cache (const gchar *contents,
       g_free (actual_environment);
       g_free (environment_path);
     }
-  /* On macOS the preferred-language list does not include explicit gettext
-   * locale overrides. These extra seeds are captured without such overrides;
-   * using one with different environment settings could show stale labels. */
-  if (!identity_matches && startup_locale_environment_is_clean ())
+  gboolean clean_environment = startup_locale_environment_is_clean ();
+  if (!identity_matches && !clean_environment)
+    {
+      gchar *fingerprint = startup_locale_environment_fingerprint ();
+      gchar *expected_environment = g_strconcat (fingerprint, "\n", NULL);
+      gchar *key = startup_override_seed_key (escaped, fingerprint);
+      g_clear_pointer (&metadata, g_free);
+      g_free (metadata_path);
+      g_free (directory);
+      directory = g_build_filename (contents, "Resources", "Engine-Startup", "overrides", key, NULL);
+      metadata_path = g_build_filename (directory, "identity", NULL);
+      gchar *environment_path = g_build_filename (directory, "environment", NULL);
+      gchar *actual_environment = NULL;
+      identity_matches = g_file_get_contents (metadata_path, &metadata, NULL, NULL) &&
+                         g_strcmp0 (metadata, expected) == 0 &&
+                         g_file_get_contents (environment_path, &actual_environment, NULL, NULL) &&
+                         g_strcmp0 (actual_environment, expected_environment) == 0;
+      g_free (actual_environment);
+      g_free (environment_path);
+      g_free (key);
+      g_free (expected_environment);
+      g_free (fingerprint);
+    }
+  /* Clean localized seeds must never be used with gettext overrides. */
+  if (!identity_matches && clean_environment)
     {
       g_clear_pointer (&metadata, g_free);
       g_free (metadata_path);
