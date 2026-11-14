@@ -611,7 +611,8 @@ GlimsStatus
 glims_image_close (GlimsEngine  *engine,
                    GlimsImageID  id)
 {
-  if (! glims_lookup_image (engine, id))
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!open)
     return GLIMS_STATUS_NOT_FOUND;
 
   /* A monitored link can enter a file plug-in's nested loop without an
@@ -619,7 +620,13 @@ glims_image_close (GlimsEngine  *engine,
   if (engine->busy > 0)
     return GLIMS_STATUS_BUSY;
 
+  /* Cancelling a typed stroke during close emits drawable signals. Keep a
+   * reentrant callback from closing the same image or editing it while its
+   * stroke and image records are being released. */
+  gboolean typed_stroke = glims_typed_strokes_for_image (engine, open->image, GLIMS_TYPED_STROKES_QUERY);
+  if (typed_stroke) engine->busy++;
   glims_release_image (engine, id);
+  if (typed_stroke) engine->busy--;
 
   return GLIMS_STATUS_OK;
 }

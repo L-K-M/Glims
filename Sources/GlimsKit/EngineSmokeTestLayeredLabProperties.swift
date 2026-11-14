@@ -20,6 +20,10 @@ extension EngineSmokeTest {
             palette.retarget(to: nil)
             paletteWindow.orderOut(nil)
             paletteWindow.close()
+            if let window = controller?.window, let sheet = window.attachedSheet {
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                sheet.orderOut(nil)
+            }
             if let controller, !controller.closeStarted { controller.closeDiscardingChanges() }
             if let document {
                 if controller == nil && !document.isClosing { document.closeImageWhenDrained() }
@@ -60,8 +64,8 @@ extension EngineSmokeTest {
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,
               "document does not expose private Lab planes as channels")
         check(opened.layers.count == 2, "document shows two logical layers")
-        check(!opened.toolIsAvailable(.paintbrush) && opened.toolIsAvailable(.zoom),
-              "editing tools are unavailable while zoom remains available")
+        check(opened.toolIsAvailable(.paintbrush) == opened.storage.allowsLabLayerBrush && opened.toolIsAvailable(.zoom),
+              "Brush follows its layered Lab capability while zoom remains available")
         let originalTool = ToolState.shared.current
         defer { ToolState.shared.select(originalTool) }
         let toolPalette = ToolsPaletteController()
@@ -85,7 +89,26 @@ extension EngineSmokeTest {
             let enabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.rectangleSelect.rawValue }?.isEnabled
             check(enabled == opened.storage.allowsLabSelections,
                   "Tools palette updates selection availability when switching between Lab layouts")
+            let brushEnabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.paintbrush.rawValue }?.isEnabled
+            check(brushEnabled == opened.storage.allowsLabLayerBrush,
+                  "Tools palette updates Brush availability for the layered Lab layout")
         } else { check(false, "Tools palette contains its tool grid") }
+        do {
+            let previousTool = ToolState.shared.current
+            defer { ToolState.shared.select(previousTool) }
+            ToolState.shared.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func optionDescendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap { optionDescendants($0) }
+            }
+            let labels = optionDescendants(options.view).compactMap { ($0 as? NSTextField)?.stringValue }
+            let activeHint = labels.contains { $0.contains("Paint the selected Lab layer") }
+            check(activeHint == opened.toolIsAvailable(.paintbrush),
+                  "Brush hint matches layered Lab tool availability")
+        }
         func drain(_ step: String) {
             let deadline = Date().addingTimeInterval(15)
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
@@ -134,6 +157,235 @@ extension EngineSmokeTest {
             try opened.stopRecording()
         } else {
             check(!opened.toolIsAvailable(.rectangleSelect), "older engines keep layered Lab selection disabled")
+        }
+        let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
+        check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
+              "Fill menu follows the layered Lab color capability")
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COLOR_FILL"] == "1" {
+            check(opened.storage.allowsLabLayerColorFill, "test adapter advertises layered Lab color Fill")
+        }
+        if opened.storage.allowsLabLayerColorFill, let window = windowController.window,
+           let originalRoot = opened.selectedLayerIDs.first {
+            let oldForeground = ToolState.shared.foreground
+            defer { ToolState.shared.foreground = oldForeground }
+            ToolState.shared.foreground = .red
+            let beforeRecording = pixel(session, image, x: 1, y: 1)
+            let previousError = opened.onError
+            var recordingErrors: [String] = []
+            opened.onError = { recordingErrors.append($0) }
+            defer { opened.onError = previousError }
+            try opened.startRecording()
+            check(!windowController.validateMenuItem(fillMenu), "Lab Fill is disabled while recording")
+            windowController.fill(nil)
+            EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Lab Fill refusal during recording")
+            check(!recordingErrors.isEmpty && window.attachedSheet == nil &&
+                  pixel(session, image, x: 1, y: 1) == beforeRecording && opened.recorder.records.isEmpty,
+                  "Lab Fill during recording changes nothing and opens no sheet")
+            try opened.stopRecording()
+            opened.onError = previousError
+            func waitForSheet() -> NSWindow? {
+                let deadline = Date().addingTimeInterval(15)
+                while window.attachedSheet == nil && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                return window.attachedSheet
+            }
+            opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
+            drain("fill selection")
+            let insideBefore = pixel(session, image, x: 1, y: 1)
+            let outsideBefore = pixel(session, image, x: 0, y: 0)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                check(true, "captured Lab layer Fill sheet opens")
+                window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Lab color fill")
+                let insideAfter = pixel(session, image, x: 1, y: 1)
+                check(insideAfter?.count == 4 && (insideAfter?[0] ?? 0) > 245 &&
+                      (insideAfter?[1] ?? 255) < 20 && (insideAfter?[2] ?? 255) < 20 &&
+                      pixel(session, image, x: 0, y: 0) == outsideBefore,
+                      "foreground Fill changes only selected pixels to red")
+                let undo = EngineUndoManager(document: opened)
+                check(undo.canUndo, "Lab color fill offers Undo")
+                undo.undo(); drain("Lab color fill Undo")
+                check(pixel(session, image, x: 1, y: 1) == insideBefore, "Undo restores pixels before Lab color fill")
+                undo.redo(); drain("Lab color fill Redo")
+                check(pixel(session, image, x: 1, y: 1) == insideAfter, "Redo restores the Lab color fill")
+                undo.undo(); drain("restore pixels after Lab color fill")
+                undo.undo(); drain("restore selection after Lab color fill")
+                check(opened.selectionBounds == nil, "fill fixture restores its empty selection")
+            } else { check(false, "captured Lab layer Fill sheet opens") }
+            let beforeCustom = pixel(session, image, x: 1, y: 1)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap { descendants($0) }
+                }
+                let controls = sheet.contentView.map { descendants($0) } ?? []
+                if let choice = controls.compactMap({ $0 as? NSPopUpButton }).first(where: { $0.itemTitles.contains("Custom") }),
+                   let well = controls.compactMap({ $0 as? NSColorWell }).first,
+                   let action = choice.action {
+                    choice.selectItem(withTitle: "Custom")
+                    NSApp.sendAction(action, to: choice.target, from: choice)
+                    check(well.isEnabled, "Custom Fill enables the color well")
+                    well.color = .blue
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("custom Lab color fill")
+                    let result = pixel(session, image, x: 1, y: 1)
+                    check(result?.count == 4 && (result?[0] ?? 255) < 20 &&
+                          (result?[1] ?? 255) < 20 && (result?[2] ?? 0) > 245,
+                          "Custom Fill uses the selected blue rather than the red foreground")
+                    opened.undo(); drain("custom Lab color fill Undo")
+                    check(pixel(session, image, x: 1, y: 1) == beforeCustom,
+                          "Undo restores pixels before Custom Fill")
+                } else {
+                    check(false, "Custom Fill exposes its choice and color well")
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                }
+            } else { check(false, "Lab Fill sheet opens for custom color") }
+            let beforeCancel = pixel(session, image, x: 1, y: 1)
+            windowController.fill(nil)
+            if let sheet = waitForSheet() {
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("cancel Lab Fill")
+                check(pixel(session, image, x: 1, y: 1) == beforeCancel, "Cancel leaves Lab pixels unchanged")
+            } else { check(false, "Lab Fill sheet opens for cancellation") }
+            if let other = opened.layers.first(where: { $0.id != originalRoot }) {
+                var errors: [String] = []
+                let oldError = opened.onError
+                opened.onError = { errors.append($0) }
+                defer { opened.onError = oldError }
+                windowController.fill(nil)
+                if let sheet = waitForSheet() {
+                    opened.selectLayer(other.id); drain("retarget while Fill is open")
+                    if window.attachedSheet === sheet {
+                        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    }
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("refuse retargeted Lab Fill")
+                    check(!errors.isEmpty && pixel(session, image, x: 1, y: 1) == beforeCancel,
+                          "Fill refuses a layer changed while its sheet was open")
+                    opened.selectLayer(originalRoot); drain("restore captured layer")
+                } else { check(false, "Lab Fill sheet opens for retarget test") }
+                opened.onError = oldError
+            }
+        } else if opened.storage.allowsLabLayerColorFill {
+            check(false, "layered Lab Fill fixture has a window and selected root")
+        }
+        if opened.storage.allowsLabLayerBrush, let window = windowController.window {
+            let state = ToolState.shared
+            let oldTool = state.current, oldForeground = state.foreground, oldBrush = state.brush(for: .paintbrush)
+            defer { state.foreground = oldForeground; state.update(.paintbrush) { $0 = oldBrush }; state.select(oldTool) }
+            state.foreground = .red
+            state.update(.paintbrush) { $0.size = 4; $0.opacity = 1; $0.hardness = 1; $0.resource = nil }
+            state.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: flatDocument); options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func descendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
+            let optionViews = descendants(options.view)
+            let optionText = optionViews.compactMap { ($0 as? NSTextField)?.stringValue }
+            let pressure = optionViews.compactMap { $0 as? NSButton }.first { $0.title == "Pen pressure sets size" }
+            check(optionText.contains(where: { $0.contains("foreground color") }) &&
+                  !optionText.contains(where: { $0.contains("Select one Lab channel") }) && pressure?.isEnabled == false,
+                  "layered Brush options show foreground color and fixed pressure behavior")
+            let oldError = opened.onError
+            var errors: [String] = []
+            opened.onError = { errors.append($0) }
+            defer { opened.onError = oldError }
+            let oldProjection = opened.onProjectionChange
+            var brushDamage: [CGRect] = []
+            opened.onProjectionChange = { rect in brushDamage.append(rect); oldProjection?(rect) }
+            defer { opened.onProjectionChange = oldProjection }
+            let before = pixel(session, image, x: 1, y: 1)
+            var invalidBrush = state.brush(for: .paintbrush)
+            invalidBrush.size = .nan
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: invalidBrush)
+            drain("failed layered Brush begin")
+            check(!opened.strokeIsActive && !opened.labBrushStrokeIsActive && !errors.isEmpty,
+                  "a failed layered Brush begin releases gesture admission without mouse-up")
+            if opened.strokeIsActive { opened.endStroke(); drain("clean up failed Brush begin") }
+            errors.removeAll()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            drain("Brush begin after failure")
+            check(opened.labBrushStrokeIsActive && errors.isEmpty,
+                  "a valid layered Brush begins after a failed begin")
+            opened.cancelLabBrushStroke(); drain("cancel Brush after failed begin")
+            check(pixel(session, image, x: 1, y: 1) == before,
+                  "the recovery stroke cancels without changing pixels")
+            try opened.startRecording()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            check(!opened.strokeIsActive && !errors.isEmpty && opened.recorder.records.isEmpty,
+                  "layered Lab Brush refuses recording without starting a gesture")
+            try opened.stopRecording(); errors.removeAll()
+            opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
+            drain("brush selection")
+            let outside = pixel(session, image, x: 0, y: 0)
+            let canvas = windowController.canvas
+            func mouse(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+                NSEvent.mouseEvent(with: type,
+                    location: canvas.convert(CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale), to: nil),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
+               let drag = mouse(.leftMouseDragged, CGPoint(x: 2.5, y: 1.5)),
+               let up = mouse(.leftMouseUp, CGPoint(x: 2.5, y: 1.5)) {
+                brushDamage.removeAll()
+                canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
+                drain("layered Lab canvas Brush gesture")
+                let painted = pixel(session, image, x: 1, y: 1)
+                if !errors.isEmpty || painted == before || pixel(session, image, x: 0, y: 0) != outside {
+                    print("BRUSH_DIAGNOSTIC errors=\(errors) before=\(String(describing: before)) painted=\(String(describing: painted)) outside=\(String(describing: outside)) outsideAfter=\(String(describing: pixel(session, image, x: 0, y: 0)))")
+                }
+                check(errors.isEmpty && painted != before && pixel(session, image, x: 0, y: 0) == outside,
+                      "canvas Brush paints selected pixels and preserves outside pixels")
+                check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
+                      "canvas receives brush damage for the painted pixel")
+                let undo = EngineUndoManager(document: opened)
+                check(undo.canUndo, "layered Lab Brush offers Undo")
+                undo.undo(); drain("layered Lab Brush Undo")
+                check(pixel(session, image, x: 1, y: 1) == before, "Undo restores the canvas Brush stroke")
+                undo.redo(); drain("layered Lab Brush Redo")
+                check(pixel(session, image, x: 1, y: 1) == painted, "Redo restores the canvas Brush stroke")
+                undo.undo(); drain("restore canvas Brush pixels")
+                undo.undo(); drain("restore canvas Brush selection")
+            } else { check(false, "layered Lab Brush events can be created") }
+            if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
+               let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53) {
+                let undoBefore = try? session.undoInfo(image)
+                canvas.mouseDown(with: down); drain("begin canvas Brush cancellation")
+                if !opened.labBrushStrokeIsActive || pixel(session, image, x: 1, y: 1) == before {
+                    print("BRUSH_CANCEL_DIAGNOSTIC active=\(opened.labBrushStrokeIsActive) errors=\(errors) before=\(String(describing: before)) after=\(String(describing: pixel(session, image, x: 1, y: 1)))")
+                }
+                check(opened.labBrushStrokeIsActive && pixel(session, image, x: 1, y: 1) != before,
+                      "cancellation fixture begins a visible Brush stroke")
+                brushDamage.removeAll()
+                window.makeFirstResponder(canvas); canvas.keyDown(with: escape)
+                drain("cancel canvas Brush with Escape")
+                let undoAfter = try? session.undoInfo(image)
+                check(undoBefore != nil && undoAfter != nil && !opened.strokeIsActive && pixel(session, image, x: 1, y: 1) == before &&
+                      undoBefore?.undoCount == undoAfter?.undoCount && undoBefore?.redoCount == undoAfter?.redoCount,
+                      "Escape restores the canvas Brush pixels and history")
+                check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
+                      "Escape invalidates the restored canvas pixels")
+                let rapidUndo = try? session.undoInfo(image)
+                let entered = DispatchSemaphore(value: 0)
+                let release = DispatchSemaphore(value: 0)
+                opened.inputQueue.async { entered.signal(); _ = release.wait(timeout: .now() + 20) }
+                let held = entered.wait(timeout: .now() + 3) == .success
+                canvas.mouseDown(with: down)
+                let accepted = opened.labBrushStrokeIsActive
+                canvas.keyDown(with: escape)
+                release.signal()
+                drain("cancel queued canvas Brush immediately")
+                let rapidAfter = try? session.undoInfo(image)
+                check(held && accepted && rapidUndo != nil && rapidAfter != nil && !opened.strokeIsActive &&
+                      pixel(session, image, x: 1, y: 1) == before && rapidUndo == rapidAfter,
+                      "immediate Escape cancels a queued Brush begin without a history change")
+            } else { check(false, "canvas Brush cancellation events can be created") }
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }
