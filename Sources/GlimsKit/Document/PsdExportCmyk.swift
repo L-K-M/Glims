@@ -8,12 +8,14 @@ enum PsdOutputColor: String, CaseIterable, Equatable, Sendable {
     case document
     case cmyk
     case bitmap
+    case duotone
 
     var title: String {
         switch self {
         case .document: return "Document RGB/Grayscale"
         case .cmyk: return "CMYK"
         case .bitmap: return "Bitmap (1-bit)"
+        case .duotone: return "Duotone (retain settings)"
         }
     }
 
@@ -25,6 +27,8 @@ enum PsdOutputColor: String, CaseIterable, Equatable, Sendable {
             return "Converts an RGB image to CMYK for this PSD using the chosen profile (relative colorimetric with black-point compensation). Output is 8-bit for 8-bit images and 16-bit otherwise. Editing stays RGB."
         case .bitmap:
             return "Exports the visible grayscale or indexed image as opaque black and white. Intermediate gray, transparency and linked layers are refused. Layers and metadata are omitted; save XCF to keep editing."
+        case .duotone:
+            return "Exports opaque 8-bit grayscale with retained Duotone settings from an imported file. The preview remains grayscale; inks cannot be edited. Linked layers are refused; layers and other metadata are omitted. Save XCF to keep editing."
         }
     }
 }

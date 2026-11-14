@@ -111,7 +111,7 @@ xcrun clang++ -dynamiclib -o "$OUT/libglimsengine.dylib" \
   -Wl,-exported_symbol,_glims_engine_get_api || die "linking the adapter failed"
 
 echo "==> Building the conformance tests and the performance pass"
-for program in engine-tests engine-perf bitmap-psd-engine-tests duotone-preservation-tests; do
+for program in engine-tests engine-perf bitmap-psd-engine-tests duotone-preservation-tests duotone-export-tests; do
   xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -I"$INCLUDE" \
     "$ROOT/Engine/tests/$program.c" -o "$OUT/glims-$program" || die "building $program failed"
 done
@@ -165,6 +165,14 @@ if [[ "$MODE" == test ]]; then
         "$OUT/glims-duotone-preservation-tests" "$OUT/libglimsengine.dylib" "$DUOTONE_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/duotone-preservation-test.log"
   (( status == 0 )) || die "the Duotone preservation tests failed (status $status)"
+  EXPORT_WORK="$WORK/duotone-export"
+  mkdir -p "$EXPORT_WORK/home" "$EXPORT_WORK/cache"
+  status=0
+  run_with_timeout 180 "$OUT/duotone-export-test.log" \
+    env HOME="$EXPORT_WORK/home" XDG_CACHE_HOME="$EXPORT_WORK/cache" \
+        "$OUT/glims-duotone-export-tests" "$OUT/libglimsengine.dylib" "$EXPORT_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
+  cat "$OUT/duotone-export-test.log"
+  (( status == 0 )) || die "the Duotone export tests failed (status $status)"
   status=0
   run_with_timeout 60 "$OUT/codec-test.log" \
     env HOME="$WORK/home" XDG_CACHE_HOME="$WORK/cache" \

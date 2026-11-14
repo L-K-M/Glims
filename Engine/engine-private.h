@@ -35,6 +35,8 @@ GlimsStatus glims_image_export_bitmap_threshold_psd (GlimsEngine *engine, GlimsI
                                                      char **error);
 GlimsStatus glims_image_export_bitmap_diffusion_psd (GlimsEngine *engine, GlimsImageID image,
                                                      const char *path, char **error);
+GlimsStatus glims_image_export_duotone_psd (GlimsEngine *engine, GlimsImageID image,
+                                           const char *path, char **error);
 /* Native scalar CMYK output, deliberately separate from RGB-to-CMYK export. */
 GlimsStatus glims_image_export_native_cmyk_psd (GlimsEngine *engine, GlimsImageID image,
                                                const char *path, char **error);

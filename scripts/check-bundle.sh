@@ -38,6 +38,8 @@ TESTS="$(ls -t "$ADAPTER_ROOT"/*/glims-engine-tests 2>/dev/null | head -1)"
 [[ -n "$TESTS" ]] || { echo "error: no conformance test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
 DUOTONE_TESTS="$(dirname "$TESTS")/glims-duotone-preservation-tests"
 [[ -x "$DUOTONE_TESTS" ]] || { echo "error: no matching Duotone test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
+DUOTONE_EXPORT_TESTS="$(dirname "$TESTS")/glims-duotone-export-tests"
+[[ -x "$DUOTONE_EXPORT_TESTS" ]] || { echo "error: no matching Duotone export test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-check-bundle.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -45,7 +47,9 @@ mkdir -p "$WORK/home" "$WORK/tests"
 # The test binary lives in _engine/; run a copy so the sandbox can deny it.
 cp "$TESTS" "$WORK/glims-engine-tests"
 cp "$DUOTONE_TESTS" "$WORK/glims-duotone-preservation-tests"
+cp "$DUOTONE_EXPORT_TESTS" "$WORK/glims-duotone-export-tests"
 mkdir -p "$WORK/duotone/home" "$WORK/duotone/cache"
+mkdir -p "$WORK/duotone-export/home" "$WORK/duotone-export/cache"
 
 
 status=0
@@ -75,6 +79,20 @@ else
 fi
 if grep -q -E "$ROOT/_(engine|deps)" "$WORK/duotone.log"; then
   echo "!! Duotone preservation looked for files in the build trees"
+  status=1
+fi
+
+echo "==> Duotone export against the bundled adapter (build trees unreadable)"
+if sandbox-exec -p "$PROFILE" env HOME="$WORK/duotone-export/home" XDG_CACHE_HOME="$WORK/duotone-export/cache" TMPDIR="$WORK" \
+     "$WORK/glims-duotone-export-tests" "$ADAPTER" "$WORK/duotone-export" "$ROOT/Engine/tests/fixtures" > "$WORK/duotone-export.log" 2>&1; then
+  echo "-- $(grep -c '^ok' "$WORK/duotone-export.log") checks passed"
+else
+  grep -E '^FAIL' "$WORK/duotone-export.log" || tail -20 "$WORK/duotone-export.log"
+  echo "!! the Duotone export checks failed against the bundle"
+  status=1
+fi
+if grep -q -E "$ROOT/_(engine|deps)" "$WORK/duotone-export.log"; then
+  echo "!! Duotone export looked for files in the build trees"
   status=1
 fi
 

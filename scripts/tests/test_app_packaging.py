@@ -90,6 +90,9 @@ class AppPackagingTests(unittest.TestCase):
         duotone = runner.parent / "glims-duotone-preservation-tests"
         duotone.write_text(source)
         duotone.chmod(0o755)
+        duotone_export = runner.parent / "glims-duotone-export-tests"
+        duotone_export.write_text(source)
+        duotone_export.chmod(0o755)
         executable = app / "Contents/MacOS/Glims"
         executable.write_text(source)
         executable.chmod(0o755)
@@ -109,7 +112,8 @@ class AppPackagingTests(unittest.TestCase):
         runners = outputs / "test-engine"
         runners.mkdir()
         for name, content in (("glims-engine-tests", "#!/bin/sh\necho 'ok engine'\n"),
-                              ("glims-duotone-preservation-tests", "#!/bin/sh\necho 'FAIL duotone'\nexit 1\n")):
+                              ("glims-duotone-preservation-tests", "#!/bin/sh\necho 'FAIL duotone'\nexit 1\n"),
+                              ("glims-duotone-export-tests", "#!/bin/sh\necho 'ok duotone export'\n")):
             path = runners / name
             path.write_text(content)
             path.chmod(0o755)
@@ -121,6 +125,26 @@ class AppPackagingTests(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("Duotone preservation checks failed", result.stdout)
+
+    def test_bundle_check_propagates_duotone_export_failure(self):
+        app = self.root / "dist/Glims.app"
+        (app / "Contents/Frameworks").mkdir(parents=True)
+        (app / "Contents/MacOS").mkdir()
+        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        runners = self.root / "isolated-adapters/test-engine"
+        runners.mkdir(parents=True)
+        for name in ("glims-engine-tests", "glims-duotone-preservation-tests", "glims-duotone-export-tests"):
+            path = runners / name
+            path.write_text("#!/bin/sh\necho 'FAIL export'\nexit 1\n" if name == "glims-duotone-export-tests" else "#!/bin/sh\necho 'ok'\n")
+            path.chmod(0o755)
+        executable = app / "Contents/MacOS/Glims"
+        executable.write_text("#!/bin/sh\necho 'ok app'\n")
+        executable.chmod(0o755)
+        self.env["GLIMS_ADAPTER_ROOT"] = str(runners.parent)
+        result = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Duotone export checks failed", result.stdout)
 
     def test_shell_only_is_explicit(self):
         result = self.run_build("--shell-only")
