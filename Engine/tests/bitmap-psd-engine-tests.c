@@ -227,6 +227,16 @@ int main(int argc, char **argv)
     status=api->image_export_bitmap_diffusion_psd(engine,half_image,output,&error);
     CHECK(status==GLIMS_STATUS_OK && has_bytes(output,dithered_psd,sizeof dithered_psd),
           "diffusion export matches the independently calculated checkerboard PSD"); free_error(api,&error);
+    GlimsImageID decoded=0;
+    status=api->image_open(engine,output,&decoded,&error);
+    CHECK(status==GLIMS_STATUS_OK && decoded, "GIMP reopens diffusion Bitmap output"); free_error(api,&error);
+    if(decoded) {
+      unsigned char rendered[4*4*4]={0};
+      CHECK(api->image_render(engine,decoded,1.0,(GlimsRect){0,0,4,4},rendered,4*4)==GLIMS_STATUS_OK &&
+            rendered[0]==255 && rendered[4]==0 && rendered[4*4]==0 && rendered[5*4]==255,
+            "GIMP reads the expected dithered black and white pixels");
+      api->image_close(engine,decoded);
+    }
     CHECK(api->image_undo_info(engine,half_image,&after)==GLIMS_STATUS_OK && before.undo_count==after.undo_count && before.redo_count==after.redo_count,
           "diffusion export preserves source history");
     static const char sentinel[]="diffusion-original"; write_bytes(output,sentinel,sizeof sentinel-1);
