@@ -6111,3 +6111,15 @@ and all four engines pass native round-trip and refusal tests. Full editor
 compatibility, review and integration remain open. Conversion, dithering,
 metadata and preserved editable Bitmap mode are separate work. See
 [bitmap-psd.md](bitmap-psd.md).
+
+### Explicit grayscale threshold for Bitmap PSD (candidate)
+
+The Bitmap PSD export sheet adds an explicit threshold method for opaque
+grayscale canvases, retaining strict existing black and white as the default.
+A chosen 0–255 cutoff maps its value and darker samples to black, after
+rounding the document-encoded grayscale to eight bits. The output is flat;
+transparency, out-of-range/nonfinite pixels and linked layers are refused.
+The source stays unchanged and Repeat Export and Batch retain the choice.
+Native ramp, boundary, destination and cancellation checks and focused Swift
+checks pass on the pinned engine. Four-engine, real-window, full editor,
+review and integration checks remain open; dithering remains separate work.

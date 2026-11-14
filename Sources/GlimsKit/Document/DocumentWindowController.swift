@@ -3380,7 +3380,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                      context: imageDocument.colorInfo.mode == .cmyk
                                         ? .nativeCmyk(profileName: imageDocument.colorInfo.profileLabel) : .ordinary,
                                      supportsBitmapPSD: imageDocument.session.supportsBitmapPSD &&
-                                        [.grayscale, .indexed].contains(imageDocument.colorInfo.mode))
+                                        [.grayscale, .indexed].contains(imageDocument.colorInfo.mode),
+                                     supportsBitmapThresholdPSD: imageDocument.session.supportsBitmapThresholdPSD &&
+                                        imageDocument.colorInfo.mode == .grayscale)
         export.panel.directoryURL = imageDocument.fileState.lastExportURL?.deletingLastPathComponent() ?? exportDirectory
         export.panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = export.panel.url, let self,

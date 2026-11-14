@@ -82,7 +82,8 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
 
     init(session: EngineSession) {
         service = RecorderBatchService(session: session)
-        exportForm = ExportOptionsForm(supportsBitmapPSD: session.supportsBitmapPSD)
+        exportForm = ExportOptionsForm(supportsBitmapPSD: session.supportsBitmapPSD,
+                                       supportsBitmapThresholdPSD: session.supportsBitmapThresholdPSD)
         let panel = BatchPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 560),
                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                backing: .buffered, defer: false)
