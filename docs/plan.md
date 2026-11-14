@@ -6053,3 +6053,13 @@ the saved version 15 commands have no layer binding and replay against the
 destination Lab image's root mask. The native operation still validates the
 document on execution. A real-window test covers capture, Save, loaded-file
 replay and Undo. Wider engine checks, CI and release qualification remain open.
+
+### Photoshop Bitmap PSD export (foundation)
+
+A private bounded serializer can write opaque binary black-and-white pixels
+as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
+chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
+independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
+user interface yet. Color conversion, alpha, metadata,
+non-binary input and preserved editable document mode remain separate work.
+See [bitmap-psd.md](bitmap-psd.md).
