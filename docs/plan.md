@@ -6030,3 +6030,13 @@ ordinary Fill entry. Transport tests include a protected old-prefix boundary,
 request values and native error ownership. Real-window tests cover the new
 engine's selection refusal, empty-selection Fill and Undo, and the old-engine
 fallback. Recorder capture, persistence and replay remain separate work.
+
+### Photoshop Bitmap PSD export (foundation)
+
+A private bounded serializer can write opaque binary black-and-white pixels
+as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
+chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
+independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
+user interface yet. Color conversion, alpha, metadata,
+non-binary input and preserved editable document mode remain separate work.
+See [bitmap-psd.md](bitmap-psd.md).
