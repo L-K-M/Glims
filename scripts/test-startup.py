@@ -5,6 +5,7 @@ Uses disposable user directories and a cloned app; never changes the input
 bundle. Ordinary GUI launch timing is a separate acceptance check.
 """
 import argparse
+import hashlib
 import os
 import re
 import signal
@@ -30,14 +31,28 @@ def main():
         # Native plug-in cache identity includes executable mtimes. A plain
         # recursive copy changes them and silently tests only requery fallback.
         subprocess.run(['cp', '-cpR', str(app), str(clone)], check=True)
-        # This suite deliberately invalidates the original host seed. Exercise
-        # alternate localized seeds separately in test-startup-localized-seeds.
-        shutil.rmtree(clone / 'Contents/Resources/Engine-Startup/localized', ignore_errors=True)
+        # Exercise the selected user registry under a clean locale. When the
+        # bundle was built with overrides, its matching clean-host seed lives
+        # among the localized seeds; install that seed into the disposable
+        # clone before removing the others for the recovery cases below.
+        startup = clone / 'Contents/Resources/Engine-Startup'
+        host_language = (startup / 'identity').read_text().splitlines()[1]
+        clean_host = startup / 'localized' / hashlib.sha256(host_language.encode()).hexdigest()
+        if (clean_host / 'pluginrc').is_file():
+            shutil.copy2(clean_host / 'pluginrc', startup / 'pluginrc')
+            digest = hashlib.sha256()
+            for key in ('LANG', 'LANGUAGE'):
+                digest.update(key.encode() + b'\0\0')
+            (startup / 'environment').write_text(digest.hexdigest() + '\n')
+        shutil.rmtree(startup / 'localized', ignore_errors=True)
         probe = work / 'startup-tests'
         subprocess.run(['xcrun', 'clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I', str(ROOT / 'Sources/CGlimsEngine/include'),
                         str(ROOT / 'Engine/tests/startup-tests.c'), '-o', str(probe)], check=True)
         environment = dict(os.environ)
+        for key in tuple(environment):
+            if key in ('LANG', 'LANGUAGE') or key.startswith('LC_'):
+                environment.pop(key)
         for key, leaf in [('HOME', 'home'), ('CFFIXED_USER_HOME', 'home'),
                           ('XDG_CACHE_HOME', 'cache'), ('XDG_CONFIG_HOME', 'config'),
                           ('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state'),
