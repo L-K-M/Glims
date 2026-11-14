@@ -234,6 +234,9 @@ final class EngineCanvasView: NSView {
         self.document = document
         lastBackingFactor = Self.fallbackBackingFactor
         super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+        setAccessibilityLabel("Image canvas")
         TabletEraserProximity.shared.start()
         updateFrameSize()
     }
