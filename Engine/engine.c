@@ -55,7 +55,10 @@
 #include "core/gimpchannel.h"
 #include "core/gimpgrid.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
+#include "core/gimplayer.h"
+#include "core/gimpobject.h"
 #include "core/gimpprojection.h"
 
 #include "paint/gimppaintcore.h"
@@ -5357,6 +5360,95 @@ api_image_fill_lab_layer_srgb (GlimsEngine *engine, GlimsImageID image,
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab_layer_srgb,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_fill_lab_layer_srgb_on_engine, &args, error);
+}
+
+typedef struct {
+  GlimsImageID image;
+  GlimsLabLayerPropertyChange settings;
+  char **error;
+} LabLayerPropertyArgs;
+
+static GlimsStatus
+image_change_lab_layer_properties_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLayerPropertyArgs *args = data;
+  GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB) return GLIMS_STATUS_UNSUPPORTED;
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  if (!storage) return GLIMS_STATUS_FAILED;
+  if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  for (guint i = 0; i < storage->map.count; i++)
+    if (gimp_item_get_id (GIMP_ITEM (storage->layers[i].group)) == args->settings.root)
+      {
+        guint index = storage->layers[i].map_index;
+        if (index >= storage->map.count || memcmp (storage->map.entries[index].group, args->settings.uuid, 16))
+          {
+            if (args->error) *args->error = strdup ("The captured Lab layer has changed. Select it again.");
+            return GLIMS_STATUS_INVALID_ARGUMENT;
+          }
+        if (!gimp_image_undo_is_enabled (open->image) || gimp_image_get_undo_group_count (open->image))
+          {
+            if (args->error) *args->error = strdup ("Finish the current Undo operation before changing this Lab layer.");
+            return GLIMS_STATUS_BUSY;
+          }
+        GlimsStatus ready = glims_edit_ready (engine, open, args->error);
+        if (ready != GLIMS_STATUS_OK) return ready;
+        GimpLayer *layer = storage->layers[i].group;
+        const GlimsLayerChange *change = &args->settings.change;
+        gboolean unchanged;
+        if (change->properties == GLIMS_LAYER_NAME)
+          unchanged = g_strcmp0 (gimp_object_get_name (GIMP_OBJECT (layer)), change->name) == 0;
+        else
+          unchanged = (!(change->properties & GLIMS_LAYER_VISIBLE) ||
+                       gimp_item_get_visible (GIMP_ITEM (layer)) == change->visible) &&
+                      (!(change->properties & GLIMS_LAYER_OPACITY) ||
+                       gimp_layer_get_opacity (layer) == change->opacity);
+        if (unchanged) return GLIMS_STATUS_OK;
+        /* The existing typed change runs directly on this engine-thread
+         * call; no main loop is entered between the identity check and it. */
+        return glims_layer_change (engine, args->image, args->settings.root, &args->settings.change, args->error);
+      }
+  if (args->error) *args->error = strdup ("The captured Lab layer no longer exists.");
+  return GLIMS_STATUS_NOT_FOUND;
+}
+
+static GlimsStatus
+api_image_change_lab_layer_properties (GlimsEngine *engine, GlimsImageID image,
+                                       const GlimsLabLayerPropertyChange *settings, char **error)
+{
+  if (error) *error = NULL;
+  uint32_t size;
+  if (!settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof (GlimsLabLayerPropertyChange)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabLayerPropertyArgs args = { .image = image, .error = error };
+  memcpy (&args.settings, settings, sizeof args.settings);
+  guint8 zero_uuid[16] = { 0 };
+  if (args.settings.root <= 0 || !memcmp (args.settings.uuid, zero_uuid, sizeof zero_uuid) ||
+      args.settings.change.struct_size < sizeof (GlimsLayerChange)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  const guint32 properties = args.settings.change.properties;
+  if (properties == GLIMS_LAYER_NAME)
+    {
+      if (!memchr (args.settings.change.name, '\0', sizeof args.settings.change.name) ||
+          !args.settings.change.name[0] || !g_utf8_validate (args.settings.change.name, -1, NULL))
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  else if (!properties || (properties & ~(GLIMS_LAYER_VISIBLE | GLIMS_LAYER_OPACITY)) ||
+           ((properties & GLIMS_LAYER_OPACITY) &&
+            (!isfinite (args.settings.change.opacity) || args.settings.change.opacity < 0 ||
+             args.settings.change.opacity > 1)))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (args.settings.change.properties & GLIMS_LAYER_VISIBLE)
+    {
+      const bool no = false, yes = true;
+      if (memcmp (&args.settings.change.visible, &no, sizeof no) &&
+          memcmp (&args.settings.change.visible, &yes, sizeof yes)) return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_change_lab_layer_properties,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_change_lab_layer_properties_on_engine, &args, error);
 }
 
 static GlimsStatus

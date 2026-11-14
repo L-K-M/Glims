@@ -500,6 +500,14 @@ typedef struct GlimsLayerChange {
   char     mode[64];         /* blend mode nick, as GlimsLayerInfo reports it */
 } GlimsLayerChange;
 
+/* An explicit logical Lab root and its document-scoped identity. */
+typedef struct GlimsLabLayerPropertyChange {
+  uint32_t struct_size;
+  GlimsItemID root;
+  uint8_t uuid[16];
+  GlimsLayerChange change;
+} GlimsLabLayerPropertyChange;
+
 /* The locks a layer or group can hold; `mask` and `values` of
  * set_layer_locks and the fields of GlimsLayerState are these bits. */
 typedef enum GlimsLayerLock {
@@ -4290,6 +4298,11 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_fill_lab_layer_srgb_empty_selection) (GlimsEngine *engine,
                                             GlimsImageID image,
                                             const GlimsLabLayerColorFillSettings *settings,
+                                            char **error);
+  /* Slot224: change a logical Lab root only if its captured UUID matches.
+   * Refuses when Undo is disabled or another Undo group is open. */
+  GlimsStatus (*image_change_lab_layer_properties) (GlimsEngine *engine, GlimsImageID image,
+                                            const GlimsLabLayerPropertyChange *settings,
                                             char **error);
 } GlimsEngineAPI;
 
