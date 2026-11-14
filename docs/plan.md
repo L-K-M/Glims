@@ -6182,7 +6182,9 @@ The legacy sRGB fallback uses the sampler's validated projection footprint at
 exactly 50% instead of eagerly validating the same footprint twice. Other
 scales and the normal color-managed canvas path are unchanged. The legacy alpha
 fixture now also compares full and single-pixel half-scale reads across both
-renderer chunk seams, including a partial-alpha sample and padded rows.
+renderer chunk seams, including a partial-alpha sample and padded rows. After
+a fresh seam edit it compares the optimized read with a subsequent read after
+explicit eager projection validation, including all pixels and row padding.
 
 On one 24 MP, 20-layer fixture, six alternating baseline/candidate runs gave
 mean 50% cold, post-edit and post-Undo reads of 612/567, 667/587 and 682/563 ms;
@@ -6193,7 +6195,7 @@ per sampled image and one value per byte; the same variation occurred between
 baseline runs and between candidate runs. Its cause remains unverified.
 
 All four engines pass their conformance, display-sampling, legacy-alpha and
-component-editor checks; the extended legacy fixture passes 615 checks per
+component-editor checks; the extended legacy fixture passes 620 checks per
 engine. Full editor checks pass 3,355 / 3,329 / 3,355 / 3,355 on 3.2.8,
 3.0.8, 3.2.0 and master. The separate pinned bundle passes its 2,268 native,
 14 Duotone preservation, 20 Duotone export, 13 composite import and 3,355

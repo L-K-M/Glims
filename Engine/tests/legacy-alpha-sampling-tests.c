@@ -149,17 +149,43 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  memset(wide,0xa5,wide_size);
  status=glims_image_render(engine,id,.5,(GlimsRect){0,0,4100,257},wide,wide_stride);
  CHECK(status==GLIMS_STATUS_OK,"half-scale viewport renders across both chunk boundaries");
+ gboolean seam_checked=FALSE;
  for(unsigned yi=0;yi<2;yi++)for(unsigned xi=0;xi<2;xi++){
   guint8 single[4]={0x5a,0x5a,0x5a,0x5a};int x=xs[xi],y=ys[yi];
   status=glims_image_render(engine,id,.5,(GlimsRect){x,y,1,1},single,4);
   CHECK(status==GLIMS_STATUS_OK && !memcmp(single,wide+(size_t)y*wide_stride+x*4,4),
         "half-scale chunk seam matches a single-pixel read");
-  if(x==4096 && y==256)CHECK(single[0]>0 && single[3]>0,"half-scale seam samples the seeded red pixel");
+  if(x==4096 && y==256){
+   CHECK(single[0]>0 && single[3]>0,"half-scale seam samples the seeded red pixel");seam_checked=TRUE;
+  }
  }
+ CHECK(seam_checked,"half-scale seeded seam is included in the probes");
  for(int y=0;y<257;y++){
   gboolean intact=TRUE;for(size_t x=4100*4;x<wide_stride;x++)if(wide[(size_t)y*wide_stride+x]!=0xa5)intact=FALSE;
   CHECK(intact,"half-scale viewport preserves row padding");
  }
+ /* Compare the optimized read with an explicit eager projection validation
+  * after a fresh edit. Both routes use the same sampler and conversion; this
+  * checks that skipping the earlier validation does not leave stale pixels. */
+ const guint8 blue[4]={0,0,255,255};
+ gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(layer)),GEGL_RECTANGLE(8192,512,1,1),0,
+                 babl_format("R'G'B'A u8"),blue,GEGL_AUTO_ROWSTRIDE);
+ gimp_drawable_update(GIMP_DRAWABLE(layer),8192,512,1,1);
+ memset(wide,0xa5,wide_size);
+ status=glims_image_render(engine,id,.5,(GlimsRect){0,0,4100,257},wide,wide_stride);
+ CHECK(status==GLIMS_STATUS_OK,"half-scale optimized render follows a fresh edit");
+ CHECK(wide[(size_t)256*wide_stride+4096*4+2]>0,
+       "half-scale optimized read sees the edited blue seam pixel");
+ guint8 *eager=g_malloc(wide_size);memset(eager,0xa5,wide_size);
+ open=glims_lookup_image(engine,id);GeglBuffer *projection=NULL;
+ status=open ? glims_projection_prepare_read(open,.5,(GlimsRect){0,0,4100,257},&projection) : GLIMS_STATUS_FAILED;
+ CHECK(status==GLIMS_STATUS_OK && projection,"eager validation prepares the same edited projection");
+ if(status==GLIMS_STATUS_OK && projection){
+  status=glims_image_render(engine,id,.5,(GlimsRect){0,0,4100,257},eager,wide_stride);
+  CHECK(status==GLIMS_STATUS_OK && !memcmp(wide,eager,wide_size),
+        "optimized and eagerly validated half-scale reads agree after edit including padding");
+ }
+ g_free(eager);
  g_free(wide);CHECK(glims_image_close(engine,id)==GLIMS_STATUS_OK,"wide probe closes owned image");
  return GLIMS_STATUS_OK;
 }
