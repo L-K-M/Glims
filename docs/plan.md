@@ -6233,6 +6233,11 @@ and XCF reopen/export, and still export sources without it. Each passes nine
 direct admission checks for conflicting, empty and oversized resources and
 MeSa serialization. Codec tests pass 25 checks each in optimized and sanitizer
 builds, covering both signatures, odd/even padding, streaming and failure
-paths. The development engine emits upstream cache cleanup warnings. Real-window,
-bundle, full editor and hosted qualification remain in progress. Retaining
-this data does not enable a color preview or establish Photoshop printing fidelity.
+paths. Real-window export and Repeat Export pass on all four engines, as do
+the full editor suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development
+engine emits upstream cache cleanup warnings; 3.0 also emitted LibGimp EOF
+warnings in the focused window test. The Swift suite passes 1,799 tests.
+The standalone pinned bundle passes 2,268 engine, 17 preservation, 24 export,
+13 composite-import and 3,355 editor checks with development trees inaccessible.
+Hosted qualification remains in progress. Retaining this data does not enable
+a color preview or establish Photoshop printing fidelity.
