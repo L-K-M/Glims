@@ -6159,7 +6159,7 @@ bundle, four-engine editor checks and review remain open.
 A private bounded serializer can write opaque binary black-and-white pixels
 as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
 chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
-independently decoded a small fixture. It is not wired to a file transaction,
-engine operation or user interface yet. Color conversion, alpha, metadata,
+independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
+user interface yet. Color conversion, alpha, metadata,
 non-binary input and preserved editable document mode remain separate work.
 See [bitmap-psd.md](bitmap-psd.md).
