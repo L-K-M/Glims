@@ -619,6 +619,18 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    GlimsLabLayerFillSettings invalid=fill;invalid.lightness=NAN;
    CHECK(api->image_fill_lab_layer(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
          "public fill refuses a nonfinite physical color");if(error)api->free_string(error);error=NULL;
+   GlimsLabLayerFillSettings range_fill=fill;range_fill.lightness=100.5;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses L* above 100");if(error)api->free_string(error);error=NULL;
+   range_fill=fill;range_fill.a=-128.5;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses a* below -128");if(error)api->free_string(error);error=NULL;
+   range_fill=fill;range_fill.b=127.5;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses b* above 127");if(error)api->free_string(error);error=NULL;
+   range_fill=fill;range_fill.opacity=1.0001;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses opacity above one");if(error)api->free_string(error);error=NULL;
    guint8 unaligned_fill[sizeof fill+2];memset(unaligned_fill,0xa5,sizeof unaligned_fill);memcpy(unaligned_fill+1,&fill,sizeof fill);
    request_fill_cancel=TRUE;fill_cancel_scheduled=FALSE;fill_cancelled=FALSE;
    GlimsStatus fill_status=api->image_fill_lab_layer(engine,id,(const GlimsLabLayerFillSettings*)(unaligned_fill+1),&error);
