@@ -38,7 +38,7 @@ def main():
             "procedure.set_menu_label(os.environ.get('GLIMS_TEST_METADATA_LABEL', 'missing oracle'))"))
         plugin.chmod(0o755)
 
-        def run(name, label, category=False):
+        def run(name, label, category=False, language='de', locale='de_DE.UTF-8'):
             profile = work / name
             profile.mkdir(exist_ok=True)
             env = os.environ.copy()
@@ -51,7 +51,7 @@ def main():
                               ('GIMP3_DIRECTORY', 'user'), ('TMPDIR', 'tmp')]:
                 (profile / leaf).mkdir(exist_ok=True)
                 env[key] = str(profile / leaf)
-            env.update(LANGUAGE='de', LC_ALL='de_DE.UTF-8', GLIMS_STARTUP_TRACE='1',
+            env.update(LANGUAGE=language, LC_ALL=locale, GLIMS_STARTUP_TRACE='1',
                        GLIMS_STARTUP_CATALOG_REPORT=str(profile / 'catalog'),
                        GLIMS_STARTUP_LABEL_REPORT=str(profile / 'labels'), GLIMS_TEST_METADATA_LABEL=label)
             if category:
@@ -82,8 +82,9 @@ def main():
             value = fingerprint.hexdigest()
             key = hashlib.sha256(escaped_language.encode() + b'\0' + value.encode() + b'\0').hexdigest()
             return key, value
-        for code, locale in (('en', 'en_US.UTF-8'), ('de', 'de_DE.UTF-8'), ('fr', 'fr_FR.UTF-8'),
-                             ('it', 'it_IT.UTF-8'), ('es', 'es_ES.UTF-8'), ('ja', 'ja_JP.UTF-8')):
+        pairs = (('en', 'en_US.UTF-8'), ('de', 'de_DE.UTF-8'), ('fr', 'fr_FR.UTF-8'),
+                 ('it', 'it_IT.UTF-8'), ('es', 'es_ES.UTF-8'), ('ja', 'ja_JP.UTF-8'))
+        for code, locale in pairs:
             key, fingerprint = identity_for({'LANGUAGE': code, 'LC_ALL': locale})
             seed = contents / 'Resources/Engine-Startup/overrides' / key
             assert (seed / 'identity').read_bytes() == host_bytes, f'{code}: wrong override identity'
@@ -94,6 +95,13 @@ def main():
         host_identity.write_text('0.0.0\nincompatible\n')
         seeded, seeded_labels = run('matching', 'matching oracle')
         assert seeded, 'exact common locale override did not use a packaged seed'
+        seeded_catalogs = {'de': seeded_labels}
+        for code, locale in pairs:
+            if code == 'de':
+                continue
+            matched, labels = run(f'matching-{code}', f'{code} oracle', language=code, locale=locale)
+            assert matched, f'{code}: exact locale override did not use a packaged seed'
+            seeded_catalogs[code] = labels
         key, _ = identity_for({'LANGUAGE': 'de', 'LC_ALL': 'de_DE.UTF-8'})
         override_registry = contents / 'Resources/Engine-Startup/overrides' / key / 'pluginrc'
         original_registry = override_registry.read_bytes()
@@ -120,8 +128,11 @@ def main():
         # Prevent a matching host seed from masking native discovery on a host
         # whose build environment happens to equal this override.
         host_identity.write_text('0.0.0\nincompatible\n')
-        discovered, discovered_labels = run('discovery', 'fresh oracle')
-        assert not discovered and seeded_labels == discovered_labels, 'override seed differs from native discovery'
+        for code, locale in pairs:
+            discovered, discovered_labels = run(f'discovery-{code}', f'fresh {code} oracle',
+                                                  language=code, locale=locale)
+            assert not discovered and seeded_catalogs[code] == discovered_labels, \
+                f'{code}: override seed differs from native discovery'
         print('PASS: exact locale override seed matches native discovery and refuses unmatched environments')
 
 

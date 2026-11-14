@@ -6025,8 +6025,9 @@ packager's complete macOS preferred-language list. The complete locale
 environment and language identity must match before an override seed is used;
 other configurations still perform native discovery. Cache keys include the
 matching override seed contents so replacing a seed refreshes warm caches.
-A disposable prototype checked discovery of a new plug-in, changed seed
-contents, unmatched locale categories and invalid identities against native
-discovery. Its matching engine probe took about 3.8 seconds under load; this
+The startup regression checks all six seeded catalogs against fresh native
+discovery, including a newly added plug-in, changed seed contents, unmatched
+locale categories and invalid identities; bundle qualification runs this
+regression. A matching engine probe took about 3.8 seconds under load; this
 is not an ordinary app-launch measurement or a five-second guarantee. The final
 bundle, four-engine editor checks and review remain open.

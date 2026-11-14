@@ -70,4 +70,10 @@ else
   status=1
 fi
 
+echo "==> Exact locale override seed and native discovery checks"
+if ! python3 "$ROOT/scripts/test-startup-override-seeds.py" "$APP"; then
+  echo "!! the bundled locale override seed checks failed"
+  status=1
+fi
+
 exit "$status"
