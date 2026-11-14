@@ -4,11 +4,15 @@ GIMP's PSD loader reads Photoshop Bitmap images as indexed images; its PSD
 exporter emits indexed PSD instead of Bitmap mode. This candidate adds an
 explicit Bitmap (1-bit) option to the PSD export sheet and Batch. It writes
 the visible canvas of a grayscale or indexed document as a flat one-bit PSD.
-All composited pixels must be exactly black or white and fully opaque; the
-export refuses intermediate gray, color, transparency or linked layers instead
-of converting silently or relying on mutable linked files. Layers, profile, resolution and other metadata are omitted. Save an
+The default method accepts only exactly black or white, fully opaque pixels.
+An explicit Threshold method accepts an opaque grayscale document and maps
+8-bit grayscale values at or below the chosen 0–255 cutoff to black. The
+sample is converted to the document's Y-prime encoding and rounded to the
+nearest 8-bit value before comparison. Neither method changes the source.
+Color and transparency are refused rather than silently converted; linked
+layers are also refused because their file contents may change during export. Layers, profile, resolution and other metadata are omitted. Save an
 XCF to keep the editable source. Repeat Export retains this explicit choice.
-Old adapters do not advertise the option. Conversion, dithering and a preserved
+Old adapters do not advertise methods they lack. Dithering and a preserved
 editable Bitmap document mode remain future work.
 
 The private serializer writes PSD v1 Bitmap mode, one one-bit channel, raw
