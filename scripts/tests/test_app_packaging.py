@@ -93,6 +93,9 @@ class AppPackagingTests(unittest.TestCase):
         duotone_export = runner.parent / "glims-duotone-export-tests"
         duotone_export.write_text(source)
         duotone_export.chmod(0o755)
+        composite = runner.parent / "glims-psd-composite-tests"
+        composite.write_text(source)
+        composite.chmod(0o755)
         executable = app / "Contents/MacOS/Glims"
         executable.write_text(source)
         executable.chmod(0o755)
@@ -113,7 +116,8 @@ class AppPackagingTests(unittest.TestCase):
         runners.mkdir()
         for name, content in (("glims-engine-tests", "#!/bin/sh\necho 'ok engine'\n"),
                               ("glims-duotone-preservation-tests", "#!/bin/sh\necho 'FAIL duotone'\nexit 1\n"),
-                              ("glims-duotone-export-tests", "#!/bin/sh\necho 'ok duotone export'\n")):
+                              ("glims-duotone-export-tests", "#!/bin/sh\necho 'ok duotone export'\n"),
+                              ("glims-psd-composite-tests", "#!/bin/sh\necho 'ok composite'\n")):
             path = runners / name
             path.write_text(content)
             path.chmod(0o755)
@@ -133,7 +137,7 @@ class AppPackagingTests(unittest.TestCase):
         (app / "Contents/Frameworks/libglimsengine.dylib").touch()
         runners = self.root / "isolated-adapters/test-engine"
         runners.mkdir(parents=True)
-        for name in ("glims-engine-tests", "glims-duotone-preservation-tests", "glims-duotone-export-tests"):
+        for name in ("glims-engine-tests", "glims-duotone-preservation-tests", "glims-duotone-export-tests", "glims-psd-composite-tests"):
             path = runners / name
             path.write_text("#!/bin/sh\necho 'FAIL export'\nexit 1\n" if name == "glims-duotone-export-tests" else "#!/bin/sh\necho 'ok'\n")
             path.chmod(0o755)
@@ -145,6 +149,26 @@ class AppPackagingTests(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("Duotone export checks failed", result.stdout)
+
+    def test_bundle_check_propagates_psd_composite_failure(self):
+        app = self.root / "dist/Glims.app"
+        (app / "Contents/Frameworks").mkdir(parents=True)
+        (app / "Contents/MacOS").mkdir()
+        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        runners = self.root / "isolated-adapters/test-engine"
+        runners.mkdir(parents=True)
+        for name in ("glims-engine-tests", "glims-duotone-preservation-tests", "glims-duotone-export-tests", "glims-psd-composite-tests"):
+            path = runners / name
+            path.write_text("#!/bin/sh\necho 'FAIL composite'\nexit 1\n" if name == "glims-psd-composite-tests" else "#!/bin/sh\necho 'ok'\n")
+            path.chmod(0o755)
+        executable = app / "Contents/MacOS/Glims"
+        executable.write_text("#!/bin/sh\necho 'ok app'\n")
+        executable.chmod(0o755)
+        self.env["GLIMS_ADAPTER_ROOT"] = str(runners.parent)
+        result = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Photoshop composite checks failed", result.stdout)
 
     def test_shell_only_is_explicit(self):
         result = self.run_build("--shell-only")

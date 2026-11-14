@@ -26,6 +26,7 @@ enum MainMenu {
         add(menu, "File", [
             item("New…", #selector(AppController.newDocument(_:)), "n"),
             item("Open…", #selector(AppController.openDocument(_:)), "o"),
+            item("Open Photoshop Composite…", #selector(AppController.openPhotoshopComposite(_:))),
             item("Open CMYK PSD…", #selector(AppController.openNativeCMYKPSD(_:))),
             RecentDocumentsMenu.shared.makeItem(),
             item("Open as Layers…", #selector(DocumentWindowController.openLayersFromFile(_:))),

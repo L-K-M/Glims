@@ -13,6 +13,7 @@ struct DocumentFileState: Equatable {
     enum ImportStrategy: Equatable {
         case appearance
         case nativeCMYKPSD
+        case photoshopComposite
     }
 
     /// The native (XCF) file this image is written to; `nil` while it
@@ -100,16 +101,18 @@ struct DocumentFileState: Equatable {
         /// Reload the authoritative CMYK samples and embedded profile through
         /// the preserving PSD importer, never the appearance-oriented opener.
         case nativeCMYKPSD(URL)
+        /// Reload the same flattened appearance rather than switching to layers.
+        case photoshopComposite(URL)
 
         var url: URL {
-            switch self { case .native(let url), .imported(let url), .nativeCMYKPSD(let url): return url }
+            switch self { case .native(let url), .imported(let url), .nativeCMYKPSD(let url), .photoshopComposite(let url): return url }
         }
 
         /// The File menu item's title for this source.
         var menuTitle: String {
             switch self {
             case .native: return "Revert to Saved…"
-            case .imported, .nativeCMYKPSD: return "Revert…"
+            case .imported, .nativeCMYKPSD, .photoshopComposite: return "Revert…"
             }
         }
     }
@@ -121,7 +124,11 @@ struct DocumentFileState: Equatable {
     var revertSource: RevertSource? {
         if let nativeURL { return .native(nativeURL) }
         if let importedSourceURL {
-            return importStrategy == .nativeCMYKPSD ? .nativeCMYKPSD(importedSourceURL) : .imported(importedSourceURL)
+            switch importStrategy {
+            case .nativeCMYKPSD: return .nativeCMYKPSD(importedSourceURL)
+            case .photoshopComposite: return .photoshopComposite(importedSourceURL)
+            case .appearance, nil: return .imported(importedSourceURL)
+            }
         }
         return nil
     }

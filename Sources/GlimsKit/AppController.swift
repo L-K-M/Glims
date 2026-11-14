@@ -29,6 +29,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     private var pendingOpenURLs: [URL] = []
     private var openingURLs: Set<URL> = []
     private var openingNativeCMYKURLs: Set<URL> = []
+    private var openingPhotoshopCompositeURLs: Set<URL> = []
     private var pendingFileOperations = 0
     private var terminationRequested = false
     private let fileWrites = FileWriteCoordinator()
@@ -427,7 +428,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 return (item.fileAccessID, url)
             }
             let token = try self.fileWrites.reserve(url, owner: controller.fileAccessID,
-                                                    openFiles: openFiles, opening: Array(self.openingURLs))
+                openFiles: openFiles,
+                opening: Array(self.openingURLs.union(self.openingNativeCMYKURLs).union(self.openingPhotoshopCompositeURLs)))
             return { [weak self] in self?.fileWrites.release(token) }
         }
         controller.revertHandler = { [weak self, weak controller] source, done in
@@ -607,6 +609,85 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
     }
 
+    @objc func openPhotoshopComposite(_ sender: Any?) {
+        guard session?.supportsPhotoshopCompositeImport == true,
+              !terminationRequested, !PlugInCommands.isRunning else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Open Photoshop Composite"
+        panel.message = "Open the merged appearance stored in a PSD or PSB. Individual layers and their editing settings will not be available, and the stored appearance may be out of date. The original file is not changed."
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importPhotoshopComposite(from: url) { [weak self] result in
+            guard self?.terminationRequested == false, case .failure(let error) = result else { return }
+            if let engineError = error as? EngineSession.EngineError,
+               engineError.status == Int32(GLIMS_STATUS_CANCELLED.rawValue) { return }
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    func importPhotoshopComposite(from requested: URL,
+                                  completion: @escaping @MainActor (Result<DocumentWindowController, Error>) -> Void) {
+        guard let session, !terminationRequested else {
+            return completion(.failure(ImageDocument.DocumentError.closed))
+        }
+        guard session.supportsPhotoshopCompositeImport else {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                message: "This image engine cannot open a Photoshop composite.")))
+        }
+        guard requested.isFileURL else {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                message: "Choose a local Photoshop PSD or PSB file.")))
+        }
+        let url = requested.standardizedFileURL
+        guard !PlugInCommands.isRunning, fileWrites.owner(writing: url) == nil,
+              !openingPhotoshopCompositeURLs.contains(where: { FileWriteCoordinator.sameFile($0, url) }) else {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue),
+                message: "Wait for the current file operation to finish, then open the Photoshop composite again.")))
+        }
+        if let existing = documents.first(where: {
+            guard $0.imageDocument.fileState.importStrategy == .photoshopComposite,
+                  let source = $0.imageDocument.fileState.importedSourceURL else { return false }
+            return FileWriteCoordinator.sameFile(source, url)
+        }) {
+            existing.window?.makeKeyAndOrderFront(nil)
+            return completion(.success(existing))
+        }
+        openingPhotoshopCompositeURLs.insert(url)
+        pendingFileOperations += 1
+        EngineActivity.shared.performWhenReady(label: "Opening composite \(url.lastPathComponent)", work: {
+            let result = Result { try session.openPhotoshopComposite(path: url.path) }
+            DispatchQueue.main.async {
+                let finish = { (outcome: Result<DocumentWindowController, Error>) in
+                    self.openingPhotoshopCompositeURLs.remove(url)
+                    self.pendingFileOperations -= 1
+                    completion(outcome)
+                    self.advanceDocumentClosing()
+                }
+                let discard = { (image: Int32, error: Error) in
+                    EngineActivity.shared.closeImage(image, session: session) { cleanup in
+                        if case .failure(let cleanupError) = cleanup { finish(.failure(cleanupError)) }
+                        else { finish(.failure(error)) }
+                    }
+                }
+                switch result {
+                case .failure(let error): finish(.failure(error))
+                case .success(let image):
+                    guard !self.terminationRequested else { return discard(image, ImageDocument.DocumentError.closed) }
+                    do {
+                        let document = try ImageDocument(session: session, image: image,
+                            name: url.lastPathComponent, openedFrom: url, importStrategy: .photoshopComposite)
+                        self.open(document)
+                        guard let controller = self.documents.first(where: { $0.imageDocument === document }) else {
+                            return finish(.failure(ImageDocument.DocumentError.closed))
+                        }
+                        finish(.success(controller))
+                    } catch { discard(image, error) }
+                }
+            }
+        })
+    }
+
     /// Explicit ink-preserving import owns its result until adoption or complete
     /// cleanup. An appearance import of the same path is a distinct document.
     func importNativeCMYKPSD(from requested: URL,
@@ -710,6 +791,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 continue
             }
             if let existing = documents.first(where: {
+                guard $0.imageDocument.fileState.importStrategy != .photoshopComposite else { return false }
                 guard let source = $0.imageDocument.fileState.nativeURL ?? $0.imageDocument.fileState.importedSourceURL else { return false }
                 return FileWriteCoordinator.sameFile(source, url)
             }) {
@@ -1117,9 +1199,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Reverting \(source.lastPathComponent)", work: {
             let result = Result {
-                try strategy == .nativeCMYKPSD
-                    ? session.importNativeCMYKPSD(path: source.path)
-                    : session.openImage(path: source.path)
+                switch strategy {
+                case .appearance: return try session.openImage(path: source.path)
+                case .nativeCMYKPSD: return try session.importNativeCMYKPSD(path: source.path)
+                case .photoshopComposite: return try session.openPhotoshopComposite(path: source.path)
+                }
             }
             DispatchQueue.main.async {
                 self.adoptRevertedImage(result, from: source, strategy: strategy, into: controller) { outcome in
@@ -1246,6 +1330,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(openPhotoshopComposite(_:)):
+            return session?.supportsPhotoshopCompositeImport == true && !terminationRequested && !PlugInCommands.isRunning
         case #selector(openNativeCMYKPSD(_:)):
             return session?.supportsNativeCMYKPSDImport == true && !terminationRequested && !PlugInCommands.isRunning
         case #selector(closeAllDocuments(_:)):

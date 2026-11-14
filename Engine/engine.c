@@ -1477,6 +1477,7 @@ typedef struct
 
 MARSHAL (image_new,    return glims_image_new (e, a->width, a->height, a->out, a->error);)
 MARSHAL (image_open,   return glims_image_open (e, a->string, a->out, a->error);)
+MARSHAL (image_open_psd_composite, return glims_image_open_psd_composite (e, a->string, a->out, a->error);)
 MARSHAL (image_close,  return glims_image_close (e, a->image);)
 MARSHAL (image_info,   return glims_image_info (e, a->image, a->out);)
 MARSHAL (image_render, return glims_image_render (e, a->image, a->number, a->area, a->pixels, a->stride);)
@@ -1877,6 +1878,17 @@ api_image_open (GlimsEngine *e, const char *path, GlimsImageID *image, char **er
   return glims_facade_call (e, GLIMS_FACADE_OP_image_open,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
                             image_open_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_open_psd_composite (GlimsEngine *e, const char *path, GlimsImageID *image, char **error)
+{
+  if (image) *image = 0;
+  if (error) *error = NULL;
+  GlimsArgs a = { .string = path, .out = image, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_open_psd_composite,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_open_psd_composite_on_engine, &a, error);
 }
 
 static GlimsStatus

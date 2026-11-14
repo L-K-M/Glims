@@ -470,11 +470,9 @@ open_spooled_xcf (GlimsEngine *engine, GFileIOStream *spool, GFile *original,
   return image;
 }
 
-GlimsStatus
-glims_image_open (GlimsEngine   *engine,
-                  const char    *path,
-                  GlimsImageID  *out,
-                  char         **error)
+static GlimsStatus
+image_open (GlimsEngine *engine, const char *path, GlimsImageID *out,
+            char **error, gboolean photoshop_composite)
 {
   GFile             *file;
   GimpImage         *image;
@@ -500,7 +498,8 @@ glims_image_open (GlimsEngine   *engine,
 
   g_autoptr(GFileIOStream) spool = NULL;
   gboolean compressed_source = FALSE;
-  if (!glims_foreign_compressed_spool (file, source_info, &spool, &compressed_source, &gerror))
+  if (!photoshop_composite &&
+      !glims_foreign_compressed_spool (file, source_info, &spool, &compressed_source, &gerror))
     {
       g_clear_object (&source_info);
       g_object_unref (file);
@@ -512,7 +511,32 @@ glims_image_open (GlimsEngine   *engine,
       return glims_fail (error, gerror, "The compressed XCF could not be staged.");
     }
 
-  if (!spool)
+  if (photoshop_composite)
+    {
+      /* The choice is explicit and applies only to real PSD/PSB bytes, not
+       * merely a filename. The upstream merged loader validates the rest. */
+      guint8 header[6]; gsize got = 0;
+      GFileInputStream *stream = g_file_read (file, NULL, &gerror);
+      gboolean valid = stream && g_input_stream_read_all (G_INPUT_STREAM (stream), header,
+                            sizeof header, &got, NULL, &gerror) && got == sizeof header &&
+                       !memcmp (header, "8BPS", 4) && header[4] == 0 &&
+                       (header[5] == 1 || header[5] == 2);
+      g_clear_object (&stream);
+      if (!valid)
+        {
+          g_clear_object (&source_info); g_object_unref (file);
+          return glims_fail (error, gerror, "Choose a valid Photoshop PSD or PSB file.");
+        }
+      GimpProcedure *procedure = gimp_pdb_lookup_procedure (engine->gimp->pdb, "file-psd-load-merged");
+      if (!GIMP_IS_PLUG_IN_PROCEDURE (procedure))
+        {
+          g_clear_object (&source_info); g_object_unref (file);
+          if (error) *error = strdup ("Photoshop composite import is unavailable in this image engine.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
+      file_proc = GIMP_PLUG_IN_PROCEDURE (procedure);
+    }
+  else if (!spool)
     {
       file_proc = gimp_plug_in_manager_file_procedure_find (engine->gimp->plug_in_manager,
                                                           GIMP_FILE_PROCEDURE_GROUP_OPEN,
@@ -574,6 +598,8 @@ glims_image_open (GlimsEngine   *engine,
     {
       g_clear_object (&source_info);
       g_object_unref (file);
+      if (photoshop_composite && status == GIMP_PDB_CANCEL)
+        { g_clear_error (&gerror); return GLIMS_STATUS_CANCELLED; }
       return glims_fail (error, gerror, "The file could not be opened.");
     }
 
@@ -607,6 +633,22 @@ glims_image_open (GlimsEngine   *engine,
       glims_fail (error, NULL, "The file's component planes or ink definitions are damaged or unsupported.");
     }
   return adopted;
+}
+
+GlimsStatus
+glims_image_open (GlimsEngine *engine, const char *path, GlimsImageID *out, char **error)
+{
+  return image_open (engine, path, out, error, FALSE);
+}
+
+GlimsStatus
+glims_image_open_psd_composite (GlimsEngine *engine, const char *path,
+                                GlimsImageID *out, char **error)
+{
+  if (error) *error = NULL;
+  if (out) *out = 0;
+  if (!path || !g_path_is_absolute (path) || !out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  return image_open (engine, path, out, error, TRUE);
 }
 
 GlimsStatus
