@@ -4276,6 +4276,13 @@ typedef struct GlimsEngineAPI {
                                                   const char *expected_fingerprint,
                                                   GlimsStrokeID *result,
                                                   GlimsStrokeCaptureFacts *facts, char **error);
+  /* Slot222: sample the composited layered Lab image at an integer pixel.
+   * Returns straight nonlinear sRGB and alpha without display quantization,
+   * clipping or proofing. The result is cleared on failure; out-of-bounds
+   * coordinates and a NULL result are invalid. Other layouts are refused. */
+  GlimsStatus (*image_sample_layered_lab) (GlimsEngine *engine, GlimsImageID image,
+                                          int32_t x, int32_t y,
+                                          GlimsSampledColor *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
