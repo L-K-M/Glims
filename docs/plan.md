@@ -6078,6 +6078,11 @@ recording. Existing file versions and ordinary RGB layer-property behavior
 remain unchanged. Live capture is still separate work; review, CI and bundle
 qualification are pending.
 
+An additional native candidate reads each displayed logical Lab layer and its
+UUID together on the engine thread. This is a prerequisite for retaining a
+row's identity while the palette defers reloads; it does not itself enable
+live recording. Cross-engine checks, review and integration remain pending.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels

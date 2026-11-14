@@ -5220,6 +5220,63 @@ api_image_lab_layer_identity (GlimsEngine *engine, GlimsImageID image,
 
 typedef struct {
   GlimsImageID image;
+  GlimsLabLayerSnapshotRow *rows;
+  int32_t capacity;
+  int32_t count;
+} LabLayerSnapshotArgs;
+
+static GlimsStatus
+image_lab_layer_snapshot_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLayerSnapshotArgs *args = data;
+  GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    return GLIMS_STATUS_UNSUPPORTED;
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  g_autofree GlimsLayerInfo *layers = g_try_new0 (GlimsLayerInfo, GLIMS_LAB_LAYER_LIMIT);
+  g_autofree GlimsLabLayerSnapshotRow *snapshot = g_try_new0 (GlimsLabLayerSnapshotRow, GLIMS_LAB_LAYER_LIMIT);
+  if (!storage || !layers || !snapshot) return GLIMS_STATUS_FAILED;
+  if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  int32_t count = 0;
+  GlimsStatus status = glims_image_layers (engine, args->image, layers, GLIMS_LAB_LAYER_LIMIT, &count);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (count < 0 || (guint) count != storage->map.count) return GLIMS_STATUS_UNSUPPORTED;
+  for (int32_t i = 0; i < count; i++)
+    {
+      guint index = storage->layers[i].map_index;
+      if (index >= storage->map.count ||
+          layers[i].id != gimp_item_get_id (GIMP_ITEM (storage->layers[i].group)))
+        return GLIMS_STATUS_UNSUPPORTED;
+      snapshot[i].layer = layers[i];
+      memcpy (snapshot[i].uuid, storage->map.entries[index].group, sizeof snapshot[i].uuid);
+    }
+  /* All validation precedes writes, and memcpy supports unaligned output. */
+  int32_t written = MIN (count, args->capacity);
+  if (written > 0) memcpy (args->rows, snapshot, (size_t) written * sizeof *snapshot);
+  args->count = count;
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+api_image_lab_layer_snapshot (GlimsEngine *engine, GlimsImageID image,
+                              GlimsLabLayerSnapshotRow *rows, int32_t capacity,
+                              int32_t *count)
+{
+  if (!count) return GLIMS_STATUS_INVALID_ARGUMENT;
+  *count = 0;
+  if (capacity < 0 || (!rows && capacity != 0)) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabLayerSnapshotArgs args = { image, rows, capacity, 0 };
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_image_lab_layer_snapshot,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_lab_layer_snapshot_on_engine, &args, NULL);
+  if (status == GLIMS_STATUS_OK) *count = args.count;
+  return status;
+}
+
+typedef struct {
+  GlimsImageID image;
   GlimsLabLayerFillSettings settings;
   char **error;
 } LabLayerFillArgs;

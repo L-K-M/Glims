@@ -233,6 +233,40 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    guint32 identity_size=sizeof(GlimsLabLayerIdentity)+8;memcpy(raw_identity+1,&identity_size,sizeof identity_size);
    GlimsUndoInfo identity_before={0},identity_after={0};
    CHECK(api->image_undo_info(engine,id,&identity_before)==GLIMS_STATUS_OK,"identity read captures history");
+   gboolean can_snapshot=api->struct_size>=offsetof(GlimsEngineAPI,image_lab_layer_snapshot)+
+      sizeof api->image_lab_layer_snapshot && api->image_lab_layer_snapshot;
+   CHECK(can_snapshot,"engine exposes atomic logical layer snapshots");
+   if(can_snapshot){
+    GlimsLabLayerSnapshotRow snapshots[2];int32_t snapshot_count=-1;
+    CHECK(api->image_lab_layer_snapshot(engine,id,snapshots,2,&snapshot_count)==GLIMS_STATUS_OK&&
+          snapshot_count==2&&snapshots[0].layer.id==rows[0].id&&snapshots[1].layer.id==rows[1].id&&
+          !strcmp(snapshots[0].layer.name,rows[0].name)&&
+          !memcmp(snapshots[0].uuid,m.entries[0].group,16)&&!memcmp(snapshots[1].uuid,m.entries[1].group,16),
+          "snapshot pairs displayed roots with their document-scoped identities");
+    guint8 unaligned[sizeof(GlimsLabLayerSnapshotRow)+2];memset(unaligned,0xa5,sizeof unaligned);
+    engine->busy++;snapshot_count=-1;
+    GlimsStatus snapshot_status=api->image_lab_layer_snapshot(engine,id,(GlimsLabLayerSnapshotRow*)(unaligned+1),1,&snapshot_count);
+    engine->busy--;
+    GlimsLabLayerSnapshotRow one;memcpy(&one,unaligned+1,sizeof one);
+    CHECK(snapshot_status==GLIMS_STATUS_OK&&snapshot_count==2&&one.layer.id==rows[0].id&&
+          !memcmp(one.uuid,m.entries[0].group,16)&&unaligned[0]==0xa5&&unaligned[sizeof unaligned-1]==0xa5,
+          "busy truncated unaligned snapshot returns the total and preserves adjacent bytes");
+    snapshot_count=-1;
+    CHECK(api->image_lab_layer_snapshot(engine,id,NULL,0,&snapshot_count)==GLIMS_STATUS_OK&&snapshot_count==2,
+          "snapshot supports a count-only read");
+    snapshot_count=-1;
+    CHECK(api->image_lab_layer_snapshot(engine,id,NULL,1,&snapshot_count)==GLIMS_STATUS_INVALID_ARGUMENT&&snapshot_count==0,
+          "snapshot rejects a missing row buffer and clears count");
+    snapshot_count=-1;
+    CHECK(api->image_lab_layer_snapshot(engine,id,snapshots,-1,&snapshot_count)==GLIMS_STATUS_INVALID_ARGUMENT&&snapshot_count==0&&
+          api->image_lab_layer_snapshot(engine,id,snapshots,2,NULL)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "snapshot rejects a negative capacity and a missing count");
+    memset(snapshots,0xa5,sizeof snapshots);GlimsLabLayerSnapshotRow unchanged[2];memcpy(unchanged,snapshots,sizeof unchanged);
+    snapshot_count=-1;
+    CHECK(api->image_lab_layer_snapshot(NULL,id,snapshots,2,&snapshot_count)==GLIMS_STATUS_NOT_RUNNING&&snapshot_count==0&&
+          !memcmp(snapshots,unchanged,sizeof snapshots),
+          "stopped engine snapshot clears count and leaves rows untouched");
+   }
    GlimsStatus identity_status=api->image_lab_layer_identity(engine,id,rows[0].id,(GlimsLabLayerIdentity*)(raw_identity+1));
    GlimsLabLayerIdentity first_identity;memcpy(&first_identity,raw_identity+1,sizeof first_identity);
    CHECK(identity_status==GLIMS_STATUS_OK&&first_identity.struct_size==identity_size&&
@@ -426,6 +460,13 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->image_new(engine,2,2,&ordinary,&error)==GLIMS_STATUS_OK&&ordinary,
          "ordinary image fixture for identity refusal opens");if(error)api->free_string(error);error=NULL;
    if(ordinary){
+    if(can_snapshot){
+     GlimsLabLayerSnapshotRow snapshot,unchanged;memset(&snapshot,0xa5,sizeof snapshot);unchanged=snapshot;
+     int32_t n=-1;
+     CHECK(api->image_lab_layer_snapshot(engine,ordinary,&snapshot,1,&n)==GLIMS_STATUS_UNSUPPORTED&&n==0&&
+           !memcmp(&snapshot,&unchanged,sizeof snapshot),
+           "ordinary image snapshot is refused without changing the output row");
+    }
     if(can_guard_properties){
      GlimsLabLayerPropertyChange guarded={.struct_size=sizeof guarded,.root=rows[0].id,
        .change={.struct_size=sizeof(GlimsLayerChange),.properties=GLIMS_LAYER_OPACITY,.opacity=.5}};
@@ -1317,6 +1358,13 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     GlimsLabLayerIdentity reordered_identity={.struct_size=sizeof reordered_identity};
     CHECK(api->image_lab_layer_identity(engine,id,rows[0].id,&reordered_identity)==GLIMS_STATUS_OK&&
           !memcmp(reordered_identity.uuid,first_identity.uuid,16),"root UUID remains stable across reorder");
+    if(can_snapshot){
+     GlimsLabLayerSnapshotRow snapshots[2];int32_t count=0;
+     CHECK(api->image_lab_layer_snapshot(engine,id,snapshots,2,&count)==GLIMS_STATUS_OK&&count==2&&
+           snapshots[0].layer.id==rows[1].id&&!memcmp(snapshots[0].uuid,m.entries[1].group,16)&&
+           snapshots[1].layer.id==rows[0].id&&!memcmp(snapshots[1].uuid,first_identity.uuid,16),
+           "snapshot keeps UUIDs attached to their roots after reorder");
+    }
     CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},order_after,4)==GLIMS_STATUS_OK&&
           order_after[0]>order_before[0]+20,"reorder changes the visible composite");
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,ordered,8,&n)==GLIMS_STATUS_OK&&
