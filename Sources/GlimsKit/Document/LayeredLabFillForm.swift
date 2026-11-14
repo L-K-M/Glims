@@ -1,5 +1,7 @@
 import AppKit
 
+private let opacityValidationMessage = "Enter an opacity from 0 to 100%."
+
 @MainActor
 enum LayeredLabFillForm {
     static func present(in document: ImageDocument, on window: NSWindow) {
@@ -42,15 +44,29 @@ enum LayeredLabFillForm {
                                      [NSTextField(labelWithString: "Opacity (%):"), opacity]])
         grid.rowSpacing = 8; grid.columnSpacing = 12
         choice.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-        grid.setFrameSize(grid.fittingSize)
+        let validation = NSTextField(labelWithString: opacityValidationMessage)
+        validation.textColor = .systemRed
+        validation.heightAnchor.constraint(greaterThanOrEqualToConstant: 16).isActive = true
+        let content = NSStackView(views: [grid, validation])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 8
+        content.setFrameSize(content.fittingSize)
+        validation.stringValue = ""
         let alert = NSAlert()
         alert.messageText = "Fill"
         alert.informativeText = "Fill the selection, or the entire active layer if there is no selection."
-        alert.accessoryView = grid
-        alert.addButton(withTitle: "Fill"); alert.addButton(withTitle: "Cancel")
+        alert.accessoryView = content
+        let submit = alert.addButton(withTitle: "Fill")
+        alert.addButton(withTitle: "Cancel")
+        let submitHandler = LayeredLabFillSubmit(parent: window, sheet: alert.window,
+                                                 field: field, validation: validation)
+        submit.target = submitHandler
+        submit.action = #selector(LayeredLabFillSubmit.submit(_:))
         alert.window.initialFirstResponder = choice
         let panelWasVisible = NSColorPanel.sharedColorPanelExists && NSColorPanel.shared.isVisible
-        alert.beginSheetModal(for: window) { [sync, weak sheetWindow = alert.window] response in
+        alert.beginSheetModal(for: window) { [sync, submitHandler, weak sheetWindow = alert.window] response in
+            _ = submitHandler // NSControl's target is weak; retain it for the sheet's lifetime.
             sheetWindow?.endEditing(for: nil)
             if well.isActive && !panelWasVisible { NSColorPanel.shared.orderOut(nil) }
             sync.colorWell?.deactivate()
@@ -72,5 +88,35 @@ enum LayeredLabFillForm {
                 document.fillLabLayer(target, color: color, opacity: value)
             } catch { document.onError?(error.localizedDescription) }
         }
+    }
+}
+
+@MainActor
+private final class LayeredLabFillSubmit: NSObject {
+    private weak var parent: NSWindow?
+    private weak var sheet: NSWindow?
+    private weak var field: NSTextField?
+    private weak var validation: NSTextField?
+
+    init(parent: NSWindow, sheet: NSWindow, field: NSTextField, validation: NSTextField) {
+        self.parent = parent
+        self.sheet = sheet
+        self.field = field
+        self.validation = validation
+    }
+
+    @objc func submit(_ sender: Any?) {
+        guard let parent, let sheet, let field, parent.attachedSheet === sheet else { return }
+        sheet.endEditing(for: nil)
+        guard ChannelForms.opacityValue(field.stringValue) != nil else {
+            validation?.stringValue = opacityValidationMessage
+            sheet.makeFirstResponder(field)
+            NSSound.beep()
+            NSAccessibility.post(element: NSApp, notification: .announcementRequested,
+                                 userInfo: [.announcement: opacityValidationMessage,
+                                            .priority: NSAccessibilityPriorityLevel.high.rawValue])
+            return
+        }
+        parent.endSheet(sheet, returnCode: .alertFirstButtonReturn)
     }
 }
