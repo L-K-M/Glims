@@ -6012,3 +6012,13 @@ runs on the 24 MP fixture did not show a reliable speedup: the two 50% median
 read times were 15.64 and 15.69 ms before, versus 15.35 and 16.23 ms with
 the experiment. The change was not adopted. These are native viewport reads,
 not end-to-end interaction timings.
+
+### Photoshop Bitmap PSD export (foundation)
+
+A private bounded serializer can write opaque binary black-and-white pixels
+as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
+chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
+independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
+user interface yet. Color conversion, alpha, metadata,
+non-binary input and preserved editable document mode remain separate work.
+See [bitmap-psd.md](bitmap-psd.md).
