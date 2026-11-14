@@ -6214,7 +6214,30 @@ real-window Save/Reopen checks pass on all four engines, as do the full editor
 suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development engine reports
 upstream cache-file cleanup warnings despite passing. A focused source review
 found no concrete defect and did not execute tests or inspect upstream GIMP
-ownership internals. Hosted CI remains in progress. This
-retains data for a future color preview; it does not display or recalculate it.
-The standalone pinned bundle passes 2,268 engine, 17 preservation, 20 export,
+ownership internals. Hosted CI remains in progress. This retains data for a
+future color preview; it does not display or recalculate it. The standalone
+pinned bundle passes 2,268 engine, 17 preservation, 20 export, 13 composite
+import and 3,355 editor checks with development trees inaccessible.
+
+### Retaining alternate Duotone colors on PSD export (candidate)
+
+Duotone PSD export now carries a retained resource 1066 body and its 8BIM or
+MeSa signature into the flat output. It refuses conflicting, empty or
+oversized retained resources rather than silently discarding them. The source
+image and Undo history remain unchanged. Resources absent from a source remain
+absent, and other image resources are still not exported.
+
+The previous adapter reproduced loss of the Photoshop fixture's alternate
+colors; all four updated adapters preserve the exact resource across export
+and XCF reopen/export, and still export sources without it. Each passes nine
+direct admission checks for conflicting, empty and oversized resources and
+MeSa serialization. Codec tests pass 25 checks each in optimized and sanitizer
+builds, covering both signatures, odd/even padding, streaming and failure
+paths. Real-window export and Repeat Export pass on all four engines, as do
+the full editor suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development
+engine emits upstream cache cleanup warnings; 3.0 also emitted LibGimp EOF
+warnings in the focused window test. The Swift suite passes 1,799 tests.
+The standalone pinned bundle passes 2,268 engine, 17 preservation, 24 export,
 13 composite-import and 3,355 editor checks with development trees inaccessible.
+Hosted qualification remains in progress. Retaining this data does not enable
+a color preview or establish Photoshop printing fidelity.

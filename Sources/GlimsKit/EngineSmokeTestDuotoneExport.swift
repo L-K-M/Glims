@@ -15,6 +15,37 @@ extension EngineSmokeTest {
         let length = input[26..<30].reduce(0) { ($0 << 8) | Int($1) }
         guard length > 0, length <= input.count - 30 else { return check(false, "Duotone settings are bounded") }
         let block = input.subdata(in: 30..<(30 + length))
+        func alternateResource(_ data: Data) -> Data? {
+            guard data.count >= 30 else { return nil }
+            let mode = data[26..<30].reduce(0) { ($0 << 8) | Int($1) }
+            guard mode <= data.count - 30, data.count - 30 - mode >= 4 else { return nil }
+            var position = 30 + mode
+            let size = data[position..<(position + 4)].reduce(0) { ($0 << 8) | Int($1) }
+            position += 4
+            guard size <= data.count - position else { return nil }
+            let end = position + size
+            var found: Data?
+            while position < end {
+                guard end - position >= 12,
+                      data[position..<(position + 4)].elementsEqual([0x38, 0x42, 0x49, 0x4d]) else { return nil }
+                let id = (Int(data[position + 4]) << 8) | Int(data[position + 5])
+                let nameSize = (Int(data[position + 6]) + 2) & ~1
+                guard nameSize <= end - position - 6, end - position - 6 - nameSize >= 4 else { return nil }
+                let offset = position + 6 + nameSize
+                let count = data[offset..<(offset + 4)].reduce(0) { ($0 << 8) | Int($1) }
+                let start = offset + 4
+                guard count <= end - start, count % 2 == 0 || count < end - start else { return nil }
+                if id == 1066 {
+                    guard found == nil else { return nil }
+                    found = data.subdata(in: start..<(start + count))
+                }
+                position = start + count + count % 2
+            }
+            return position == end ? found : nil
+        }
+        guard let alternate = alternateResource(input), alternate.count == 794 else {
+            return check(false, "Duotone fixture contains alternate-color data")
+        }
         let image = try session.openImage(path: path)
         let document = try ImageDocument(session: session, image: image, name: "Duotone fixture")
         documents.items.append(document)
@@ -63,6 +94,8 @@ extension EngineSmokeTest {
         check(exported.count >= 30 + length && exported[23] == 8 && exported[25] == 8 &&
               exported.subdata(in: 30..<(30 + length)) == block,
               "export retains the exact Photoshop color-mode block")
+        check(alternateResource(exported) == alternate,
+              "document export retains the exact alternate-color resource")
         check(try session.copyPixels(image, merged: true).pixels == before && session.undoInfo(image).undoCount == undo &&
               document.hasUnsavedChanges == dirty && document.lastExportSettings == settings,
               "export preserves source state and records the explicit choice")
