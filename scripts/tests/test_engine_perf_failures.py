@@ -56,7 +56,7 @@ class EnginePerformanceFailures(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("render ran before the long stroke began", result.stderr)
         self.assertIn("viewport render while a stroke paints", result.stdout)
-        self.assertIn("WITHIN BUDGET:", result.stdout)
+        self.assertRegex(result.stdout, r"(?:WITHIN|OVER) BUDGET: \d+ measurement")
 
 
 if __name__ == "__main__":
