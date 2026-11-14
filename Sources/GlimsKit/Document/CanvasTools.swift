@@ -295,7 +295,8 @@ final class CanvasToolController {
         else if tool == .transform, transformSession?.isIdentity == false { phase = .transformReady }
         else { phase = .idle }
         return ToolHintPolicy.hint(tool: tool, phase: phase, flags: flags,
-                                   mode: document.colorInfo.mode)
+                                   mode: document.colorInfo.mode, layout: document.storage.layout,
+                                   canSampleLayeredLab: document.session.supportsLayeredLabSampling)
     }
 
     private func hintChanged(_ reason: ToolHintPolicy.Refresh) {
@@ -413,11 +414,18 @@ final class CanvasToolController {
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
-        guard document.toolIsAvailable(tool),
-              !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil) else {
-            onStatus?(document.colorInfo.mode == .lab
-                ? "Choose an available Lab editing or navigation tool."
-                : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
+        let canSampleLabBrush = document.storage.layout == .layeredLab && tool == .paintbrush &&
+            document.session.supportsLayeredLabSampling
+        let toolAvailable = document.toolIsAvailable(tool)
+        guard toolAvailable,
+              !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil && !canSampleLabBrush) else {
+            if toolAvailable && document.storage.layout == .layeredLab && tool == .paintbrush && optionDown {
+                onStatus?("Release Option to paint the selected Lab layer.")
+            } else {
+                onStatus?(document.colorInfo.mode == .lab
+                    ? "Choose an available Lab editing or navigation tool."
+                    : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
+            }
             return
         }
         let labSelectionTool = document.storage.layout == .layeredLab && document.acceptsLabSelections &&

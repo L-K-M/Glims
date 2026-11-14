@@ -5990,6 +5990,29 @@ environment overrides and invalid identities. These are engine timings, not
 ordinary app-launch measurements, and do not establish a universal
 five-second startup. Full bundle checks, review and CI remain open.
 
+### Layered Lab Fill validation and color sampling (candidates)
+
+The Fill sheet keeps the chosen color and invalid opacity text visible when
+validation fails, explains the error inline and returns focus to the field.
+Correcting the value allows the captured Fill to proceed; Undo and Cancel are
+covered by a real-window test. Spoken VoiceOver behavior still needs a manual
+accessibility check.
+
+A capable engine can sample the composited layered Lab image as an sRGB
+foreground color, both with the Eyedropper and with Option while using the
+Brush. Sampling leaves pixels and history untouched. The app checks the
+optional engine capability, so older adapters keep these controls unavailable.
+The four engine conformance suites and real-window sampling checks pass;
+review, CI and integrated application qualification remain in progress. Other
+layered Lab tools and full Photoshop 4 parity are not yet established.
+
+A separate fractional-zoom experiment batched contiguous rows into one Babl
+conversion. Its alpha regression matched padded-row output, but alternating
+runs on the 24 MP fixture did not show a reliable speedup: the two 50% median
+read times were 15.64 and 15.69 ms before, versus 15.35 and 16.23 ms with
+the experiment. The change was not adopted. These are native viewport reads,
+not end-to-end interaction timings.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels
