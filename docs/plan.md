@@ -5977,6 +5977,19 @@ changed user plug-in label observed on restart. An incompatible bundle keeps
 native discovery, which took about 10.5 seconds. Final package checks,
 review and CI remain open.
 
+### Localized startup registries (candidate)
+
+The bundle can carry registries for several exact macOS language identities,
+plus a clean-environment copy for the packager's full preferred-language
+list. The host registry is also bound to the locale environment that produced
+it. Other language lists or locale overrides fall back to native discovery;
+the cache never substitutes a partial language match. In isolated engine
+probes, French and German discovery took about 10 seconds and matching seeds
+took about 1.2 seconds. Tests compare native labels, new plug-in discovery,
+environment overrides and invalid identities. These are engine timings, not
+ordinary app-launch measurements, and do not establish a universal
+five-second startup. Full bundle checks, review and CI remain open.
+
 ### Layered Lab Fill validation and color sampling (candidates)
 
 The Fill sheet keeps the chosen color and invalid opacity text visible when
