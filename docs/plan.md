@@ -6241,3 +6241,17 @@ The standalone pinned bundle passes 2,268 engine, 17 preservation, 24 export,
 13 composite-import and 3,355 editor checks with development trees inaccessible.
 Hosted qualification remains in progress. Retaining this data does not enable
 a color preview or establish Photoshop printing fidelity.
+
+### Photoshop composite file errors (candidate)
+
+Opening a Photoshop composite now reports the operating system's reason when
+the file cannot be opened, inspected or read. Invalid signatures and nonregular
+files still receive the format refusal; named pipes remain nonblocking. A
+missing-file regression reproduced the former misleading format message, and
+the FIFO check has a watchdog. All four engines pass the native and focused
+window regressions, plus full editor suites of 3,355 / 3,329 / 3,355 / 3,355
+checks. The Swift suite passes 1,799 tests. The standalone pinned bundle passes
+2,268 engine, 17 preservation, 24 Duotone export, 14 composite-import and
+3,355 editor checks with development trees inaccessible. The development
+engine reports upstream cache cleanup warnings. Hosted qualification remains
+in progress.
