@@ -531,6 +531,50 @@ final class EngineSession: @unchecked Sendable {
         return supportsLabAxes && api.image_select_lab_shape != nil && api.image_select_lab_command != nil
     }
 
+    var supportsLabLayerColorFill: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_fill_lab_layer_srgb),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_fill_lab_layer_srgb) else { return false }
+        return api.image_lab_layer_identity != nil && api.image_fill_lab_layer_srgb != nil
+    }
+
+    struct LabLayerFillTarget: Equatable, Sendable {
+        let root: Int32
+        let uuid: UUID
+    }
+
+    func labLayerFillTarget(_ image: Int32, root: Int32) throws -> LabLayerFillTarget {
+        guard supportsLabLayerColorFill, let identity = api.image_lab_layer_identity else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This engine cannot fill a Lab layer.")
+        }
+        var result = GlimsLabLayerIdentity()
+        result.struct_size = UInt32(MemoryLayout<GlimsLabLayerIdentity>.size)
+        try check(identity(engine, image, root, &result), nil)
+        let uuid = UUID(uuid: result.uuid)
+        guard uuid != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The selected layer has no usable identity.")
+        }
+        return LabLayerFillTarget(root: root, uuid: uuid)
+    }
+
+    static func labLayerFillColor(_ color: NSColor) throws -> RGBAColor {
+        let rgb = try Self.color(color)
+        return RGBAColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: rgb.alpha)
+    }
+
+    func fillLabLayer(_ image: Int32, target: LabLayerFillTarget, color: RGBAColor, opacity: Double) throws {
+        guard supportsLabLayerColorFill, let slot = api.image_fill_lab_layer_srgb else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This engine cannot fill a Lab layer.")
+        }
+        var settings = GlimsLabLayerColorFillSettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabLayerColorFillSettings>.size)
+        settings.root = target.root
+        settings.uuid = target.uuid.uuid
+        settings.color = GlimsColor(red: color.red, green: color.green, blue: color.blue, alpha: color.alpha)
+        settings.opacity = opacity
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &settings, &error), error)
+    }
+
     enum LabCopyDestination {
         case lab, linearRGB
 
@@ -1329,6 +1373,7 @@ final class EngineSession: @unchecked Sendable {
         let allowsLayerDelete: Bool
         let allowsLayerReorder: Bool
         let allowsLabSelections: Bool
+        let allowsLabLayerColorFill: Bool
 
         var restrictedEditingMessage: String {
             if allowsLayerDuplicate { return "This layered Lab document supports viewing and limited layer edits." }
@@ -1340,7 +1385,7 @@ final class EngineSession: @unchecked Sendable {
         init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false,
              allowsLayerRename: Bool = false, allowsLayerDuplicate: Bool = false, allowsLayerCreate: Bool = false,
              allowsLayerDelete: Bool = false, allowsLayerReorder: Bool = false,
-             allowsLabSelections: Bool = false) {
+             allowsLabSelections: Bool = false, allowsLabLayerColorFill: Bool = false) {
             self.layout = layout
             self.readOnly = readOnly
             self.allowsLayerProperties = allowsLayerProperties
@@ -1350,11 +1395,12 @@ final class EngineSession: @unchecked Sendable {
             self.allowsLayerDelete = allowsLayerDelete
             self.allowsLayerReorder = allowsLayerReorder
             self.allowsLabSelections = allowsLabSelections
+            self.allowsLabLayerColorFill = allowsLabLayerColorFill
         }
 
         static func decode(_ info: GlimsImageStorageInfo) throws -> ImageStorage {
             guard info.struct_size == UInt32(MemoryLayout<GlimsImageStorageInfo>.size),
-                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE | GLIMS_IMAGE_STORAGE_LAYER_DELETE | GLIMS_IMAGE_STORAGE_LAYER_REORDER | GLIMS_IMAGE_STORAGE_LAB_SELECTIONS) == 0 else {
+                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE | GLIMS_IMAGE_STORAGE_LAYER_DELETE | GLIMS_IMAGE_STORAGE_LAYER_REORDER | GLIMS_IMAGE_STORAGE_LAB_SELECTIONS | GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL) == 0 else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1375,10 +1421,12 @@ final class EngineSession: @unchecked Sendable {
             let allowsLayerDelete = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_DELETE) != 0
             let allowsLayerReorder = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_REORDER) != 0
             let allowsLabSelections = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAB_SELECTIONS) != 0
-            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate && !allowsLayerCreate && !allowsLayerDelete && !allowsLayerReorder && !allowsLabSelections)) &&
+            let allowsLabLayerColorFill = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL) != 0
+            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate && !allowsLayerCreate && !allowsLayerDelete && !allowsLayerReorder && !allowsLabSelections && !allowsLabLayerColorFill)) &&
                   (!allowsLayerRename || allowsLayerProperties) && (!allowsLayerDuplicate || allowsLayerProperties) &&
                   (!allowsLayerCreate || allowsLayerProperties) && (!allowsLayerDelete || allowsLayerProperties) &&
-                  (!allowsLayerReorder || allowsLayerProperties) && (!allowsLabSelections || allowsLayerProperties) else {
+                  (!allowsLayerReorder || allowsLayerProperties) && (!allowsLabSelections || allowsLayerProperties) &&
+                  (!allowsLabLayerColorFill || allowsLayerProperties) else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This image uses an unsupported storage capability.")
             }
@@ -1389,7 +1437,8 @@ final class EngineSession: @unchecked Sendable {
             return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties,
                                 allowsLayerRename: allowsLayerRename, allowsLayerDuplicate: allowsLayerDuplicate,
                                 allowsLayerCreate: allowsLayerCreate, allowsLayerDelete: allowsLayerDelete,
-                                allowsLayerReorder: allowsLayerReorder, allowsLabSelections: allowsLabSelections)
+                                allowsLayerReorder: allowsLayerReorder, allowsLabSelections: allowsLabSelections,
+                                allowsLabLayerColorFill: allowsLabLayerColorFill)
         }
     }
 

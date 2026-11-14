@@ -15,6 +15,9 @@
 #include "plate-storage.h"
 #include "component-paint.h"
 #include "lab-brush-core.h"
+#include "lab-layer-brush-core.h"
+#include "lab-layer-storage.h"
+#include "lab-transform.h"
 #include "lab-fill.h"
 
 #include <math.h>
@@ -78,6 +81,10 @@ typedef struct
   guint32          last_time_ms; /* V2 only, after an entire accepted packet */
   gboolean         component_stroke;
   gboolean         lab_stroke;
+  gboolean         lab_layer_stroke;
+  gboolean         lab_layer_dispatching;
+  GimpLayer        *lab_layer_root;
+  guint8           lab_layer_uuid[16];
   GlimsLabBrushSettings lab;
   guint32          lab_storage;
   gboolean         ink_capture_stroke;
@@ -89,7 +96,7 @@ gboolean
 glims_stroke_is_lab (GlimsEngine *engine, GlimsStrokeID id)
 {
   GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
-  return stroke && stroke->lab_stroke;
+  return stroke && (stroke->lab_stroke || stroke->lab_layer_stroke);
 }
 
 gboolean
@@ -103,10 +110,14 @@ glims_typed_strokes_for_image (GlimsEngine *engine, GimpImage *image,
   while (g_hash_table_iter_next (&iter, NULL, &value))
     {
       GlimsStroke *stroke = value;
-      if ((stroke->lab_stroke || stroke->ink_capture_stroke) && stroke->image == image)
+      if ((stroke->lab_stroke || stroke->lab_layer_stroke || stroke->ink_capture_stroke) && stroke->image == image)
         {
           found = TRUE;
-          if (action == GLIMS_TYPED_STROKES_CANCEL) g_hash_table_iter_remove (&iter);
+          if (action == GLIMS_TYPED_STROKES_CANCEL)
+            {
+              if (stroke->lab_layer_stroke) stroke->lab_layer_dispatching = TRUE;
+              g_hash_table_iter_remove (&iter);
+            }
         }
     }
   return found;
@@ -172,7 +183,7 @@ glims_strokes_free (gpointer data)
   if (stroke->core && stroke->drawables)
     {
       /* Native cancel returns before thawing an untouched drawable. */
-      if ((stroke->lab_stroke || stroke->ink_capture_stroke) &&
+      if ((stroke->lab_stroke || stroke->lab_layer_stroke || stroke->ink_capture_stroke) &&
           (stroke->core->x1 == stroke->core->x2 || stroke->core->y1 == stroke->core->y2))
         gimp_paint_core_finish (stroke->core, stroke->drawables, FALSE);
       else
@@ -191,6 +202,7 @@ glims_strokes_free (gpointer data)
   g_clear_object (&stroke->options);
   g_list_free (stroke->drawables);
   g_clear_object (&stroke->drawable);
+  g_clear_object (&stroke->lab_layer_root);
   g_clear_object (&stroke->image);
   g_free (stroke);
 }
@@ -989,6 +1001,217 @@ glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID id)
   return GLIMS_STATUS_OK;
 }
 
+static GlimsStatus
+lab_layer_stroke_target_ready (GlimsEngine *engine, GlimsStroke *stroke, char **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, gimp_image_get_id (stroke->image));
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  if (!storage) return GLIMS_STATUS_FAILED;
+  if (!open || open->image != stroke->image ||
+      open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB ||
+      glims_lab_layer_storage_read (stroke->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+    goto changed;
+  guint index = 0;
+  for (; index < storage->map.count; index++)
+    if (storage->layers[index].group == stroke->lab_layer_root) break;
+  if (index == storage->map.count || storage->layers[index].map_index >= storage->map.count ||
+      memcmp (storage->map.entries[storage->layers[index].map_index].group, stroke->lab_layer_uuid, 16))
+    goto changed;
+  GList *selected = gimp_image_get_selected_layers (stroke->image);
+  if (!selected || selected->next || selected->data != stroke->lab_layer_root) goto changed;
+  GList *plane = stroke->drawables;
+  for (guint i = 0; i < 4; i++, plane = plane ? plane->next : NULL)
+    if (!plane || plane->data != storage->layers[index].planes[i]) goto changed;
+  if (plane) goto changed;
+  if (engine->busy || engine->progress || glims_filters_active_for_image (engine, stroke->image) ||
+      !gimp_image_undo_is_enabled (stroke->image) || gimp_image_get_undo_group_count (stroke->image))
+    {
+      if (error) *error = g_strdup ("Finish the current operation before painting this layer.");
+      return GLIMS_STATUS_BUSY;
+    }
+  return GLIMS_STATUS_OK;
+changed:
+  if (error) *error = g_strdup ("The Lab brush target changed. The stroke was cancelled.");
+  return GLIMS_STATUS_INVALID_ARGUMENT;
+}
+
+static void
+emit_lab_layer_brush_damage (GlimsEngine *engine, GlimsStroke *stroke)
+{
+  GeglRectangle damage;
+  if (glims_lab_layer_brush_core_take_damage (stroke->core, &damage))
+    glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, stroke->image, &damage, NULL);
+}
+
+GlimsStatus
+glims_stroke_cancel_lab_layer (GlimsEngine *engine, GlimsStrokeID id)
+{
+  GlimsStroke *stroke = g_hash_table_lookup (engine->strokes, GINT_TO_POINTER (id));
+  if (!stroke) return GLIMS_STATUS_NOT_FOUND;
+  if (!stroke->lab_layer_stroke) return GLIMS_STATUS_UNSUPPORTED;
+  if (stroke->lab_layer_dispatching) return GLIMS_STATUS_BUSY;
+  GimpImage *image = g_object_ref (stroke->image);
+  GeglRectangle damage = { stroke->core->x1, stroke->core->y1,
+                           stroke->core->x2 - stroke->core->x1,
+                           stroke->core->y2 - stroke->core->y1 };
+  stroke->lab_layer_dispatching = TRUE;
+  engine->busy++;
+  g_hash_table_remove (engine->strokes, GINT_TO_POINTER (id));
+  gimp_image_flush (image);
+  if (damage.width > 0 && damage.height > 0)
+    glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &damage, NULL);
+  engine->busy--;
+  g_object_unref (image);
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
+                              GlimsResourceID brush_id, const GlimsLabLayerBrushSettings *settings,
+                              const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!settings || !out || settings->struct_size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsLabLayerBrushSettings request = *settings;
+  const double components[] = { request.color.red, request.color.green, request.color.blue,
+                                request.color.alpha, request.opacity, request.hardness };
+  guint8 zero_uuid[16] = { 0 };
+  if (request.root <= 0 || !memcmp (request.uuid, zero_uuid, sizeof zero_uuid) ||
+      !isfinite (request.size) || request.size < 1 || request.size > 10000)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  for (guint i = 0; i < G_N_ELEMENTS (components); i++)
+    if (!isfinite (components[i]) || components[i] < 0 || components[i] > 1)
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+  GlimsOpenImage *open = glims_lookup_image (engine, image_id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  GlimsStatus status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (engine->progress || !gimp_image_undo_is_enabled (open->image) ||
+      gimp_image_get_undo_group_count (open->image)) return GLIMS_STATUS_BUSY;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB) return GLIMS_STATUS_UNSUPPORTED;
+  g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+  if (!storage) return GLIMS_STATUS_FAILED;
+  if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+    return GLIMS_STATUS_UNSUPPORTED;
+  guint index = 0;
+  for (; index < storage->map.count; index++)
+    if (gimp_item_get_id (GIMP_ITEM (storage->layers[index].group)) == request.root) break;
+  if (index == storage->map.count) return GLIMS_STATUS_NOT_FOUND;
+  guint map_index = storage->layers[index].map_index;
+  if (map_index >= storage->map.count || memcmp (storage->map.entries[map_index].group, request.uuid, 16))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  GimpLayer *root = storage->layers[index].group;
+  GList *selected = gimp_image_get_selected_layers (open->image);
+  if (!selected || selected->next || selected->data != root) return GLIMS_STATUS_INVALID_ARGUMENT;
+  GimpSymmetry *symmetry = gimp_image_get_active_symmetry (open->image);
+  if (!symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY) return GLIMS_STATUS_UNSUPPORTED;
+
+  const double encoded[] = { request.color.red, request.color.green, request.color.blue };
+  float linear[3], lab[3];
+  for (guint i = 0; i < 3; i++)
+    linear[i] = (float) (encoded[i] <= 0.04045 ? encoded[i] / 12.92 : pow ((encoded[i] + 0.055) / 1.055, 2.4));
+  GlimsLabTransform *transform = glims_lab_transform_new ();
+  if (!transform) return GLIMS_STATUS_FAILED;
+  gboolean converted = glims_lab_transform_from_linear_rgb (transform, linear, 1, lab);
+  glims_lab_transform_free (transform);
+  if (!converted) return GLIMS_STATUS_FAILED;
+
+  GlimsStrokeSampleV2 *samples = NULL;
+  gsize count = 0;
+  status = read_stroke_packet_v2 (packet, TRUE, 0, &samples, &count, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  GimpBrush *brush = NULL;
+  if (brush_id) status = glims_lookup_brush (engine, brush_id, &brush);
+  else brush = gimp_context_get_brush (gimp_get_user_context (engine->gimp));
+  GimpPaintInfo *info = glims_paint_info_for_tool (engine->gimp, GLIMS_PAINT_PAINTBRUSH);
+  if (status != GLIMS_STATUS_OK || !brush || !info)
+    {
+      g_free (samples);
+      return status != GLIMS_STATUS_OK ? status :
+        glims_fail (error, NULL, "Choose an available mask brush before painting.");
+    }
+  GlimsBrushSettings geometry = { .struct_size = sizeof geometry,
+    .size = request.size, .opacity = request.opacity, .tool = GLIMS_PAINT_PAINTBRUSH,
+    .hardness = request.hardness, .rate = -1, .flow = -1, .exposure = -1 };
+  GlimsStroke *stroke = g_new0 (GlimsStroke, 1);
+  stroke->image = g_object_ref (open->image);
+  stroke->drawable = g_object_ref (GIMP_DRAWABLE (storage->layers[index].planes[0]));
+  stroke->lab_layer_root = g_object_ref (root);
+  memcpy (stroke->lab_layer_uuid, request.uuid, 16);
+  stroke->lab_layer_stroke = TRUE;
+  stroke->component_stroke = TRUE;
+  stroke->input_version = GLIMS_STROKE_INPUT_V2;
+  stroke->last_time_ms = samples[0].time_ms;
+  stroke->options = glims_make_paint_options (engine->gimp, info, &geometry, brush);
+  g_object_set (stroke->options, "use-applicator", FALSE,
+    "brush-spacing", .15, "brush-angle", 0.0, "brush-aspect-ratio", 0.0,
+    "brush-hardness", request.hardness, "brush-force", .5,
+    "brush-lock-to-view", FALSE, "application-mode", GIMP_PAINT_CONSTANT,
+    "expand-use", FALSE, NULL);
+  stroke->options->jitter_options->use_jitter = FALSE;
+  stroke->options->smoothing_options->use_smoothing = FALSE;
+  gimp_paint_options_enable_dynamics (stroke->options, FALSE);
+  gimp_context_define_property (GIMP_CONTEXT (stroke->options), GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
+  gimp_context_set_paint_mode (GIMP_CONTEXT (stroke->options), GIMP_LAYER_MODE_NORMAL);
+  stroke->core = glims_lab_layer_brush_core_new (CLAMP ((double)lab[0], 0, 100),
+    CLAMP ((double)lab[1], -128, 127), CLAMP ((double)lab[2], -128, 127),
+    request.opacity * request.color.alpha);
+  if (!stroke->core) { g_free (samples); glims_strokes_free (stroke); return GLIMS_STATUS_FAILED; }
+  for (guint i = 0; i < 4; i++) stroke->drawables = g_list_append (stroke->drawables, storage->layers[index].planes[i]);
+  GimpCoords coords = to_coords_v2 (&samples[0]);
+  g_free (samples);
+  GError *native_error = NULL;
+  /* Native painting emits synchronous signals. Prevent reentrant close or
+   * mutation while a stroke is not yet registered, then revalidate the
+   * selected root before publishing the new handle. */
+  engine->busy++;
+  if (!gimp_paint_core_start (stroke->core, stroke->drawables, stroke->options, &coords, &native_error))
+    {
+      g_list_free (stroke->drawables); stroke->drawables = NULL;
+      gimp_paint_core_cleanup (stroke->core);
+      glims_strokes_free (stroke);
+      engine->busy--;
+      return glims_fail (error, native_error, "The Lab layer brush could not start.");
+    }
+  stroke->core->last_coords = coords;
+  gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options, GIMP_PAINT_STATE_INIT, stroke->last_time_ms);
+  gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options, GIMP_PAINT_STATE_MOTION, stroke->last_time_ms);
+  engine->busy--;
+  const char *failure = glims_lab_layer_brush_core_error (stroke->core);
+  if (failure)
+    {
+      if (error) *error = g_strdup (failure);
+      engine->busy++;
+      glims_strokes_free (stroke);
+      gimp_image_flush (open->image);
+      engine->busy--;
+      return GLIMS_STATUS_FAILED;
+    }
+  status = lab_layer_stroke_target_ready (engine, stroke, error);
+  if (status != GLIMS_STATUS_OK)
+    {
+      engine->busy++;
+      glims_strokes_free (stroke);
+      gimp_image_flush (open->image);
+      engine->busy--;
+      return status;
+    }
+  gint id = glims_next_session_id (engine);
+  g_hash_table_insert (engine->strokes, GINT_TO_POINTER (id), stroke);
+  stroke->lab_layer_dispatching = TRUE;
+  engine->busy++;
+  gimp_image_flush (open->image);
+  emit_lab_layer_brush_damage (engine, stroke);
+  engine->busy--;
+  stroke->lab_layer_dispatching = FALSE;
+  status = lab_layer_stroke_target_ready (engine, stroke, error);
+  if (status != GLIMS_STATUS_OK)
+    { glims_stroke_cancel_lab_layer (engine, id); return status; }
+  *out = id;
+  return GLIMS_STATUS_OK;
+}
+
 static gboolean
 clear_lab_stroke_facts (GlimsStrokeCaptureFacts *facts)
 {
@@ -1389,6 +1612,7 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
   gsize count;
   if (!stroke) return GLIMS_STATUS_NOT_FOUND;
   if (stroke->input_version != GLIMS_STROKE_INPUT_V2) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (stroke->lab_layer_stroke && stroke->lab_layer_dispatching) return GLIMS_STATUS_BUSY;
   GlimsStatus status = read_stroke_packet_v2 (packet, FALSE, stroke->last_time_ms, &samples, &count, error);
   if (status != GLIMS_STATUS_OK) return status;
   if (stroke->lab_stroke)
@@ -1398,6 +1622,16 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
         {
           g_free (samples);
           glims_stroke_cancel_lab (engine, id);
+          return status;
+        }
+    }
+  if (stroke->lab_layer_stroke)
+    {
+      status = lab_layer_stroke_target_ready (engine, stroke, error);
+      if (status != GLIMS_STATUS_OK)
+        {
+          g_free (samples);
+          glims_stroke_cancel_lab_layer (engine, id);
           return status;
         }
     }
@@ -1413,6 +1647,8 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
         }
     }
   if (!count) return GLIMS_STATUS_OK;
+  if (stroke->lab_layer_stroke)
+    { stroke->lab_layer_dispatching = TRUE; engine->busy++; }
   for (gsize i = 0; i < count; i++)
     {
       GimpCoords coords = to_coords_v2 (&samples[i]);
@@ -1425,10 +1661,28 @@ glims_stroke_continue_v2 (GlimsEngine               *engine,
           glims_stroke_cancel_lab (engine, id);
           return GLIMS_STATUS_FAILED;
         }
+      if (stroke->lab_layer_stroke && glims_lab_layer_brush_core_error (stroke->core))
+        {
+          if (error) *error = g_strdup (glims_lab_layer_brush_core_error (stroke->core));
+          g_free (samples);
+          engine->busy--;
+          stroke->lab_layer_dispatching = FALSE;
+          glims_stroke_cancel_lab_layer (engine, id);
+          return GLIMS_STATUS_FAILED;
+        }
     }
   stroke->last_time_ms = samples[count - 1].time_ms;
   g_free (samples);
   gimp_image_flush (stroke->image);
+  if (stroke->lab_layer_stroke)
+    {
+      emit_lab_layer_brush_damage (engine, stroke);
+      engine->busy--;
+      stroke->lab_layer_dispatching = FALSE;
+      status = lab_layer_stroke_target_ready (engine, stroke, error);
+      if (status != GLIMS_STATUS_OK)
+        { glims_stroke_cancel_lab_layer (engine, id); return status; }
+    }
   return GLIMS_STATUS_OK;
 }
 
@@ -1440,6 +1694,8 @@ glims_stroke_end (GlimsEngine   *engine,
 
   if (! stroke)
     return GLIMS_STATUS_NOT_FOUND;
+  if (stroke->lab_layer_stroke && stroke->lab_layer_dispatching)
+    return GLIMS_STATUS_BUSY;
 
   if (stroke->ink_capture_stroke)
     {
@@ -1460,6 +1716,17 @@ glims_stroke_end (GlimsEngine   *engine,
           return status != GLIMS_STATUS_OK ? status : GLIMS_STATUS_FAILED;
         }
     }
+  if (stroke->lab_layer_stroke)
+    {
+      GlimsStatus status = lab_layer_stroke_target_ready (engine, stroke, NULL);
+      if (status != GLIMS_STATUS_OK || glims_lab_layer_brush_core_error (stroke->core))
+        {
+          glims_stroke_cancel_lab_layer (engine, id);
+          return status != GLIMS_STATUS_OK ? status : GLIMS_STATUS_FAILED;
+        }
+    }
+  gboolean layer_stroke = stroke->lab_layer_stroke;
+  if (layer_stroke) { stroke->lab_layer_dispatching = TRUE; engine->busy++; }
   gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options,
                          GIMP_PAINT_STATE_FINISH, 0);
   gimp_paint_core_finish (stroke->core, stroke->drawables, TRUE);
@@ -1470,6 +1737,7 @@ glims_stroke_end (GlimsEngine   *engine,
   g_list_free (stroke->drawables);
   stroke->drawables = NULL;
   g_hash_table_remove (engine->strokes, GINT_TO_POINTER (id));
+  if (layer_stroke) engine->busy--;
 
   return GLIMS_STATUS_OK;
 }

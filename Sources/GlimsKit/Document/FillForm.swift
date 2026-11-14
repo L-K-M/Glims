@@ -10,6 +10,9 @@ import AppKit
 @MainActor
 enum FillForm {
     static func present(in document: ImageDocument, on window: NSWindow) {
+        if document.storage.layout == .layeredLab {
+            return LayeredLabFillForm.present(in: document, on: window)
+        }
         if document.colorInfo.mode == .lab {
             return LabFillForm.present(in: document, on: window)
         }
@@ -136,7 +139,7 @@ enum FillForm {
 }
 
 @MainActor
-private final class FillFormSync: NSObject {
+final class FillFormSync: NSObject {
     weak var choice: NSPopUpButton?
     weak var colorWell: NSColorWell?
     weak var slider: NSSlider?

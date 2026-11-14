@@ -1241,7 +1241,9 @@ enum {
   /* One logical root can move among top-level roots with Undo/Redo. */
   GLIMS_IMAGE_STORAGE_LAYER_REORDER = 1u << 6,
   /* Typed Lab shape and All/None/Invert commands edit the root mask. */
-  GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7
+  GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7,
+  /* Captured sRGB fills of a single logical Lab root are supported. */
+  GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL = 1u << 8
 };
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */
@@ -1270,6 +1272,16 @@ typedef struct GlimsLabLayerColorFillSettings {
   GlimsColor color;       /* Straight, bounded nonlinear sRGB. */
   double opacity;         /* Finite [0,1], multiplied by color alpha. */
 } GlimsLabLayerColorFillSettings;
+
+typedef struct GlimsLabLayerBrushSettings {
+  uint32_t struct_size;
+  GlimsItemID root;      /* Explicit, solely selected logical root. */
+  uint8_t uuid[16];      /* Captured document-scoped identity. */
+  GlimsColor color;      /* Straight bounded nonlinear sRGB. */
+  double opacity;        /* [0,1], multiplied by color alpha and selection. */
+  double size;           /* [1,10000] pixels. */
+  double hardness;       /* [0,1]. */
+} GlimsLabLayerBrushSettings;
 
 /* The image's color state. Caller-owned: image_color_info fills the
  * struct in place; the fixed buffers are UTF-8, truncated, and need no
@@ -4219,6 +4231,18 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_fill_lab_layer_srgb) (GlimsEngine *engine, GlimsImageID image,
                                             const GlimsLabLayerColorFillSettings *settings,
                                             char **error);
+  /* Slot217: begin one captured logical-layer brush stroke. V2 input and
+   * continuation apply; current selection is captured at begin. The four
+   * planes form one Undo step at stroke_end, or are restored on cancel or
+   * failed revalidation. Dynamics, Recorder capture and pressure effects are
+   * not supported. Settings may be unaligned and require the known prefix. */
+  GlimsStatus (*stroke_begin_lab_layer) (GlimsEngine *engine, GlimsImageID image,
+                                         GlimsResourceID brush,
+                                         const GlimsLabLayerBrushSettings *settings,
+                                         const GlimsStrokePacketV2 *first,
+                                         GlimsStrokeID *result, char **error);
+  /* Slot218: cancel only a live layered Lab stroke, restoring all planes. */
+  GlimsStatus (*stroke_cancel_lab_layer) (GlimsEngine *engine, GlimsStrokeID stroke);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
