@@ -15,7 +15,9 @@ The synthetic block is a marker, not a Photoshop ink specification. The
 fixture is attributed in the test-fixture README. These preservation checks
 pass on all four supported engines. This change does not interpret ink
 settings, provide a Duotone color preview, create or edit ink curves, or add
-Duotone PSD export. Oversized new metadata refuses. Four-engine
-editor qualification, export workflow and review remain open.
+Duotone PSD export. Oversized new metadata refuses. A focused real-window
+test confirms the document Save flow retains the block. Preservation requires
+the updated adapter; full editor qualification, export workflow and review
+remain open.
 
 Reference: [Adobe Photoshop File Formats Specification](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/), Color Mode Data Section.

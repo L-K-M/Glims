@@ -6144,6 +6144,7 @@ before adoption, retaining exact bytes without an Undo step; an oversized new
 block is refused. A synthetic envelope and a Photoshop CC 2018 Duotone fixture
 pass PSD import, XCF save, reopen and resave with exact block bytes on the
 four supported engines. This is metadata preservation only, not Duotone ink
-editing, a color preview or Duotone PSD export. Full editor qualification and
-review remain open. See
+editing, a color preview or Duotone PSD export. A focused real-window Save
+check passes with the updated adapter. Full editor qualification and review
+remain open. See
 [duotone-preservation.md](duotone-preservation.md).
