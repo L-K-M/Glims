@@ -17,6 +17,10 @@ class AppPackagingTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         for name in ("build-app.sh", "check-bundle.sh", "engine.env"):
             shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
+        # The bundle runner's native startup probe is replaced by a small
+        # fixture here; its real behavior is exercised on packaged engines.
+        (self.root / "scripts/test-startup-override-seeds.py").write_text(
+            "print('override seed fixture executed')\n")
         # If preflight succeeds, stop at Swift. No test should build or modify
         # a real bundle or engine; this marks that the chosen mode reached it.
         tools = self.root / "tools"
@@ -95,6 +99,12 @@ class AppPackagingTests(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 checks passed", result.stdout)
+        self.assertIn("override seed fixture executed", result.stdout)
+        (self.root / "scripts/test-startup-override-seeds.py").write_text("raise SystemExit(7)\n")
+        failed = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
+                                env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("bundled locale override seed checks failed", failed.stdout)
 
     def test_shell_only_is_explicit(self):
         result = self.run_build("--shell-only")
