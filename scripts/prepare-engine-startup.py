@@ -14,6 +14,9 @@ import tempfile
 # These seeds cover common single-language macOS preference lists. All other
 # lists still use native discovery; a partial language match is never safe.
 LOCALIZED_SEEDS = ('en', 'de', 'fr', 'it', 'es', 'ja')
+OVERRIDE_SEEDS = (('en', 'en_US.UTF-8'), ('de', 'de_DE.UTF-8'),
+                  ('fr', 'fr_FR.UTF-8'), ('it', 'it_IT.UTF-8'),
+                  ('es', 'es_ES.UTF-8'), ('ja', 'ja_JP.UTF-8'))
 
 
 def locale_environment_keys(environment):
@@ -32,6 +35,11 @@ def locale_environment_fingerprint(environment):
     return digest.hexdigest()
 
 
+def override_seed_key(escaped_language, environment):
+    fingerprint = locale_environment_fingerprint(environment)
+    return hashlib.sha256(escaped_language.encode('utf-8') + b'\0' + fingerprint.encode('ascii') + b'\0').hexdigest()
+
+
 def prepare(app):
     source = Path(__file__).resolve().parents[1]
     contents = Path(app).resolve() / "Contents"
@@ -44,7 +52,7 @@ def prepare(app):
         subprocess.run(["xcrun", "clang", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-I", str(source / "Sources/CGlimsEngine/include"),
                         str(source / "Engine/tests/startup-tests.c"), "-o", str(probe)], check=True)
-        def capture(name, language=None, clean_locale=False):
+        def capture(name, language=None, clean_locale=False, locale_override=None):
             profile = work / name
             profile.mkdir()
             environment = dict(os.environ)
@@ -59,12 +67,14 @@ def prepare(app):
                 environment[key] = str(profile / leaf)
             command = [str(probe), str(contents / "Frameworks/libglimsengine.dylib"),
                        str(profile / "user"), str(profile / "cache")]
-            if language or clean_locale:
+            if language or clean_locale or locale_override is not None:
                 # The runtime accepts these extra seeds only in this same
                 # environment, because gettext overrides are not represented
                 # by macOS's preferred-language-list identity.
                 for key in locale_environment_keys(environment):
                     environment.pop(key, None)
+            if locale_override is not None:
+                environment.update(locale_override)
             if language:
                 command.extend(["-AppleLanguages", f"({language})"])
             result = subprocess.run(command, env=environment, cwd=profile, text=True,
@@ -111,6 +121,15 @@ def prepare(app):
                 raise RuntimeError("Engine identity changed while preparing the clean host registry")
             digest = hashlib.sha256(clean_language.encode('utf-8')).hexdigest()
             write_seed(destination / "localized" / digest, version, clean_language, clean_registry)
+        # These are exact environment pairs for the packager's complete macOS
+        # preferred-language list. Other environments still discover natively.
+        for code, locale in OVERRIDE_SEEDS:
+            environment = {'LANGUAGE': code, 'LC_ALL': locale}
+            override_version, actual, registry = capture(f'override-{code}', locale_override=environment)
+            if override_version != version or actual != host_language:
+                raise RuntimeError(f"Engine identity changed while preparing override {code}")
+            key = override_seed_key(actual, environment)
+            write_seed(destination / "overrides" / key, version, actual, registry, environment)
         for language in LOCALIZED_SEEDS:
             if language == host_language:
                 continue

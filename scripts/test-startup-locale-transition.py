@@ -85,6 +85,17 @@ def main():
         assert first == 'before override'
         selected_registry = profile / 'user/pluginrc'
         original_registry = selected_registry.read_bytes()
+        localized_seed = contents / 'Resources/Engine-Startup/localized' / hashlib.sha256(b'fr').hexdigest() / 'pluginrc'
+        assert localized_seed.is_file(), 'the bundled French seed is required for this regression'
+        localized_bytes = localized_seed.read_bytes()
+        try:
+            localized_seed.write_bytes(localized_bytes + b'\n# simulated localized bundle update\n')
+            updated_clean, updated_clean_labels = run(profile, 'localized seed changed', 'updated clean oracle', False)
+            assert updated_clean == 'updated clean oracle' and updated_clean_labels == clean_labels, \
+                'a changed localized seed reused the previous selected registry'
+            assert selected_registry.read_bytes() == original_registry, 'localized seed update modified the selected registry'
+        finally:
+            localized_seed.write_bytes(localized_bytes)
         changed, changed_labels = run(profile, 'changed override', 'after override', True)
         fresh, fresh_labels = run(work / 'fresh', 'fresh override', 'fresh oracle', True)
         assert fresh == 'fresh oracle'
