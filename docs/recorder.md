@@ -20,7 +20,8 @@ Current capture covers these command families:
 - Canvas resizing, with offset and fill color.
 - Image cropping.
 - Supported layer property changes: name, visibility, opacity and blend mode.
-- Complete Pencil, Eraser, Paintbrush and Sponge gestures with supported brush settings.
+- Complete Pencil, Eraser, Paintbrush and Sponge gestures with supported brush settings,
+  including accepted tablet rotation and tangential pressure.
 - A newly applied Levels, Curves, Color Balance, Hue/Saturation or
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
@@ -65,10 +66,12 @@ pressure; other outputs, pixmap/pipe brushes and unknown configurations refuse
 capture. There is no promise of portable pixels across engine versions.
 
 The trace stores image coordinates, pressure, signed tilt and millisecond
-timestamps, with the accepted batch boundaries intact. It does not infer
-velocity or direction. For the ordinary RGB/gray stroke path, only pixel layers can be bound; painting a mask/channel or using another paint tool produces an
+timestamps, with the accepted batch boundaries intact. Tablet traces also
+retain optional rotation and tangential pressure. It does not infer velocity
+or direction. For the ordinary RGB/gray stroke path, only pixel layers can be bound; painting a mask/channel or using another paint tool produces an
 explicit unsupported row. Pencil, Eraser and Paintbrush strokes use recording
-format version 2; Sponge strokes require version 20. Otherwise,
+format version 2; Sponge mouse strokes require version 20, and ordinary
+tablet strokes require version 21. Otherwise,
 recordings without successful strokes retain version 1; Channel ▸ To Selection
 raises the file to version 3, a committed Transform-tool layer affine
 raises it to version 4, a committed Levels adjustment raises it to
@@ -79,7 +82,7 @@ Brightness/Contrast adjustment raises it to version 10. Native ink Fill/Clear/
 Invert and Levels use version 11; native ink Curves uses version 12.
 Physical Lab Fill/Curves use version 13, Lab Brush version 14 and Lab selections
 version 15. Ink Brush uses 16, Lab Levels 17, layered Lab Brush 18, layered Lab
-Fill 19, and Sponge strokes 20. Mixed recordings use
+Fill 19, Sponge strokes 20, and ordinary tablet strokes 21. Mixed recordings use
 the highest required version. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
