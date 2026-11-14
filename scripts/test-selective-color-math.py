@@ -39,7 +39,7 @@ def main() -> None:
         "-Wall", "-Wextra", "-Werror",
         "-I", str(ROOT / "Engine"),
     ]
-    sanitizers = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+    sanitizers = ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
 
     run([*base, *([] if args.no_sanitizers else sanitizers),
          str(KERNEL), str(HARNESS), "-o", str(binary)])
