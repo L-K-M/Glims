@@ -20,7 +20,7 @@ Current capture covers these command families:
 - Canvas resizing, with offset and fill color.
 - Image cropping.
 - Supported layer property changes: name, visibility, opacity and blend mode.
-- Complete Pencil, Eraser and Paintbrush gestures with supported brush settings.
+- Complete Pencil, Eraser, Paintbrush and Sponge gestures with supported brush settings.
 - A newly applied Levels, Curves, Color Balance, Hue/Saturation or
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
@@ -77,7 +77,8 @@ to version 8, a Hue/Saturation adjustment raises it to version 9, and a
 Brightness/Contrast adjustment raises it to version 10. Native ink Fill/Clear/
 Invert and Levels use version 11; native ink Curves uses version 12.
 Physical Lab Fill/Curves use version 13, Lab Brush version 14 and Lab selections
-version 15. Mixed recordings use
+version 15. Ink Brush uses 16, Lab Levels 17, layered Lab Brush 18, layered Lab
+Fill 19, and Sponge strokes 20. Mixed recordings use
 the highest required version. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
