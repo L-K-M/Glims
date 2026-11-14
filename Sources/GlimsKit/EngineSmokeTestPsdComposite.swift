@@ -96,8 +96,9 @@ extension EngineSmokeTest {
             return check(false, "composite Revert finishes")
         }
         remember()
+        let revertedPixels = try session.copyPixels(replacement.imageDocument.image, merged: true).pixels
         check(replacement.imageDocument.fileState.importStrategy == .photoshopComposite &&
-              (try session.copyPixels(replacement.imageDocument.image, merged: true).pixels) == pixels,
+              revertedPixels == pixels,
               "Revert uses the composite loader and restores its pixels")
         check(try Data(contentsOf: source) == original, "composite import and Revert do not modify the source PSD")
     }
