@@ -103,6 +103,25 @@ final class ExportOptionsFormTests: XCTestCase {
         XCTAssertEqual(form.psdLayoutPopup.indexOfSelectedItem, 1)
     }
 
+    func testDuotoneChoiceIsExplicitFlattenedAndRequiresCapability() throws {
+        let form = ExportOptionsForm(supportsDuotonePSD: true)
+        form.selectFormat(.psd)
+        let index = try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .duotone))
+        XCTAssertTrue(try XCTUnwrap(form.psdColorPopup.item(at: index)).isEnabled)
+        form.psdColorPopup.selectItem(at: index)
+        fire(form.psdColorPopup)
+        XCTAssertEqual(form.settings.psdColor, .duotone)
+        XCTAssertEqual(form.settings.psdLayout, .merged)
+        XCTAssertFalse(form.psdLayoutPopup.isEnabled)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("preview remains grayscale"))
+        XCTAssertTrue(form.commitEditing())
+        XCTAssertThrowsError(try form.settings.nativeValue())
+        let old = ExportOptionsForm(settings: form.settings)
+        XCTAssertFalse(try XCTUnwrap(old.psdColorPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(old.commitEditing())
+        XCTAssertTrue(old.lastError?.contains("not available") == true)
+    }
+
     func testBitmapPSDChoiceIsExplicitAndKeepsOnlyMergedContent() throws {
         let form = ExportOptionsForm(supportsBitmapPSD: true)
         form.selectFormat(.psd)
