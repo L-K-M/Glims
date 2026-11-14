@@ -67,6 +67,11 @@ extension EngineSmokeTest {
         check(opened.layers.count == 2, "document shows two logical layers")
         check(opened.toolIsAvailable(.paintbrush) == opened.storage.allowsLabLayerBrush && opened.toolIsAvailable(.zoom),
               "Brush follows its layered Lab capability while zoom remains available")
+        check(opened.toolIsAvailable(.eyedropper) == session.supportsLayeredLabSampling,
+              "Eyedropper follows its layered Lab sampling capability")
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_SAMPLING"] == "1" {
+            check(session.supportsLayeredLabSampling, "test adapter supports layered Lab color sampling")
+        }
         let originalTool = ToolState.shared.current
         defer { ToolState.shared.select(originalTool) }
         let toolPalette = ToolsPaletteController()
@@ -93,6 +98,9 @@ extension EngineSmokeTest {
             let brushEnabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.paintbrush.rawValue }?.isEnabled
             check(brushEnabled == opened.storage.allowsLabLayerBrush,
                   "Tools palette updates Brush availability for the layered Lab layout")
+            let sampleEnabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.eyedropper.rawValue }?.isEnabled
+            check(sampleEnabled == session.supportsLayeredLabSampling,
+                  "Tools palette updates Eyedropper availability for the layered Lab layout")
         } else { check(false, "Tools palette contains its tool grid") }
         do {
             let previousTool = ToolState.shared.current
@@ -203,6 +211,28 @@ extension EngineSmokeTest {
                       (insideAfter?[1] ?? 255) < 20 && (insideAfter?[2] ?? 255) < 20 &&
                       pixel(session, image, x: 0, y: 0) == outsideBefore,
                       "foreground Fill changes only selected pixels to red")
+                if session.supportsLayeredLabSampling {
+                    let canvas = windowController.canvas
+                    let location = canvas.convert(CGPoint(x: 1.5 * canvas.scale, y: 1.5 * canvas.scale), to: nil)
+                    if let down = NSEvent.mouseEvent(with: .leftMouseDown, location: location, modifierFlags: [],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 1, clickCount: 1, pressure: 1),
+                       let up = NSEvent.mouseEvent(with: .leftMouseUp, location: location, modifierFlags: [],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 2, clickCount: 1, pressure: 0) {
+                        let priorTool = ToolState.shared.current
+                        ToolState.shared.foreground = .blue
+                        ToolState.shared.select(.eyedropper)
+                        canvas.mouseDown(with: down); canvas.mouseUp(with: up)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1)
+                        let sampled = ToolState.shared.foreground.usingColorSpace(.sRGB)
+                        check(sampled != nil && (sampled?.redComponent ?? 0) > 0.95 &&
+                              (sampled?.greenComponent ?? 1) < 0.08 && (sampled?.blueComponent ?? 1) < 0.08,
+                              "Eyedropper samples the composited layered Lab color after Fill")
+                        ToolState.shared.select(priorTool)
+                        ToolState.shared.foreground = .red
+                    } else { check(false, "layered Lab Eyedropper mouse events can be created") }
+                }
                 let undo = EngineUndoManager(document: opened)
                 check(undo.canUndo, "Lab color fill offers Undo")
                 undo.undo(); drain("Lab color fill Undo")
