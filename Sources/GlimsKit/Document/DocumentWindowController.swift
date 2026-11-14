@@ -3382,6 +3382,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                      supportsBitmapPSD: imageDocument.session.supportsBitmapPSD &&
                                         [.grayscale, .indexed].contains(imageDocument.colorInfo.mode),
                                      supportsBitmapThresholdPSD: imageDocument.session.supportsBitmapThresholdPSD &&
+                                        imageDocument.colorInfo.mode == .grayscale,
+                                     supportsBitmapDiffusionPSD: imageDocument.session.supportsBitmapDiffusionPSD &&
                                         imageDocument.colorInfo.mode == .grayscale)
         export.panel.directoryURL = imageDocument.fileState.lastExportURL?.deletingLastPathComponent() ?? exportDirectory
         export.panel.beginSheetModal(for: window) { [weak self] response in

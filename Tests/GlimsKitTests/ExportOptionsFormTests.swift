@@ -170,6 +170,26 @@ final class ExportOptionsFormTests: XCTestCase {
         XCTAssertTrue(form.lastError?.contains("not available") == true)
     }
 
+    func testDiffusionChoiceIsExplicitAndRequiresItsCapability() throws {
+        let index = try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .diffusion))
+        let form = ExportOptionsForm(supportsBitmapPSD: true, supportsBitmapThresholdPSD: true,
+                                     supportsBitmapDiffusionPSD: true)
+        form.selectFormat(.psd)
+        form.psdColorPopup.selectItem(at: try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap)))
+        fire(form.psdColorPopup)
+        XCTAssertTrue(try XCTUnwrap(form.bitmapMethodPopup.item(at: index)).isEnabled)
+        form.bitmapMethodPopup.selectItem(at: index)
+        fire(form.bitmapMethodPopup)
+        XCTAssertEqual(form.settings.bitmapMethod, .diffusion)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("dithering"))
+        XCTAssertTrue(form.commitEditing())
+        let unsupported = ExportOptionsForm(settings: form.settings, supportsBitmapPSD: true,
+                                            supportsBitmapThresholdPSD: true)
+        XCTAssertFalse(try XCTUnwrap(unsupported.bitmapMethodPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(unsupported.commitEditing())
+        XCTAssertTrue(unsupported.lastError?.contains("not available") == true)
+    }
+
     // MARK: Validation gate
 
     func testValidateEnforcesTheTypedQualityRange() {

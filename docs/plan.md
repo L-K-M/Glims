@@ -6123,3 +6123,15 @@ The source stays unchanged and Repeat Export and Batch retain the choice.
 Native ramp, boundary, destination and cancellation checks and focused Swift
 checks pass on the pinned engine. Four-engine, real-window, full editor,
 review and integration checks remain open; dithering remains separate work.
+
+### Diffusion dithering for Bitmap PSD (candidate)
+
+The export sheet offers an explicit diffusion method for opaque grayscale,
+using left-to-right Floyd–Steinberg error diffusion in the document's Y-prime
+encoding. The default remains strict black and white. Two bounded error rows
+carry across streaming chunks; input, history and identity remain untouched.
+Transparency, out-of-range/nonfinite values and linked layers refuse.
+Optimized and sanitized core tests include independent rational patterns,
+one-pixel rows and the 4096-pixel chunk boundary; pinned native output,
+cancellation and focused Swift transport tests pass. Four-engine, actual
+window, Batch, full editor, hosted review and integration remain open.

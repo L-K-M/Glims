@@ -4336,6 +4336,13 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_export_bitmap_threshold_psd) (GlimsEngine *engine, GlimsImageID image,
                                                     const char *path, uint32_t threshold,
                                                     char **error);
+  /* Slot228: flat Bitmap PSD from opaque grayscale, using left-to-right
+   * Floyd-Steinberg diffusion on finite document-encoded Y-prime samples in
+   * [0,1]. One half is the white decision; row state is bounded by image
+   * width. Linked layers refuse. Source, atomic destination and cancellation
+   * rules match slot227. */
+  GlimsStatus (*image_export_bitmap_diffusion_psd) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
