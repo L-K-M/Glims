@@ -5999,3 +5999,10 @@ independently decoded a small fixture. It now has atomic file publication, but i
 user interface yet. Color conversion, alpha, metadata,
 non-binary input and preserved editable document mode remain separate work.
 See [bitmap-psd.md](bitmap-psd.md).
+
+### Canvas accessibility identity (candidate)
+
+Canvas accessibility labels include the document name, refresh after a native
+save changes it, and post an accessibility notification only when the label
+changes. An unnamed image has a localizable fallback label.
+Real-window, save, VoiceOver and full keyboard-access qualification remain open.
