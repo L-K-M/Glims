@@ -34,7 +34,22 @@ extension EngineSmokeTest {
             let rgba: [UInt8] = x < 20 ? [210, 60, 60, 255] : [160, 120, 120, 255]
             bytes[i..<i + 4] = rgba[0...3]
         } }
-        let image = try session.newImage(pixels: .init(width: width, height: height, pixels: Data(bytes), origin: .zero))
+        let opaque = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-sponge-opaque-ui"
+        let image: Int32
+        if opaque {
+            // A normal new image starts with an opaque Background layer.
+            // Give it a muted color so each Sponge direction has work to do.
+            image = try session.newImage(width: width, height: height)
+            do {
+                try session.fill(image: image, at: .zero, mode: .selection,
+                                 color: NSColor(srgbRed: 0.65, green: 0.4, blue: 0.4, alpha: 1))
+            } catch {
+                try? session.closeImage(image)
+                throw error
+            }
+        } else {
+            image = try session.newImage(pixels: .init(width: width, height: height, pixels: Data(bytes), origin: .zero))
+        }
         let document = try ImageDocument(session: session, image: image, name: "Sponge Recorder")
         documents.items.append(document)
         let owner = DocumentWindowController(document: document)
