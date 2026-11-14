@@ -6,6 +6,27 @@ import XCTest
 /// unsaved, and which commands move that state.
 @MainActor
 final class DocumentFileStateTests: XCTestCase {
+    func testPhotoshopCompositeStaysAnImportedCopyAndRevertsThroughItsOwnRoute() {
+        let source = URL(fileURLWithPath: "/tmp/photo.psd")
+        let native = URL(fileURLWithPath: "/tmp/edited.xcf")
+        var state = DocumentFileState(openedFrom: source, importStrategy: .photoshopComposite)
+        XCTAssertNil(state.nativeURL)
+        XCTAssertEqual(state.importedSourceURL, source)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.saveRoute, .askForFile)
+        XCTAssertEqual(state.revertSource, .photoshopComposite(source))
+        state.noteSaved(to: native)
+        XCTAssertEqual(state.revertSource, .native(native))
+        XCTAssertNil(state.importStrategy)
+        let disguised = URL(fileURLWithPath: "/tmp/photoshop-content.xcf")
+        var disguisedState = DocumentFileState(openedFrom: disguised, importStrategy: .photoshopComposite)
+        XCTAssertNil(disguisedState.nativeURL)
+        XCTAssertEqual(disguisedState.saveRoute, .askForFile)
+        XCTAssertEqual(disguisedState.revertSource, .photoshopComposite(disguised))
+        disguisedState.noteUnsavedCopy()
+        XCTAssertNil(disguisedState.importedSourceURL)
+        XCTAssertNil(disguisedState.importStrategy)
+    }
     private let xcf = URL(fileURLWithPath: "/tmp/image.xcf")
     private let otherXcf = URL(fileURLWithPath: "/tmp/other.xcf")
     private let png = URL(fileURLWithPath: "/tmp/photo.png")

@@ -3466,7 +3466,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case .native:
             alert.messageText = "Revert to \u{201C}\(fileName)\u{201D}?"
             alert.informativeText = "All changes to \u{201C}\(imageDocument.name)\u{201D} since it was last saved will be lost, including the undo history."
-        case .imported, .nativeCMYKPSD:
+        case .imported, .nativeCMYKPSD, .photoshopComposite:
             alert.messageText = "Re-import \u{201C}\(fileName)\u{201D}?"
             alert.informativeText = "All changes to \u{201C}\(imageDocument.name)\u{201D} will be lost, including the undo history. The document is imported again from its original file."
         }

@@ -40,6 +40,8 @@ DUOTONE_TESTS="$(dirname "$TESTS")/glims-duotone-preservation-tests"
 [[ -x "$DUOTONE_TESTS" ]] || { echo "error: no matching Duotone test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
 DUOTONE_EXPORT_TESTS="$(dirname "$TESTS")/glims-duotone-export-tests"
 [[ -x "$DUOTONE_EXPORT_TESTS" ]] || { echo "error: no matching Duotone export test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
+COMPOSITE_TESTS="$(dirname "$TESTS")/glims-psd-composite-tests"
+[[ -x "$COMPOSITE_TESTS" ]] || { echo "error: no matching Photoshop composite test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-check-bundle.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -48,8 +50,10 @@ mkdir -p "$WORK/home" "$WORK/tests"
 cp "$TESTS" "$WORK/glims-engine-tests"
 cp "$DUOTONE_TESTS" "$WORK/glims-duotone-preservation-tests"
 cp "$DUOTONE_EXPORT_TESTS" "$WORK/glims-duotone-export-tests"
+cp "$COMPOSITE_TESTS" "$WORK/glims-psd-composite-tests"
 mkdir -p "$WORK/duotone/home" "$WORK/duotone/cache"
 mkdir -p "$WORK/duotone-export/home" "$WORK/duotone-export/cache"
+mkdir -p "$WORK/psd-composite/home" "$WORK/psd-composite/cache"
 
 
 status=0
@@ -93,6 +97,20 @@ else
 fi
 if grep -q -E "$ROOT/_(engine|deps)" "$WORK/duotone-export.log"; then
   echo "!! Duotone export looked for files in the build trees"
+  status=1
+fi
+
+echo "==> Photoshop composite import against the bundled adapter (build trees unreadable)"
+if sandbox-exec -p "$PROFILE" env HOME="$WORK/psd-composite/home" XDG_CACHE_HOME="$WORK/psd-composite/cache" TMPDIR="$WORK" \
+     "$WORK/glims-psd-composite-tests" "$ADAPTER" "$WORK/psd-composite" "$ROOT/Engine/tests/fixtures" > "$WORK/psd-composite.log" 2>&1; then
+  echo "-- $(grep -c '^ok' "$WORK/psd-composite.log") checks passed"
+else
+  grep -E '^FAIL' "$WORK/psd-composite.log" || tail -20 "$WORK/psd-composite.log"
+  echo "!! the Photoshop composite checks failed against the bundle"
+  status=1
+fi
+if grep -q -E "$ROOT/_(engine|deps)" "$WORK/psd-composite.log"; then
+  echo "!! Photoshop composite import looked for files in the build trees"
   status=1
 fi
 
