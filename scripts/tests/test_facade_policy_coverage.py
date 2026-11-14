@@ -14,14 +14,22 @@ class FacadePolicyCoverageTests(unittest.TestCase):
     def test_current_bindings_are_complete(self):
         errors, count = COVERAGE.check(ROOT)
         self.assertEqual(errors, [])
-        self.assertEqual(count, 214)
+        self.assertEqual(count, 216)
 
     def test_missing_misrouted_and_bypassing_bindings_refuse(self):
         cases = [
+            ('Engine/engine.c', 'GLIMS_FACADE_OP_image_fill_lab_layer_srgb,', 'GLIMS_FACADE_OP_image_fill_lab_layer,'),
+            ('Engine/facade-operations.def',
+             'GLIMS_FACADE(image_fill_lab_layer_srgb, api_image_fill_lab_layer_srgb, IMAGE, COMPONENT)',
+             'GLIMS_FACADE(image_fill_lab_layer_srgb, api_image_fill_lab_layer_srgb, IMAGE, ORDINARY)'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_lab_layer_identity,', 'GLIMS_FACADE_OP_image_storage_info,'),
             ('Engine/facade-operations.def',
              'GLIMS_FACADE(image_lab_layer_identity, api_image_lab_layer_identity, IMAGE, COMPONENT)',
              'GLIMS_FACADE(image_lab_layer_identity, api_image_lab_layer_identity, IMAGE, ORDINARY)'),
+            ('Engine/engine.c', 'GLIMS_FACADE_OP_image_fill_lab_layer,', 'GLIMS_FACADE_OP_image_fill_lab,'),
+            ('Engine/facade-operations.def',
+             'GLIMS_FACADE(image_fill_lab_layer, api_image_fill_lab_layer, IMAGE, COMPONENT)',
+             'GLIMS_FACADE(image_fill_lab_layer, api_image_fill_lab_layer, IMAGE, ORDINARY)'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_curves_lab,', 'GLIMS_FACADE_OP_image_curves_ink,'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_lab_snapshot_begin,', 'GLIMS_FACADE_OP_image_ink_snapshot_begin,'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_image_lab_snapshot_curves,', 'GLIMS_FACADE_OP_image_ink_snapshot_curves,'),
