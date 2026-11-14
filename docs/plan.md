@@ -6063,6 +6063,13 @@ Redo and dirty state. This entry is a prerequisite for recording those
 property changes; Recorder capture and replay are not yet enabled. Native
 matrix checks and review remain in progress.
 
+The Swift bridge checks the complete optional API prefix and the identity
+entry before using the guarded operation. It can obtain a property target
+without requiring color Fill support, and it never falls back to the
+unguarded layer-change entry. Transport tests cover older protected prefixes,
+missing entries, request values and native error ownership. Recorder capture
+and replay remain separate work.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels
