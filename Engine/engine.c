@@ -33,6 +33,7 @@
 #include "script-fu-path-fix.h"
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -365,11 +366,30 @@ write_plug_in_theme (void)
   g_string_free (css, TRUE);
 }
 
+typedef struct {
+  Gimp *gimp;
+  GSList *plugin_defs; /* owned references, retained until restore returns */
+} StartupRegistryCapture;
+
+static GPrivate startup_registry_capture = G_PRIVATE_INIT (NULL);
+
 static void
 init_status (const gchar *text1,
              const gchar *text2,
              gdouble      percentage)
 {
+  StartupRegistryCapture *capture = g_private_get (&startup_registry_capture);
+  /* GIMP releases plug-in definitions immediately after restore. Its final
+   * plug-in-init status callback runs before it writes and releases them. */
+  if (capture && !text1 && text2 && !*text2 && percentage == 1.0 &&
+      capture->gimp->plug_in_manager && capture->gimp->plug_in_manager->plug_in_defs)
+    {
+      g_slist_free_full (capture->plugin_defs, g_object_unref);
+      capture->plugin_defs = NULL;
+      for (GSList *item = capture->gimp->plug_in_manager->plug_in_defs; item; item = item->next)
+        capture->plugin_defs = g_slist_prepend (capture->plugin_defs, g_object_ref (item->data));
+      capture->plugin_defs = g_slist_reverse (capture->plugin_defs);
+    }
   if (g_getenv ("GLIMS_STARTUP_TRACE"))
     g_printerr ("startup %.6f %s | %s | %.3f\n",
                 g_get_monotonic_time () / 1000000.0,
@@ -773,6 +793,158 @@ startup_locale_environment_is_clean (void)
   return clean;
 }
 
+/* Locale overrides are not part of GIMP's prev-language setting. Keep their
+ * registries separate so a later launch cannot reuse labels queried under a
+ * different environment. The private directory also keeps the user's chosen
+ * pluginrc untouched. GIMP still discovers changed/user plug-ins normally. */
+static gchar *
+startup_override_registry_path (const gchar *cache_directory,
+                                const gchar *contents,
+                                const gchar *language,
+                                const gchar *user_directory,
+                                const gchar *selected_registry)
+{
+  struct stat st;
+  if (!cache_directory || !contents || !language || !user_directory || !selected_registry) return NULL;
+  g_autofree gchar *base = g_build_filename (cache_directory, "glims-pluginrc-environments", NULL);
+  if (g_mkdir (base, 0700) != 0 && errno != EEXIST) return NULL;
+  if (g_lstat (base, &st) != 0 || !S_ISDIR (st.st_mode) || st.st_uid != getuid () ||
+      (st.st_mode & 077) != 0) return NULL;
+  g_autofree gchar *fingerprint = startup_locale_environment_fingerprint ();
+  GChecksum *sum = g_checksum_new (G_CHECKSUM_SHA256);
+  const gchar *parts[] = { GIMP_VERSION, language, contents, user_directory, selected_registry, fingerprint };
+  for (guint i = 0; i < G_N_ELEMENTS (parts); i++)
+    g_checksum_update (sum, (const guchar *) parts[i], strlen (parts[i]) + 1);
+  /* App updates can replace plug-ins or change seed identity without
+   * changing GIMP's version or bundle path. Bind the cache to all three
+   * bounded seed files, including presence and length for each one. */
+  const gchar *leaves[] = { "identity", "environment", "pluginrc" };
+  for (guint i = 0; i < G_N_ELEMENTS (leaves); i++)
+    {
+      g_autofree gchar *seed_path = g_build_filename (contents, "Resources", "Engine-Startup", leaves[i], NULL);
+      gchar *seed = NULL;
+      gsize seed_length = 0;
+      guchar has_seed = 0;
+      if (g_lstat (seed_path, &st) == 0)
+        {
+          if (!S_ISREG (st.st_mode) || st.st_size < 0 || st.st_size > 16 * 1024 * 1024 ||
+              !g_file_get_contents (seed_path, &seed, &seed_length, NULL) || seed_length > 16 * 1024 * 1024)
+            { g_free (seed); g_checksum_free (sum); return NULL; }
+          has_seed = 1;
+        }
+      else if (errno != ENOENT) { g_checksum_free (sum); return NULL; }
+      g_checksum_update (sum, (const guchar *) leaves[i], strlen (leaves[i]) + 1);
+      g_checksum_update (sum, &has_seed, 1);
+      if (has_seed)
+        {
+          guint64 length = GUINT64_TO_BE ((guint64) seed_length);
+          g_checksum_update (sum, (const guchar *) &length, sizeof length);
+          g_checksum_update (sum, (const guchar *) seed, seed_length);
+        }
+      g_free (seed);
+    }
+  g_autofree gchar *digest = g_strdup (g_checksum_get_string (sum));
+  g_checksum_free (sum);
+  g_autofree gchar *directory = g_build_filename (base, digest, NULL);
+  if (g_mkdir (directory, 0700) != 0 && errno != EEXIST) return NULL;
+  if (g_lstat (directory, &st) != 0 || !S_ISDIR (st.st_mode) || st.st_uid != getuid () ||
+      (st.st_mode & 077) != 0) return NULL;
+  gchar *path = g_build_filename (directory, "pluginrc", NULL);
+  if (g_lstat (path, &st) == 0)
+    {
+      if (!S_ISREG (st.st_mode) || st.st_uid != getuid ()) { g_free (path); return NULL; }
+    }
+  else if (errno != ENOENT) { g_free (path); return NULL; }
+  return path;
+}
+
+/* A selected registry predating Glims's environment tracking has unknown
+ * provenance. Remember only byte-exact registries that this engine actually
+ * produced in this locale, scoped to this profile and bundled engine. */
+static gchar *
+startup_registry_digest (GFile *file)
+{
+  gchar *path = file ? g_file_get_path (file) : NULL;
+  int fd = path ? open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW) : -1;
+  struct stat before, after;
+  GChecksum *sum = NULL;
+  gchar *digest = NULL;
+  if (fd >= 0 && fstat (fd, &before) == 0 && S_ISREG (before.st_mode) &&
+      before.st_size >= 0 && before.st_size <= 16 * 1024 * 1024)
+    {
+      guint8 buffer[16384];
+      ssize_t n;
+      sum = g_checksum_new (G_CHECKSUM_SHA256);
+      while ((n = read (fd, buffer, sizeof buffer)) > 0)
+        g_checksum_update (sum, buffer, (gsize) n);
+      if (n == 0 && fstat (fd, &after) == 0 && before.st_dev == after.st_dev &&
+          before.st_ino == after.st_ino && before.st_size == after.st_size &&
+          before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec &&
+          before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec)
+        digest = g_strdup (g_checksum_get_string (sum));
+    }
+  if (sum) g_checksum_free (sum);
+  if (fd >= 0) close (fd);
+  g_free (path);
+  return digest;
+}
+
+static gchar *
+startup_registry_marker (GlimsEngine *engine, const gchar *contents,
+                         const gchar *language, const gchar *digest)
+{
+  if (!digest) return NULL;
+  g_autofree gchar *path = startup_override_registry_path (engine->cache_directory, contents, language,
+                                                           engine->user_directory, "<selected-registry-verification>");
+  if (!path) return NULL;
+  g_autofree gchar *directory = g_path_get_dirname (path);
+  g_autofree gchar *name = g_strconcat ("verified-", digest, NULL);
+  return g_build_filename (directory, name, NULL);
+}
+
+static gboolean
+startup_registry_is_verified (GlimsEngine *engine, const gchar *contents,
+                              const gchar *language, GFile *selected)
+{
+  g_autofree gchar *digest = startup_registry_digest (selected);
+  g_autofree gchar *marker = startup_registry_marker (engine, contents, language, digest);
+  struct stat st;
+  return marker && g_lstat (marker, &st) == 0 && S_ISREG (st.st_mode) && st.st_uid == getuid ();
+}
+
+/* Compare a fresh serialization of the engine's actual catalogue with the
+ * selected file before attesting it. Another process may have replaced the
+ * file during restore; matching the engine's values prevents blessing a
+ * concurrently written registry from another environment. */
+static void
+startup_verify_selected_registry (GlimsEngine *engine, const gchar *contents,
+                                  const gchar *language, GFile *selected, GSList *plugin_defs)
+{
+  if (!plugin_defs) return;
+  g_autofree gchar *cache = startup_override_registry_path (engine->cache_directory, contents, language,
+                                                            engine->user_directory, "<selected-registry-verification>");
+  if (!cache) return;
+  g_autofree gchar *directory = g_path_get_dirname (cache);
+  g_autofree gchar *path = g_build_filename (directory, "witness-XXXXXX", NULL);
+  int witness_fd = g_mkstemp_full (path, O_RDWR | O_CLOEXEC, 0600);
+  if (witness_fd < 0) return;
+  close (witness_fd);
+  GFile *witness = g_file_new_for_path (path);
+  if (plug_in_rc_write (plugin_defs, witness, NULL))
+    {
+      g_autofree gchar *actual = startup_registry_digest (selected);
+      g_autofree gchar *expected = startup_registry_digest (witness);
+      if (actual && expected && g_str_equal (actual, expected))
+        {
+          g_autofree gchar *marker = startup_registry_marker (engine, contents, language, actual);
+          int fd = marker ? open (marker, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600) : -1;
+          if (fd >= 0) close (fd);
+        }
+    }
+  g_file_delete (witness, NULL, NULL);
+  g_object_unref (witness);
+}
+
 static gboolean
 seed_bundle_plugin_cache (const gchar *contents,
                           const gchar *language,
@@ -888,6 +1060,8 @@ engine_initialize (GlimsEngine  *engine,
   gchar       *original_pluginrc_path = NULL;
   gchar       *temporary_registry_dir = NULL;
   gchar       *temporary_registry_path = NULL;
+  gchar       *override_registry_path = NULL;
+  GFile       *selected_for_verification = NULL;
   gboolean     temporary_registry_active = FALSE;
   gboolean     preserve_previous_language = FALSE;
   GError      *font_error    = NULL;
@@ -1069,7 +1243,95 @@ engine_initialize (GlimsEngine  *engine,
       gboolean language_changed = prev_language &&
                                   g_strcmp0 (prev_language, current_language) != 0;
       GFile *selected = configured_plugin_cache (gimp);
-      if (selected && !g_file_query_exists (selected, NULL))
+      gboolean override_active = contents && !startup_locale_environment_is_clean ();
+      gboolean selected_exists = selected && g_file_query_exists (selected, NULL);
+      gboolean selected_verified = !override_active && contents && selected_exists &&
+        startup_registry_is_verified (engine, contents, current_language, selected);
+      gboolean selected_unverified = !override_active && contents && selected_exists && !selected_verified;
+      if (!override_active && contents && selected && (!selected_exists || selected_verified))
+        selected_for_verification = g_object_ref (selected);
+      if (override_active)
+        {
+          gchar *selected_path = selected ? g_file_get_path (selected) : NULL;
+          override_registry_path = startup_override_registry_path (engine->cache_directory, contents, current_language,
+                                                                   engine->user_directory, selected_path);
+          g_free (selected_path);
+          gchar *config_path = override_registry_path ? g_filename_to_utf8 (override_registry_path, -1, NULL, NULL, NULL) : NULL;
+          gchar *expanded = config_path ? gimp_config_path_expand (config_path, TRUE, NULL) : NULL;
+          if (expanded && g_strcmp0 (expanded, override_registry_path) == 0)
+            {
+              GFile *file = g_file_new_for_path (override_registry_path);
+              gboolean exists = g_file_query_exists (file, NULL);
+              g_object_get (gimp->config, "pluginrc-path", &original_pluginrc_path, NULL);
+              g_object_set (gimp->config, "pluginrc-path", config_path, NULL);
+              temporary_registry_active = TRUE; /* restore config after discovery */
+              preserve_previous_language = language_changed;
+              if (!exists)
+                {
+                  gboolean seeded = seed_bundle_plugin_cache (contents, current_language, file);
+                  gimp->query_all = !seeded;
+                  if (seeded && g_getenv ("GLIMS_STARTUP_TRACE"))
+                    g_printerr ("Glims: seeded bundled command cache\n");
+                }
+              else
+                gimp->query_all = configured_plugin_cache_unusable (gimp);
+              g_object_unref (file);
+            }
+          else
+            {
+              /* Do not let an override overwrite the selected registry: a
+               * later clean launch would otherwise reuse the wrong labels. */
+              temporary_registry_dir = g_dir_make_tmp ("glims-pluginrc-XXXXXX", NULL);
+              temporary_registry_path = temporary_registry_dir
+                ? g_build_filename (temporary_registry_dir, "pluginrc", NULL) : NULL;
+              g_clear_pointer (&config_path, g_free);
+              g_clear_pointer (&expanded, g_free);
+              config_path = temporary_registry_path
+                ? g_filename_to_utf8 (temporary_registry_path, -1, NULL, NULL, NULL) : NULL;
+              expanded = config_path ? gimp_config_path_expand (config_path, TRUE, NULL) : NULL;
+              if (temporary_registry_path && (!expanded || g_strcmp0 (expanded, temporary_registry_path) != 0))
+                {
+                  const gchar *tmpdir = g_getenv ("TMPDIR");
+                  gchar *directory_name = g_path_get_basename (temporary_registry_dir);
+                  g_clear_pointer (&config_path, g_free);
+                  g_clear_pointer (&expanded, g_free);
+                  if (tmpdir && *tmpdir)
+                    {
+                      config_path = g_strdup_printf ("${TMPDIR}%s%s/pluginrc",
+                                                     g_str_has_suffix (tmpdir, "/") ? "" : "/",
+                                                     directory_name);
+                      expanded = gimp_config_path_expand (config_path, TRUE, NULL);
+                    }
+                  g_free (directory_name);
+                }
+              if (expanded && g_strcmp0 (expanded, temporary_registry_path) == 0)
+                {
+                  g_object_get (gimp->config, "pluginrc-path", &original_pluginrc_path, NULL);
+                  g_object_set (gimp->config, "pluginrc-path", config_path, NULL);
+                  temporary_registry_active = TRUE;
+                  preserve_previous_language = language_changed;
+                  gimp->query_all = TRUE;
+                }
+              else
+                {
+                  if (temporary_registry_dir) g_rmdir (temporary_registry_dir);
+                  g_free (temporary_registry_path);
+                  g_free (temporary_registry_dir);
+                  g_free (override_registry_path);
+                  g_free (config_path);
+                  g_free (expanded);
+                  g_clear_object (&selected);
+                  g_free (prev_language);
+                  g_free (contents);
+                  g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                       "Could not create a safe command cache for the locale override.");
+                  return FALSE;
+                }
+            }
+          g_free (expanded);
+          g_free (config_path);
+        }
+      else if (selected && !selected_exists)
         {
           if (seed_bundle_plugin_cache (contents, current_language, selected))
             {
@@ -1079,7 +1341,7 @@ engine_initialize (GlimsEngine  *engine,
             }
         }
       else if (selected &&
-               ((!language_changed && configured_plugin_cache_unusable (gimp)) ||
+               ((!language_changed && (configured_plugin_cache_unusable (gimp) || selected_unverified)) ||
                 (language_changed &&
                  g_file_query_file_type (selected, G_FILE_QUERY_INFO_NONE, NULL) == G_FILE_TYPE_REGULAR)))
         {
@@ -1129,12 +1391,25 @@ engine_initialize (GlimsEngine  *engine,
               g_object_unref (file);
             }
         }
+      /* If a private seeded registry could not be prepared, never silently
+       * reuse an unverified selected registry's potentially stale labels. */
+      if (selected_unverified && !temporary_registry_active)
+        gimp->query_all = TRUE;
       g_clear_object (&selected);
   }
   g_free (prev_language);
-  g_free (contents);
 
+  StartupRegistryCapture registry_capture = { gimp, NULL };
+  if (selected_for_verification && !temporary_registry_active)
+    g_private_set (&startup_registry_capture, &registry_capture);
   gimp_restore (gimp, init_status, &font_error);
+  g_private_set (&startup_registry_capture, NULL);
+  if (selected_for_verification && !temporary_registry_active)
+    startup_verify_selected_registry (engine, contents, current_language, selected_for_verification,
+                                      registry_capture.plugin_defs);
+  g_slist_free_full (registry_capture.plugin_defs, g_object_unref);
+  g_clear_object (&selected_for_verification);
+  g_free (contents);
   if (temporary_registry_active)
     g_object_set (gimp->config, "pluginrc-path", original_pluginrc_path, NULL);
   if (temporary_registry_path) g_unlink (temporary_registry_path);
@@ -1142,6 +1417,7 @@ engine_initialize (GlimsEngine  *engine,
   g_free (original_pluginrc_path);
   g_free (temporary_registry_path);
   g_free (temporary_registry_dir);
+  g_free (override_registry_path);
   if (font_error)
     {
       show_message (gimp, NULL, GIMP_MESSAGE_WARNING, NULL, font_error->message);
