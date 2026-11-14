@@ -23,6 +23,27 @@ static int has_bytes(const char *path, const void *bytes, size_t count)
   size_t n = fread(data, 1, sizeof data, f); int ok = !ferror(f) && n == count && !memcmp(data, bytes, count);
   fclose(f); return ok;
 }
+typedef unsigned int (*IdleAdd)(int (*callback)(void *), void *data);
+typedef struct {
+  const GlimsEngineAPI *api;
+  GlimsEngine *engine;
+  IdleAdd idle_add;
+  int armed, scheduled, cancelled;
+} CancelFixture;
+static int cancel_idle(void *data)
+{
+  CancelFixture *f = data;
+  f->cancelled = f->api->procedure_cancel(f->engine) == GLIMS_STATUS_OK;
+  return 0;
+}
+static void on_event(void *data, const GlimsEvent *event)
+{
+  CancelFixture *f = data;
+  if (f->armed && !f->scheduled && event->kind == GLIMS_EVENT_PROGRESS &&
+      event->active && event->value >= 1.0) {
+    f->scheduled = f->idle_add(cancel_idle, f) != 0;
+  }
+}
 static void free_error(const GlimsEngineAPI *api, char **error)
 {
   if (*error) api->free_string(*error);
@@ -50,12 +71,16 @@ int main(int argc, char **argv)
     0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0, 0xaa,0x80,0x55,0x00
   };
   if (!write_bytes(input,pgm,sizeof pgm-1) || !write_bytes(nonbinary,gray,sizeof gray-1) || !write_bytes(single,white,sizeof white-1)) return 2;
-  GlimsEngineConfig config = { .struct_size=sizeof config, .user_directory=user, .cache_directory=cache };
+  CancelFixture cancel = { .api=api, .idle_add=(IdleAdd)dlsym(library,"g_idle_add") };
+  if (!cancel.idle_add) { fprintf(stderr,"missing g_idle_add in adapter dependencies\n"); return 2; }
+  GlimsEngineConfig config = { .struct_size=sizeof config, .user_directory=user, .cache_directory=cache,
+                               .event_context=&cancel, .on_event=on_event };
   GlimsEngine *engine = NULL; char *error = NULL;
   GlimsStatus status = api->start(&config,&engine,&error);
   CHECK(status == GLIMS_STATUS_OK && engine, "engine starts");
   if (!engine) { if(error) fprintf(stderr,"%s\n",error); free_error(api,&error); return 1; }
   free_error(api,&error);
+  cancel.engine = engine;
   GlimsImageID image = 0, reopened = 0, bad = 0;
   status=api->image_open(engine,input,&image,&error);
   CHECK(status==GLIMS_STATUS_OK && image, "open binary grayscale fixture");
@@ -76,6 +101,15 @@ int main(int argc, char **argv)
       CHECK(api->image_export_bitmap_psd(engine,reopened,output,&error)==GLIMS_STATUS_OK && has_bytes(output,psd,sizeof psd), "indexed Bitmap import re-exports with Bitmap mode"); free_error(api,&error);
       api->image_close(engine,reopened);
     }
+    static const char cancellation_sentinel[]="before-cancel";
+    if (!write_bytes(output,cancellation_sentinel,sizeof cancellation_sentinel-1)) return 2;
+    cancel.armed=1;
+    status=api->image_export_bitmap_psd(engine,image,output,&error);
+    cancel.armed=0;
+    CHECK(cancel.scheduled && cancel.cancelled && status==GLIMS_STATUS_CANCELLED &&
+          has_bytes(output,cancellation_sentinel,sizeof cancellation_sentinel-1),
+          "engine cancellation at completed pixels preserves destination");
+    free_error(api,&error);
     GlimsLayerInfo layer; int32_t count=0;
     if(api->image_layers(engine,image,&layer,1,&count)==GLIMS_STATUS_OK && count>0) {
       GlimsLayerChange change={.struct_size=sizeof change,.properties=GLIMS_LAYER_OPACITY,.opacity=0.5};
