@@ -1456,8 +1456,9 @@ extension EngineSmokeTest {
                                     : "Stop recording before undoing a Lab layer edit."
                 check(startError == nil && opened.recorder.isRecording && historyBefore == historyAfter && errors == [expected],
                       "history commands explain refusal when a field starts recording reentrantly")
-                if opened.recorder.isRecording { try opened.stopRecording() }
                 errors.removeAll()
+                if opened.recorder.isRecording { try opened.stopRecording() }
+                check(errors.isEmpty, "Recorder Stop reports no unexpected errors after history refusal")
             }
         } else if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAB_LIVE_PROPERTIES"] == "1" {
             check(false, "required live Lab property test has a selection, identity and palette row")
