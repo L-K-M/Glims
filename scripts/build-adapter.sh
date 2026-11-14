@@ -193,6 +193,12 @@ if [[ "$MODE" == test ]]; then
         "$OUT/glims-tiff-import-tests" "$WORK" || status=$?
   cat "$OUT/tiff-import-test.log"
   (( status == 0 )) || die "the TIFF import preparation tests failed (status $status)"
+  status=0
+  run_with_timeout 600 "$OUT/duotone-alternate-metadata-test.log" \
+    python3 "$ROOT/scripts/test-duotone-alternate-metadata.py" \
+      --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 180 || status=$?
+  cat "$OUT/duotone-alternate-metadata-test.log"
+  (( status == 0 )) || die "the Duotone alternate metadata tests failed (status $status)"
 fi
 
 if [[ "$MODE" == perf ]]; then

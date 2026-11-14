@@ -6197,3 +6197,21 @@ matching resource; optimized and sanitizer tests pass 814 checks each. The
 resource is not yet retained on import or used for preview, and its validity
 after changing inks or curves still needs a defined policy. See
 [duotone-preview-table.md](duotone-preview-table.md).
+
+### Preserving alternate Duotone colors (candidate)
+
+The PSD loader carries image resource 1066 as transient metadata. For imported
+Duotone grayscale images, Glims promotes either supported resource signature
+to persistent metadata alongside the existing opaque color-mode block. The
+bytes and other flags are retained; empty or oversized transient data refuses.
+A real Photoshop fixture loses the alternate-color bytes on the baseline, and
+retains them across XCF save, reopen and resave with this change. Its source,
+grayscale pixels, clean state and Undo history remain unchanged.
+
+All four engines pass conformance plus 17 public and 26 direct metadata checks,
+including both signatures, exact flags and bytes after reopening XCF. Focused
+real-window Save/Reopen checks pass on all four engines. A focused source review
+found no concrete defect and did not execute tests or inspect upstream GIMP
+ownership internals. Full editor, standalone bundle and hosted CI remain in
+progress. This retains data for a future color preview; it does not display or
+recalculate that preview.
