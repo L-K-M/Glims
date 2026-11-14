@@ -22,7 +22,8 @@ static double now (void)
 
 int main (int argc, char **argv)
 {
-  /* Foundation reads this preference from the process's original argv. */
+  /* Foundation reads this process-only preference from the original argv.
+   * Exclude it from this probe's own positional-argument validation. */
   if (argc >= 6 && strcmp (argv[argc - 2], "-AppleLanguages") == 0)
     argc -= 2;
   if (argc != 4 && argc != 5) return 2;
