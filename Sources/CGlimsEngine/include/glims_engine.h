@@ -4283,6 +4283,14 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_sample_layered_lab) (GlimsEngine *engine, GlimsImageID image,
                                           int32_t x, int32_t y,
                                           GlimsSampledColor *result, char **error);
+  /* Slot223: slot216 with an empty image selection checked on the engine
+   * thread at entry and immediately before publishing the staged pixels.
+   * A nonempty selection at either check refuses without publishing pixels
+   * or adding an Undo step. */
+  GlimsStatus (*image_fill_lab_layer_srgb_empty_selection) (GlimsEngine *engine,
+                                            GlimsImageID image,
+                                            const GlimsLabLayerColorFillSettings *settings,
+                                            char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

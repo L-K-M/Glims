@@ -52,6 +52,7 @@
 
 #include "core/gimp.h"
 #include "core/gimp-user-install.h"
+#include "core/gimpchannel.h"
 #include "core/gimpgrid.h"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
@@ -5279,12 +5280,29 @@ typedef struct {
   GlimsImageID image;
   GlimsLabLayerColorFillSettings settings;
   char **error;
+  gboolean require_empty_selection;
 } LabLayerColorFillArgs;
 
 static GlimsStatus
 image_fill_lab_layer_srgb_on_engine (GlimsEngine *engine, gpointer data)
 {
   LabLayerColorFillArgs *args = data;
+  if (args->require_empty_selection)
+    {
+      GlimsOpenImage *open = glims_lookup_image (engine, args->image);
+      if (!open) return GLIMS_STATUS_NOT_FOUND;
+      if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+        return GLIMS_STATUS_UNSUPPORTED;
+      GimpChannel *selection = gimp_image_get_mask (open->image);
+      if (!selection || !gimp_channel_is_empty (selection))
+        {
+          if (args->error) *args->error = strdup ("Clear the selection before recording or replaying a Lab layer fill.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+      /* No event loop is entered before the fill captures its selection.
+       * The fill rechecks that the captured empty mask is still empty before
+       * publishing its staged pixels, including after progress callbacks. */
+    }
   const double channels[3] = { args->settings.color.red, args->settings.color.green,
                                args->settings.color.blue };
   float linear[3], lab[3];
@@ -5308,26 +5326,48 @@ image_fill_lab_layer_srgb_on_engine (GlimsEngine *engine, gpointer data)
 }
 
 static GlimsStatus
-api_image_fill_lab_layer_srgb (GlimsEngine *engine, GlimsImageID image,
-                               const GlimsLabLayerColorFillSettings *settings, char **error)
+prepare_lab_layer_color_fill (const GlimsLabLayerColorFillSettings *settings,
+                              LabLayerColorFillArgs *args)
 {
-  if (error) *error = NULL;
   uint32_t size;
   if (!settings) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&size, settings, sizeof size);
   if (size < sizeof (GlimsLabLayerColorFillSettings)) return GLIMS_STATUS_INVALID_ARGUMENT;
-  LabLayerColorFillArgs args = { .image = image, .error = error };
-  memcpy (&args.settings, settings, sizeof args.settings);
-  const double values[] = { args.settings.color.red, args.settings.color.green,
-                            args.settings.color.blue, args.settings.color.alpha,
-                            args.settings.opacity };
+  memcpy (&args->settings, settings, sizeof args->settings);
+  const double values[] = { args->settings.color.red, args->settings.color.green,
+                            args->settings.color.blue, args->settings.color.alpha,
+                            args->settings.opacity };
   guint8 zero_uuid[16] = { 0 };
-  if (args.settings.root <= 0 || !memcmp (args.settings.uuid, zero_uuid, sizeof zero_uuid))
+  if (args->settings.root <= 0 || !memcmp (args->settings.uuid, zero_uuid, sizeof zero_uuid))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   for (guint i = 0; i < G_N_ELEMENTS (values); i++)
     if (!isfinite (values[i]) || values[i] < 0 || values[i] > 1)
       return GLIMS_STATUS_INVALID_ARGUMENT;
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+api_image_fill_lab_layer_srgb (GlimsEngine *engine, GlimsImageID image,
+                               const GlimsLabLayerColorFillSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLayerColorFillArgs args = { .image = image, .error = error };
+  GlimsStatus status = prepare_lab_layer_color_fill (settings, &args);
+  if (status != GLIMS_STATUS_OK) return status;
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab_layer_srgb,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_fill_lab_layer_srgb_on_engine, &args, error);
+}
+
+static GlimsStatus
+api_image_fill_lab_layer_srgb_empty_selection (GlimsEngine *engine, GlimsImageID image,
+                                               const GlimsLabLayerColorFillSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  LabLayerColorFillArgs args = { .image = image, .error = error, .require_empty_selection = TRUE };
+  GlimsStatus status = prepare_lab_layer_color_fill (settings, &args);
+  if (status != GLIMS_STATUS_OK) return status;
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_fill_lab_layer_srgb_empty_selection,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_fill_lab_layer_srgb_on_engine, &args, error);
 }
