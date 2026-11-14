@@ -38,6 +38,7 @@ layered_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_select_lab_command:
     case GLIMS_FACADE_OP_image_lab_layer_identity:
     case GLIMS_FACADE_OP_image_lab_layer_snapshot:
+    case GLIMS_FACADE_OP_image_convert_layered_lab_copy:
     case GLIMS_FACADE_OP_image_sample_layered_lab:
     case GLIMS_FACADE_OP_image_fill_lab_layer:
     case GLIMS_FACADE_OP_image_fill_lab_layer_srgb:

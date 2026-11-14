@@ -304,6 +304,9 @@ GlimsStatus glims_image_import_native_cmyk_psd (GlimsEngine *engine, const char 
 GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
                                           const GlimsLabCopySettings *settings,
                                           GlimsImageID *result, char **error);
+GlimsStatus glims_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImageID image,
+                                                 const GlimsLabCopySettings *settings,
+                                                 GlimsImageID *result, char **error);
 
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);

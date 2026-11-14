@@ -5,6 +5,7 @@
 #include "plate-storage.h"
 #include "lab-samples.h"
 #include "lab-transform.h"
+#include "lab-layer-render.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -133,7 +134,7 @@ qualified_rgb (GimpImage *image)
 }
 
 static GimpImage *
-prepare_rgb (GlimsEngine *engine, gint width, gint height, char **error)
+prepare_rgb (GlimsEngine *engine, gint width, gint height, gboolean alpha, char **error)
 {
   GimpImage *image = gimp_create_image (engine->gimp, width, height, GIMP_RGB,
                                        GIMP_PRECISION_FLOAT_LINEAR, FALSE);
@@ -152,7 +153,7 @@ prepare_rgb (GlimsEngine *engine, gint width, gint height, char **error)
   /* Native storage omits redundant builtin ICC bytes. Float-linear precision
    * and the effective builtin profile together retain the exact interpretation. */
   GimpLayer *layer = gimp_layer_new (image, width, height,
-                                    gimp_image_get_layer_format (image, FALSE),
+                                    gimp_image_get_layer_format (image, alpha),
                                     "Converted appearance", GIMP_OPACITY_OPAQUE,
                                     GIMP_LAYER_MODE_NORMAL);
   if (!layer || !gimp_image_add_layer (image, layer, NULL, 0, FALSE))
@@ -167,10 +168,10 @@ prepare_rgb (GlimsEngine *engine, gint width, gint height, char **error)
   return image;
 }
 
-GlimsStatus
-glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
-                               const GlimsLabCopySettings *input,
-                               GlimsImageID *result, char **error)
+static GlimsStatus
+convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
+                  const GlimsLabCopySettings *input, gboolean layered,
+                  GlimsImageID *result, char **error)
 {
   if (result) *result = 0;
   if (error) *error = NULL;
@@ -195,6 +196,9 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
 
   gboolean to_lab = settings.destination_mode == GLIMS_COLOR_MODE_LAB;
   GlimsPlateStorage source_storage;
+  if (layered && (to_lab || open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB))
+    return refuse_copy (GLIMS_STATUS_UNSUPPORTED, error,
+                        "Choose a layered Lab document for this RGB copy.");
   if (to_lab)
     {
       if (has_link_layer (open->image))
@@ -204,9 +208,9 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
         return refuse_copy (GLIMS_STATUS_UNSUPPORTED, error,
                             "A Lab copy requires an 8-bit, 16-bit or 32-bit RGB image using standard sRGB or linear sRGB. Convert a custom profile to sRGB first.");
     }
-  else if (!open->component_document || open->component_mode != GLIMS_PLATE_MODE_LAB ||
+  else if (!layered && (!open->component_document || open->component_mode != GLIMS_PLATE_MODE_LAB ||
            !glims_plate_storage_read_open (open, &source_storage) ||
-           source_storage.map.mode != GLIMS_PLATE_MODE_LAB || source_storage.map.count != 3)
+           source_storage.map.mode != GLIMS_PLATE_MODE_LAB || source_storage.map.count != 3))
     return refuse_copy (GLIMS_STATUS_UNSUPPORTED, error,
                         "An RGB copy requires a valid native Lab document.");
 
@@ -216,6 +220,7 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
   const Babl *read_format = NULL, *write_format = NULL;
   GlimsLabFormat lab_format = GLIMS_LAB_FORMAT_FLOAT;
   GlimsLabTransform *transform = glims_lab_transform_new ();
+  GlimsLabLayerRender *layer_render = NULL;
   LabCopyRow *row = g_try_new (LabCopyRow, 1);
   if (!transform || !row)
     {
@@ -255,16 +260,25 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
     }
   else
     {
-      candidate = prepare_rgb (engine, width, height, error);
+      candidate = prepare_rgb (engine, width, height, layered, error);
       if (!candidate) { status = GLIMS_STATUS_FAILED; goto cleanup; }
       GList *layers = gimp_image_get_layer_iter (candidate);
       outputs[0] = g_object_ref (gimp_drawable_get_buffer (GIMP_DRAWABLE (layers->data)));
       write_format = gegl_buffer_get_format (outputs[0]);
-      for (guint axis = 0; axis < 3; axis++)
-        inputs[axis] = g_object_ref (gimp_drawable_get_buffer (GIMP_DRAWABLE (source_storage.planes[axis])));
-      lab_format = source_storage.map.storage == GLIMS_PLATE_STORAGE_U8 ? GLIMS_LAB_FORMAT_U8 :
-                   source_storage.map.storage == GLIMS_PLATE_STORAGE_U16 ? GLIMS_LAB_FORMAT_U16 :
-                   GLIMS_LAB_FORMAT_FLOAT;
+      if (layered)
+        {
+          layer_render = glims_lab_layer_render_new (source);
+          if (!layer_render)
+            { status = refuse_copy (GLIMS_STATUS_UNSUPPORTED, error, "The layered Lab image could not be read."); goto cleanup; }
+        }
+      else
+        {
+          for (guint axis = 0; axis < 3; axis++)
+            inputs[axis] = g_object_ref (gimp_drawable_get_buffer (GIMP_DRAWABLE (source_storage.planes[axis])));
+          lab_format = source_storage.map.storage == GLIMS_PLATE_STORAGE_U8 ? GLIMS_LAB_FORMAT_U8 :
+                       source_storage.map.storage == GLIMS_PLATE_STORAGE_U16 ? GLIMS_LAB_FORMAT_U16 :
+                       GLIMS_LAB_FORMAT_FLOAT;
+        }
     }
   /* Candidate metadata and pixels are construction, not user edits. */
   gimp_image_undo_disable (candidate);
@@ -281,10 +295,10 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
                         to_lab ? "Creating Lab copy" : "Creating linear RGB copy");
   status = GLIMS_STATUS_OK;
   for (gint y = 0; status == GLIMS_STATUS_OK && y < height; y++)
-    for (gint x = 0; status == GLIMS_STATUS_OK && x < width; x += LAB_COPY_ROW)
+    for (gint x = 0; status == GLIMS_STATUS_OK && x < width; )
       {
         if (!continue_copy (&progress)) { status = GLIMS_STATUS_CANCELLED; break; }
-        gint count = MIN (LAB_COPY_ROW, width - x);
+        gint count = MIN (layered ? GLIMS_LAB_LAYER_RENDER_MAX_WIDTH : LAB_COPY_ROW, width - x);
         GeglRectangle area = { x, y, count, 1 };
         if (to_lab)
           {
@@ -317,6 +331,15 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
                                   row->plane, GEGL_AUTO_ROWSTRIDE);
               }
           }
+        else if (layered)
+          {
+            if (!glims_lab_layer_render_row (layer_render, x, y, count, row->rgba))
+              {
+                status = refuse_copy (GLIMS_STATUS_FAILED, error, "The layered Lab image could not be rendered.");
+                break;
+              }
+            gegl_buffer_set (outputs[0], &area, 0, write_format, row->rgba, GEGL_AUTO_ROWSTRIDE);
+          }
         else
           {
             for (guint axis = 0; axis < 3; axis++)
@@ -340,6 +363,7 @@ glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
             gegl_buffer_set (outputs[0], &area, 0, write_format, row->rgb, GEGL_AUTO_ROWSTRIDE);
           }
         progress.completed += count;
+        x += count;
       }
   if (status == GLIMS_STATUS_OK && !continue_copy (&progress)) status = GLIMS_STATUS_CANCELLED;
   g_signal_handler_disconnect (progress.progress, handler);
@@ -363,8 +387,25 @@ cleanup:
       g_clear_object (&outputs[i]);
     }
   g_clear_object (&candidate);
+  glims_lab_layer_render_free (layer_render);
   g_object_unref (source);
   glims_lab_transform_free (transform);
   g_free (row);
   return status;
+}
+
+GlimsStatus
+glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
+                              const GlimsLabCopySettings *settings,
+                              GlimsImageID *result, char **error)
+{
+  return convert_lab_copy (engine, id, settings, FALSE, result, error);
+}
+
+GlimsStatus
+glims_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImageID id,
+                                      const GlimsLabCopySettings *settings,
+                                      GlimsImageID *result, char **error)
+{
+  return convert_lab_copy (engine, id, settings, TRUE, result, error);
 }

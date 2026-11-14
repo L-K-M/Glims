@@ -7,6 +7,13 @@ The confirmation describes the copy's pixel-only scope before starting work.
 The new document requires its own Save even though its construction has no
 Undo steps.
 
+A layered Lab document can also create a separate linear RGB copy when the
+engine supports that operation. It composites visible Lab layers in their
+displayed order and preserves transparency in one float RGBA layer. It copies
+the full canvas regardless of the selection, without changing the original.
+Editable structure, paths, saved selections and other metadata stay in the
+original. The resulting RGB document can use the usual Export command.
+
 This candidate copies the full canvas and resolution. RGB layers contribute
 their merged visible appearance; a selection does not crop or attenuate the
 copy. Lab conversion reads all three authoritative channels regardless of
@@ -25,7 +32,8 @@ conversion services cancellation. Hidden and nested linked layers also refuse.
 Lab output stores physical D50 L*, a*, b* as 32-bit floats. The reverse route
 accepts all three supported native Lab precisions and produces one opaque
 32-bit linear-RGB layer with the builtin linear-sRGB interpretation. The
-native engine omits redundant builtin ICC bytes; this is an effective-profile
+layered route composites physical Lab and produces straight-alpha float
+linear RGB. The native engine omits redundant builtin ICC bytes; this is an effective-profile
 contract, not an embedded-profile claim. Finite extended values are retained
 when representable. There is no silent gamut clipping or alpha flattening.
 Unsupported modes, nonfinite samples and unrepresentable output refuse.
@@ -46,6 +54,10 @@ reads through Close, and treats result adoption as a file operation through
 Quit. The original does not acquire an Undo step or an unsaved-change marker.
 
 ## Current evidence and remaining work
+
+The layered route is an unmerged candidate. It needs the complete four-engine
+matrix, actual-window acceptance, standalone bundle checks and review before
+release; the installed app does not yet contain it.
 
 The independent native fixture passes 412 checks on GIMP 3.2.8, 3.2.0 and
 master, and 392 on 3.0.8, which has no linked-layer class. All four engines

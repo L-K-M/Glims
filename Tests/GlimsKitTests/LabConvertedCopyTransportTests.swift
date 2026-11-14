@@ -11,6 +11,7 @@ final class LabConvertedCopyTransportTests: XCTestCase {
         var result: Int32 = 81
         var message: String?
         var calls = 0
+        var layeredCalls = 0
         var source: Int32 = 0
         var settings: GlimsLabCopySettings?
         var outputWasCleared = false
@@ -81,6 +82,17 @@ final class LabConvertedCopyTransportTests: XCTestCase {
             error?.pointee = producer.message.map { producer.allocateString($0) }
             return producer.status
         }
+        table.image_convert_layered_lab_copy = { engine, source, settings, result, error in
+            let producer = Producer.from(engine)
+            producer.layeredCalls += 1
+            producer.source = source
+            producer.settings = settings?.pointee
+            producer.outputWasCleared = result?.pointee == 0
+            producer.errorWasCleared = error?.pointee == nil
+            result?.pointee = producer.result
+            error?.pointee = producer.message.map { producer.allocateString($0) }
+            return producer.status
+        }
         return table
     }
 
@@ -135,6 +147,37 @@ final class LabConvertedCopyTransportTests: XCTestCase {
             XCTAssertFalse(session.supportsLabConvertedCopy)
             self.assertStatus(GLIMS_STATUS_UNSUPPORTED) { try session.convertedLabCopy(image: 27, destination: .lab) }
             XCTAssertEqual(producer.calls, 0)
+        }
+    }
+
+    func testLayeredCopyRequiresItsOwnPresentSlot() throws {
+        try withSession(configure: {
+            $0.struct_size = UInt32(MemoryLayout<GlimsEngineAPI>.offset(of: \.image_convert_layered_lab_copy)!)
+        }, guardedPrefix: true) { session, producer in
+            XCTAssertTrue(session.supportsLabConvertedCopy)
+            XCTAssertFalse(session.supportsLayeredLabConvertedCopy)
+            self.assertStatus(GLIMS_STATUS_UNSUPPORTED) { try session.convertedLabCopy(image: 27, destination: .linearRGB, layered: true) }
+            XCTAssertEqual(producer.calls, 0)
+            XCTAssertEqual(producer.layeredCalls, 0)
+        }
+        try withSession(configure: { $0.image_convert_layered_lab_copy = nil }) { session, producer in
+            XCTAssertFalse(session.supportsLayeredLabConvertedCopy)
+            self.assertStatus(GLIMS_STATUS_UNSUPPORTED) { try session.convertedLabCopy(image: 27, destination: .linearRGB, layered: true) }
+            XCTAssertEqual(producer.calls, 0)
+        }
+    }
+
+    func testLayeredCopyUsesItsOwnSlotAndMergedFloatRGBSettings() throws {
+        try withSession { session, producer in
+            XCTAssertTrue(session.supportsLayeredLabConvertedCopy)
+            XCTAssertEqual(try session.convertedLabCopy(image: 27, destination: .linearRGB, layered: true), 81)
+            XCTAssertEqual(producer.layeredCalls, 1)
+            XCTAssertEqual(producer.calls, 0)
+            XCTAssertEqual(producer.source, 27)
+            XCTAssertEqual(producer.settings?.destination_mode, GLIMS_COLOR_MODE_RGB.rawValue)
+            XCTAssertEqual(producer.settings?.content, GLIMS_LAB_COPY_MERGED_CANVAS.rawValue)
+            XCTAssertEqual(producer.settings?.output_component, GLIMS_COLOR_COMPONENT_FLOAT.rawValue)
+            XCTAssertTrue(producer.outputWasCleared && producer.errorWasCleared)
         }
     }
 

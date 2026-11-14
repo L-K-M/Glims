@@ -4929,6 +4929,27 @@ api_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
     image_convert_lab_copy_on_engine, &a, error);
 }
 
+static GlimsStatus
+image_convert_layered_lab_copy_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabCopyArgs *a = data;
+  return glims_image_convert_layered_lab_copy (engine, a->image, a->settings, a->result, a->error);
+}
+
+static GlimsStatus
+api_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImageID image,
+                                    const GlimsLabCopySettings *settings,
+                                    GlimsImageID *result, char **error)
+{
+  if (result) *result = 0;
+  if (error) *error = NULL;
+  if (!result) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabCopyArgs a = { image, settings, result, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_convert_layered_lab_copy,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_convert_layered_lab_copy_on_engine, &a, error);
+}
+
 typedef struct {
   GlimsImageID image;
   GlimsLabCurvesSettings settings;

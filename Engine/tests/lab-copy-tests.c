@@ -5,6 +5,7 @@
  * .0003 * max(1,abs(expected)). They account for independently constructed
  * LCMS sRGB colorants, not measured/adjusted output errors. */
 #include "plate-storage.h"
+#include "lab-layer-storage.h"
 #include "core/gimpchannel.h"
 #include "core/gimpcontainer.h"
 #include "core/gimpdrawable.h"
@@ -464,7 +465,7 @@ static void linked_cases(GlimsEngine *engine,const char *work) {
 
 typedef struct {
   GlimsEngine *engine;Scene *scene;GlimsLabCopySettings request;GlimsImageID output;
-  gint armed,paused,release,timed_out;GlimsStatus status;char *error;
+  gint armed,paused,release,timed_out;GlimsStatus status;char *error;gboolean layered;
 } Control;
 static gboolean pause_idle(gpointer data) {
   Control *c=data;g_atomic_int_set(&c->paused,1);gint64 end=g_get_monotonic_time()+10*G_TIME_SPAN_SECOND;
@@ -479,10 +480,11 @@ static void event(void *data,const GlimsEvent *e) {
   Control *c=data;if(e->kind==GLIMS_EVENT_PROGRESS&&e->active&&g_atomic_int_compare_and_exchange(&c->armed,1,0))g_idle_add_full(G_PRIORITY_HIGH,pause_idle,c,NULL);
 }
 static gpointer copy_thread(gpointer data) {
-  Control *c=data;c->status=api->image_convert_lab_copy(c->engine,c->scene->id,&c->request,&c->output,&c->error);return NULL;
+  Control *c=data;c->status=c->layered ? api->image_convert_layered_lab_copy(c->engine,c->scene->id,&c->request,&c->output,&c->error)
+                                     : api->image_convert_lab_copy(c->engine,c->scene->id,&c->request,&c->output,&c->error);return NULL;
 }
 static void control_case(Control *c,Scene *s) {
-  c->scene=s;c->request=settings(s->lab);c->output=0;c->status=GLIMS_STATUS_FAILED;
+  c->scene=s;c->request=settings(s->lab);c->output=0;c->status=GLIMS_STATUS_FAILED;c->layered=FALSE;
   Capture *before=g_new0(Capture,1),*after=g_new0(Capture,1);CHECK(get_capture(c->engine,s->id,before),"capture source before controlled cancellation");
   g_atomic_int_set(&c->paused,0);g_atomic_int_set(&c->release,0);g_atomic_int_set(&c->timed_out,0);g_atomic_int_set(&c->armed,1);
   GThread *worker=g_thread_new("copy-cancel-test",copy_thread,c);
@@ -652,6 +654,180 @@ static void other_modes(GlimsEngine *engine) {
   }g_free(profile);
 }
 
+/* A separate, wide layered carrier exercises the public copy route across
+ * two 256-pixel row boundaries and checks straight alpha independently. */
+enum { LW = 521, LH = 2, LN = LW * LH };
+typedef struct { GlimsImageID id; char digest[65]; float samples[LN * 4]; double xres, yres; guint public_images; } LayerCopyScene;
+static GlimsStatus create_layer_copy_scene(GlimsEngine *engine,gpointer data) {
+  LayerCopyScene *scene=data;
+  GlimsLabLayerMap map={.width=LW,.height=LH,.count=2,.mode=GLIMS_LAB_LAYER_MAP_MODE_LAB,
+    .storage=GLIMS_LAB_LAYER_MAP_STORAGE_U8,.encoding=GLIMS_LAB_LAYER_MAP_ENCODING_LAB_D50};
+  for(guint i=0;i<2;i++)for(guint p=0;p<5;p++){
+    guint8 *id=((guint8*)&map.entries[i])+16*p;id[0]=0x73;id[14]=i+1;id[15]=p+1;
+  }
+  char *error=NULL;GimpImage *image=glims_lab_layer_storage_create(engine,&map,&error);
+  if(error)api->free_string(error);
+  if(!image)return GLIMS_STATUS_FAILED;
+  GlimsLabLayerStorage st;
+  if(glims_lab_layer_storage_read(image,&st)!=GLIMS_LAB_LAYER_STORAGE_VALID){g_object_unref(image);return GLIMS_STATUS_FAILED;}
+  guint8 pixels[LN];
+  for(guint i=0;i<2;i++)for(guint role=0;role<4;role++){
+    for(guint p=0;p<LN;p++)pixels[p]=role==0?(i?128:255):role==3?(i?255:(p%4)*85):
+      i?(role==1?200:60):128;
+    GimpDrawable *d=GIMP_DRAWABLE(st.layers[i].planes[role]);
+    gegl_buffer_set(gimp_drawable_get_buffer(d),GEGL_RECTANGLE(0,0,LW,LH),0,
+                    gimp_drawable_get_format(d),pixels,GEGL_AUTO_ROWSTRIDE);
+    gimp_drawable_update(d,0,0,LW,LH);
+  }
+  gimp_item_set_visible(GIMP_ITEM(st.layers[1].group),FALSE,FALSE);
+  gimp_image_set_resolution(image,300,144);
+  GlimsStatus status=glims_adopt_image(engine,image,&scene->id);
+  if(status!=GLIMS_STATUS_OK)g_object_unref(image);
+  return status;
+}
+static GlimsStatus capture_layer_copy_source(GlimsEngine *engine,gpointer data) {
+  LayerCopyScene *scene=data;GlimsOpenImage *open=glims_lookup_image(engine,scene->id);
+  GlimsLabLayerStorage st;
+  if(!open||glims_lab_layer_storage_read(open->image,&st)!=GLIMS_LAB_LAYER_STORAGE_VALID)return GLIMS_STATUS_FAILED;
+  GChecksum *sum=g_checksum_new(G_CHECKSUM_SHA256);guint8 bytes[LN];
+  for(guint i=0;i<2;i++){
+    gboolean visible=gimp_item_get_visible(GIMP_ITEM(st.layers[i].group));
+    double opacity=gimp_layer_get_opacity(st.layers[i].group);
+    g_checksum_update(sum,(const guchar*)&visible,sizeof visible);g_checksum_update(sum,(const guchar*)&opacity,sizeof opacity);
+    for(guint role=0;role<4;role++){
+      GimpDrawable *d=GIMP_DRAWABLE(st.layers[i].planes[role]);
+      gegl_buffer_get(gimp_drawable_get_buffer(d),GEGL_RECTANGLE(0,0,LW,LH),1,gimp_drawable_get_format(d),bytes,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+      g_checksum_update(sum,bytes,sizeof bytes);
+    }
+  }
+  gint facts[]={gimp_image_is_dirty(open->image),gimp_image_get_undo_group_count(open->image),
+    gimp_undo_stack_get_depth(gimp_image_get_undo_stack(open->image)),gimp_undo_stack_get_depth(gimp_image_get_redo_stack(open->image))};
+  g_checksum_update(sum,(const guchar*)facts,sizeof facts);
+  GimpDrawable *mask=GIMP_DRAWABLE(gimp_image_get_mask(open->image));
+  gegl_buffer_get(gimp_drawable_get_buffer(mask),GEGL_RECTANGLE(0,0,LW,LH),1,babl_format("Y u8"),bytes,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+  g_checksum_update(sum,bytes,sizeof bytes);
+  g_checksum_update(sum,(const guchar*)&open->history_revision,sizeof open->history_revision);
+  scene->public_images=g_hash_table_size(engine->images);
+  g_strlcpy(scene->digest,g_checksum_get_string(sum),sizeof scene->digest);g_checksum_free(sum);
+  return GLIMS_STATUS_OK;
+}
+static GlimsStatus reveal_lower_layer(GlimsEngine *engine,gpointer data) {
+  LayerCopyScene *scene=data;GlimsOpenImage *open=glims_lookup_image(engine,scene->id);GlimsLabLayerStorage st;
+  if(!open||glims_lab_layer_storage_read(open->image,&st)!=GLIMS_LAB_LAYER_STORAGE_VALID)return GLIMS_STATUS_FAILED;
+  gimp_item_set_visible(GIMP_ITEM(st.layers[1].group),TRUE,FALSE);
+  gimp_layer_set_opacity(st.layers[1].group,0.5,FALSE);
+  return GLIMS_STATUS_OK;
+}
+static GlimsStatus capture_layer_copy_result(GlimsEngine *engine,gpointer data) {
+  LayerCopyScene *scene=data;GlimsOpenImage *open=glims_lookup_image(engine,scene->id);
+  if(!open)return GLIMS_STATUS_NOT_FOUND;
+  GList *layers=gimp_image_get_layer_list(open->image);
+  if(g_list_length(layers)!=1){g_list_free(layers);return GLIMS_STATUS_FAILED;}
+  GimpDrawable *d=layers->data;const Babl *format=gimp_drawable_get_format(d);
+  if(!babl_format_has_alpha(format)){g_list_free(layers);return GLIMS_STATUS_FAILED;}
+  gegl_buffer_get(gimp_drawable_get_buffer(d),GEGL_RECTANGLE(0,0,LW,LH),1,
+                  babl_format_with_space("RGBA float",format),scene->samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+  gimp_image_get_resolution(open->image,&scene->xres,&scene->yres);g_list_free(layers);
+  return GLIMS_STATUS_OK;
+}
+static void layered_lab_copy_case(GlimsEngine *engine,Oracle *oracle,Control *control,const char *work) {
+  LayerCopyScene *source=g_new0(LayerCopyScene,1),*result=g_new0(LayerCopyScene,1);char *error=NULL;
+  CHECK(api->struct_size>=offsetof(GlimsEngineAPI,image_convert_layered_lab_copy)+sizeof api->image_convert_layered_lab_copy && api->image_convert_layered_lab_copy,
+        "layered Lab copy capability is present");
+  if(!api->image_convert_layered_lab_copy)goto done;
+  CHECK(glims_engine_call(engine,create_layer_copy_scene,source)==GLIMS_STATUS_OK&&source->id,"create wide transparent layered Lab source");
+  if(!source->id)goto done;
+  GlimsPoint points[2]={{1,0},{5,1}};
+  GlimsLabSelectOptions selection={.struct_size=sizeof selection,.operation=GLIMS_SELECT_REPLACE};
+  CHECK(api->image_select_lab_shape(engine,source->id,GLIMS_SHAPE_RECTANGLE,points,2,&selection,&error)==GLIMS_STATUS_OK,
+        "select a small source region independently of copy extent");clear_error(&error);
+  CHECK(glims_engine_call(engine,capture_layer_copy_source,source)==GLIMS_STATUS_OK,"capture source planes, attributes and history");
+  char before[65];memcpy(before,source->digest,sizeof before);
+  GlimsLabCopySettings request=settings(TRUE);GlimsStatus status=api->image_convert_layered_lab_copy(engine,source->id,&request,&result->id,&error);
+  CHECK(status==GLIMS_STATUS_OK&&result->id&&result->id!=source->id,"layered copy returns an independent RGB image");
+  if(status!=GLIMS_STATUS_OK)printf("     layered copy status=%d error=%s\n",status,error?error:"(none)");clear_error(&error);
+  CHECK(glims_engine_call(engine,capture_layer_copy_source,source)==GLIMS_STATUS_OK&&!strcmp(before,source->digest),"layered copy leaves source planes, attributes and history unchanged");
+  if(result->id){
+    CHECK(glims_engine_call(engine,capture_layer_copy_result,result)==GLIMS_STATUS_OK,"result has one RGBA float layer");
+    CHECK(result->xres==300&&result->yres==144,"layered copy retains resolution");
+    gboolean pixels=TRUE;
+    for(guint p=0;p<LN;p++){
+      float alpha=(p%4)*85.0f/255.0f;
+      pixels &= fabsf(result->samples[4*p+3]-alpha)<0.00001f;
+      for(guint c=0;c<3;c++)pixels &= fabsf(result->samples[4*p+c]-(alpha?1.0f:0.0f))<0.002f;
+    }
+    CHECK(pixels,"all pixels retain white and straight alpha across row and 256-pixel chunk boundaries");
+    gchar *path=g_build_filename(work,"layered-rgb-copy.xcf",NULL);GlimsImageID reopened=0;
+    status=api->image_save(engine,result->id,path,&error);
+    CHECK(status==GLIMS_STATUS_OK,"save transparent RGB copy as XCF");clear_error(&error);
+    if(status==GLIMS_STATUS_OK){
+      status=api->image_open(engine,path,&reopened,&error);
+      CHECK(status==GLIMS_STATUS_OK&&reopened&&reopened!=result->id,"reopen RGB copy independently");clear_error(&error);
+      if(reopened){
+        LayerCopyScene *saved=g_new0(LayerCopyScene,1);saved->id=reopened;
+        CHECK(glims_engine_call(engine,capture_layer_copy_result,saved)==GLIMS_STATUS_OK&&
+              !memcmp(result->samples,saved->samples,sizeof result->samples)&&saved->xres==300&&saved->yres==144,
+              "XCF retains all straight RGB and alpha samples and resolution");
+        CHECK(api->image_close(engine,reopened)==GLIMS_STATUS_OK,"close reopened RGB copy");g_free(saved);
+      }
+    }
+    g_free(path);
+    CHECK(api->image_close(engine,result->id)==GLIMS_STATUS_OK,"close converted RGB copy");result->id=0;
+  }
+  CHECK(glims_engine_call(engine,reveal_lower_layer,source)==GLIMS_STATUS_OK,"enable translucent lower Lab layer");
+  CHECK(glims_engine_call(engine,capture_layer_copy_source,source)==GLIMS_STATUS_OK,"capture translucent layered source");memcpy(before,source->digest,sizeof before);
+  status=api->image_convert_layered_lab_copy(engine,source->id,&request,&result->id,&error);
+  CHECK(status==GLIMS_STATUS_OK&&result->id,"create RGB copy with two contributing layers");clear_error(&error);
+  CHECK(glims_engine_call(engine,capture_layer_copy_source,source)==GLIMS_STATUS_OK&&!strcmp(before,source->digest),"two-layer copy preserves source and active selection");
+  if(result->id){
+    CHECK(glims_engine_call(engine,capture_layer_copy_result,result)==GLIMS_STATUS_OK,"read two-layer RGB output");
+    gboolean pixels=TRUE;
+    for(guint p=0;p<LN;p++){
+      double upper=(p%4)/3.0,lower=0.5*(1-upper),alpha=upper+lower;
+      double lab[3]={(100*upper+(128*100.0/255)*lower)/alpha,72*lower/alpha,-68*lower/alpha},rgb[3];
+      cmsDoTransform(oracle->reverse,lab,rgb,1);
+      pixels &= fabs(result->samples[4*p+3]-alpha)<0.00001;
+      for(guint c=0;c<3;c++)pixels &= fabs(result->samples[4*p+c]-rgb[c])<0.0003;
+    }
+    CHECK(pixels,"visible layer order and opacity match independent physical-Lab and LCMS oracle");
+    CHECK(api->image_close(engine,result->id)==GLIMS_STATUS_OK,"close two-layer RGB copy");result->id=0;
+  }
+  request.destination_mode=GLIMS_COLOR_MODE_LAB;result->id=123;
+  status=api->image_convert_layered_lab_copy(engine,source->id,&request,&result->id,&error);
+  CHECK(status==GLIMS_STATUS_UNSUPPORTED&&result->id==0,"layered slot refuses unsupported destination without publishing a handle");clear_error(&error);
+  result->id=123;status=api->image_convert_layered_lab_copy(engine,source->id,NULL,&result->id,&error);
+  CHECK(status==GLIMS_STATUS_INVALID_ARGUMENT&&result->id==0,"layered slot rejects missing settings and clears the result");clear_error(&error);
+  request=settings(TRUE);request.struct_size=sizeof request-1;result->id=123;
+  status=api->image_convert_layered_lab_copy(engine,source->id,&request,&result->id,&error);
+  CHECK(status==GLIMS_STATUS_INVALID_ARGUMENT&&result->id==0,"layered slot rejects short settings and clears the result");clear_error(&error);
+  Scene control_scene={.id=source->id,.lab=TRUE};
+  control->scene=&control_scene;control->request=settings(TRUE);control->output=0;control->status=GLIMS_STATUS_FAILED;control->layered=TRUE;
+  CHECK(glims_engine_call(engine,capture_layer_copy_source,source)==GLIMS_STATUS_OK,"capture layered source before cancellation");
+  memcpy(before,source->digest,sizeof before);guint image_count=source->public_images;
+  g_atomic_int_set(&control->paused,0);g_atomic_int_set(&control->release,0);g_atomic_int_set(&control->timed_out,0);g_atomic_int_set(&control->armed,1);
+  GThread *worker=g_thread_new("layered-copy-cancel-test",copy_thread,control);
+  gint64 deadline=g_get_monotonic_time()+10*G_TIME_SPAN_SECOND;
+  while(!g_atomic_int_get(&control->paused)&&g_get_monotonic_time()<deadline)g_usleep(1000);
+  gboolean paused=g_atomic_int_get(&control->paused);CHECK(paused,"layered copy reaches a cooperative cancellation checkpoint");
+  if(paused){
+    CHECK(api->image_close(engine,source->id)==GLIMS_STATUS_BUSY,"layered source cannot close during conversion");
+    CHECK(api->image_undo(engine,source->id)==GLIMS_STATUS_BUSY,"layered source cannot Undo during conversion");
+    GlimsImageID second=123;status=api->image_convert_layered_lab_copy(engine,source->id,&control->request,&second,&error);
+    CHECK(status==GLIMS_STATUS_BUSY&&second==0,"reentrant layered copy refuses without publishing");clear_error(&error);
+    CHECK(api->procedure_cancel(engine)==GLIMS_STATUS_OK,"cancel reaches layered conversion");
+  }
+  g_atomic_int_set(&control->release,1);g_thread_join(worker);g_atomic_int_set(&control->armed,0);
+  CHECK(!g_atomic_int_get(&control->timed_out)&&control->status==GLIMS_STATUS_CANCELLED&&control->output==0,"cancel retires layered copy without publishing");clear_error(&control->error);
+  CHECK(glims_engine_call(engine,capture_layer_copy_source,source)==GLIMS_STATUS_OK&&!strcmp(before,source->digest)&&source->public_images==image_count,
+        "cancel preserves layered source and publishes no image");
+  CHECK(api->procedure_cancel(engine)==GLIMS_STATUS_NOT_FOUND,"layered cancellation releases progress ownership");
+  if(control->output)api->image_close(engine,control->output);
+  control->scene=NULL;control->layered=FALSE;
+done:
+  if(source->id)api->image_close(engine,source->id);
+  g_free(source);g_free(result);
+}
+
 int main(int argc,char **argv) {
   if(argc!=2){fprintf(stderr,"usage: %s WORK\n",argv[0]);return 2;}
   api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);
@@ -689,6 +865,7 @@ int main(int argc,char **argv) {
   linked_cases(engine,argv[1]);
   wide_cases(engine);
   other_modes(engine);
+  layered_lab_copy_case(engine,&oracle,&control,argv[1]);
   api->stop(engine);oracle_close(&oracle);g_free(user);g_free(cache);
   printf("max physical-Lab error %.9g; max linear-RGB error %.9g (fixed limits .03 and .0003 relative)\n",maximum_lab_error,maximum_rgb_error);
   printf("%u Lab copy checks, %u failures\n",checks,failures);return failures?1:0;

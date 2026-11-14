@@ -1740,8 +1740,16 @@ final class EngineSession: @unchecked Sendable {
     /// An independent, unsaved, merged-canvas FLOAT image. The caller owns the
     /// returned image and must close it if document adoption fails. This call
     /// can take time and must run off the main thread.
-    func convertedLabCopy(image: Int32, destination: LabCopyDestination) throws -> Int32 {
-        guard supportsLabConvertedCopy, let convert = api.image_convert_lab_copy else {
+    var supportsLayeredLabConvertedCopy: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_convert_layered_lab_copy),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_convert_layered_lab_copy) else { return false }
+        return api.image_convert_layered_lab_copy != nil
+    }
+
+    func convertedLabCopy(image: Int32, destination: LabCopyDestination, layered: Bool = false) throws -> Int32 {
+        let convert = layered ? (supportsLayeredLabConvertedCopy ? api.image_convert_layered_lab_copy : nil)
+                              : (supportsLabConvertedCopy ? api.image_convert_lab_copy : nil)
+        guard let convert else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                               message: "This image engine does not support converted Lab copies.")
         }
