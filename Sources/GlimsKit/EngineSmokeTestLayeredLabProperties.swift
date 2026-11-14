@@ -238,8 +238,10 @@ extension EngineSmokeTest {
                         window.endSheet(cancelled, returnCode: .alertSecondButtonReturn)
                         EngineSmokeTestHost.pumpEvents(for: 0.1); drain("cancel recorded Lab Fill")
                         try opened.stopRecording()
+                        let settleDeadline = Date().addingTimeInterval(15)
+                        while opened.recorder.pendingCount != 0 && Date() < settleDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
                         let afterCancel = try session.undoInfo(image)
-                        check(opened.recorder.records.isEmpty && beforeCancel == afterCancel &&
+                        check(opened.recorder.pendingCount == 0 && opened.recorder.records.isEmpty && beforeCancel == afterCancel &&
                               pixel(session, image, x: 1, y: 1) == beforeRecording,
                               "cancelling the recorded Lab Fill sheet leaves no record or changes")
                         _ = opened.clearRecording()
@@ -255,7 +257,7 @@ extension EngineSmokeTest {
                         try opened.stopRecording()
                         let deadline = Date().addingTimeInterval(15)
                         while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
-                        if let row = opened.recorder.records.first, case .success(.fillLabLayer) = row.resolution {
+                        if let row = opened.recorder.records.first, case .success(.fillLabLayer(_)) = row.resolution {
                             check(pixel(session, image, x: 1, y: 1) != beforeRecording,
                                   "Lab Fill admitted after recording starts is recorded")
                         } else { check(false, "Lab Fill admitted after recording starts is recorded") }
@@ -268,7 +270,9 @@ extension EngineSmokeTest {
                         try opened.stopRecording()
                         window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
                         EngineSmokeTestHost.pumpEvents(for: 0.1); drain("stop recording with Lab Fill sheet open")
-                        check(opened.recorder.records.isEmpty && pixel(session, image, x: 1, y: 1) != beforeRecording,
+                        let settleDeadline = Date().addingTimeInterval(15)
+                        while opened.recorder.pendingCount != 0 && Date() < settleDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                        check(opened.recorder.pendingCount == 0 && opened.recorder.records.isEmpty && pixel(session, image, x: 1, y: 1) != beforeRecording,
                               "Lab Fill admitted after recording stops is not recorded")
                         opened.undo(); drain("Undo Fill after stopping recording")
                         _ = opened.clearRecording()
@@ -284,9 +288,11 @@ extension EngineSmokeTest {
                     check(!windowController.validateMenuItem(fillMenu), "recorded Lab Fill is disabled with a selection")
                     windowController.fill(nil)
                     EngineSmokeTestHost.pumpEvents(for: 0.1); drain("selected recorded Lab Fill refusal")
+                    let unexpectedSheet = window.attachedSheet
+                    if let unexpectedSheet { window.endSheet(unexpectedSheet, returnCode: .alertSecondButtonReturn) }
                     try opened.stopRecording()
                     let afterRefusal = try session.undoInfo(image)
-                    check(!recordingErrors.isEmpty && window.attachedSheet == nil && opened.recorder.records.isEmpty &&
+                    check(!recordingErrors.isEmpty && unexpectedSheet == nil && opened.recorder.records.isEmpty &&
                           selectedHistory == afterRefusal && pixel(session, image, x: 1, y: 1) == beforeRecording,
                           "recorded Lab Fill refuses an uncaptured selection without changes")
                     _ = opened.clearRecording(); recordingErrors.removeAll()

@@ -46,7 +46,8 @@ final class RecorderLabLayerFillFileTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""version":19"#, with: #""version":20"#).utf8)))
         XCTAssertThrowsError(try RecorderFileCodec.encode(file(binding: RecorderBindingDescription.none)))
         XCTAssertThrowsError(try RecorderFileCodec.encode(file(kind: .channel)))
-        XCTAssertThrowsError(try RecorderFileCodec.encode(file(opacity: 1.1)))
+        let outOfRange = try file(opacity: 1.1)
+        XCTAssertThrowsError(try RecorderFileCodec.encode(outOfRange))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""opacity":0.625"#, with: #""opacity":1.1"#).utf8)))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""red":0.125"#, with: #""red":1.1"#).utf8)))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""space":"srgb""#, with: #""space":"lab""#).utf8)))
@@ -55,7 +56,8 @@ final class RecorderLabLayerFillFileTests: XCTestCase {
 
     func testOpacityMustBeFiniteAndWithinNativeRange() throws {
         for value in [-Double.infinity, -0.01, 1.01, Double.infinity, Double.nan] {
-            XCTAssertThrowsError(try fill(opacity: value).validated(), "opacity \(value) should be rejected")
+            let constructed = try fill(opacity: value)
+            XCTAssertThrowsError(try constructed.validated(), "opacity \(value) should be rejected")
         }
         XCTAssertNoThrow(try fill(opacity: 0).validated())
         XCTAssertNoThrow(try fill(opacity: 1).validated())
