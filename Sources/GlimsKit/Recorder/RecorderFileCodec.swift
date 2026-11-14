@@ -19,6 +19,7 @@ enum RecorderFileCodec {
     static let labSelectionVersion = 15
     static let inkStrokeVersion = 16
     static let labLevelsVersion = 17
+    static let labLayerStrokeVersion = 18
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -95,7 +96,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...labLevelsVersion)
+        let fileVersion = try integer(root.get("version"), range: version...labLayerStrokeVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -128,6 +129,7 @@ enum RecorderFileCodec {
         var hasLabSelectionCommand = false
         var hasInkStrokeCommand = false
         var hasLabLevels = false
+        var hasLabLayerStrokeCommand = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -156,6 +158,7 @@ enum RecorderFileCodec {
                 if case .applyLabCurves = command { hasLabCommand = true }
                 if case .applyLabLevels = command { hasLabCommand = true; hasLabLevels = true }
                 if case .completeLabStroke = command { hasLabCommand = true; hasLabStrokeCommand = true }
+                if case .completeLabLayerStroke = command { hasLabLayerStrokeCommand = true }
                 if case .labSelection = command { hasLabSelectionCommand = true }
                 let binding = try binding(row.get("binding"))
                 try validate(binding, for: command, descriptions: descriptions)
@@ -200,6 +203,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == labLevelsVersion, !hasLabLevels {
             throw RecorderFileError.invalid("Version 17 requires a successful Lab Levels command.")
+        }
+        if fileVersion == labLayerStrokeVersion, !hasLabLayerStrokeCommand {
+            throw RecorderFileError.invalid("Version 18 requires a successful Lab layer stroke.")
         }
         // Each extended version requires its own successful command, exactly
         // as version 2 always required a complete stroke.
@@ -658,6 +664,11 @@ enum RecorderFileCodec {
         case "completeInkStroke":
             guard version >= inkStrokeVersion else { throw RecorderFileError.invalid("An ink stroke needs recording version 16.") }
             return .completeInkStroke(try inkStroke(node, points: &points))
+        case "completeLabLayerStroke":
+            guard version >= labLayerStrokeVersion else { throw RecorderFileError.invalid("A Lab layer stroke needs recording version 18.") }
+            let shared = try inkStroke(node, points: &points)
+            return .completeLabLayerStroke(try RecorderLabLayerStrokeCommand(settings: shared.settings,
+                trace: shared.trace, facts: shared.facts).validated())
         case "completeLabStroke":
             guard version >= labStrokeVersion else { throw RecorderFileError.invalid("A Lab stroke needs recording version 14.") }
             return .completeLabStroke(try labStroke(node, points: &points))
@@ -911,6 +922,10 @@ enum RecorderFileCodec {
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }
+            return
+        case (.completeLabLayerStroke(let stroke), .layer(let id)):
+            guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A Lab layer stroke needs a pixel layer description.") }
+            _ = try stroke.validated()
             return
         case (.completeStroke, .layer(let id)):
             guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A complete stroke needs a pixel layer description.") }

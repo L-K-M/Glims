@@ -27,6 +27,8 @@ extension RecorderFileCodec {
                 case .selectionShape(.polygon(let points), _):
                     guard points.count <= RecorderFileLimits.points - pointCount else { throw RecorderFileError.invalid("Invalid polygon point count.") }
                     pointCount += points.count
+                case .completeLabLayerStroke(let stroke):
+                    pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 case .completeLabStroke(let stroke):
                     pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 case .completeInkStroke(let stroke):
@@ -199,6 +201,7 @@ extension RecorderFileCommand {
         case .completeInkStroke(let value): self = .completeInkStroke(try value.validated())
         case .completeStroke(let value): self = .completeStroke(value)
         case .completeLabStroke(let value): self = .completeLabStroke(try value.validated())
+        case .completeLabLayerStroke(let value): self = .completeLabLayerStroke(try value.validated())
         }
     }
 }

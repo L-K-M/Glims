@@ -26,6 +26,10 @@ extension RecorderFileCodec {
                     pointCount += points.count
                 }
                 fileVersion = max(fileVersion, labSelectionVersion)
+            case .success(.completeLabLayerStroke(let stroke), _):
+                let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                pointCount += count
+                fileVersion = max(fileVersion, labLayerStrokeVersion)
             case .success(.completeLabStroke(let stroke), _):
                 let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -126,6 +130,12 @@ extension RecorderFileCodec {
         if fileVersion == labLevelsVersion, !hasLabLevels {
             throw RecorderFileError.invalid("Version 17 requires a successful Lab Levels command.")
         }
+        if fileVersion == labLayerStrokeVersion, !value.records.contains(where: {
+            if case .success(.completeLabLayerStroke, _) = $0.outcome { return true }
+            return false
+        }) {
+            throw RecorderFileError.invalid("Version 18 requires a successful Lab layer stroke.")
+        }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
         }
@@ -199,6 +209,16 @@ extension RecorderFileCodec {
         let batches = try stroke.trace.batches.map { RecorderJSON.array(try $0.map(labStrokePointJSON)) }
         return .object(["tag": .string("completeInkStroke"), "settings": .object(settings), "facts": facts,
                         "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
+    }
+
+    private static func labLayerStrokeJSON(_ value: RecorderLabLayerStrokeCommand) throws -> RecorderJSON {
+        let stroke = try value.validated()
+        let shared = RecorderInkStrokeCommand(settings: stroke.settings, trace: stroke.trace, facts: stroke.facts)
+        guard case .object(var fields) = try inkStrokeJSON(shared) else {
+            throw RecorderFileError.invalid("Could not encode the Lab layer stroke.")
+        }
+        fields["tag"] = .string("completeLabLayerStroke")
+        return .object(fields)
     }
 
     private static func strokeJSON(_ value: RecorderStrokeCommand) throws -> RecorderJSON {
@@ -348,6 +368,7 @@ extension RecorderFileCodec {
             guard curves.isValid else { throw RecorderFileError.invalid("Invalid ink Curves values.") }
             return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
         case .completeLabStroke(let stroke): return try labStrokeJSON(stroke)
+        case .completeLabLayerStroke(let stroke): return try labLayerStrokeJSON(stroke)
         case .completeInkStroke(let stroke): return try inkStrokeJSON(stroke)
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }
