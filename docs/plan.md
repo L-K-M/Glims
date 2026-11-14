@@ -6040,3 +6040,12 @@ the saved version 15 commands have no layer binding and replay against the
 destination Lab image's root mask. The native operation still validates the
 document on execution. A real-window test covers capture, Save, loaded-file
 replay and Undo. Wider engine checks, CI and release qualification remain open.
+
+### Guarded layered Lab properties (native candidate)
+
+An optional engine entry validates a captured logical layer UUID before
+changing that root's visibility, opacity or name. It refuses while Undo is
+disabled or another Undo group is open; unchanged valid values preserve Undo,
+Redo and dirty state. This entry is a prerequisite for recording those
+property changes; Recorder capture and replay are not yet enabled. Native
+matrix checks and review remain in progress.

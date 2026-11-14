@@ -12,6 +12,7 @@
 #include "core/gimpbrush-private.h"
 #include "core/gimpchannel.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
@@ -275,10 +276,164 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->image_undo_info(engine,id,&identity_after)==GLIMS_STATUS_OK&&
          identity_before.undo_count==identity_after.undo_count&&identity_before.redo_count==identity_after.redo_count,
          "identity reads leave Undo and Redo unchanged");
+   gboolean can_guard_properties=api->struct_size>=offsetof(GlimsEngineAPI,image_change_lab_layer_properties)+
+      sizeof api->image_change_lab_layer_properties && api->image_change_lab_layer_properties;
+   CHECK(can_guard_properties,"identity-guarded Lab layer properties are available");
+   if(can_guard_properties){
+    GlimsImageID isolated=0;error=NULL;
+    gboolean isolated_opened=api->image_open(engine,path,&isolated,&error)==GLIMS_STATUS_OK&&isolated;
+    CHECK(isolated_opened,"guarded property Undo-admission fixture opens");
+    if(error)api->free_string(error);error=NULL;
+    if(isolated_opened){
+     GlimsLayerInfo roots[8],after_roots[8];int32_t root_count=0,after_count=0;
+     GlimsLabLayerIdentity identity={.struct_size=sizeof identity};
+     GlimsOpenImage *opened=glims_lookup_image(engine,isolated);
+     gboolean ready=opened&&api->image_layers(engine,isolated,roots,8,&root_count)==GLIMS_STATUS_OK&&root_count==2&&
+       api->image_lab_layer_identity(engine,isolated,roots[0].id,&identity)==GLIMS_STATUS_OK;
+     CHECK(ready,"guarded property Undo-admission fixture captures a root");
+     if(ready){
+      GlimsLabLayerPropertyChange request={.struct_size=sizeof request,.root=roots[0].id,
+        .change={.struct_size=sizeof(GlimsLayerChange),.properties=GLIMS_LAYER_VISIBLE|GLIMS_LAYER_OPACITY,
+                 .visible=roots[0].visible,.opacity=roots[0].opacity}};
+      memcpy(request.uuid,identity.uuid,16);
+      GlimsUndoInfo before_noop={0},after_noop={0};GlimsImageInfo info_before={0},info_after={0};
+      GlimsLayerChange seed_redo={.struct_size=sizeof seed_redo,.properties=GLIMS_LAYER_OPACITY,.opacity=.625};
+      CHECK(api->layer_change(engine,isolated,roots[0].id,&seed_redo,&error)==GLIMS_STATUS_OK&&
+            api->image_undo(engine,isolated)==GLIMS_STATUS_OK&&
+            api->image_undo_info(engine,isolated,&before_noop)==GLIMS_STATUS_OK&&before_noop.redo_count>0,
+            "guarded property no-op fixture has a real Redo entry");
+      if(error)api->free_string(error);error=NULL;
+      gboolean no_op_ready=api->image_undo_info(engine,isolated,&before_noop)==GLIMS_STATUS_OK&&
+        api->image_info(engine,isolated,&info_before)==GLIMS_STATUS_OK;
+      GlimsStatus no_op=api->image_change_lab_layer_properties(engine,isolated,&request,&error);
+      CHECK(no_op_ready&&no_op==GLIMS_STATUS_OK&&api->image_undo_info(engine,isolated,&after_noop)==GLIMS_STATUS_OK&&
+            api->image_info(engine,isolated,&info_after)==GLIMS_STATUS_OK&&before_noop.undo_count==after_noop.undo_count&&
+            before_noop.redo_count==after_noop.redo_count&&info_before.dirty==info_after.dirty,
+            "unchanged guarded properties preserve Undo, Redo and dirty state");
+      if(error)api->free_string(error);error=NULL;
+      request.change.properties=GLIMS_LAYER_NAME;g_strlcpy(request.change.name,roots[0].name,sizeof request.change.name);
+      no_op=api->image_change_lab_layer_properties(engine,isolated,&request,&error);
+      CHECK(no_op==GLIMS_STATUS_OK&&api->image_undo_info(engine,isolated,&after_noop)==GLIMS_STATUS_OK&&
+            api->image_info(engine,isolated,&info_after)==GLIMS_STATUS_OK&&before_noop.undo_count==after_noop.undo_count&&
+            before_noop.redo_count==after_noop.redo_count&&info_before.dirty==info_after.dirty,
+            "unchanged guarded name preserves Undo, Redo and dirty state");
+      if(error)api->free_string(error);error=NULL;
+      request.change.properties=GLIMS_LAYER_NAME;g_strlcpy(request.change.name,"Must not rename",sizeof request.change.name);
+      CHECK(gimp_image_undo_freeze(opened->image),"guarded property fixture freezes Undo");
+      GlimsStatus frozen=api->image_change_lab_layer_properties(engine,isolated,&request,&error);
+      gboolean frozen_unchanged=api->image_layers(engine,isolated,after_roots,8,&after_count)==GLIMS_STATUS_OK&&
+        after_count==2&&!strcmp(after_roots[0].name,roots[0].name);
+      CHECK(gimp_image_undo_thaw(opened->image),"guarded property fixture thaws Undo");
+      CHECK(frozen==GLIMS_STATUS_BUSY&&frozen_unchanged,"guarded rename refuses frozen Undo without mutation");
+      if(error)api->free_string(error);error=NULL;
+      request.change.properties=GLIMS_LAYER_OPACITY;request.change.opacity=.375;
+      CHECK(gimp_image_undo_group_start(opened->image,GIMP_UNDO_GROUP_ITEM_PROPERTIES,"Fixture"),
+            "guarded property fixture starts an external Undo group");
+      GlimsStatus grouped=api->image_change_lab_layer_properties(engine,isolated,&request,&error);
+      gboolean grouped_unchanged=api->image_layers(engine,isolated,after_roots,8,&after_count)==GLIMS_STATUS_OK&&
+        after_count==2&&fabs(after_roots[0].opacity-roots[0].opacity)<1e-6;
+      CHECK(gimp_image_undo_group_end(opened->image),"guarded property fixture ends its external Undo group");
+      CHECK(grouped==GLIMS_STATUS_BUSY&&grouped_unchanged,"guarded opacity refuses an external Undo group without mutation");
+      if(error)api->free_string(error);error=NULL;
+     }
+     CHECK(api->image_close(engine,isolated)==GLIMS_STATUS_OK,"guarded property Undo-admission fixture closes");
+    }
+    GlimsLabLayerPropertyChange guarded={.struct_size=sizeof guarded,.root=rows[0].id,
+      .change={.struct_size=sizeof(GlimsLayerChange),.properties=GLIMS_LAYER_OPACITY,.opacity=.375}};
+    memcpy(guarded.uuid,first_identity.uuid,16);
+    GlimsUndoInfo before={0},after={0};GlimsLayerInfo changed[8];int32_t changed_count=0;
+    CHECK(api->image_undo_info(engine,id,&before)==GLIMS_STATUS_OK,"guarded properties capture initial history");
+    error=(char*)0x1;
+    CHECK(api->image_change_lab_layer_properties(engine,id,NULL,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&error==NULL,
+          "guarded properties reject null settings and clear the error");
+    GlimsLabLayerPropertyChange invalid=guarded;invalid.struct_size=sizeof invalid-1;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject a short outer prefix");
+    invalid=guarded;invalid.change.struct_size=sizeof invalid.change-1;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject a short change prefix");
+    invalid=guarded;memset(invalid.uuid,0,sizeof invalid.uuid);
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject a zero UUID");
+    invalid=guarded;invalid.root=0;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject a missing root");
+    invalid=guarded;invalid.root=INT32_MAX;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_NOT_FOUND&&error,
+          "guarded properties reject a nonmember root with an explanation");
+    if(error)api->free_string(error);error=NULL;
+    invalid=guarded;invalid.change.opacity=NAN;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject a nonfinite opacity");
+    if(error)api->free_string(error);error=NULL;
+    invalid=guarded;invalid.change.properties=GLIMS_LAYER_MODE;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject unsupported blend modes");
+    if(error)api->free_string(error);error=NULL;
+    invalid=guarded;invalid.change.properties=GLIMS_LAYER_NAME;memset(invalid.change.name,'x',sizeof invalid.change.name);
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject an unterminated name");
+    invalid=guarded;invalid.change.properties=GLIMS_LAYER_NAME;invalid.change.name[0]=(char)0xff;invalid.change.name[1]=0;
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject an invalid UTF-8 name");
+    invalid=guarded;invalid.change.properties=GLIMS_LAYER_VISIBLE;
+    memset(&invalid.change.visible,0xff,sizeof invalid.change.visible);
+    CHECK(api->image_change_lab_layer_properties(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded properties reject invalid boolean representations");
+    engine->busy++;
+    GlimsStatus busy=api->image_change_lab_layer_properties(engine,id,&guarded,&error);
+    engine->busy--;
+    CHECK(busy==GLIMS_STATUS_BUSY,"guarded properties refuse while the engine is busy");
+    if(error)api->free_string(error);error=NULL;
+    GlimsLabLayerPropertyChange stale=guarded;stale.uuid[0]^=0x80;
+    GlimsStatus refused=api->image_change_lab_layer_properties(engine,id,&stale,&error);
+    CHECK(refused==GLIMS_STATUS_INVALID_ARGUMENT&&error,"guarded properties refuse a stale logical UUID");
+    if(error)api->free_string(error);error=NULL;
+    stale=guarded;memcpy(stale.uuid,m.entries[1].group,16);
+    CHECK(api->image_change_lab_layer_properties(engine,id,&stale,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&error,
+          "guarded properties reject another root's UUID");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo_info(engine,id,&after)==GLIMS_STATUS_OK&&before.undo_count==after.undo_count&&
+          before.redo_count==after.redo_count&&api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&
+          changed_count==2&&fabs(changed[0].opacity-rows[0].opacity)<1e-6&&changed[0].visible==rows[0].visible,
+          "refused guarded properties preserve layer state and history");
+    CHECK(api->image_change_lab_layer_properties(engine,id,&guarded,&error)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&changed_count==2&&
+          fabs(changed[0].opacity-.375)<1e-6,"guarded Lab opacity changes the captured root");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&
+          fabs(changed[0].opacity-rows[0].opacity)<1e-6,"one Undo restores guarded Lab opacity");
+    guarded.change.properties=GLIMS_LAYER_VISIBLE;guarded.change.visible=!rows[0].visible;
+    guint8 unaligned[sizeof guarded+10];memset(unaligned,0xa5,sizeof unaligned);memcpy(unaligned+1,&guarded,sizeof guarded);
+    guint32 future_size=sizeof guarded+8;memcpy(unaligned+1,&future_size,sizeof future_size);
+    CHECK(api->image_change_lab_layer_properties(engine,id,(GlimsLabLayerPropertyChange*)(unaligned+1),&error)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&changed[0].visible!=rows[0].visible&&
+          unaligned[0]==0xa5&&!memcmp(unaligned+1+sizeof guarded,"\xa5\xa5\xa5\xa5\xa5\xa5\xa5\xa5",8)&&
+          unaligned[sizeof unaligned-1]==0xa5,
+          "unaligned future-sized guarded visibility changes only the captured root");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&
+          changed[0].visible==rows[0].visible,"one Undo restores guarded Lab visibility");
+    guarded.change.properties=GLIMS_LAYER_NAME;g_strlcpy(guarded.change.name,"Guarded Lab layer",sizeof guarded.change.name);
+    CHECK(api->image_change_lab_layer_properties(engine,id,&guarded,&error)==GLIMS_STATUS_OK&&
+          api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&
+          !strcmp(changed[0].name,"Guarded Lab layer"),"guarded Lab rename changes the captured root");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_layers(engine,id,changed,8,&changed_count)==GLIMS_STATUS_OK&&
+          !strcmp(changed[0].name,rows[0].name),"one Undo restores guarded Lab layer name");
+   }
    GlimsImageID ordinary=0;error=NULL;
    CHECK(api->image_new(engine,2,2,&ordinary,&error)==GLIMS_STATUS_OK&&ordinary,
          "ordinary image fixture for identity refusal opens");if(error)api->free_string(error);error=NULL;
    if(ordinary){
+    if(can_guard_properties){
+     GlimsLabLayerPropertyChange guarded={.struct_size=sizeof guarded,.root=rows[0].id,
+       .change={.struct_size=sizeof(GlimsLayerChange),.properties=GLIMS_LAYER_OPACITY,.opacity=.5}};
+     memcpy(guarded.uuid,first_identity.uuid,16);
+     CHECK(api->image_change_lab_layer_properties(engine,ordinary,&guarded,&error)==GLIMS_STATUS_UNSUPPORTED,
+           "ordinary images reject guarded Lab layer properties");
+     if(error)api->free_string(error);error=NULL;
+    }
     GlimsSampledColor ordinary_sample={1,1,1,1};
     CHECK(can_sample&&api->image_sample_layered_lab(engine,ordinary,0,0,&ordinary_sample,&error)==GLIMS_STATUS_UNSUPPORTED&&
           ordinary_sample.red==0&&ordinary_sample.alpha==0,"ordinary image refuses the layered Lab sampler");
@@ -288,6 +443,21 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
           !memcmp(second_identity.uuid,"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",16),
           "ordinary image refuses a Lab root identity and clears the output");
     CHECK(api->image_close(engine,ordinary)==GLIMS_STATUS_OK,"ordinary identity fixture closes");
+   }
+   if(can_guard_properties){
+    GlimsImageID flat=0;error=NULL;
+    GlimsStatus flat_opened=api->image_new_lab(engine,2,2,GLIMS_COLOR_COMPONENT_U8,&flat,&error);
+    CHECK(flat_opened==GLIMS_STATUS_OK&&flat,"flat Lab fixture for guarded property refusal opens");
+    if(error)api->free_string(error);error=NULL;
+    if(flat){
+     GlimsLabLayerPropertyChange guarded={.struct_size=sizeof guarded,.root=rows[0].id,
+       .change={.struct_size=sizeof(GlimsLayerChange),.properties=GLIMS_LAYER_OPACITY,.opacity=.5}};
+     memcpy(guarded.uuid,first_identity.uuid,16);
+     CHECK(api->image_change_lab_layer_properties(engine,flat,&guarded,&error)==GLIMS_STATUS_UNSUPPORTED,
+           "flat Lab images reject guarded layer properties");
+     if(error)api->free_string(error);error=NULL;
+     CHECK(api->image_close(engine,flat)==GLIMS_STATUS_OK,"flat Lab guarded property fixture closes");
+    }
    }
    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"fill fixture selects its captured root");
    GlimsLabLayerBrushSettings brush={.struct_size=sizeof brush,.root=rows[0].id,
@@ -1564,6 +1734,13 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    if(count==2)CHECK(api->layer_change(engine,id,rows[0].id,&damaged_change,&error)==GLIMS_STATUS_UNSUPPORTED,
                      "layer edits reject damaged storage");
    if(error)api->free_string(error);error=NULL;
+   if(count==2 && api->struct_size>=offsetof(GlimsEngineAPI,image_change_lab_layer_properties)+
+      sizeof api->image_change_lab_layer_properties && api->image_change_lab_layer_properties){
+    GlimsLabLayerPropertyChange guarded={.struct_size=sizeof guarded,.root=rows[0].id,.uuid={1},.change=damaged_change};
+    CHECK(api->image_change_lab_layer_properties(engine,id,&guarded,&error)==GLIMS_STATUS_UNSUPPORTED,
+          "guarded Lab layer properties reject damaged storage");
+    if(error)api->free_string(error);error=NULL;
+   }
    if(count==2)CHECK(api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,NULL,&error)==GLIMS_STATUS_UNSUPPORTED,
                      "duplication rejects damaged storage");
    if(error)api->free_string(error);error=NULL;
