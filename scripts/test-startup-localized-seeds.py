@@ -80,8 +80,8 @@ def main():
 
         # Verify real packaged seeds also discover newly installed plug-ins.
         packaged_labels = {}
-        # The host language uses the host seed, not a localized seed. Select
-        # two other packaged languages even on French or German build hosts.
+        # Exercise two single-language seeds distinct from the host, plus
+        # both exact lists. A list matching the host uses its host seed.
         packaged_languages = (tuple(language for language in ('fr', 'de', 'en')
                                     if language != host_language)[:2] +
                               ('en-US,en', 'de-CH,de,en'))
@@ -95,6 +95,11 @@ def main():
                          if language != host_language)
         _, label = run('different-fallback-order', unshipped, 'fresh fallback oracle', False)
         assert label == 'fresh fallback oracle'
+        # A strict prefix must not select the longer list's registry either.
+        prefix = next(language for language in ('de-CH,de', 'en-US')
+                      if language != host_language)
+        _, label = run('prefix-of-seed-list', prefix, 'fresh prefix oracle', False)
+        assert label == 'fresh prefix oracle'
         shutil.rmtree(startup / 'localized', ignore_errors=True)
         (startup / 'identity').write_text('0.0.0\nincompatible-language\n')
 

@@ -20,9 +20,9 @@ class AppPackagingTests(unittest.TestCase):
         # The bundle runner's native startup probe is replaced by a small
         # fixture here; its real behavior is exercised on packaged engines.
         (self.root / "scripts/test-startup-override-seeds.py").write_text(
-            "print('override seed fixture executed')\n")
+            "if not __debug__: raise SystemExit('assertions disabled')\nprint('override seed fixture executed')\n")
         (self.root / "scripts/test-startup-localized-seeds.py").write_text(
-            "assert __debug__\nprint('preferred-language seed fixture executed')\n")
+            "if not __debug__: raise SystemExit('assertions disabled')\nprint('preferred-language seed fixture executed')\n")
         # If preflight succeeds, stop at Swift. No test should build or modify
         # a real bundle or engine; this marks that the chosen mode reached it.
         tools = self.root / "tools"
