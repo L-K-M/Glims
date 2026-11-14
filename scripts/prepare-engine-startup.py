@@ -124,12 +124,18 @@ def prepare(app):
         # These are exact environment pairs for the packager's complete macOS
         # preferred-language list. Other environments still discover natively.
         for code, locale in OVERRIDE_SEEDS:
-            environment = {'LANGUAGE': code, 'LC_ALL': locale}
-            override_version, actual, registry = capture(f'override-{code}', locale_override=environment)
-            if override_version != version or actual != host_language:
-                raise RuntimeError(f"Engine identity changed while preparing override {code}")
-            key = override_seed_key(actual, environment)
-            write_seed(destination / "overrides" / key, version, actual, registry, environment)
+            for launch_defaults in (False, True):
+                environment = {'LANGUAGE': code, 'LC_ALL': locale}
+                if launch_defaults:
+                    # LaunchServices on macOS can add these two variables even
+                    # when the launching process supplied neither one.
+                    environment.update(LANG='C.UTF-8', LC_CTYPE='C.UTF-8')
+                name = f'override-{code}' + ('-launch' if launch_defaults else '')
+                override_version, actual, registry = capture(name, locale_override=environment)
+                if override_version != version or actual != host_language:
+                    raise RuntimeError(f"Engine identity changed while preparing {name}")
+                key = override_seed_key(actual, environment)
+                write_seed(destination / "overrides" / key, version, actual, registry, environment)
         for language in LOCALIZED_SEEDS:
             if language == host_language:
                 continue
