@@ -6045,6 +6045,29 @@ bundle qualification runs this regression. A matching engine probe took about 3.
 is not an ordinary app-launch measurement or a five-second guarantee. The final
 bundle, four-engine editor checks and review remain open.
 
+### Exact multi-language startup seeds (candidate)
+
+The packaged clean-environment registries now include the complete macOS
+preference lists `en-US,en` and `de-CH,de,en`, in addition to the existing
+single-language seeds. The entire ordered list must match; other lists and
+unmatched locale overrides still use native discovery. The baseline bundle
+reproduces a missing seed for `en-US,en`. The expanded regression compares
+seeded command labels with fresh discovery, exercises a newly installed
+plug-in and checks that a different fallback order does not reuse a seed.
+In fresh-profile direct launches of the same built app, with a clean locale
+environment and an explicit preferred-language list, three `en-US,en` runs
+reached a document in 1.78–1.86 seconds with the seed; two runs with
+access denied took 11.62–12.18 seconds. For `de-CH,de,en`, three seeded runs
+took 1.80–2.37 seconds and two denied runs took 11.78–12.13 seconds. Each run
+verified the complete native language identity and whether the seed was used.
+These measurements are not a guarantee for every Mac.
+The standalone pinned bundle passes 2,268 engine and 3,355 editor checks,
+the override and preferred-language catalog comparisons, and the added
+plug-in and fallback-order checks. Eleven packaging tests pass, including
+failure propagation and protection against Python optimization. Hosted
+review and CI remain in progress. Other language lists and unmatched
+overrides do not have a five-second guarantee.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels
