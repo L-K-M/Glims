@@ -68,9 +68,11 @@ capture. There is no promise of portable pixels across engine versions.
 The trace stores image coordinates, pressure, signed tilt and millisecond
 timestamps, with the accepted batch boundaries intact. Tablet traces also
 retain optional rotation and tangential pressure. It does not infer velocity
-or direction. For the ordinary RGB/gray stroke path, only pixel layers can be bound; painting a mask/channel or using another paint tool produces an
-explicit unsupported row. Pencil, Eraser and Paintbrush strokes use recording
-format version 2; Sponge mouse strokes require version 20, and ordinary
+or direction. For the ordinary RGB stroke path, only pixel layers can be bound; painting a mask/channel or using another paint tool produces an
+explicit unsupported row. Pencil and Paintbrush can record on opaque or
+alpha-bearing RGB layers. Eraser recording requires alpha because an opaque
+Eraser uses the current background color, which is not yet captured.
+Pencil, Eraser and Paintbrush mouse strokes use recording format version 2; Sponge mouse strokes require version 20, and ordinary
 tablet strokes require version 21. Otherwise,
 recordings without successful strokes retain version 1; Channel ▸ To Selection
 raises the file to version 3, a committed Transform-tool layer affine

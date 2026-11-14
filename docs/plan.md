@@ -6233,3 +6233,15 @@ engine sets. The application transport tests check old table prefixes,
 resource identity, failure cleanup and V2 replay batches. Synthetic document
 qualification and physical tablet checks are separate; do not treat this
 candidate as merged or universally hardware-qualified.
+
+
+### Opaque Pencil and Paintbrush recording (candidate)
+
+Ordinary RGB Pencil and Paintbrush capture now includes opaque Background
+layers. A new fingerprint domain distinguishes opaque from alpha-bearing
+targets, so guarded replay cannot cross that boundary; existing alpha-bearing
+and ink fingerprints are unchanged. The live opaque Eraser remains deliberately
+uncaptured because its inherited background color is not in the recording.
+The native candidate tests mouse and V2 tablet capture against independently
+painted pixels, guarded cross-alpha refusal and Undo/Redo. Full app, older
+engine and release qualification remain separate.
