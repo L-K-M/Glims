@@ -22,6 +22,7 @@ enum RecorderFileCodec {
     static let labLayerStrokeVersion = 18
     static let labLayerFillVersion = 19
     static let spongeStrokeVersion = 20
+    static let tabletStrokeVersion = 21
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -98,7 +99,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...spongeStrokeVersion)
+        let fileVersion = try integer(root.get("version"), range: version...tabletStrokeVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -134,6 +135,7 @@ enum RecorderFileCodec {
         var hasLabLayerStrokeCommand = false
         var hasLabLayerFillCommand = false
         var hasSpongeStroke = false
+        var hasTabletStroke = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -146,6 +148,7 @@ enum RecorderFileCodec {
                 row = try Object(node, required: ["ordinal", "outcome", "command", "binding"])
                 let command = try command(row.get("command"), version: fileVersion, points: &points)
                 if case .completeStroke = command { hasStroke = true }
+                if case .completeTabletStroke = command { hasTabletStroke = true }
                 if case .completeStroke(let stroke) = command, stroke.settings.tool.isSponge { hasSpongeStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
@@ -215,6 +218,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == labLayerFillVersion, !hasLabLayerFillCommand {
             throw RecorderFileError.invalid("Version 19 requires a successful Lab layer Fill.")
+        }
+        if fileVersion == tabletStrokeVersion, !hasTabletStroke {
+            throw RecorderFileError.invalid("Version 21 requires a successful tablet stroke.")
         }
         if fileVersion == spongeStrokeVersion, !hasSpongeStroke {
             throw RecorderFileError.invalid("Version 20 requires a successful Sponge stroke.")
@@ -495,6 +501,59 @@ enum RecorderFileCodec {
     }
 
 
+    private static func tabletStroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderTabletStrokeCommand {
+        let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
+        let settings = try Object(value.get("settings"),
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness"])
+        guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))) else {
+            throw RecorderFileError.invalid("Invalid recorded tablet brush tool.")
+        }
+        guard let brush = try RecorderStrokeCommand.Settings(tool: tool, size: number(settings.get("size")),
+                  opacity: number(settings.get("opacity")), red: number(settings.get("red")),
+                  green: number(settings.get("green")), blue: number(settings.get("blue")),
+                  hardness: settings.optional("hardness").map { try number($0) },
+                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase"))) else {
+            throw RecorderFileError.invalid("Invalid recorded tablet brush settings.")
+        }
+        let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
+        let identity = try Object(facts.get("brush"), required: ["name", "isInternal"], optional: ["collection"])
+        let name = try string(identity.get("name"), native: true)
+        let collection = try identity.optional("collection").map { try string($0, native: true) }
+        let fingerprint = try string(facts.get("fingerprint"))
+        guard !name.isEmpty, fingerprint.utf8.count == 64,
+              fingerprint.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw RecorderFileError.invalid("Invalid recorded brush identity or fingerprint.")
+        }
+        let capture = EngineSession.StrokeCaptureFacts(brush: .init(name: name, collection: collection,
+            isInternal: try bool(identity.get("isInternal"))), fingerprint: fingerprint)
+
+        guard RecorderFileLimits.points - points >= 1 else { throw RecorderFileError.invalid("Invalid tablet stroke point count.") }
+        let batchLimit = min(RecorderTabletStrokeAccumulator.maximumPoints - 1, RecorderFileLimits.points - points - 1)
+        let batchNodes = try array(value.get("batches"), maximum: batchLimit)
+        var count = 1
+        for batch in batchNodes {
+            let samples = try array(batch, maximum: 4096)
+            guard !samples.isEmpty, samples.count <= 4096, samples.count <= RecorderFileLimits.points - points - count else {
+                throw RecorderFileError.invalid("Invalid tablet stroke batch or point count.")
+            }
+            count += samples.count
+        }
+        guard count <= RecorderTabletStrokeAccumulator.maximumPoints else {
+            throw RecorderFileError.invalid("Invalid tablet stroke point count.")
+        }
+
+        let first = try labStrokePoint(value.get("first"))
+        let batches = try batchNodes.map { batch -> [RecorderTabletStrokeTrace.Point] in
+            try array(batch, maximum: 4096).map(labStrokePoint)
+        }
+        let trace = RecorderTabletStrokeTrace(first: first, batches: batches)
+        let consumed = try RecorderFileLimits.tabletStrokePointCount(trace, remaining: RecorderFileLimits.points - points)
+        let stroke = try RecorderTabletStrokeCommand(settings: brush, trace: trace, facts: capture).validated()
+        points += consumed
+        return stroke
+    }
+
+
     private static func command(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderFileCommand {
         switch try tag(node) {
         case "selectionShape":
@@ -695,6 +754,9 @@ enum RecorderFileCodec {
         case "labSelectCommand":
             guard version >= labSelectionVersion else { throw RecorderFileError.invalid("A Lab selection needs recording version 15.") }
             return .labSelection(try labSelectCommand(node))
+        case "completeTabletStroke":
+            guard version >= tabletStrokeVersion else { throw RecorderFileError.invalid("A tablet stroke needs recording version 21.") }
+            return .completeTabletStroke(try tabletStroke(node, points: &points))
         case "completeStroke":
             guard version >= strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
             let value = try stroke(node, points: &points)
@@ -950,6 +1012,10 @@ enum RecorderFileCodec {
             return
         case (.completeLabLayerStroke(let stroke), .layer(let id)):
             guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A Lab layer stroke needs a pixel layer description.") }
+            _ = try stroke.validated()
+            return
+        case (.completeTabletStroke(let stroke), .layer(let id)):
+            guard descriptions[id]?.kind == .pixel else { throw RecorderFileError.invalid("A tablet stroke needs a pixel layer description.") }
             _ = try stroke.validated()
             return
         case (.completeStroke, .layer(let id)):

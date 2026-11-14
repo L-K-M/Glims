@@ -560,6 +560,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (native guides)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-tablet-stroke" {
+                try exerciseRecorderTabletStroke(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder-tablet-stroke)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-sponge-ui" {
                 try exerciseRecorderSpongeUI(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder-sponge-ui)" : "FAILED: \(failures) failures")

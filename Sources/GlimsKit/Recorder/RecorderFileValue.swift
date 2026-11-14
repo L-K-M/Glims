@@ -335,10 +335,11 @@ enum RecorderFileCommand: Equatable {
     /// binding; the command carries no native filter/effect identity.
     case applyBrightnessContrast(RecorderBrightnessContrastValue)
     case completeStroke(RecorderStrokeCommand)
+    case completeTabletStroke(RecorderTabletStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

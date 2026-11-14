@@ -26,6 +26,8 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
         var beginDrawable: Int32 = 0
         var beginBrush: GlimsBrushSettings?
         var beginPacket: [GlimsStrokeSampleV2] = []
+        var continuedPackets: [[GlimsStrokeSampleV2]] = []
+        var continueStatus = GLIMS_STATUS_OK
         var beginExpectedFingerprint: String?
         var factsBrushName: String?
         var factsBrushCollection: String??
@@ -112,7 +114,16 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
             handle?.pointee = p.returnedResource
             return p.clearAndMaybeFail(error) == GLIMS_STATUS_OK ? p.resolveStatus : p.status
         }
-        api.stroke_continue_v2 = { _, _, _, _ in GLIMS_STATUS_OK }
+        api.stroke_continue_v2 = { engine, stroke, packet, error in
+            let p = Producer.from(engine)
+            p.calls.append("continue:\(stroke)")
+            let first = p.beginPacket
+            p.capturePacket(packet)
+            p.continuedPackets.append(p.beginPacket)
+            p.beginPacket = first
+            error?.pointee = nil
+            return p.continueStatus
+        }
         api.stroke_end = { engine, stroke in
             let p = Producer.from(engine); p.calls.append("end:\(stroke)"); return GLIMS_STATUS_OK
         }
@@ -248,4 +259,31 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
             XCTAssertEqual(p.freed, 4)
         }
     }
+    func testReplaySendsV2BatchesAndEndsAfterSuccessOrFailure() throws {
+        let identity = EngineSession.ResourceIdentity(name: "Expected", collection: nil, isInternal: false)
+        let fingerprint = String(repeating: "b", count: 64)
+        let first = try RecorderTabletStrokeTrace.Point(native: sample(rotation: 0.25, tangent: -0.5))
+        let laterNative = EngineSession.StrokeSampleV2(point: .init(x: 15, y: 18, timeMilliseconds: 18),
+                                                       rotationTurns: 0.75, tangentialPressure: 0.5)
+        let later = try RecorderTabletStrokeTrace.Point(native: laterNative)
+        let settings = try XCTUnwrap(RecorderStrokeCommand.Settings(EngineSession.Brush()))
+        let command = RecorderTabletStrokeCommand(settings: settings, trace: .init(first: first, batches: [[later]]),
+                                                   facts: .init(brush: identity, fingerprint: fingerprint))
+        for status in [GLIMS_STATUS_OK, GLIMS_STATUS_FAILED] {
+            try withSession { session, p in
+                p.factsBrushName = identity.name; p.factsFingerprint = fingerprint; p.continueStatus = status
+                if status == GLIMS_STATUS_OK {
+                    try command.apply(session: session, image: 9, layer: 4)
+                } else {
+                    self.assertStatus(GLIMS_STATUS_FAILED) { try command.apply(session: session, image: 9, layer: 4) }
+                }
+                XCTAssertEqual(p.calls, ["resolve", "tablet_capture_begin", "continue:73", "end:73"])
+                XCTAssertEqual(p.beginExpectedFingerprint, fingerprint)
+                XCTAssertEqual(p.beginPacket.first?.rotation_turns, 0.25)
+                XCTAssertEqual(p.continuedPackets.first?.first?.rotation_turns, 0.75)
+                XCTAssertEqual(p.continuedPackets.first?.first?.tangential_pressure, 0.5)
+            }
+        }
+    }
+
 }

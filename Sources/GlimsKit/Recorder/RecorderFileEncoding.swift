@@ -47,6 +47,9 @@ extension RecorderFileCodec {
                     }
                     inkIdentities[symbol] = identity
                 }
+            case .success(.completeTabletStroke(let stroke), _):
+                pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                fileVersion = max(fileVersion, tabletStrokeVersion)
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -219,6 +222,25 @@ extension RecorderFileCodec {
                         "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
     }
 
+    private static func tabletStrokeJSON(_ value: RecorderTabletStrokeCommand) throws -> RecorderJSON {
+        let stroke = try value.validated()
+        _ = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points)
+        let brush = stroke.settings
+        var settings: [String: RecorderJSON] = [
+            "tool": .string(brush.tool.rawValue), "size": try d(brush.size), "opacity": try d(brush.opacity),
+            "red": try d(brush.red), "green": try d(brush.green), "blue": try d(brush.blue),
+            "pressureSize": .bool(brush.pressureSize), "antiErase": .bool(brush.antiErase),
+        ]
+        if let hardness = brush.hardness { settings["hardness"] = try d(hardness) }
+        let identity = stroke.facts.brush
+        var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
+        if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
+        let facts = RecorderJSON.object(["brush": .object(brushIdentity), "fingerprint": .string(stroke.facts.fingerprint)])
+        let batches = try stroke.trace.batches.map { RecorderJSON.array(try $0.map(labStrokePointJSON)) }
+        return .object(["tag": .string("completeTabletStroke"), "settings": .object(settings), "facts": facts,
+                        "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
+    }
+
     private static func labLayerStrokeJSON(_ value: RecorderLabLayerStrokeCommand) throws -> RecorderJSON {
         let stroke = try value.validated()
         let shared = RecorderInkStrokeCommand(settings: stroke.settings, trace: stroke.trace, facts: stroke.facts)
@@ -382,6 +404,7 @@ extension RecorderFileCodec {
             return .object(["tag": .string("fillLabLayer"), "color": try colorJSON(value.color), "opacity": try d(value.opacity)])
         case .completeInkStroke(let stroke): return try inkStrokeJSON(stroke)
         case .completeStroke(let stroke): return try strokeJSON(stroke)
+        case .completeTabletStroke(let stroke): return try tabletStrokeJSON(stroke)
         }
     }
     private static func descriptionKindJSON(_ value: RecorderTargetDescription.Kind) -> RecorderJSON {
