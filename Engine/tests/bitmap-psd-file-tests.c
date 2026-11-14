@@ -41,7 +41,9 @@ static bool content_is(const char *path, const char *expected)
 static bool no_temporary(const char *dir)
 {
   DIR *d = opendir(dir); if (!d) return false; bool clean = true; struct dirent *entry;
-  while ((entry = readdir(d))) if (strncmp(entry->d_name, ".glims-cmyk-", 12) == 0) clean = false;
+  while ((entry = readdir(d)))
+    if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..") &&
+        strcmp(entry->d_name, "output.psd") && strcmp(entry->d_name, "link.psd")) clean = false;
   closedir(d); return clean;
 }
 int main(void)
@@ -55,6 +57,8 @@ int main(void)
   if (fwrite("original", 1, 8, f) != 8 || fclose(f)) return 2;
   if (chmod(path, 0640)) return 2;
   GlimsBitmapPsdSpec spec = {9,2}; Fixture fixture = {0}; int err = 99;
+  CHECK(glims_bitmap_psd_write_file(&spec, read_pixels, &fixture, NULL, NULL, NULL, &err) == GLIMS_BITMAP_PSD_FILE_INVALID &&
+        err == 0 && fixture.calls == 0 && content_is(path,"original"), "null path is refused before reading pixels");
   fixture.bad = true;
   CHECK(glims_bitmap_psd_write_file(&spec, read_pixels, &fixture, path, NULL, NULL, &err) == GLIMS_BITMAP_PSD_FILE_INVALID_PIXEL &&
         content_is(path,"original") && no_temporary(folder), "nonbinary late pixel preserves existing target");
