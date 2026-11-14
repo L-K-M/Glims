@@ -579,8 +579,10 @@ glims_image_open (GlimsEngine   *engine,
 
   g_clear_error (&gerror);
 
-  GlimsStatus restore_status = glims_foreign_effects_load (image, file, mime_type,
-                                                          source_info, spool, compressed_source, error);
+  GlimsStatus restore_status = glims_duotone_preserve_import (image, error);
+  if (restore_status == GLIMS_STATUS_OK)
+    restore_status = glims_foreign_effects_load (image, file, mime_type,
+                                                source_info, spool, compressed_source, error);
   if (spool)
     {
       GError *close_error = NULL;

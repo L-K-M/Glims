@@ -6135,3 +6135,15 @@ Optimized and sanitized core tests include independent rational patterns,
 one-pixel rows and the 4096-pixel chunk boundary; pinned native output,
 cancellation and focused Swift transport tests pass. Four-engine, actual
 window, Batch, full editor, hosted review and integration remain open.
+
+### Opaque Duotone metadata across XCF (candidate)
+
+A synthetic Duotone PSD reproduced loss of the opaque color-mode block on XCF
+save. The candidate promotes GIMP's grayscale import tag to a persistent tag
+before adoption, retaining exact bytes without an Undo step; an oversized new
+block is refused. A synthetic envelope and a Photoshop CC 2018 Duotone fixture
+pass PSD import, XCF save, reopen and resave with exact block bytes on the
+four supported engines. This is metadata preservation only, not Duotone ink
+editing, a color preview or Duotone PSD export. Full editor qualification and
+review remain open. See
+[duotone-preservation.md](duotone-preservation.md).

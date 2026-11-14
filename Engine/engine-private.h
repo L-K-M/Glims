@@ -24,6 +24,9 @@
 #define GLIMS_TYPE_PROGRESS (glims_progress_get_type ())
 G_DECLARE_FINAL_TYPE (GlimsProgress, glims_progress, GLIMS, PROGRESS, GObject)
 
+/* Preserve GIMP's opaque PSD Duotone metadata for XCF round trips. */
+GlimsStatus glims_duotone_preserve_import (GimpImage *image, char **error);
+
 /* Flat binary Bitmap output from an ordinary image. */
 GlimsStatus glims_image_export_bitmap_psd (GlimsEngine *engine, GlimsImageID image,
                                            const char *path, char **error);
