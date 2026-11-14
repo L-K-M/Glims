@@ -5311,6 +5311,57 @@ api_image_fill_lab_layer_srgb (GlimsEngine *engine, GlimsImageID image,
     image_fill_lab_layer_srgb_on_engine, &args, error);
 }
 
+typedef struct {
+  GlimsImageID image;
+  GlimsResourceID brush;
+  GlimsLabLayerBrushSettings settings;
+  const GlimsStrokePacketV2 *packet;
+  GlimsStrokeID stroke;
+  char **error;
+} LabLayerStrokeArgs;
+
+static GlimsStatus
+stroke_begin_lab_layer_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabLayerStrokeArgs *args = data;
+  return glims_stroke_begin_lab_layer (engine, args->image, args->brush,
+                                      &args->settings, args->packet, &args->stroke, args->error);
+}
+
+static GlimsStatus
+api_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image, GlimsResourceID brush,
+                            const GlimsLabLayerBrushSettings *settings,
+                            const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  if (!out || !settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  uint32_t size;
+  memcpy (&size, settings, sizeof size);
+  if (size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabLayerStrokeArgs args = { .image = image, .brush = brush, .packet = packet, .error = error };
+  memcpy (&args.settings, settings, sizeof args.settings);
+  GlimsStatus status = glims_facade_call (engine, GLIMS_FACADE_OP_stroke_begin_lab_layer,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    stroke_begin_lab_layer_on_engine, &args, error);
+  if (status == GLIMS_STATUS_OK) *out = args.stroke;
+  return status;
+}
+
+static GlimsStatus
+stroke_cancel_lab_layer_on_engine (GlimsEngine *engine, gpointer data)
+{
+  return glims_stroke_cancel_lab_layer (engine, *(GlimsStrokeID *) data);
+}
+
+static GlimsStatus
+api_stroke_cancel_lab_layer (GlimsEngine *engine, GlimsStrokeID stroke)
+{
+  return glims_facade_call (engine, GLIMS_FACADE_OP_stroke_cancel_lab_layer,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_STROKE, stroke, { 0, 0 } },
+    stroke_cancel_lab_layer_on_engine, &stroke, NULL);
+}
+
 static const GlimsEngineAPI api_v1 = {
   .api_version = GLIMS_ENGINE_API_VERSION,
   .struct_size = sizeof (GlimsEngineAPI),

@@ -22,6 +22,8 @@ typedef struct {
   double lightness, a, b, opacity;
   GimpDrawable *planes[4];
   GeglBuffer *coverage, *selection;
+  GeglRectangle pending_damage;
+  gboolean has_damage;
   const char *failure;
 } GlimsLabLayerBrushCore;
 typedef struct { GimpBrushCoreClass parent; } GlimsLabLayerBrushCoreClass;
@@ -73,6 +75,18 @@ glims_lab_layer_brush_core_error (GimpPaintCore *core)
   if (!core || !G_TYPE_CHECK_INSTANCE_TYPE (core, glims_lab_layer_brush_core_get_type ()))
     return "This is not a layered Lab brush stroke.";
   return ((GlimsLabLayerBrushCore *) core)->failure;
+}
+
+gboolean
+glims_lab_layer_brush_core_take_damage (GimpPaintCore *core, GeglRectangle *damage)
+{
+  if (!core || !damage || !G_TYPE_CHECK_INSTANCE_TYPE (core, glims_lab_layer_brush_core_get_type ()))
+    return FALSE;
+  GlimsLabLayerBrushCore *self = (GlimsLabLayerBrushCore *) core;
+  if (!self->has_damage) return FALSE;
+  *damage = self->pending_damage;
+  self->has_damage = FALSE;
+  return TRUE;
 }
 
 /* All planes must stay attached to the same full-size canvas. Their ordering
@@ -205,6 +219,9 @@ dab (GlimsLabLayerBrushCore *self, const GimpCoords *coords, const GimpTempBuf *
         {
           for (unsigned i = 0; i < 4; i++)
             gegl_buffer_copy (candidate[i], &area, GEGL_ABYSS_NONE, live[i], &area);
+          if (self->has_damage)
+            gegl_rectangle_bounding_box (&self->pending_damage, &self->pending_damage, &area);
+          else { self->pending_damage = area; self->has_damage = TRUE; }
           if (core->x1 == core->x2 || core->y1 == core->y2)
             { core->x1 = area.x; core->y1 = area.y; core->x2 = area.x + area.width; core->y2 = area.y + area.height; }
           else
