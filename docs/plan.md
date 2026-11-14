@@ -6082,3 +6082,6 @@ An additional native candidate reads each displayed logical Lab layer and its
 UUID together on the engine thread. This is a prerequisite for retaining a
 row's identity while the palette defers reloads; it does not itself enable
 live recording. Cross-engine checks, review and integration remain pending.
+The candidate Swift bridge reads the bounded snapshot in one call and rejects
+incomplete counts, duplicate or zero identities and invalid layer IDs. Older
+engine API prefixes refuse this capability without reading past their bounds.

@@ -65,6 +65,20 @@ extension EngineSmokeTest {
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,
               "document does not expose private Lab planes as channels")
         check(opened.layers.count == 2, "document shows two logical layers")
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAB_LAYER_SNAPSHOT"] == "1" {
+            check(session.supportsLabLayerSnapshot, "test adapter supports atomic Lab layer snapshots")
+            if session.supportsLabLayerSnapshot {
+                let snapshot = try session.labLayerSnapshot(image)
+                check(snapshot.map(\.layer) == opened.layers,
+                      "Swift snapshot returns the displayed Lab layer rows")
+                let identities = try snapshot.map { try session.labLayerPropertyTarget(image, root: $0.layer.id).uuid }
+                check(snapshot.map(\.identity) == identities && Set(identities).count == snapshot.count,
+                      "Swift snapshot pairs each displayed Lab row with its native UUID")
+            }
+        } else if !session.supportsLabLayerSnapshot {
+            check((try? session.labLayerSnapshot(image)) == nil,
+                  "an older engine refuses atomic Lab layer snapshots safely")
+        }
         check(opened.toolIsAvailable(.paintbrush) == opened.storage.allowsLabLayerBrush && opened.toolIsAvailable(.zoom),
               "Brush follows its layered Lab capability while zoom remains available")
         check(opened.toolIsAvailable(.eyedropper) == session.supportsLayeredLabSampling,
