@@ -1,9 +1,10 @@
-/* Local-file transaction for the private native CMYK PSD serializer.
- * Pure C11/POSIX. No GLib/GIMP dependency.
+/* Shared local-file transaction for the private CMYK and Bitmap PSD
+ * serializers. Pure C11/POSIX; no GLib/GIMP dependency.
  */
 #define _POSIX_C_SOURCE 200809L
 
 #include "cmyk-psd-file.h"
+#include "bitmap-psd-file.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -344,25 +345,19 @@ check_existing_target (int dirfd, const char *basename, mode_t *out_mode,
   return GLIMS_CMYK_PSD_FILE_OK;
 }
 
-GlimsCmykPsdFileStatus
-glims_cmyk_psd_write_file (const GlimsCmykPsdSpec *spec,
-                           GlimsCmykPsdRead read, void *read_context,
-                           const char *path, GlimsCmykPsdContinue proceed,
-                           void *proceed_context, int *os_error)
+typedef GlimsCmykPsdStatus (*PsdSerialize) (void *context, GlimsCmykPsdWrite write,
+                                           void *write_context);
+
+/* Both serializers use the same proven destination transaction. Each public
+ * wrapper validates its own immutable spec and source before entering. */
+static GlimsCmykPsdFileStatus
+psd_write_file (const char *path, GlimsCmykPsdContinue proceed,
+                void *proceed_context, PsdSerialize serialize,
+                void *serialize_context, int *os_error)
 {
   if (os_error != NULL)
     *os_error = 0;
-
-  /* Preflight validation before any output/temp creation/source callbacks.
-   * Absolute nonempty regular filename syntax validation. */
-  if (spec == NULL || read == NULL || path == NULL)
-    return GLIMS_CMYK_PSD_FILE_INVALID;
-  if (!is_absolute_nonempty_filename (path))
-    return GLIMS_CMYK_PSD_FILE_INVALID;
-
-  uint64_t psize = 0;
-  GlimsCmykPsdStatus psz = glims_cmyk_psd_size (spec, &psize);
-  if (psz != GLIMS_CMYK_PSD_OK)
+  if (!serialize || !is_absolute_nonempty_filename (path))
     return GLIMS_CMYK_PSD_FILE_INVALID;
 
   const char *slash = strrchr (path, '/');
@@ -436,7 +431,7 @@ glims_cmyk_psd_write_file (const GlimsCmykPsdSpec *spec,
   wctx.io_failed = false;
   wctx.io_errno = 0;
 
-  GlimsCmykPsdStatus cst = glims_cmyk_psd_write (spec, read, read_context, write_callback, &wctx);
+  GlimsCmykPsdStatus cst = serialize (serialize_context, write_callback, &wctx);
 
   if (cst == GLIMS_CMYK_PSD_OK)
     {
@@ -598,4 +593,82 @@ glims_cmyk_psd_write_file (const GlimsCmykPsdSpec *spec,
     }
 
   return status;
+}
+
+
+typedef struct {
+  const GlimsCmykPsdSpec *spec;
+  GlimsCmykPsdRead read;
+  void *read_context;
+} CmykPsdSource;
+
+static GlimsCmykPsdStatus
+serialize_cmyk (void *context, GlimsCmykPsdWrite write, void *write_context)
+{
+  CmykPsdSource *source = context;
+  return glims_cmyk_psd_write (source->spec, source->read, source->read_context,
+                               write, write_context);
+}
+
+GlimsCmykPsdFileStatus
+glims_cmyk_psd_write_file (const GlimsCmykPsdSpec *spec,
+                           GlimsCmykPsdRead read, void *read_context,
+                           const char *path, GlimsCmykPsdContinue proceed,
+                           void *proceed_context, int *os_error)
+{
+  uint64_t size;
+  if (os_error) *os_error = 0;
+  if (!read || !is_absolute_nonempty_filename (path) ||
+      glims_cmyk_psd_size (spec, &size) != GLIMS_CMYK_PSD_OK)
+    return GLIMS_CMYK_PSD_FILE_INVALID;
+  CmykPsdSource source = { spec, read, read_context };
+  return psd_write_file (path, proceed, proceed_context, serialize_cmyk, &source, os_error);
+}
+
+typedef struct {
+  const GlimsBitmapPsdSpec *spec;
+  GlimsBitmapPsdRead read;
+  void *read_context;
+  bool invalid_pixel;
+} BitmapPsdSource;
+
+static GlimsCmykPsdStatus
+serialize_bitmap (void *context, GlimsCmykPsdWrite write, void *write_context)
+{
+  BitmapPsdSource *source = context;
+  GlimsBitmapPsdStatus status = glims_bitmap_psd_write (source->spec, source->read,
+      source->read_context, write, write_context);
+  switch (status)
+    {
+    case GLIMS_BITMAP_PSD_OK: return GLIMS_CMYK_PSD_OK;
+    case GLIMS_BITMAP_PSD_READ_FAILED: return GLIMS_CMYK_PSD_READ_FAILED;
+    case GLIMS_BITMAP_PSD_WRITE_FAILED: return GLIMS_CMYK_PSD_WRITE_FAILED;
+    case GLIMS_BITMAP_PSD_INVALID_PIXEL: source->invalid_pixel = true; return GLIMS_CMYK_PSD_INVALID;
+    case GLIMS_BITMAP_PSD_INVALID: default: return GLIMS_CMYK_PSD_INVALID;
+    }
+}
+
+GlimsBitmapPsdFileStatus
+glims_bitmap_psd_write_file (const GlimsBitmapPsdSpec *spec,
+                             GlimsBitmapPsdRead read, void *read_context,
+                             const char *path, GlimsBitmapPsdContinue proceed,
+                             void *proceed_context, int *os_error)
+{
+  uint64_t size;
+  if (os_error) *os_error = 0;
+  if (!read || !is_absolute_nonempty_filename (path) ||
+      glims_bitmap_psd_size (spec, &size) != GLIMS_BITMAP_PSD_OK)
+    return GLIMS_BITMAP_PSD_FILE_INVALID;
+  BitmapPsdSource source = { spec, read, read_context, false };
+  GlimsCmykPsdFileStatus status = psd_write_file (path, proceed, proceed_context,
+                                                 serialize_bitmap, &source, os_error);
+  if (source.invalid_pixel) return GLIMS_BITMAP_PSD_FILE_INVALID_PIXEL;
+  switch (status)
+    {
+    case GLIMS_CMYK_PSD_FILE_OK: return GLIMS_BITMAP_PSD_FILE_OK;
+    case GLIMS_CMYK_PSD_FILE_READ_FAILED: return GLIMS_BITMAP_PSD_FILE_READ_FAILED;
+    case GLIMS_CMYK_PSD_FILE_IO_FAILED: return GLIMS_BITMAP_PSD_FILE_IO_FAILED;
+    case GLIMS_CMYK_PSD_FILE_CANCELLED: return GLIMS_BITMAP_PSD_FILE_CANCELLED;
+    case GLIMS_CMYK_PSD_FILE_INVALID: default: return GLIMS_BITMAP_PSD_FILE_INVALID;
+    }
 }
