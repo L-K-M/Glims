@@ -27,6 +27,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     private static let dragType = NSPasteboard.PasteboardType("ch.lkmc.Glims.layerID")
 
     private weak var document: ImageDocument?
+    private var recorderObserver: UUID?
+    private var recorderActivity: (recording: Bool, replaying: Bool)?
     private let outline = NSOutlineView()
     private var reloading = false
     private var snapshot = LayerListSnapshot(document: nil, layers: [])
@@ -37,15 +39,20 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         weak var document: ImageDocument?
         let owner: ObjectIdentifier
         let layer: Int32
+        let labIdentity: UUID?
         init(_ document: ImageDocument, _ layer: Int32) {
             self.document = document; owner = ObjectIdentifier(document); self.layer = layer
+            labIdentity = document.labLayerIdentities[layer]
         }
         func matches(_ other: OpacityTarget?) -> Bool {
             guard let other else { return false }
-            return document === other.document && other.owner == owner && other.layer == layer
+            return document === other.document && other.owner == owner && other.layer == layer && other.labIdentity == labIdentity
         }
         var isAvailable: Bool {
             guard let document else { return false }
+            if document.storage.layout == .layeredLab && document.recorder.isRecording {
+                guard let labIdentity, document.labLayerIdentities[layer] == labIdentity else { return false }
+            }
             return document.acceptsLayerProperties && !document.targetCommandIsPending
                 && document.layers.contains { $0.id == layer }
         }
@@ -303,7 +310,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         opacityWrite = token
         opacityWriteTarget = captured
         opacityControl.isEnabled = false
-        owner.changeLayer(captured.layer, .init(opacity: opacity)) { [weak self] _ in
+        owner.changeLayer(captured.layer, .init(opacity: opacity), labIdentity: captured.labIdentity) { [weak self] _ in
             guard let self, self.opacityWrite == token else { return }
             self.opacityWrite = nil
             self.opacityWriteTarget = nil
@@ -820,11 +827,26 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             finishOpacityField()
             // A field-end callback can itself retarget the palette.
             guard generation == targetGeneration else { return }
+            if let recorderObserver { document?.removeRecorderObserver(recorderObserver) }
+            recorderObserver = nil
+            recorderActivity = target.map { ($0.recorder.isRecording, $0.recorder.isReplaying) }
             lastSyncedSelectionIDs = []
             selectedEffect = nil
             effectSelectionIsNew = false
         }
         document = target
+        if recorderObserver == nil, let target {
+            recorderObserver = target.addRecorderObserver { [weak self, weak target] in
+                guard let self, let target, self.document === target else { return }
+                let activity = (target.recorder.isRecording, target.recorder.isReplaying)
+                guard self.recorderActivity?.recording != activity.0 || self.recorderActivity?.replaying != activity.1 else { return }
+                self.recorderActivity = activity
+                DispatchQueue.main.async { [weak self, weak target] in
+                    guard let self, let target, self.document === target else { return }
+                    self.reload()
+                }
+            }
+        }
         reload()
     }
 
@@ -873,7 +895,8 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         displayedDocument = shown
 
         snapshot = LayerListSnapshot(document: document, layers: document?.layers ?? [],
-                                     effects: document?.layerEffects ?? [:])
+                                     effects: document?.layerEffects ?? [:],
+                                     labIdentities: document?.labLayerIdentities ?? [:])
         outline.reloadData()
         for id in expandedGroupIDs {
             if let node = snapshot.tree.nodesByID[id] { outline.expandItem(node) }
@@ -1041,7 +1064,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
               (document.acceptsEdits || change.isLimitedLayerPropertyChange),
               (change.name == nil || document.acceptsLayerRename),
               LayerRowView.canChange(context, document: document, layers: document.layers) else { return false }
-        document.changeLayer(context.layerID, change)
+        if document.storage.layout == .layeredLab && document.recorder.isRecording {
+            guard let identity = context.labIdentity, document.labLayerIdentities[context.layerID] == identity else { return false }
+        }
+        document.changeLayer(context.layerID, change, labIdentity: context.labIdentity)
         return true
     }
 
@@ -1112,13 +1138,16 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // The native floating layer shows as a temporary row, labelled so.
         let isFloating = document.floatingState.isActive && document.floatingState.floating == layer.id
         let rowView = LayerRowView(layer: layer,
-                                   context: LayerRowView.Context(document: document, layerID: layer.id),
+                                   context: LayerRowView.Context(document: document, layerID: layer.id,
+                                                                 labIdentity: snapshot.labIdentity(for: layer.id)),
                                    details: Self.detailsSuffix(for: layer, floating: isFloating),
                                    locks: locks, mask: mask, activeTarget: target) { [weak self] context, change in
             self?.commitLayerChange(context, change) ?? false
         }
-        rowView.checkbox.isEnabled = document.acceptsLayerProperties
-        rowView.nameField.isEditable = document.acceptsLayerRename
+        let canRecordRow = document.storage.layout != .layeredLab || !document.recorder.isRecording ||
+            (rowView.context.labIdentity != nil && rowView.context.labIdentity == document.labLayerIdentities[layer.id])
+        rowView.checkbox.isEnabled = document.acceptsLayerProperties && canRecordRow
+        rowView.nameField.isEditable = document.acceptsLayerRename && canRecordRow
         rowView.layerThumb.isEnabled = document.acceptsLayerSelection
         rowView.maskThumb?.isEnabled = document.acceptsEdits
         rowView.onThumbnail = { [weak self, weak rowView] pick, option in

@@ -544,6 +544,18 @@ final class EngineSession: @unchecked Sendable {
         return api.image_fill_lab_layer_srgb_empty_selection != nil
     }
 
+    var supportsLabLayerPropertyChange: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_change_lab_layer_properties),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_change_lab_layer_properties) else { return false }
+        return api.image_lab_layer_identity != nil && api.image_change_lab_layer_properties != nil
+    }
+
+    var supportsLabLayerSnapshot: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_layer_snapshot),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_layer_snapshot) else { return false }
+        return api.image_lab_layer_snapshot != nil
+    }
+
     var supportsLabLayerBrush: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_lab_layer),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_lab_layer) else { return false }
@@ -700,9 +712,57 @@ final class EngineSession: @unchecked Sendable {
         let uuid: UUID
     }
 
+    struct LabLayerSnapshot: Equatable {
+        let layer: Layer
+        let identity: UUID
+    }
+
+    /// Capture rows and identities in one native operation. A fixed capacity
+    /// avoids pairing a count probe with a later, potentially changed list.
+    func labLayerSnapshot(_ image: Int32) throws -> [LabLayerSnapshot] {
+        guard supportsLabLayerSnapshot, let read = api.image_lab_layer_snapshot else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot safely identify displayed Lab layers.")
+        }
+        let limit = 256
+        var rows = [GlimsLabLayerSnapshotRow](repeating: GlimsLabLayerSnapshotRow(), count: limit)
+        var count: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(read(engine, image, buffer.baseAddress, Int32(limit), &count), nil)
+        }
+        guard count >= 0, count <= limit else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab layer snapshot is incomplete.")
+        }
+        let zero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        var ids = Set<Int32>(), identities = Set<UUID>()
+        return try rows.prefix(Int(count)).map { row in
+            let identity = UUID(uuid: row.uuid)
+            guard row.layer.id > 0, identity != zero,
+                  ids.insert(row.layer.id).inserted, identities.insert(identity).inserted else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab layer snapshot has invalid identities.")
+            }
+            return LabLayerSnapshot(layer: Self.layer(row.layer), identity: identity)
+        }
+    }
+
     func labLayerFillTarget(_ image: Int32, root: Int32) throws -> LabLayerFillTarget {
-        guard supportsLabLayerColorFill, let identity = api.image_lab_layer_identity else {
+        guard supportsLabLayerColorFill else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This engine cannot fill a Lab layer.")
+        }
+        return try readLabLayerTarget(image, root: root)
+    }
+
+    func labLayerPropertyTarget(_ image: Int32, root: Int32) throws -> LabLayerFillTarget {
+        guard supportsLabLayerPropertyChange else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot safely record or replay Lab layer properties.")
+        }
+        return try readLabLayerTarget(image, root: root)
+    }
+
+    private func readLabLayerTarget(_ image: Int32, root: Int32) throws -> LabLayerFillTarget {
+        guard let identity = api.image_lab_layer_identity else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This engine cannot identify a Lab layer.")
         }
         var result = GlimsLabLayerIdentity()
         result.struct_size = UInt32(MemoryLayout<GlimsLabLayerIdentity>.size)
@@ -3611,7 +3671,7 @@ final class EngineSession: @unchecked Sendable {
         return result == 0 ? nil : result
     }
 
-    func changeLayer(_ layer: Int32, image: Int32, _ change: LayerChange) throws {
+    private static func nativeLayerChange(_ change: LayerChange) -> GlimsLayerChange {
         var settings = GlimsLayerChange()
         settings.struct_size = UInt32(MemoryLayout<GlimsLayerChange>.size)
         var properties: UInt32 = 0
@@ -3632,8 +3692,28 @@ final class EngineSession: @unchecked Sendable {
             Self.copy(mode, into: &settings.mode)
         }
         settings.properties = properties
+        return settings
+    }
+
+    func changeLayer(_ layer: Int32, image: Int32, _ change: LayerChange) throws {
+        var settings = Self.nativeLayerChange(change)
         var error: UnsafeMutablePointer<CChar>?
         try check(api.layer_change(engine, image, layer, &settings, &error), error)
+    }
+
+    /// Never falls back to the ordinary unguarded layer-change entry.
+    func changeLabLayer(_ image: Int32, target: LabLayerFillTarget, change: LayerChange) throws {
+        guard supportsLabLayerPropertyChange, let slot = api.image_change_lab_layer_properties else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot safely record or replay Lab layer properties.")
+        }
+        var settings = GlimsLabLayerPropertyChange()
+        settings.struct_size = UInt32(MemoryLayout<GlimsLabLayerPropertyChange>.size)
+        settings.root = target.root
+        settings.uuid = target.uuid.uuid
+        settings.change = Self.nativeLayerChange(change)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(slot(engine, image, &settings, &error), error)
     }
 
     func moveLayer(_ layer: Int32, image: Int32, by offset: CGSize) throws {

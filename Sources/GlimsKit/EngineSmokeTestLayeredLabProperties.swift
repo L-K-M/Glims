@@ -65,6 +65,20 @@ extension EngineSmokeTest {
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,
               "document does not expose private Lab planes as channels")
         check(opened.layers.count == 2, "document shows two logical layers")
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAB_LAYER_SNAPSHOT"] == "1" {
+            check(session.supportsLabLayerSnapshot, "test adapter supports atomic Lab layer snapshots")
+            if session.supportsLabLayerSnapshot {
+                let snapshot = try session.labLayerSnapshot(image)
+                check(snapshot.map(\.layer) == opened.layers,
+                      "Swift snapshot returns the displayed Lab layer rows")
+                let identities = try snapshot.map { try session.labLayerPropertyTarget(image, root: $0.layer.id).uuid }
+                check(snapshot.map(\.identity) == identities && Set(identities).count == snapshot.count,
+                      "Swift snapshot pairs each displayed Lab row with its native UUID")
+            }
+        } else if !session.supportsLabLayerSnapshot {
+            check((try? session.labLayerSnapshot(image)) == nil,
+                  "an older engine refuses atomic Lab layer snapshots safely")
+        }
         check(opened.toolIsAvailable(.paintbrush) == opened.storage.allowsLabLayerBrush && opened.toolIsAvailable(.zoom),
               "Brush follows its layered Lab capability while zoom remains available")
         check(opened.toolIsAvailable(.eyedropper) == session.supportsLayeredLabSampling,
@@ -234,6 +248,132 @@ extension EngineSmokeTest {
         } else {
             check(!opened.toolIsAvailable(.rectangleSelect), "older engines keep layered Lab selection disabled")
         }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_GUARDED_PROPERTIES"] == "1" {
+            check(session.supportsLabLayerPropertyChange, "test adapter supports guarded Lab layer properties")
+        }
+        if let root = opened.selectedLayerIDs.first,
+           let original = try session.layers(image).first(where: { $0.id == root }) {
+            let before = try session.undoInfo(image)
+            let target: EngineSession.LabLayerFillTarget
+            if session.supportsLabLayerPropertyChange {
+                target = try session.labLayerPropertyTarget(image, root: root)
+                var staleBytes = target.uuid.uuid
+                staleBytes.0 ^= 0x80
+                let stale = EngineSession.LabLayerFillTarget(root: root, uuid: UUID(uuid: staleBytes))
+                var staleError: EngineSession.EngineError?
+                do { try session.changeLabLayer(image, target: stale, change: .init(opacity: 0.375)) }
+                catch { staleError = error as? EngineSession.EngineError }
+                let after = try session.undoInfo(image)
+                let staleLayer = try session.layers(image).first(where: { $0.id == root })
+                check(staleError?.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue) && after == before &&
+                      staleLayer?.opacity == original.opacity,
+                      "guarded Lab property bridge refuses a stale UUID without changes")
+                let nextOpacity = original.opacity == 0.375 ? 0.625 : 0.375
+                try session.changeLabLayer(image, target: target, change: .init(opacity: nextOpacity))
+                let changed = try session.layers(image).first(where: { $0.id == root })
+                check(changed?.opacity == nextOpacity, "guarded Lab property bridge changes the captured layer")
+                try session.undo(image)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("guarded Lab property Undo")
+                let restored = try session.layers(image).first(where: { $0.id == root })
+                check(restored?.opacity == original.opacity, "Undo restores guarded Lab property bridge change")
+            } else {
+                target = .init(root: root, uuid: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!)
+                var refusal: EngineSession.EngineError?
+                do { try session.changeLabLayer(image, target: target, change: .init(opacity: 0.375)) }
+                catch { refusal = error as? EngineSession.EngineError }
+                let after = try session.undoInfo(image)
+                let current = try session.layers(image).first(where: { $0.id == root })
+                check(refusal?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue) && after == before &&
+                      current?.opacity == original.opacity,
+                      "older engines refuse guarded Lab properties without changes")
+            }
+        } else { check(false, "guarded Lab property bridge has a logical root") }
+        if let root = opened.selectedLayerIDs.first,
+           let original = try session.layers(image).first(where: { $0.id == root }),
+           let other = opened.layers.first(where: { $0.id != root }) {
+            let symbol = UUID()
+            let description = RecorderTargetDescription(name: "Lab layer", kind: .pixel, ancestors: [], siblingIndex: 0,
+                bounds: .init(x: 0, y: 0, width: Double(opened.info.width), height: Double(opened.info.height)))
+            let value = RecorderFileCommand.LayerProperties(name: nil, visible: nil, opacity: 0.375, mode: nil)
+            let file = RecorderFileValue(recordingID: UUID(), name: "Lab layer properties",
+                origin: .init(imageLabel: "Lab.xcf", initialWidth: Int(opened.info.width), initialHeight: Int(opened.info.height)),
+                symbols: [.init(id: symbol, description: description)],
+                records: [.init(ordinal: 0, outcome: .success(.layerProperties(value), .layer(symbol)))])
+            let prepared = try RecorderFileSemanticBridge.prepare(RecorderFileCodec.decode(RecorderFileCodec.encode(file)))
+            let priorError = opened.onError
+            opened.onError = { _ in }
+            defer { opened.onError = priorError; _ = opened.clearRecording() }
+            let history = try session.undoInfo(image)
+            EngineSmokeTestHost.pumpEvents(for: 0.1); drain("before Lab property recording installation")
+            var installed: Result<Void, Error>?
+            opened.installRecording(prepared, checkpoint: try opened.recorderInstallCheckpoint(),
+                                    choices: [symbol: .layer(root)]) { installed = $0 }
+            drain("Lab property recording installation")
+            guard let installed else { throw NSError(domain: "LayeredLabSmoke", code: 8) }
+            if session.supportsLabLayerPropertyChange {
+                try installed.get()
+                opened.selectLayer(other.id); drain("select another layer before property replay")
+                let otherBefore = try session.layers(image).first(where: { $0.id == other.id })
+                try opened.startReplay(); drain("bound Lab property replay")
+                let deadline = Date().addingTimeInterval(15)
+                while opened.recorder.isReplaying && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                let after = try session.layers(image)
+                let selection = try session.selectedLayers(image)
+                if case .finished = opened.replayStatus {
+                    check(after.first(where: { $0.id == root })?.opacity == 0.375 &&
+                          after.first(where: { $0.id == other.id })?.opacity == otherBefore?.opacity && selection == [other.id],
+                          "loaded Lab property recording edits its bound root while another is selected")
+                } else { check(false, "loaded Lab property recording edits its bound root while another is selected") }
+                opened.undo(); drain("bound Lab property replay Undo")
+                let restored = try session.layers(image).first(where: { $0.id == root })
+                check(restored?.opacity == original.opacity, "Undo restores loaded Lab property replay")
+                opened.selectLayer(root); drain("select recorded property target for deletion")
+                opened.layerCommand(.delete); drain("delete recorded property target")
+                let afterDelete = try session.layers(image)
+                if !afterDelete.contains(where: { $0.id == root }) {
+                    let beforeRefusal = try session.undoInfo(image)
+                    let remaining = afterDelete.first(where: { $0.id == other.id })
+                    try opened.startReplay(); drain("refused deleted Lab property target")
+                    let refusalDeadline = Date().addingTimeInterval(15)
+                    while opened.recorder.isReplaying && Date() < refusalDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                    let afterRefusal = try session.undoInfo(image)
+                    let current = try session.layers(image).first(where: { $0.id == other.id })
+                    if case .failed(_, let reason) = opened.replayStatus {
+                        check(reason == "The bound Lab layer is no longer available for this property change." &&
+                              beforeRefusal == afterRefusal && current?.opacity == remaining?.opacity &&
+                              current?.isVisible == remaining?.isVisible,
+                              "deleted Lab property target refuses replay without changes")
+                    } else { check(false, "deleted Lab property target refuses replay without changes") }
+                    opened.undo(); drain("restore deleted Lab property target")
+                } else { check(false, "recorded Lab property target can be deleted for refusal test") }
+                opened.selectLayer(root); drain("restore selection after Lab property replay")
+                let mixed = RecorderFileCommand.LayerProperties(name: "Mixed", visible: nil, opacity: 0.375, mode: nil)
+                let incompatible = RecorderFileValue(recordingID: UUID(), name: "Incompatible Lab properties", origin: file.origin,
+                    symbols: file.symbols, records: [.init(ordinal: 0, outcome: .success(.layerProperties(mixed), .layer(symbol)))])
+                let invalidPrepared = try RecorderFileSemanticBridge.prepare(RecorderFileCodec.decode(RecorderFileCodec.encode(incompatible)))
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("before incompatible Lab property installation")
+                let priorRecording = opened.recorderContentCheckpoint()
+                let beforeInvalid = try session.undoInfo(image)
+                var rejected: Result<Void, Error>?
+                opened.installRecording(invalidPrepared, checkpoint: try opened.recorderInstallCheckpoint(),
+                                        choices: [symbol: .layer(root)]) { rejected = $0 }
+                drain("incompatible Lab property installation")
+                let afterInvalid = try session.undoInfo(image)
+                if case .failure(let error)? = rejected {
+                    check((error as? RecorderFileError) == .invalid("A Lab layer property recording must change only its name, visibility or opacity.") &&
+                          beforeInvalid == afterInvalid && opened.recorderContentCheckpoint() == priorRecording,
+                          "incompatible Lab property recording preserves the current recording and image")
+                } else { check(false, "incompatible Lab property recording preserves the current recording and image") }
+            } else {
+                let after = try session.undoInfo(image)
+                let current = try session.layers(image).first(where: { $0.id == root })
+                if case .failure(let error) = installed {
+                    check((error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue) &&
+                          after == history && current?.opacity == original.opacity,
+                          "older engines refuse loaded Lab property recordings without changes")
+                } else { check(false, "older engines refuse loaded Lab property recordings without changes") }
+            }
+        } else { check(false, "loaded Lab property replay has two logical roots") }
         let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
               "Fill menu follows the layered Lab color capability")
@@ -1144,6 +1284,146 @@ extension EngineSmokeTest {
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }
             return view.subviews.lazy.compactMap { outline(in: $0) }.first
+        }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAB_LIVE_PROPERTIES"] == "1",
+           let selected = opened.selectedLayerIDs.first,
+           let other = opened.layers.first(where: { $0.id != selected }),
+           let identity = opened.labLayerIdentities[other.id], let list = outline(in: palette.view) {
+            let oldError = opened.onError
+            var errors: [String] = []
+            opened.onError = { errors.append($0) }
+            defer { opened.onError = oldError; _ = opened.clearRecording() }
+            func displayedRow() -> LayerRowView? {
+                guard let index = (0..<list.numberOfRows).first(where: {
+                    (list.item(atRow: $0) as? LayerTree.Node)?.layer.id == other.id
+                }) else { return nil }
+                return list.view(atColumn: 0, row: index, makeIfNecessary: true) as? LayerRowView
+            }
+            _ = opened.clearRecording()
+            try opened.startRecording()
+            EngineSmokeTestHost.pumpEvents(for: 0.1)
+            check(opened.acceptsLayerProperties && !opened.acceptsLayerCreate && !opened.acceptsLayerDelete &&
+                  !opened.acceptsLayerDuplicate && !opened.acceptsLayerReorder && !opened.acceptsLayerHistory,
+                  "recording admits guarded Lab properties but keeps structure and history disabled")
+            let priorHistory = try session.undoInfo(image)
+            var staleRefused = false
+            opened.changeLayer(other.id, .init(opacity: 0.25), labIdentity: UUID()) {
+                if case .failure = $0 { staleRefused = true }
+            }
+            let afterStale = try session.undoInfo(image)
+            check(staleRefused && priorHistory == afterStale && opened.recorder.records.isEmpty,
+                  "a stale displayed identity refuses before changing or recording a Lab property")
+            if let row = displayedRow() {
+                check(row.checkbox.isEnabled && row.context.labIdentity == identity,
+                      "the nonselected Lab row exposes its captured identity while recording")
+                row.checkbox.performClick(nil)
+                drain("recorded nonselected Lab visibility")
+            } else { check(false, "nonselected Lab row exists while recording") }
+            if let row = displayedRow() {
+                row.nameField.stringValue = "Recorded Lab layer"
+                row.finishNameEditing()
+                drain("recorded Lab rename")
+            } else { check(false, "Lab row remains available for recorded rename") }
+            let recordedOpacity = other.opacity == 0.375 ? 0.625 : 0.375
+            opened.changeLayer(other.id, .init(opacity: recordedOpacity), labIdentity: identity)
+            try opened.stopRecording()
+            drain("recorded Lab opacity after Stop")
+            let deadline = Date().addingTimeInterval(15)
+            while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            let records = opened.recorder.records
+            check(records.count == 3 && records.allSatisfy {
+                if case .success(.layerProperties) = $0.resolution { return true }
+                return false
+            } && opened.selectedLayerIDs == [selected],
+                  "Recorder captures visibility, rename and opacity on the nonselected Lab root")
+            let edited = try session.layers(image).first(where: { $0.id == other.id })
+            check(edited?.isVisible == !other.isVisible && edited?.name == "Recorded Lab layer" && edited?.opacity == recordedOpacity,
+                  "recorded Lab properties changed only the captured root")
+            let url = work.appendingPathComponent("layered-lab-live-properties.glims-recording")
+            var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+            opened.saveRecording(to: url, checkpoint: try opened.recorderSaveCheckpoint()) { saved = $0 }
+            drain("save captured Lab properties")
+            guard let saved else { throw NSError(domain: "LayeredLabSmoke", code: 31) }
+            _ = try saved.get()
+            let file = try RecorderFileCodec.decode(Data(contentsOf: url))
+            check(file.records.count == 3 && file.symbols.count == 1,
+                  "captured Lab properties save with one explicit layer binding")
+            for _ in 0..<3 { opened.undo(); drain("recorded Lab property Undo") }
+            let restored = try session.layers(image).first(where: { $0.id == other.id })
+            check(restored?.name == other.name && restored?.isVisible == other.isVisible && restored?.opacity == other.opacity,
+                  "Undo restores all three recorded Lab properties")
+            _ = opened.clearRecording()
+            let prepared = try RecorderFileSemanticBridge.prepare(file)
+            var installed: Result<Void, Error>?
+            guard let symbol = file.symbols.first?.id else { throw NSError(domain: "LayeredLabSmoke", code: 32) }
+            opened.installRecording(prepared, checkpoint: try opened.recorderInstallCheckpoint(),
+                                    choices: [symbol: .layer(other.id)]) { installed = $0 }
+            drain("install captured Lab properties")
+            guard let installed else { throw NSError(domain: "LayeredLabSmoke", code: 33) }
+            try installed.get()
+            try opened.startReplay(); drain("replay captured Lab properties")
+            let replayDeadline = Date().addingTimeInterval(15)
+            while opened.recorder.isReplaying && Date() < replayDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            let replayed = try session.layers(image).first(where: { $0.id == other.id })
+            if case .finished = opened.replayStatus {
+                check(replayed?.name == "Recorded Lab layer" && replayed?.isVisible == !other.isVisible &&
+                      replayed?.opacity == recordedOpacity && opened.selectedLayerIDs == [selected],
+                      "saved Lab properties replay on their bound nonselected root")
+            } else { check(false, "saved Lab properties replay on their bound nonselected root") }
+            for _ in 0..<3 { opened.undo(); drain("replayed Lab property Undo") }
+            _ = opened.clearRecording()
+            func views<T: NSView>(_ view: NSView, _ type: T.Type) -> [T] {
+                ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views($0, type) }
+            }
+            if let selectedLayer = opened.layers.first(where: { $0.id == selected }),
+               let opacity = views(palette.view, ClassicValueSlider.self).first(where: { $0.accessibilityTitle == "Layer opacity" }),
+               let field = views(opacity, NSTextField.self).first(where: { $0.isEditable }) {
+                try opened.startRecording()
+                EngineSmokeTestHost.pumpEvents(for: 0.1)
+                let value = selectedLayer.opacity == 0.5 ? 0.75 : 0.5
+                check(opacity.isEnabled, "selected Lab opacity control is enabled while recording")
+                field.stringValue = value == 0.5 ? "50" : "75"
+                check(field.sendAction(field.action, to: field.target), "recorded Lab opacity field action is delivered")
+                try opened.stopRecording(); drain("recorded Lab opacity field")
+                let edited = try session.layers(image).first(where: { $0.id == selected })
+                check(edited?.opacity == value && opened.recorder.records.count == 1,
+                      "the real opacity control records its selected Lab layer")
+                opened.undo(); drain("recorded opacity field Undo")
+                let restored = try session.layers(image).first(where: { $0.id == selected })
+                check(restored?.opacity == selectedLayer.opacity, "Undo restores the recorded opacity field edit")
+            } else { check(false, "selected Lab opacity field exists while recording") }
+            _ = opened.clearRecording()
+            if let selectedLayer = opened.layers.first(where: { $0.id == selected }),
+               let selectedIdentity = opened.labLayerIdentities[selected] {
+                try opened.startRecording()
+                var stoppedReentrantly = false
+                let token = opened.addRecorderObserver {
+                    if !stoppedReentrantly && opened.recorder.isRecording {
+                        stoppedReentrantly = true
+                        try? opened.stopRecording()
+                    }
+                }
+                let value = selectedLayer.opacity == 0.25 ? 0.75 : 0.25
+                opened.changeLayer(selected, .init(opacity: value), labIdentity: selectedIdentity)
+                opened.removeRecorderObserver(token)
+                drain("Lab property after reentrant Stop")
+                let reentrantDeadline = Date().addingTimeInterval(15)
+                while opened.recorder.pendingCount != 0 && Date() < reentrantDeadline {
+                    EngineSmokeTestHost.pumpEvents(for: 0.02)
+                }
+                if let record = opened.recorder.records.first, case .success(.layerProperties) = record.resolution {
+                    check(stoppedReentrantly && !opened.recorder.isRecording && opened.recorder.pendingCount == 0 &&
+                          (try session.layers(image).first(where: { $0.id == selected }))?.opacity == value,
+                          "reentrant Stop retains and settles the accepted Lab property edit")
+                } else { check(false, "reentrant Stop retains and settles the accepted Lab property edit") }
+                opened.undo(); drain("reentrant Lab property Undo")
+            } else { check(false, "selected Lab identity exists for reentrant recording") }
+        } else if !session.supportsLabLayerSnapshot {
+            try opened.startRecording()
+            EngineSmokeTestHost.pumpEvents(for: 0.1)
+            check(!opened.acceptsLayerProperties, "older engines keep Lab properties disabled while recording")
+            try opened.stopRecording()
+            _ = opened.clearRecording()
         }
         if let other = opened.layers.first(where: { !opened.selectedLayerIDs.contains($0.id) }),
            let list = outline(in: palette.view),

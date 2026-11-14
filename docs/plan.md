@@ -6072,3 +6072,44 @@ the saved version 15 commands have no layer binding and replay against the
 destination Lab image's root mask. The native operation still validates the
 document on execution. A real-window test covers capture, Save, loaded-file
 replay and Undo. Wider engine checks, CI and release qualification remain open.
+
+### Guarded layered Lab properties (native candidate)
+
+An optional engine entry validates a captured logical layer UUID before
+changing that root's visibility, opacity or name. It refuses while Undo is
+disabled or another Undo group is open; unchanged valid values preserve Undo,
+Redo and dirty state. This entry is a prerequisite for recording those
+property changes; Recorder capture and replay are not yet enabled. Native
+matrix checks and review remain in progress.
+
+The Swift bridge checks the complete optional API prefix and the identity
+entry before using the guarded operation. It can obtain a property target
+without requiring color Fill support, and it never falls back to the
+unguarded layer-change entry. Transport tests cover older protected prefixes,
+missing entries, request values and native error ownership.
+
+Loaded layer-property recordings can bind a supported name, visibility or
+opacity change to an explicit layered Lab root and its UUID. Replay keeps
+that target even when another layer is selected; a removed or changed target
+refuses without editing a different layer. Older engines and incompatible
+mixed property packets refuse installation without replacing the current
+recording. Existing file versions and ordinary RGB layer-property behavior
+remain unchanged. Live capture is still separate work; review, CI and bundle
+qualification are pending.
+
+An additional native candidate reads each displayed logical Lab layer and its
+UUID together on the engine thread. This is a prerequisite for retaining a
+row's identity while the palette defers reloads; it does not itself enable
+live recording. Cross-engine checks, review and integration remain pending.
+The candidate Swift bridge reads the bounded snapshot in one call and rejects
+incomplete counts, duplicate or zero identities and invalid layer IDs. Older
+engine API prefixes refuse this capability without reading past their bounds.
+
+Live layered Lab property recording now carries the snapshot identity with the
+displayed row or opacity target and uses the guarded native operation. The
+recorded layer remains explicit even when it is not selected. Unsupported
+engines keep these controls disabled during recording; structural operations
+and Undo remain gated while recording. Real-window tests on all four engines
+cover visibility, name, opacity, Save, replay, Undo and reentrant Stop, and an
+older adapter refuses capture. The full Swift suite passes 1,787 tests.
+Hosted review, integration and bundle qualification remain open.
