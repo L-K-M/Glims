@@ -6218,3 +6218,18 @@ checks white/transparency, layer order and opacity against an independent LCMS
 oracle across 256-pixel boundaries, plus source preservation and cancellation.
 Four-engine, real-window, bundle and review qualification remain in progress;
 it does not claim native layered Lab export or complete Photoshop parity.
+
+### Ordinary tablet stroke recording (candidate)
+
+The appended capture entry point can associate a V2 tablet stroke with the
+actual brush and guarded paint configuration before the first dab. Ordinary
+pixel-layer recordings preserve rotation, tangential pressure, timestamp wrap
+and accepted batch boundaries in recording version 21. Older engines keep
+live painting but refuse incomplete tablet recordings; guarded replay cannot
+fall back to V1 samples. Existing V1, Lab and ink recording formats are
+unchanged. Native fixtures compare capture and replay against independent
+painted pixels, Undo/Redo and explicit Core coordinate delivery on all four
+engine sets. The application transport tests check old table prefixes,
+resource identity, failure cleanup and V2 replay batches. Synthetic document
+qualification and physical tablet checks are separate; do not treat this
+candidate as merged or universally hardware-qualified.
