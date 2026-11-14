@@ -257,6 +257,12 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     brush_id=123;engine->busy++;
     CHECK(api->stroke_begin_lab_layer_pressure(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_BUSY&&brush_id==0,
           "pressure brush refuses a busy engine");engine->busy--;if(error)api->free_string(error);error=NULL;
+    brush_id=123;
+    CHECK(api->stroke_begin_lab_layer_pressure(engine,id,0,&brush,NULL,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+          "pressure brush safely refuses a null first packet");if(error)api->free_string(error);error=NULL;
+    brush_id=123;
+    CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,NULL,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+          "fixed-size brush safely refuses a null first packet");if(error)api->free_string(error);error=NULL;
     guint8 pressure_unaligned[sizeof brush+2];memset(pressure_unaligned,0xa5,sizeof pressure_unaligned);
     memcpy(pressure_unaligned+1,&brush,sizeof brush);
     brush_point.pressure=0;brush_point.time_ms=1;brush_id=0;
