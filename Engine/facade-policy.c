@@ -40,6 +40,7 @@ layered_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_sample_layered_lab:
     case GLIMS_FACADE_OP_image_fill_lab_layer:
     case GLIMS_FACADE_OP_image_fill_lab_layer_srgb:
+    case GLIMS_FACADE_OP_image_fill_lab_layer_srgb_empty_selection:
     case GLIMS_FACADE_OP_stroke_begin_lab_layer:
     case GLIMS_FACADE_OP_stroke_begin_lab_layer_pressure:
     case GLIMS_FACADE_OP_stroke_begin_lab_layer_with_capture_facts:

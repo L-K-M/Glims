@@ -23,6 +23,9 @@ static const GlimsEngineAPI *api;static unsigned checks,failures;
 static GlimsEngine *running_engine;
 static gboolean request_fill_cancel, fill_cancel_scheduled, fill_cancelled;
 static guint fill_cancel_source;
+static GimpImage *fill_selection_image;
+static gboolean request_fill_selection_change, fill_selection_scheduled, fill_selection_changed;
+static guint fill_selection_source;
 static GlimsImageID brush_retarget_image;
 static GlimsItemID brush_retarget_root;
 static gboolean brush_retargeted;
@@ -33,9 +36,13 @@ static unsigned brush_projection_events;
 static GlimsRect brush_projection_rect;
 #define CHECK(c,n) do{gboolean b=!!(c);checks++;if(!b)failures++;printf("%s %s\n",b?"ok":"FAIL",n);fflush(stdout);}while(0)
 static gboolean cancel_fill_on_engine(gpointer unused){(void)unused;fill_cancel_source=0;if(request_fill_cancel)fill_cancelled=running_engine&&api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;return G_SOURCE_REMOVE;}
+static gboolean select_all_during_fill(gpointer unused){(void)unused;fill_selection_source=0;
+ if(request_fill_selection_change&&fill_selection_image){gimp_channel_all(gimp_image_get_mask(fill_selection_image),FALSE);fill_selection_changed=TRUE;}
+ return G_SOURCE_REMOVE;}
 static void on_event(void *context,const GlimsEvent *event){(void)context;
  if(event->kind==GLIMS_EVENT_PROJECTION_CHANGED&&event->image==brush_event_image){brush_projection_events++;brush_projection_rect=event->rect;}
- if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}}
+ if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}
+ if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_selection_change&&!fill_selection_scheduled){fill_selection_scheduled=TRUE;fill_selection_source=g_idle_add(select_all_during_fill,NULL);}}
 static void retarget_on_brush_update(GimpDrawable *drawable,gint x,gint y,gint width,gint height,gpointer data){
  (void)drawable;(void)x;(void)y;(void)width;(void)height;(void)data;
  if(!brush_retargeted){
@@ -747,6 +754,21 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          "public fill fixture captures the original pixels");
    GlimsUndoInfo fill_undo_before={0},fill_undo_after={0};
    CHECK(api->image_undo_info(engine,id,&fill_undo_before)==GLIMS_STATUS_OK,"public fill captures selection history");
+   gboolean can_record_fill=api->struct_size>=offsetof(GlimsEngineAPI,image_fill_lab_layer_srgb_empty_selection)+
+      sizeof api->image_fill_lab_layer_srgb_empty_selection && api->image_fill_lab_layer_srgb_empty_selection;
+   CHECK(can_record_fill,"selection-guarded Lab color fill is available");
+   GlimsLabLayerColorFillSettings guarded_fill={.struct_size=sizeof guarded_fill,.root=rows[0].id,
+     .color={1,0,0,1},.opacity=1};memcpy(guarded_fill.uuid,first_identity.uuid,16);
+   if(can_record_fill){
+    GlimsStatus blocked=api->image_fill_lab_layer_srgb_empty_selection(engine,id,&guarded_fill,&error);
+    CHECK(blocked==GLIMS_STATUS_INVALID_ARGUMENT&&error,
+          "guarded Lab color fill refuses a nonempty selection with an explanation");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          !memcmp(fill_inside_before,fill_inside_after,4)&&api->image_undo_info(engine,id,&fill_undo_after)==GLIMS_STATUS_OK&&
+          fill_undo_before.undo_count==fill_undo_after.undo_count&&fill_undo_before.redo_count==fill_undo_after.redo_count,
+          "refused guarded fill preserves selected pixels and history");
+   }
    GlimsLabLayerFillSettings short_fill=fill;short_fill.struct_size=sizeof short_fill-1;
    CHECK(api->image_fill_lab_layer(engine,id,&short_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
          "public fill refuses a short request");if(error)api->free_string(error);error=NULL;
@@ -814,6 +836,60 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
     }
    }
    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"public fill fixture restores the empty selection");
+   if(can_record_fill){
+    GlimsOpenImage *guard_open=glims_lookup_image(engine,id);
+    fill_selection_image=guard_open?guard_open->image:NULL;
+    request_fill_selection_change=TRUE;fill_selection_scheduled=FALSE;fill_selection_changed=FALSE;
+    CHECK(api->image_undo_info(engine,id,&fill_undo_before)==GLIMS_STATUS_OK,"guarded fill captures history before progress");
+    GlimsStatus changed_selection=api->image_fill_lab_layer_srgb_empty_selection(engine,id,&guarded_fill,&error);
+    request_fill_selection_change=FALSE;fill_selection_image=NULL;
+    if(fill_selection_source){g_source_remove(fill_selection_source);fill_selection_source=0;}
+    CHECK(fill_selection_scheduled&&fill_selection_changed&&changed_selection==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded fill refuses a selection changed during progress");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          !memcmp(fill_inside_before,fill_inside_after,4)&&api->image_undo_info(engine,id,&fill_undo_after)==GLIMS_STATUS_OK&&
+          fill_undo_before.undo_count==fill_undo_after.undo_count&&fill_undo_before.redo_count==fill_undo_after.redo_count,
+          "selection changed during guarded fill publishes no pixels or history");
+    if(guard_open)gimp_channel_clear(gimp_image_get_mask(guard_open->image),NULL,FALSE);
+    error=(char*)0x1;
+    CHECK(api->image_fill_lab_layer_srgb_empty_selection(engine,id,NULL,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&error==NULL,
+          "guarded fill refuses null settings and clears the error");
+    GlimsLabLayerColorFillSettings short_guard=guarded_fill;short_guard.struct_size=sizeof short_guard-1;
+    CHECK(api->image_fill_lab_layer_srgb_empty_selection(engine,id,&short_guard,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded fill refuses a short settings prefix");
+    if(error)api->free_string(error);error=NULL;
+    request_fill_cancel=TRUE;fill_cancel_scheduled=FALSE;fill_cancelled=FALSE;
+    CHECK(api->image_undo_info(engine,id,&fill_undo_before)==GLIMS_STATUS_OK,"guarded fill captures history before cancellation");
+    GlimsStatus guarded_cancel=api->image_fill_lab_layer_srgb_empty_selection(engine,id,&guarded_fill,&error);
+    request_fill_cancel=FALSE;
+    if(fill_cancel_source){g_source_remove(fill_cancel_source);fill_cancel_source=0;}
+    CHECK(fill_cancel_scheduled&&fill_cancelled&&guarded_cancel==GLIMS_STATUS_CANCELLED,
+          "guarded fill honors cancellation after staging");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          !memcmp(fill_inside_before,fill_inside_after,4)&&api->image_undo_info(engine,id,&fill_undo_after)==GLIMS_STATUS_OK&&
+          fill_undo_before.undo_count==fill_undo_after.undo_count&&fill_undo_before.redo_count==fill_undo_after.redo_count,
+          "cancelled guarded fill preserves pixels and history");
+    GlimsLabLayerColorFillSettings stale_guard=guarded_fill;stale_guard.uuid[0]^=0xff;
+    CHECK(api->image_fill_lab_layer_srgb_empty_selection(engine,id,&stale_guard,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+          "guarded fill refuses a stale captured layer identity");
+    if(error)api->free_string(error);error=NULL;
+    guint8 unaligned_guard[sizeof guarded_fill+2];memset(unaligned_guard,0xa5,sizeof unaligned_guard);
+    memcpy(unaligned_guard+1,&guarded_fill,sizeof guarded_fill);
+    CHECK(api->image_undo_info(engine,id,&fill_undo_before)==GLIMS_STATUS_OK&&
+          api->image_fill_lab_layer_srgb_empty_selection(engine,id,(const GlimsLabLayerColorFillSettings*)(unaligned_guard+1),&error)==GLIMS_STATUS_OK&&
+          unaligned_guard[0]==0xa5&&unaligned_guard[sizeof unaligned_guard-1]==0xa5,
+          "guarded Lab color fill accepts an unaligned request and an empty selection");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          memcmp(fill_inside_before,fill_inside_after,4)&&api->image_undo_info(engine,id,&fill_undo_after)==GLIMS_STATUS_OK&&
+          fill_undo_after.undo_count==fill_undo_before.undo_count+1,
+          "guarded fill publishes the expected pixels in one Undo step");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          !memcmp(fill_inside_before,fill_inside_after,4),"Undo restores a guarded fill");
+   }
    GlimsLabLayerColorFillSettings color_fill={.struct_size=sizeof color_fill,.root=rows[0].id,
      .color={1,0,0,1},.opacity=1};memcpy(color_fill.uuid,first_identity.uuid,16);
    GlimsSampledColor before_color_fill={0};

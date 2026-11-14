@@ -202,6 +202,7 @@ extension RecorderFileCommand {
         case .completeStroke(let value): self = .completeStroke(value)
         case .completeLabStroke(let value): self = .completeLabStroke(try value.validated())
         case .completeLabLayerStroke(let value): self = .completeLabLayerStroke(try value.validated())
+        case .fillLabLayer(let value): self = .fillLabLayer(try value.validated())
         }
     }
 }
