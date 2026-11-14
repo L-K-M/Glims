@@ -6042,10 +6042,15 @@ unmatched locale overrides still use native discovery. The baseline bundle
 reproduces a missing seed for `en-US,en`. The expanded regression compares
 seeded command labels with fresh discovery, exercises a newly installed
 plug-in and checks that a different fallback order does not reuse a seed.
-In one fresh-profile ordinary-launch comparison per list on the same built app,
-`en-US,en` reached its document in 1.80 seconds with the seed and 11.62 seconds
-with access to the seed denied; `de-CH,de,en` took 2.37 and 11.78 seconds.
-Each run verified the complete native language identity and whether the seed
-was used. These are individual measurements, not a guarantee for every Mac.
-Standalone bundle, review and CI qualification remain in progress. Other
-language lists and unmatched overrides do not have a five-second guarantee.
+In fresh-profile ordinary launches of the same built app, three `en-US,en`
+runs reached a document in 1.78–1.86 seconds with the seed; two runs with
+access denied took 11.62–12.18 seconds. For `de-CH,de,en`, three seeded runs
+took 1.80–2.37 seconds and two denied runs took 11.78–12.13 seconds. Each run
+verified the complete native language identity and whether the seed was used.
+These measurements are not a guarantee for every Mac.
+The standalone pinned bundle passes 2,268 engine and 3,355 editor checks,
+the override and preferred-language catalog comparisons, and the added
+plug-in and fallback-order checks. Eleven packaging tests pass, including
+failure propagation and protection against Python optimization. Hosted
+review and CI remain in progress. Other language lists and unmatched
+overrides do not have a five-second guarantee.
