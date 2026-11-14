@@ -22,7 +22,7 @@ extension EngineSmokeTest {
         let oldMenu = NSApp.mainMenu
         let palettes = Dictionary(uniqueKeysWithValues: NSApp.windows.filter { $0 is ClassicPaletteWindow }
             .map { (ObjectIdentifier($0), $0.isVisible) })
-        var retained: [ImageDocument] = []
+        var retained: [ImageDocument] = [], loose: [Int32] = []
         func remember() {
             for controller in owner.documents where !retained.contains(where: { $0 === controller.imageDocument }) {
                 retained.append(controller.imageDocument)
@@ -34,6 +34,7 @@ extension EngineSmokeTest {
             owner.documents.filter { !$0.closeStarted }.forEach { $0.closeDiscardingChanges() }
             check(wait({ retained.allSatisfy { $0.pendingWork == 0 && gone($0.image) } && !EngineActivity.shared.isBusy }),
                   "all composite documents close and drain")
+            for image in loose where !gone(image) { try? session.closeImage(image) }
             documents.items.removeAll { item in retained.contains { $0 === item } }
             for window in NSApp.windows where window is ClassicPaletteWindow {
                 if let visible = palettes[ObjectIdentifier(window)] {
@@ -78,9 +79,16 @@ extension EngineSmokeTest {
         let pixels = try session.copyPixels(document.image, merged: true).pixels
         check(pixels.count == 64 && pixels[0] >= 23 && pixels[0] <= 25 && pixels[3] == 255 && document.layers.count == 1,
               "composite document displays the Photoshop gradient as one opaque layer")
+        let ordinaryImage = try session.openImage(path: source.path)
+        loose.append(ordinaryImage)
+        let ordinary = try ImageDocument(session: session, image: ordinaryImage,
+                                         name: "Layered PSD", openedFrom: source)
+        owner.open(ordinary); remember()
+        check(ordinary.fileState.importStrategy == .appearance && ordinary.image != document.image && owner.documents.count == 2,
+              "layered Open and composite import can coexist for the same source")
         var repeated: Result<DocumentWindowController, Error>?
         owner.importPhotoshopComposite(from: source) { repeated = $0 }
-        check(wait({ repeated != nil }) && (try? repeated?.get()) === controller && owner.documents.count == 1,
+        check(wait({ repeated != nil }) && (try? repeated?.get()) === controller && owner.documents.count == 2,
               "opening the same composite again focuses the existing document")
         var reverted: Result<DocumentWindowController, Error>?
         owner.revert(controller, to: source) { reverted = $0 }
