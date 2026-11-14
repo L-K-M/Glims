@@ -51,13 +51,15 @@ static void test_fixture (const char *path)
   CHECK (read_ok, "fixture contains a 524-byte color-mode block");
   if (!read_ok) return;
   GlimsDuotoneOptions options;
-  CHECK (glims_duotone_options_parse (block, sizeof block, &options) &&
-         !memcmp (block, options.bytes, sizeof block), "fixture matches the documented settings layout without byte changes");
+  bool parsed = glims_duotone_options_parse (block, sizeof block, &options);
+  CHECK (parsed && !memcmp (block, options.bytes, sizeof block),
+         "fixture matches the documented settings layout without byte changes");
+  if (!parsed) return;
   const uint8_t *name = NULL; size_t length = 0;
   CHECK (glims_duotone_options_count (&options) == 2 &&
          glims_duotone_options_name (&options, 1, &name, &length) &&
          length == 15 && !memcmp (name, "PANTONE 327 CVC", length), "fixture second ink name");
-  int16_t curve[GLIMS_DUOTONE_OPTIONS_CURVE_POINTS];
+  int16_t curve[GLIMS_DUOTONE_OPTIONS_CURVE_POINTS] = {0};
   CHECK (glims_duotone_options_curve (&options, 1, curve) &&
          curve[0] == 0 && curve[6] == 350 && curve[9] == 700 && curve[12] == 1000,
          "fixture transfer curve values");
@@ -70,17 +72,19 @@ int main (int argc, char **argv)
   make_options (bytes); memcpy (original, bytes, sizeof bytes);
   GlimsDuotoneOptions options, before;
   memset (&options, 0xa5, sizeof options);
-  CHECK (glims_duotone_options_parse (bytes, sizeof bytes, &options) &&
-         !memcmp (options.bytes, bytes, sizeof bytes), "parse and preserve every byte");
+  bool parsed = glims_duotone_options_parse (bytes, sizeof bytes, &options);
+  CHECK (parsed && !memcmp (options.bytes, bytes, sizeof bytes), "parse and preserve every byte");
+  if (!parsed) return 1;
   CHECK (glims_duotone_options_count (&options) == 2 && glims_duotone_options_count (NULL) == 0,
          "count active plates");
   const uint8_t *name = NULL; size_t length = 0;
-  CHECK (glims_duotone_options_name (&options, 0, &name, &length) && length == 5 &&
-         !memcmp (name, "Black", 5), "read Pascal name bytes");
-  GlimsDuotoneInkColor color;
+  bool have_name = glims_duotone_options_name (&options, 0, &name, &length);
+  CHECK (have_name && length == 5 && !memcmp (name, "Black", 5), "read Pascal name bytes");
+  if (!have_name || !name) return 1;
+  GlimsDuotoneInkColor color = {0};
   CHECK (glims_duotone_options_color (&options, 0, &color) && color.space == 2 &&
          color.components[0] == 65535 && color.components[3] == 1234, "read big-endian ink color");
-  int16_t curve[GLIMS_DUOTONE_OPTIONS_CURVE_POINTS];
+  int16_t curve[GLIMS_DUOTONE_OPTIONS_CURVE_POINTS] = {0};
   CHECK (glims_duotone_options_curve (&options, 0, curve) && curve[0] == 0 &&
          curve[1] == -1 && curve[12] == 1000, "read signed curve values");
 
