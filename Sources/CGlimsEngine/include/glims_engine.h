@@ -1241,7 +1241,9 @@ enum {
   /* One logical root can move among top-level roots with Undo/Redo. */
   GLIMS_IMAGE_STORAGE_LAYER_REORDER = 1u << 6,
   /* Typed Lab shape and All/None/Invert commands edit the root mask. */
-  GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7
+  GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7,
+  /* Captured sRGB fills of a single logical Lab root are supported. */
+  GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL = 1u << 8
 };
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */

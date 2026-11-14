@@ -2685,6 +2685,74 @@ final class ImageDocument {
         return accepted
     }
 
+    private var labLayerFillPreparationPending = false
+
+    func labLayerColorFillRefusal(root: Int32? = nil) -> String? {
+        guard storage.layout == .layeredLab, storage.allowsLabLayerColorFill, session.supportsLabLayerColorFill else {
+            return "This image engine cannot fill a Lab layer."
+        }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        if recorder.isRecording || recorder.isReplaying { return "Stop Recorder before filling this layer." }
+        guard acceptsImageReads, !strokeIsActive, pendingInput == 0, !targetCommandIsPending, !floatingState.isActive,
+              !labLayerFillPreparationPending else {
+            return "Finish the current operation before filling this layer."
+        }
+        guard selectedLayerIDs.count == 1, let selected = selectedLayerIDs.first,
+              layers.contains(where: { $0.id == selected }), root == nil || root == selected else {
+            return "Select one layer before filling it."
+        }
+        return nil
+    }
+
+    func prepareLabLayerColorFill(completion: @escaping @MainActor (Result<EngineSession.LabLayerFillTarget, Error>) -> Void) {
+        if let reason = labLayerColorFillRefusal() { completion(.failure(RecorderReplayError(message: reason))); return }
+        endPendingUserEdits()
+        if let reason = labLayerColorFillRefusal() { completion(.failure(RecorderReplayError(message: reason))); return }
+        guard let root = selectedLayerIDs.first else { completion(.failure(DocumentError.targetChanged)); return }
+        labLayerFillPreparationPending = true
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result { try session.labLayerFillTarget(image, root: root) }
+            self.dispatchReadWhenReady {
+                self.labLayerFillPreparationPending = false
+                if let reason = self.labLayerColorFillRefusal(root: root) {
+                    completion(.failure(RecorderReplayError(message: reason)))
+                } else {
+                    completion(result)
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    func fillLabLayer(_ target: EngineSession.LabLayerFillTarget, color: EngineSession.RGBAColor,
+                      opacity: Double, completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> Bool {
+        func refuse(_ reason: String) {
+            onError?(reason)
+            completion(.failure(RecorderReplayError(message: reason)))
+        }
+        guard opacity.isFinite, (0...1).contains(opacity) else { refuse("Enter an opacity from 0 to 100%."); return false }
+        if let reason = labLayerColorFillRefusal(root: target.root) { refuse(reason); return false }
+        endPendingUserEdits()
+        if let reason = labLayerColorFillRefusal(root: target.root) { refuse(reason); return false }
+        var rejection = "Finish the current operation before filling this layer."
+        return enqueueExclusive(label: "Fill Layer", admission: {
+            if let reason = self.labLayerColorFillRefusal(root: target.root) { rejection = reason; return false }
+            return true
+        }, rejected: {
+            refuse(self.isClosing ? DocumentError.closed.localizedDescription : rejection)
+        }) { [session, image] in
+            let result = Result { try session.fillLabLayer(image, target: target, color: color, opacity: opacity) }
+            self.dispatchReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The layer state could not be refreshed: \(error)") }
+                }
+                if case .failure(let error) = result { self.onError?(error.localizedDescription) }
+                completion(result)
+            }
+        }
+    }
+
     /// Cached admission only; the native operation independently revalidates
     /// the explicit plane, profile, locks and selection after earlier input.
     func inkEditRefusal(channel: Int32) -> String? {
