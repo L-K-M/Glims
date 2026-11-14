@@ -6037,3 +6037,13 @@ version and layer kind; replay resolves the target afresh and uses the guarded
 engine entry. Real-window checks cover file installation, a different selected
 layer, an uncaptured selection, replay and Undo, and refusal on older engines.
 Live capture is not enabled yet; review and CI remain pending.
+
+### Photoshop Bitmap PSD export (foundation)
+
+A private bounded serializer can write opaque binary black-and-white pixels
+as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
+chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
+independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
+user interface yet. Color conversion, alpha, metadata,
+non-binary input and preserved editable document mode remain separate work.
+See [bitmap-psd.md](bitmap-psd.md).
