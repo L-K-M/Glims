@@ -44,7 +44,8 @@ static void test_fixture (const char *path)
   if (!f) return;
   uint8_t header[30], block[GLIMS_DUOTONE_OPTIONS_SIZE];
   bool read_ok = fread (header, 1, sizeof header, f) == sizeof header &&
-    !memcmp (header, "8BPS", 4) && header[26] == 0 && header[27] == 0 &&
+    !memcmp (header, "8BPS", 4) && header[4] == 0 && header[5] == 1 &&
+    header[24] == 0 && header[25] == 8 && header[26] == 0 && header[27] == 0 &&
     header[28] == 2 && header[29] == 12 &&
     fread (block, 1, sizeof block, f) == sizeof block;
   fclose (f);
