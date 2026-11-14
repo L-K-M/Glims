@@ -111,7 +111,7 @@ xcrun clang++ -dynamiclib -o "$OUT/libglimsengine.dylib" \
   -Wl,-exported_symbol,_glims_engine_get_api || die "linking the adapter failed"
 
 echo "==> Building the conformance tests and the performance pass"
-for program in engine-tests engine-perf; do
+for program in engine-tests engine-perf bitmap-psd-engine-tests; do
   xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -I"$INCLUDE" \
     "$ROOT/Engine/tests/$program.c" -o "$OUT/glims-$program" || die "building $program failed"
 done
@@ -148,6 +148,15 @@ if [[ "$MODE" == test ]]; then
     die "plug-ins reported load errors during the tests; see $OUT/test.log"
   criticals="$(grep -c "CRITICAL" "$OUT/test.log" || true)"
   (( criticals == 0 )) || echo "!! $criticals GLib CRITICAL message(s) during the tests; see $OUT/test.log"
+  # Verify the real public Bitmap export, including GIMP's own PSD import.
+  BITMAP_WORK="$WORK/bitmap"
+  mkdir -p "$BITMAP_WORK/home" "$BITMAP_WORK/cache"
+  status=0
+  run_with_timeout 180 "$OUT/bitmap-psd-test.log" \
+    env HOME="$BITMAP_WORK/home" XDG_CACHE_HOME="$BITMAP_WORK/cache" \
+        "$OUT/glims-bitmap-psd-engine-tests" "$OUT/libglimsengine.dylib" "$BITMAP_WORK" || status=$?
+  cat "$OUT/bitmap-psd-test.log"
+  (( status == 0 )) || die "the Bitmap PSD engine tests failed (status $status)"
   status=0
   run_with_timeout 60 "$OUT/codec-test.log" \
     env HOME="$WORK/home" XDG_CACHE_HOME="$WORK/cache" \

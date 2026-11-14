@@ -225,3 +225,4 @@ GLIMS_FACADE(image_sample_layered_lab, api_image_sample_layered_lab, IMAGE, COMP
 GLIMS_FACADE(image_fill_lab_layer_srgb_empty_selection, api_image_fill_lab_layer_srgb_empty_selection, IMAGE, COMPONENT)
 GLIMS_FACADE(image_change_lab_layer_properties, api_image_change_lab_layer_properties, IMAGE, COMPONENT)
 GLIMS_FACADE(image_lab_layer_snapshot, api_image_lab_layer_snapshot, IMAGE, COMPONENT)
+GLIMS_FACADE(image_export_bitmap_psd, api_image_export_bitmap_psd, IMAGE, ORDINARY)

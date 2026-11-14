@@ -7,11 +7,13 @@ import Foundation
 enum PsdOutputColor: String, CaseIterable, Equatable, Sendable {
     case document
     case cmyk
+    case bitmap
 
     var title: String {
         switch self {
         case .document: return "Document RGB/Grayscale"
         case .cmyk: return "CMYK"
+        case .bitmap: return "Bitmap (1-bit)"
         }
     }
 
@@ -21,6 +23,8 @@ enum PsdOutputColor: String, CaseIterable, Equatable, Sendable {
             return "Exports the document's RGB or grayscale pixels."
         case .cmyk:
             return "Converts an RGB image to CMYK for this PSD using the chosen profile (relative colorimetric with black-point compensation). Output is 8-bit for 8-bit images and 16-bit otherwise. Editing stays RGB."
+        case .bitmap:
+            return "Exports the visible grayscale or indexed image as opaque black and white. Intermediate gray and transparency are refused. Layers and metadata are omitted; save XCF to keep editing."
         }
     }
 }

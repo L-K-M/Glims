@@ -3378,7 +3378,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let export = ExportSavePanel(baseName: DocumentFileState.suggestedBaseName(imageDocument.name),
                                      settings: settings,
                                      context: imageDocument.colorInfo.mode == .cmyk
-                                        ? .nativeCmyk(profileName: imageDocument.colorInfo.profileLabel) : .ordinary)
+                                        ? .nativeCmyk(profileName: imageDocument.colorInfo.profileLabel) : .ordinary,
+                                     supportsBitmapPSD: imageDocument.session.supportsBitmapPSD &&
+                                        [.grayscale, .indexed].contains(imageDocument.colorInfo.mode))
         export.panel.directoryURL = imageDocument.fileState.lastExportURL?.deletingLastPathComponent() ?? exportDirectory
         export.panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = export.panel.url, let self,

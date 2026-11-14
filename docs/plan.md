@@ -6099,12 +6099,15 @@ the four-engine real-window checks above were local. Set
 missing selection or identity fail instead of skipping this coverage. Hosted
 review, integration and bundle qualification remain open.
 
-### Photoshop Bitmap PSD export (foundation)
+### Photoshop Bitmap PSD export (candidate)
 
-A private bounded serializer can write opaque binary black-and-white pixels
-as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
-chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
-independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
-user interface yet. Color conversion, alpha, metadata,
-non-binary input and preserved editable document mode remain separate work.
-See [bitmap-psd.md](bitmap-psd.md).
+An explicit one-bit Bitmap PSD export accepts opaque binary grayscale or
+indexed canvases, flattens the visible appearance, and refuses intermediate
+gray or transparency instead of silently converting it. The source image and
+history remain untouched; metadata and layers are omitted. The real export
+sheet and Repeat Export pass a focused window test, with older adapters
+refusing safely. Literal codec and atomic file tests pass under sanitizers,
+and all four engines pass native round-trip and refusal tests. Full editor
+compatibility, review and integration remain open. Conversion, dithering,
+metadata and preserved editable Bitmap mode are separate work. See
+[bitmap-psd.md](bitmap-psd.md).
