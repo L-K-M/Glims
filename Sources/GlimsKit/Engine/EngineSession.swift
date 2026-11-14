@@ -550,6 +550,12 @@ final class EngineSession: @unchecked Sendable {
         return api.image_lab_layer_identity != nil && api.image_change_lab_layer_properties != nil
     }
 
+    var supportsLabLayerSnapshot: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_layer_snapshot),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_lab_layer_snapshot) else { return false }
+        return api.image_lab_layer_snapshot != nil
+    }
+
     var supportsLabLayerBrush: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_lab_layer),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_lab_layer) else { return false }
@@ -704,6 +710,39 @@ final class EngineSession: @unchecked Sendable {
     struct LabLayerFillTarget: Equatable, Sendable {
         let root: Int32
         let uuid: UUID
+    }
+
+    struct LabLayerSnapshot: Equatable {
+        let layer: Layer
+        let identity: UUID
+    }
+
+    /// Capture rows and identities in one native operation. A fixed capacity
+    /// avoids pairing a count probe with a later, potentially changed list.
+    func labLayerSnapshot(_ image: Int32) throws -> [LabLayerSnapshot] {
+        guard supportsLabLayerSnapshot, let read = api.image_lab_layer_snapshot else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot safely identify displayed Lab layers.")
+        }
+        let limit = 256
+        var rows = [GlimsLabLayerSnapshotRow](repeating: GlimsLabLayerSnapshotRow(), count: limit)
+        var count: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            try check(read(engine, image, buffer.baseAddress, Int32(limit), &count), nil)
+        }
+        guard count >= 0, count <= limit else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab layer snapshot is incomplete.")
+        }
+        let zero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        var ids = Set<Int32>(), identities = Set<UUID>()
+        return try rows.prefix(Int(count)).map { row in
+            let identity = UUID(uuid: row.uuid)
+            guard row.layer.id > 0, identity != zero,
+                  ids.insert(row.layer.id).inserted, identities.insert(identity).inserted else {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The Lab layer snapshot has invalid identities.")
+            }
+            return LabLayerSnapshot(layer: Self.layer(row.layer), identity: identity)
+        }
     }
 
     func labLayerFillTarget(_ image: Int32, root: Int32) throws -> LabLayerFillTarget {

@@ -13,6 +13,9 @@ final class LabLayerPropertyTransportTests: XCTestCase {
         var message: String?
         var freed = 0
         var stopped = false
+        var snapshotRows: [GlimsLabLayerSnapshotRow] = []
+        var snapshotCount: Int32?
+        var snapshotCalls = 0
 
         static func from(_ engine: OpaquePointer?) -> Producer {
             Unmanaged<Producer>.fromOpaque(UnsafeRawPointer(engine!)).takeUnretainedValue()
@@ -67,6 +70,17 @@ final class LabLayerPropertyTransportTests: XCTestCase {
             error?.pointee = producer.message.map { producer.errorString($0) }
             return producer.status
         }
+        api.image_lab_layer_snapshot = { engine, _, rows, capacity, count in
+            let producer = Producer.from(engine)
+            producer.snapshotCalls += 1
+            count?.pointee = producer.snapshotCount ?? Int32(producer.snapshotRows.count)
+            if let rows {
+                for index in 0..<min(Int(capacity), producer.snapshotRows.count) {
+                    rows[index] = producer.snapshotRows[index]
+                }
+            }
+            return producer.status
+        }
         return api
     }
 
@@ -101,6 +115,58 @@ final class LabLayerPropertyTransportTests: XCTestCase {
 
     private let target = EngineSession.LabLayerFillTarget(root: 17, uuid: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!)
     private let change = EngineSession.LayerChange(isVisible: false, opacity: 0.375)
+
+    func testLayerSnapshotRefusesOldPrefixAndMissingSlot() throws {
+        try withSession(configure: {
+            $0.struct_size = UInt32(MemoryLayout<GlimsEngineAPI>.offset(of: \.image_lab_layer_snapshot)!)
+        }, guardedPrefix: true) { session, producer in
+            XCTAssertFalse(session.supportsLabLayerSnapshot)
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            XCTAssertEqual(producer.snapshotCalls, 0)
+        }
+        try withSession(configure: { $0.image_lab_layer_snapshot = nil }) { session, producer in
+            XCTAssertFalse(session.supportsLabLayerSnapshot)
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            XCTAssertEqual(producer.snapshotCalls, 0)
+        }
+    }
+
+    func testLayerSnapshotPairsRowsAndRejectsMalformedNativeResults() throws {
+        let producer = Producer()
+        var first = GlimsLabLayerSnapshotRow(), second = GlimsLabLayerSnapshotRow()
+        first.layer.id = 17; first.layer.opacity = 0.375; first.layer.visible = true
+        first.uuid = target.uuid.uuid
+        second.layer.id = 23; second.layer.opacity = 0.75
+        second.uuid = UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!.uuid
+        producer.snapshotRows = [first, second]
+        try withSession(producer) { session, state in
+            XCTAssertTrue(session.supportsLabLayerSnapshot)
+            let rows = try session.labLayerSnapshot(19)
+            XCTAssertEqual(rows.map(\.layer.id), [17, 23])
+            XCTAssertEqual(rows.map(\.identity), [UUID(uuid: first.uuid), UUID(uuid: second.uuid)])
+            XCTAssertEqual(rows.map(\.layer.opacity), [0.375, 0.75])
+            XCTAssertEqual(state.snapshotCalls, 1)
+            state.snapshotCount = 257
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            state.snapshotCount = -1
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            state.snapshotCount = nil
+            state.snapshotRows[1].layer.id = first.layer.id
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            state.snapshotRows[1] = second
+            state.snapshotRows[1].uuid = first.uuid
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            state.snapshotRows[1] = second
+            state.snapshotRows[1].uuid = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            state.snapshotRows[1] = second
+            state.snapshotRows[1].layer.id = 0
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+            state.snapshotRows[1] = second
+            state.status = GLIMS_STATUS_UNSUPPORTED
+            XCTAssertThrowsError(try session.labLayerSnapshot(19))
+        }
+    }
 
     func testOlderGuardPagePrefixRefusesGuardedCallButKeepsOrdinaryChange() throws {
         try withSession(configure: {
