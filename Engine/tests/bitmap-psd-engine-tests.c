@@ -64,12 +64,13 @@ int main(int argc, char **argv)
   GlimsEngineGetAPIFunction get_api = (GlimsEngineGetAPIFunction) dlsym(library, "glims_engine_get_api");
   const GlimsEngineAPI *api = get_api ? get_api(GLIMS_ENGINE_API_VERSION) : NULL;
   if (!api || api->struct_size < offsetof(GlimsEngineAPI, image_export_bitmap_psd) + sizeof api->image_export_bitmap_psd || !api->image_export_bitmap_psd ||
-      api->struct_size < offsetof(GlimsEngineAPI, image_export_bitmap_threshold_psd) + sizeof api->image_export_bitmap_threshold_psd || !api->image_export_bitmap_threshold_psd) return 2;
-  char user[1024], cache[1024], input[1024], nonbinary[1024], single[1024], ramp[1024], ramp16[1024], output[1024];
+      api->struct_size < offsetof(GlimsEngineAPI, image_export_bitmap_threshold_psd) + sizeof api->image_export_bitmap_threshold_psd || !api->image_export_bitmap_threshold_psd ||
+      api->struct_size < offsetof(GlimsEngineAPI, image_export_bitmap_diffusion_psd) + sizeof api->image_export_bitmap_diffusion_psd || !api->image_export_bitmap_diffusion_psd) return 2;
+  char user[1024], cache[1024], input[1024], nonbinary[1024], single[1024], ramp[1024], ramp16[1024], half[1024], output[1024];
   snprintf(user,sizeof user,"%s/user",argv[2]); snprintf(cache,sizeof cache,"%s/cache",argv[2]);
   snprintf(input,sizeof input,"%s/input.pgm",argv[2]); snprintf(nonbinary,sizeof nonbinary,"%s/gray.pgm",argv[2]);
   snprintf(output,sizeof output,"%s/output.psd",argv[2]); snprintf(single,sizeof single,"%s/single.pgm",argv[2]);
-  snprintf(ramp,sizeof ramp,"%s/ramp.pgm",argv[2]); snprintf(ramp16,sizeof ramp16,"%s/ramp16.pgm",argv[2]);
+  snprintf(ramp,sizeof ramp,"%s/ramp.pgm",argv[2]); snprintf(ramp16,sizeof ramp16,"%s/ramp16.pgm",argv[2]); snprintf(half,sizeof half,"%s/half.pgm",argv[2]);
   static const unsigned char pgm[] = "P5\n9 2\n255\n"
     "\000\377\000\377\000\377\000\377\000"
     "\377\000\377\000\377\000\377\000\377";
@@ -77,11 +78,17 @@ int main(int argc, char **argv)
   static const unsigned char white[] = "P5\n1 1\n255\n\377";
   static const unsigned char ramp_bytes[] = "P5\n5 1\n255\n\000\100\177\200\377";
   static const unsigned char ramp16_bytes[] = "P5\n5 1\n65535\n\000\000\100\100\177\377\200\000\377\377";
+  static const unsigned char half_bytes[] = "P5\n4 4\n255\n"
+    "\200\200\200\200\200\200\200\200\200\200\200\200\200\200\200\200";
+  static const unsigned char dithered_psd[] = {
+    '8','B','P','S',0,1, 0,0,0,0,0,0, 0,1, 0,0,0,4, 0,0,0,4, 0,1, 0,0,
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0, 0x50,0xa0,0x50,0xa0
+  };
   static const unsigned char psd[] = {
     '8','B','P','S',0,1, 0,0,0,0,0,0, 0,1, 0,0,0,2, 0,0,0,9, 0,1, 0,0,
     0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0, 0xaa,0x80,0x55,0x00
   };
-  if (!write_bytes(input,pgm,sizeof pgm-1) || !write_bytes(nonbinary,gray,sizeof gray-1) || !write_bytes(single,white,sizeof white-1) || !write_bytes(ramp,ramp_bytes,sizeof ramp_bytes-1) || !write_bytes(ramp16,ramp16_bytes,sizeof ramp16_bytes-1)) return 2;
+  if (!write_bytes(input,pgm,sizeof pgm-1) || !write_bytes(nonbinary,gray,sizeof gray-1) || !write_bytes(single,white,sizeof white-1) || !write_bytes(ramp,ramp_bytes,sizeof ramp_bytes-1) || !write_bytes(ramp16,ramp16_bytes,sizeof ramp16_bytes-1) || !write_bytes(half,half_bytes,sizeof half_bytes-1)) return 2;
   CancelFixture cancel = { .api=api, .idle_add=(IdleAdd)dlsym(library,"g_idle_add") };
   if (!cancel.idle_add) { fprintf(stderr,"missing g_idle_add in adapter dependencies\n"); return 2; }
   GlimsEngineConfig config = { .struct_size=sizeof config, .user_directory=user, .cache_directory=cache,
@@ -211,6 +218,30 @@ int main(int argc, char **argv)
     status=api->image_export_bitmap_threshold_psd(engine,shades16,output,128,&error);
     CHECK(status==GLIMS_STATUS_OK && packed_byte(output,0xf0), "16-bit threshold honors its inclusive boundary"); free_error(api,&error);
     api->image_close(engine,shades16);
+  }
+  GlimsImageID half_image=0;
+  status=api->image_open(engine,half,&half_image,&error);
+  CHECK(status==GLIMS_STATUS_OK && half_image, "open mid-gray diffusion fixture"); free_error(api,&error);
+  if(half_image) {
+    GlimsUndoInfo before={0},after={0}; api->image_undo_info(engine,half_image,&before);
+    status=api->image_export_bitmap_diffusion_psd(engine,half_image,output,&error);
+    CHECK(status==GLIMS_STATUS_OK && has_bytes(output,dithered_psd,sizeof dithered_psd),
+          "diffusion export matches the independently calculated checkerboard PSD"); free_error(api,&error);
+    CHECK(api->image_undo_info(engine,half_image,&after)==GLIMS_STATUS_OK && before.undo_count==after.undo_count && before.redo_count==after.redo_count,
+          "diffusion export preserves source history");
+    static const char sentinel[]="diffusion-original"; write_bytes(output,sentinel,sizeof sentinel-1);
+    cancel.scheduled=cancel.cancelled=0; cancel.armed=1;
+    status=api->image_export_bitmap_diffusion_psd(engine,half_image,output,&error); cancel.armed=0;
+    CHECK(cancel.scheduled && cancel.cancelled && status==GLIMS_STATUS_CANCELLED && has_bytes(output,sentinel,sizeof sentinel-1),
+          "diffusion cancellation preserves the destination"); free_error(api,&error);
+    GlimsLayerInfo layer; int32_t count=0;
+    if(api->image_layers(engine,half_image,&layer,1,&count)==GLIMS_STATUS_OK && count>0) {
+      GlimsLayerChange change={.struct_size=sizeof change,.properties=GLIMS_LAYER_OPACITY,.opacity=0.5};
+      CHECK(api->layer_change(engine,half_image,layer.id,&change,&error)==GLIMS_STATUS_OK, "make diffusion fixture transparent"); free_error(api,&error);
+      status=api->image_export_bitmap_diffusion_psd(engine,half_image,output,&error);
+      CHECK(status!=GLIMS_STATUS_OK && has_bytes(output,sentinel,sizeof sentinel-1), "diffusion refuses transparency without replacing destination"); free_error(api,&error);
+    } else CHECK(0,"find diffusion fixture layer");
+    api->image_close(engine,half_image);
   }
   GlimsImageID one=0, rgb=0;
   status=api->image_open(engine,single,&one,&error);

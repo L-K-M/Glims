@@ -1989,6 +1989,12 @@ final class EngineSession: @unchecked Sendable {
         return api.image_export_bitmap_threshold_psd != nil
     }
 
+    var supportsBitmapDiffusionPSD: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_diffusion_psd),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_export_bitmap_diffusion_psd) else { return false }
+        return api.image_export_bitmap_diffusion_psd != nil
+    }
+
     func export(_ image: Int32, to path: String, settings: ExportSettings) throws {
         if settings.format == .psd, settings.psdColor == .bitmap {
             guard settings.isReadyToExport, supportsBitmapPSD, let export = api.image_export_bitmap_psd else {
@@ -1996,14 +2002,21 @@ final class EngineSession: @unchecked Sendable {
                                   message: "Bitmap PSD export is unavailable with these settings or this image engine.")
             }
             var error: UnsafeMutablePointer<CChar>?
-            if settings.bitmapMethod == .threshold {
+            switch settings.bitmapMethod {
+            case .existing:
+                try check(export(engine, image, path, &error), error)
+            case .threshold:
                 guard supportsBitmapThresholdPSD, let convert = api.image_export_bitmap_threshold_psd else {
                     throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                       message: "Threshold Bitmap export requires a newer image engine.")
                 }
                 try check(convert(engine, image, path, UInt32(settings.bitmapThreshold), &error), error)
-            } else {
-                try check(export(engine, image, path, &error), error)
+            case .diffusion:
+                guard supportsBitmapDiffusionPSD, let convert = api.image_export_bitmap_diffusion_psd else {
+                    throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                      message: "Diffusion Bitmap export requires a newer image engine.")
+                }
+                try check(convert(engine, image, path, &error), error)
             }
             return
         }

@@ -116,6 +116,28 @@ extension EngineSmokeTest {
                   "Bitmap threshold Batch removes its staging directory")
         }
 
+        if session.supportsBitmapPSD && session.supportsBitmapDiffusionPSD {
+            let grayInput = root.appendingPathComponent("Diffusion input.pgm")
+            var gray = Data("P5\n4 4\n255\n".utf8)
+            gray.append(contentsOf: Array(repeating: UInt8(128), count: 16))
+            try gray.write(to: grayInput)
+            var bitmapSettings = ExportSettings()
+            bitmapSettings.format = .psd
+            bitmapSettings.psdColor = .bitmap
+            bitmapSettings.psdLayout = .merged
+            bitmapSettings.bitmapMethod = .diffusion
+            let destination = try folder("bitmap-diffusion")
+            let items = try run(flip, [grayInput], destination, format: .exported(bitmapSettings))
+            try require(items.count == 1, "Bitmap diffusion Batch result missing")
+            let output = try saved(items[0])
+            let bitmapBytes = try Data(contentsOf: output)
+            check(bitmapBytes.count == 44 && bitmapBytes[23] == 1 && bitmapBytes[25] == 0 &&
+                  Array(bitmapBytes[40..<44]) == [0x50, 0xa0, 0x50, 0xa0],
+                  "Batch publishes the independently expected diffusion-dithered Bitmap PSD")
+            check(try Data(contentsOf: grayInput) == gray,
+                  "Bitmap diffusion Batch preserves the original input file")
+        }
+
         // The shared export form must carry its PSD layout through Batch's
         // private document, staging filename and asynchronous publication.
         let layeredInput = root.appendingPathComponent("Layered.xcf")
