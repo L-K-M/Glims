@@ -15,6 +15,11 @@
 
 #include <math.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <glib/gstdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "core/gimp.h"
 #include "core/gimpcontainer.h"
@@ -515,13 +520,21 @@ image_open (GlimsEngine *engine, const char *path, GlimsImageID *out,
     {
       /* The choice is explicit and applies only to real PSD/PSB bytes, not
        * merely a filename. The upstream merged loader validates the rest. */
-      guint8 header[6]; gsize got = 0;
-      GFileInputStream *stream = g_file_read (file, NULL, &gerror);
-      gboolean valid = stream && g_input_stream_read_all (G_INPUT_STREAM (stream), header,
-                            sizeof header, &got, NULL, &gerror) && got == sizeof header &&
-                       !memcmp (header, "8BPS", 4) && header[4] == 0 &&
-                       (header[5] == 1 || header[5] == 2);
-      g_clear_object (&stream);
+      guint8 header[6]; size_t got = 0; struct stat info;
+      /* Nonblocking admission prevents a named pipe from freezing the engine
+       * thread before GIMP gets a chance to reject it. */
+      int fd = g_open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
+      gboolean regular = fd >= 0 && fstat (fd, &info) == 0 && S_ISREG (info.st_mode);
+      while (regular && got < sizeof header)
+        {
+          ssize_t n = read (fd, header + got, sizeof header - got);
+          if (n < 0 && errno == EINTR) continue;
+          if (n <= 0) break;
+          got += (size_t) n;
+        }
+      if (fd >= 0) close (fd);
+      gboolean valid = regular && got == sizeof header && !memcmp (header, "8BPS", 4) &&
+                       header[4] == 0 && (header[5] == 1 || header[5] == 2);
       if (!valid)
         {
           g_clear_object (&source_info); g_object_unref (file);
