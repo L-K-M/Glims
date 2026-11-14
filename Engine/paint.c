@@ -939,16 +939,27 @@ glims_stroke_begin_with_capture_facts (GlimsEngine               *engine,
                               expected_fingerprint, facts, NULL, error);
 }
 
-GlimsStatus
-glims_stroke_begin_v2 (GlimsEngine                *engine,
-                       GlimsImageID                image,
-                       GlimsItemID                 drawable,
-                       GlimsResourceID             brush_id,
-                       const GlimsBrushSettings   *brush,
-                       const GlimsStrokePacketV2  *packet,
-                       GlimsStrokeID              *out,
-                       char                      **error)
+static GlimsStatus
+stroke_begin_v2_common (GlimsEngine                *engine,
+                        GlimsImageID                image,
+                        GlimsItemID                 drawable,
+                        GlimsResourceID             brush_id,
+                        const GlimsBrushSettings   *brush,
+                        const GlimsStrokePacketV2  *packet,
+                        const char                 *expected_fingerprint,
+                        GlimsStrokeID              *out,
+                        GlimsStrokeCaptureFacts    *facts,
+                        char                      **error)
 {
+  if (expected_fingerprint)
+    {
+      if (!brush_id || strnlen (expected_fingerprint, 65) != 64)
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+      for (gsize i = 0; i < 64; i++)
+        if (!g_ascii_isdigit (expected_fingerprint[i]) &&
+            (expected_fingerprint[i] < 'a' || expected_fingerprint[i] > 'f'))
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
   GlimsStrokeSampleV2 *samples = NULL;
   gsize count;
   if (out) *out = 0;
@@ -974,10 +985,31 @@ glims_stroke_begin_v2 (GlimsEngine                *engine,
   GlimsStrokePoint first = {p->x, p->y, p->pressure, p->xtilt, p->ytilt, p->time_ms};
   GimpCoords coords = to_coords_v2 (p);
   status = stroke_begin_common (engine, image, drawable, brush, resource, &first, &coords,
-                                out, NULL, NULL, NULL, error);
+                                out, expected_fingerprint, facts, NULL, error);
   g_object_unref (resource);
   g_free (samples);
   return status;
+}
+
+GlimsStatus
+glims_stroke_begin_v2 (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
+                       GlimsResourceID brush_id, const GlimsBrushSettings *brush,
+                       const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  return stroke_begin_v2_common (engine, image, drawable, brush_id, brush, packet,
+                                 NULL, out, NULL, error);
+}
+
+GlimsStatus
+glims_stroke_begin_v2_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+                                          GlimsItemID drawable, GlimsResourceID brush_id,
+                                          const GlimsBrushSettings *brush,
+                                          const GlimsStrokePacketV2 *packet,
+                                          const char *expected_fingerprint, GlimsStrokeID *out,
+                                          GlimsStrokeCaptureFacts *facts, char **error)
+{
+  return stroke_begin_v2_common (engine, image, drawable, brush_id, brush, packet,
+                                 expected_fingerprint, out, facts, error);
 }
 
 static GlimsStatus

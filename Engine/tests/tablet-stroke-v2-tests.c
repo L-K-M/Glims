@@ -592,6 +592,54 @@ cleanup:
   close_scene (engine, &scene);
 }
 
+static void
+capture_delivery (GlimsEngine *engine, GlimsResourceID inherited)
+{
+  Scene scene = {0}; GlimsStrokeID stroke = 0; Snapshot before, after;
+  GlimsStrokeCaptureFacts facts = { .struct_size = sizeof facts }, again = { .struct_size = sizeof again };
+  GlimsStrokeSampleV2 first_sample = { .struct_size = sizeof first_sample, .flags = 3,
+    .x = 8.5, .y = 10.5, .pressure = .4, .xtilt = -.2, .ytilt = .3,
+    .time_ms = 0xfffffffeu, .rotation_turns = .25, .tangential_pressure = -1 };
+  GlimsStrokeSampleV2 next_sample = { .struct_size = sizeof next_sample, .flags = 3,
+    .x = 14.5, .y = 13.5, .pressure = .8, .xtilt = .5, .ytilt = -.4,
+    .time_ms = 0, .rotation_turns = .75, .tangential_pressure = 1 };
+  GlimsStrokePacketV2 first = packet (&first_sample, 1), next = packet (&next_sample, 1);
+  NEED (seed (engine, &scene) && snapshot (engine, &scene, &before), "V2 capture coordinate scene starts");
+  g_array_set_size (deliveries, 0);
+  NEED (api->stroke_begin_v2_with_capture_facts (engine, scene.image, scene.layer, inherited,
+      &pencil, &first, NULL, &stroke, &facts, NULL) == GLIMS_STATUS_OK && stroke && facts.fingerprint,
+      "V2 capture begins with a fingerprint");
+  CHECK (deliveries->len == 3 &&
+    literal_delivery (0, EVENT_START, 8.5, 10.5, .4, -.2, .3, 0, .25, 0, inherited) &&
+    literal_delivery (2, EVENT_MOTION, 8.5, 10.5, .4, -.2, .3, 0xfffffffeu, .25, 0, inherited),
+    "V2 capture delivers both literal optional axes at stroke start");
+  NEED (api->stroke_continue_v2 (engine, stroke, &next, NULL) == GLIMS_STATUS_OK &&
+    deliveries->len == 4 &&
+    literal_delivery (3, EVENT_INTERPOLATE, 14.5, 13.5, .8, .5, -.4, 0, .75, 1, inherited),
+    "V2 capture delivers both axes across timestamp wrap");
+  NEED (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "V2 capture ends"); stroke = 0;
+  NEED (api->image_undo (engine, scene.image) == GLIMS_STATUS_OK && snapshot (engine, &scene, &before),
+        "V2 capture can be undone before guarded replay");
+  char wrong[65]; memset (wrong, 'a', 64); wrong[64] = 0;
+  if (!strcmp (wrong, facts.fingerprint)) wrong[0] = 'b';
+  guint n = deliveries->len;
+  CHECK (api->stroke_begin_v2_with_capture_facts (engine, scene.image, scene.layer, inherited,
+      &pencil, &first, wrong, &stroke, &again, NULL) == GLIMS_STATUS_FAILED && !stroke &&
+      deliveries->len == n && snapshot (engine, &scene, &after) && unchanged (&before, &after),
+      "mismatched V2 capture fingerprint refuses before any Core delivery");
+  NEED (api->stroke_begin_v2_with_capture_facts (engine, scene.image, scene.layer, inherited,
+      &pencil, &first, facts.fingerprint, &stroke, &again, NULL) == GLIMS_STATUS_OK && stroke,
+      "matching V2 capture fingerprint starts replay");
+  CHECK (deliveries->len == n + 3 &&
+    literal_delivery (n, EVENT_START, 8.5, 10.5, .4, -.2, .3, 0, .25, 0, inherited),
+    "guarded V2 replay delivers literal rotation and tangential pressure");
+cleanup:
+  if (stroke) api->stroke_end (engine, stroke);
+  api->free_string (facts.brush_name); api->free_string (facts.brush_collection); api->free_string (facts.fingerprint);
+  api->free_string (again.brush_name); api->free_string (again.brush_collection); api->free_string (again.fingerprint);
+  close_scene (engine, &scene);
+}
+
 static GlimsStatus
 run_on_engine (GlimsEngine *engine, gpointer unused)
 {
@@ -607,6 +655,11 @@ run_on_engine (GlimsEngine *engine, gpointer unused)
     return GLIMS_STATUS_OK;
   }
   delivery_and_pixels (engine, inherited);
+  if (api->struct_size >= offsetof (GlimsEngineAPI, stroke_begin_v2_with_capture_facts) +
+                          sizeof api->stroke_begin_v2_with_capture_facts && api->stroke_begin_v2_with_capture_facts)
+    capture_delivery (engine, inherited);
+  else
+    puts ("NOT RUN V2 capture coordinate oracle: no capture slot");
   malformed_samples (engine);
   packet_shapes_and_times (engine);
   future_alignment_and_limits (engine, inherited);
