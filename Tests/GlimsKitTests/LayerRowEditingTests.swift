@@ -31,6 +31,21 @@ final class LayerRowEditingTests: XCTestCase {
         XCTAssertNil(shown.layer(for: NSObject(), for: owner, currentLayers: [first, second]))
     }
 
+    func testDisplayedLabIdentityStaysWithTheSnapshotAcrossAReusedLayerID() {
+        let owner = NSObject(), first = UUID(), replacement = UUID()
+        var identities: [Int32: UUID] = [7: first]
+        let snapshot = LayerListSnapshot(document: owner, layers: [makeLayer(id: 7)],
+                                         labIdentities: identities)
+        identities[7] = replacement
+        XCTAssertEqual(snapshot.labIdentity(for: 7), first)
+        XCTAssertNotEqual(snapshot.labIdentity(for: 7), identities[7])
+        XCTAssertNil(snapshot.labIdentity(for: 8))
+        let reused = LayerListSnapshot(document: owner, layers: [makeLayer(id: 7)], labIdentities: identities)
+        XCTAssertEqual(reused.labIdentity(for: 7), replacement)
+        let context = LayerRowView.Context(document: owner, layerID: 7, labIdentity: snapshot.labIdentity(for: 7))
+        XCTAssertEqual(context.labIdentity, first)
+    }
+
     /// Records what a row tried to change and whether the document accepted.
     private final class Commit {
         var changes: [EngineSession.LayerChange] = []

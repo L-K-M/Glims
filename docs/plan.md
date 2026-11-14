@@ -6085,3 +6085,16 @@ live recording. Cross-engine checks, review and integration remain pending.
 The candidate Swift bridge reads the bounded snapshot in one call and rejects
 incomplete counts, duplicate or zero identities and invalid layer IDs. Older
 engine API prefixes refuse this capability without reading past their bounds.
+
+Live layered Lab property recording now carries the snapshot identity with the
+displayed row or opacity target and uses the guarded native operation. The
+recorded layer remains explicit even when it is not selected. Unsupported
+engines keep these controls disabled during recording; structural operations
+and Undo remain gated while recording. Real-window tests on all four engines
+cover visibility, name, opacity, Save, replay, Undo and reentrant Stop, and an
+older adapter refuses capture. The full Swift suite passes 1,787 tests.
+Hosted CI builds a shell-only app and does not run this focused native case;
+the four-engine real-window checks above were local. Set
+`GLIMS_REQUIRE_LAB_LIVE_PROPERTIES=1` in the native fixture run to make a
+missing selection or identity fail instead of skipping this coverage. Hosted
+review, integration and bundle qualification remain open.
