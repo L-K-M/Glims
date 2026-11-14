@@ -6194,4 +6194,9 @@ baseline runs and between candidate runs. Its cause remains unverified.
 
 All four engines pass their conformance, display-sampling, legacy-alpha and
 component-editor checks; the extended legacy fixture passes 615 checks per
-engine. Full app, independent review and latest-head CI remain in progress.
+engine. Full editor checks pass 3,355 / 3,329 / 3,355 / 3,355 on 3.2.8,
+3.0.8, 3.2.0 and master. The separate pinned bundle passes its 2,268 native,
+14 Duotone preservation, 20 Duotone export, 13 composite import and 3,355
+editor checks with development trees denied. A focused independent source
+review found no concrete defect; it did not run tests or audit all upstream
+validation internals. Latest-head hosted CI and review remain in progress.
