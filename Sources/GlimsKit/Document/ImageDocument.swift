@@ -3618,7 +3618,13 @@ final class ImageDocument {
         let capture: RecorderCapture?
         let labTarget: EngineSession.LabLayerFillTarget?
         if limited && recorder.isRecording {
-            guard let identity = labIdentity, labLayerIdentities[layer] == identity else {
+            guard let identity = labIdentity else {
+                let error = RecorderReplayError(message: "The displayed Lab layer could not be identified for recording.")
+                onError?(error.localizedDescription)
+                completion(.failure(error))
+                return
+            }
+            guard labLayerIdentities[layer] == identity else {
                 let error = RecorderReplayError(message: "The displayed Lab layer is no longer available for recording.")
                 onError?(error.localizedDescription)
                 completion(.failure(error))
@@ -4780,7 +4786,9 @@ final class ImageDocument {
         }
         guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
-        guard !(storage.layout == .layeredLab && recorder.isRecording) else { return }
+        guard !(storage.layout == .layeredLab && recorder.isRecording) else {
+            onError?("Stop recording before undoing a Lab layer edit."); return
+        }
         enqueueTargetCommand { session, image in try session.undo(image) }
     }
 
@@ -4790,7 +4798,9 @@ final class ImageDocument {
         }
         guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
-        guard !(storage.layout == .layeredLab && recorder.isRecording) else { return }
+        guard !(storage.layout == .layeredLab && recorder.isRecording) else {
+            onError?("Stop recording before redoing a Lab layer edit."); return
+        }
         enqueueTargetCommand { session, image in try session.redo(image) }
     }
 
@@ -6728,7 +6738,8 @@ final class ImageDocument {
         guard paintTargetIsValid else { throw DocumentError.targetChanged }
     }
 
-    /// Recorder-specific UI subscriptions leave the existing single callback
+    /// Recorder callbacks run on the main actor. Recorder-specific UI
+    /// subscriptions leave the existing single callback
     /// intact. A snapshot permits listeners to detach or retarget reentrantly.
     func addRecorderObserver(scope: RecorderObserverScope = .commands, _ observer: @escaping () -> Void) -> UUID {
         let token = UUID()

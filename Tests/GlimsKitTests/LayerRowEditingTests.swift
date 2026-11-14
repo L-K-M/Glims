@@ -40,6 +40,8 @@ final class LayerRowEditingTests: XCTestCase {
         XCTAssertEqual(snapshot.labIdentity(for: 7), first)
         XCTAssertNotEqual(snapshot.labIdentity(for: 7), identities[7])
         XCTAssertNil(snapshot.labIdentity(for: 8))
+        let reused = LayerListSnapshot(document: owner, layers: [makeLayer(id: 7)], labIdentities: identities)
+        XCTAssertEqual(reused.labIdentity(for: 7), replacement)
         let context = LayerRowView.Context(document: owner, layerID: 7, labIdentity: snapshot.labIdentity(for: 7))
         XCTAssertEqual(context.labIdentity, first)
     }

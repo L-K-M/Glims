@@ -1311,8 +1311,10 @@ extension EngineSmokeTest {
                 if case .failure = $0 { staleRefused = true }
             }
             let afterStale = try session.undoInfo(image)
-            check(staleRefused && priorHistory == afterStale && opened.recorder.records.isEmpty,
+            check(staleRefused && priorHistory == afterStale && opened.recorder.records.isEmpty &&
+                  errors == ["The displayed Lab layer is no longer available for recording."],
                   "a stale displayed identity refuses before changing or recording a Lab property")
+            errors.removeAll()
             if let row = displayedRow() {
                 check(row.checkbox.isEnabled && row.context.labIdentity == identity,
                       "the nonselected Lab row exposes its captured identity while recording")
@@ -1330,6 +1332,7 @@ extension EngineSmokeTest {
             drain("recorded Lab opacity after Stop")
             let deadline = Date().addingTimeInterval(15)
             while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            check(opened.recorder.pendingCount == 0, "recorded Lab property commands finish settling")
             let records = opened.recorder.records
             check(records.count == 3 && records.allSatisfy {
                 if case .success(.layerProperties) = $0.resolution { return true }
@@ -1371,6 +1374,9 @@ extension EngineSmokeTest {
                       "saved Lab properties replay on their bound nonselected root")
             } else { check(false, "saved Lab properties replay on their bound nonselected root") }
             for _ in 0..<3 { opened.undo(); drain("replayed Lab property Undo") }
+            let afterReplayUndo = try session.layers(image).first(where: { $0.id == other.id })
+            check(afterReplayUndo?.name == other.name && afterReplayUndo?.isVisible == other.isVisible &&
+                  afterReplayUndo?.opacity == other.opacity, "Undo restores the pre-replay Lab layer properties")
             _ = opened.clearRecording()
             func views<T: NSView>(_ view: NSView, _ type: T.Type) -> [T] {
                 ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views($0, type) }
@@ -1383,6 +1389,7 @@ extension EngineSmokeTest {
                 let value = selectedLayer.opacity == 0.5 ? 0.75 : 0.5
                 check(opacity.isEnabled, "selected Lab opacity control is enabled while recording")
                 field.stringValue = value == 0.5 ? "50" : "75"
+                check(field.action != nil, "recorded Lab opacity field has an action")
                 check(field.sendAction(field.action, to: field.target), "recorded Lab opacity field action is delivered")
                 try opened.stopRecording(); drain("recorded Lab opacity field")
                 let edited = try session.layers(image).first(where: { $0.id == selected })
@@ -1397,15 +1404,17 @@ extension EngineSmokeTest {
                let selectedIdentity = opened.labLayerIdentities[selected] {
                 try opened.startRecording()
                 var stoppedReentrantly = false
+                var reentrantStopError: Error?
                 let token = opened.addRecorderObserver {
                     if !stoppedReentrantly && opened.recorder.isRecording {
                         stoppedReentrantly = true
-                        try? opened.stopRecording()
+                        do { try opened.stopRecording() } catch { reentrantStopError = error }
                     }
                 }
                 let value = selectedLayer.opacity == 0.25 ? 0.75 : 0.25
                 opened.changeLayer(selected, .init(opacity: value), labIdentity: selectedIdentity)
                 opened.removeRecorderObserver(token)
+                check(reentrantStopError == nil, "reentrant Recorder Stop succeeds")
                 drain("Lab property after reentrant Stop")
                 let reentrantDeadline = Date().addingTimeInterval(15)
                 while opened.recorder.pendingCount != 0 && Date() < reentrantDeadline {
@@ -1419,6 +1428,27 @@ extension EngineSmokeTest {
                 } else { check(false, "reentrant Stop retains and settles the accepted Lab property edit") }
                 opened.undo(); drain("reentrant Lab property Undo")
             } else { check(false, "selected Lab identity exists for reentrant recording") }
+            check(errors.isEmpty, "live Lab property recording reports no unexpected errors")
+            errors.removeAll()
+            let oldWillChangeLayers = opened.onWillChangeLayers
+            for redo in [false, true] {
+                var startError: Error?
+                opened.onWillChangeLayers = {
+                    do { try opened.startRecording() } catch { startError = error }
+                }
+                let historyBefore = try session.undoInfo(image)
+                if redo { opened.redo() } else { opened.undo() }
+                opened.onWillChangeLayers = oldWillChangeLayers
+                let historyAfter = try session.undoInfo(image)
+                let expected = redo ? "Stop recording before redoing a Lab layer edit."
+                                    : "Stop recording before undoing a Lab layer edit."
+                check(startError == nil && opened.recorder.isRecording && historyBefore == historyAfter && errors == [expected],
+                      "history commands explain refusal when a field starts recording reentrantly")
+                if opened.recorder.isRecording { try opened.stopRecording() }
+                errors.removeAll()
+            }
+        } else if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAB_LIVE_PROPERTIES"] == "1" {
+            check(false, "required live Lab property test has a selection, identity and palette row")
         } else if !session.supportsLabLayerSnapshot {
             try opened.startRecording()
             EngineSmokeTestHost.pumpEvents(for: 0.1)

@@ -6080,4 +6080,6 @@ engines keep these controls disabled during recording; structural operations
 and Undo remain gated while recording. Real-window tests on all four engines
 cover visibility, name, opacity, Save, replay, Undo and reentrant Stop, and an
 older adapter refuses capture. The full Swift suite passes 1,787 tests.
-Hosted review, integration and bundle qualification remain open.
+Hosted CI builds a shell-only app and does not run this focused native case;
+the four-engine real-window checks above were local. Hosted review,
+integration and bundle qualification remain open.
