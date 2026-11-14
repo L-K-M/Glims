@@ -34,6 +34,12 @@ class AppPackagingTests(unittest.TestCase):
         return subprocess.run(["bash", str(self.root / "scripts/build-app.sh"), *args],
                               env=self.env, capture_output=True, text=True)
 
+    def run_build_with_restrictive_umask(self, *args):
+        return subprocess.run(
+            ["bash", "-c", 'umask 077; exec "$@"', "glims-test",
+             "bash", str(self.root / "scripts/build-app.sh"), *args],
+            env=self.env, capture_output=True, text=True)
+
     def test_normal_build_requires_engine_before_compiling(self):
         result = self.run_build()
         self.assertEqual(result.returncode, 1)
@@ -140,6 +146,20 @@ class AppPackagingTests(unittest.TestCase):
         self.assertFalse((app / "Glims.app").exists())
         self.assertEqual(list((self.root / "dist").iterdir()), [app])
 
+    def test_build_from_restrictive_umask_creates_traversable_app(self):
+        self.allow_successful_assembly()
+        (self.root / "Resources/Info.plist").chmod(0o644)
+        (self.root / "tools/Glims").chmod(0o755)
+        result = self.run_build_with_restrictive_umask("--shell-only")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        app = self.root / "dist/Glims.app"
+        for path in (app, app / "Contents", app / "Contents/MacOS",
+                     app / "Contents/Resources"):
+            with self.subTest(path=path):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((app / "Contents/Info.plist").stat().st_mode & 0o777, 0o644)
+        self.assertEqual((app / "Contents/MacOS/Glims").stat().st_mode & 0o777, 0o755)
+
     def test_normal_build_contains_the_engine(self):
         self.allow_successful_assembly()
         pinned = (ROOT / "scripts/engine.env").read_text().split('ENGINE_SETS="')[1].split(':')[0]
@@ -168,13 +188,19 @@ class AppPackagingTests(unittest.TestCase):
                            "assert (contents / 'Frameworks/libglimsengine.dylib').is_file()\n"
                            "target = contents / 'Resources/Engine-Startup'\n"
                            "target.mkdir()\n"
-                           "(target / 'pluginrc').write_text('registry')\n")
-        result = self.run_build()
+                           "(target / 'pluginrc').write_text('registry')\n"
+                           "(target / 'localized/key').mkdir(parents=True)\n"
+                           "(target / 'localized/key/pluginrc').write_text('localized registry')\n")
+        result = self.run_build_with_restrictive_umask()
         self.assertEqual(result.returncode, 0, result.stderr)
         app = self.root / "dist/Glims.app"
         self.assertEqual((app / "Contents/Frameworks/libglimsengine.dylib").read_text(), "engine")
         self.assertTrue(os.access(app / "Contents/MacOS/glims-font-cache", os.X_OK))
         self.assertEqual((app / "Contents/Resources/Engine-Startup/pluginrc").read_text(), "registry")
+        startup = app / "Contents/Resources/Engine-Startup"
+        for path in (startup, startup / "localized", startup / "localized/key"):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((startup / "localized/key/pluginrc").stat().st_mode & 0o777, 0o644)
         # A failed cache-generation step must not publish a partial app.
         marker = app / "previous-version"
         marker.write_text("keep")

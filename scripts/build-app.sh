@@ -21,6 +21,10 @@
 # CODE_SIGN_IDENTITY selects a signing identity; without it the
 # bundle is ad-hoc signed, which runs locally but cannot be notarized.
 set -euo pipefail
+# Bundles must remain traversable and readable when installed for other users,
+# even when the invoking shell uses a restrictive umask. Temporary staging
+# remains private because mktemp creates it with mode 0700.
+umask 022
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${GLIMS_BUILD_DIR:-$PROJECT_ROOT/.build}"
