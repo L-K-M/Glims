@@ -16,7 +16,12 @@
 #include "plug-in/gimppluginmanager.h"
 #include "plug-in/gimppluginmanager-file.h"
 static const GlimsEngineAPI *api;static unsigned checks,failures;
+static GlimsEngine *running_engine;
+static gboolean request_fill_cancel, fill_cancel_scheduled, fill_cancelled;
+static guint fill_cancel_source;
 #define CHECK(c,n) do{gboolean b=!!(c);checks++;if(!b)failures++;printf("%s %s\n",b?"ok":"FAIL",n);fflush(stdout);}while(0)
+static gboolean cancel_fill_on_engine(gpointer unused){(void)unused;fill_cancel_source=0;if(request_fill_cancel)fill_cancelled=running_engine&&api->procedure_cancel(running_engine)==GLIMS_STATUS_OK;return G_SOURCE_REMOVE;}
+static void on_event(void *context,const GlimsEvent *event){(void)context;if(event->kind==GLIMS_EVENT_PROGRESS&&event->active&&event->value>=1&&request_fill_cancel&&!fill_cancel_scheduled){fill_cancel_scheduled=TRUE;fill_cancel_source=g_idle_add(cancel_fill_on_engine,NULL);}}
 static gboolean save_fixture(Gimp *g,GimpImage *im,const char *path){GError *err=NULL;GFile *f=g_file_new_for_path(path);GimpPlugInProcedure *p=gimp_plug_in_manager_file_procedure_find(g->plug_in_manager,GIMP_FILE_PROCEDURE_GROUP_SAVE,f,&err);GimpPDBStatusType s=p?file_save(g,im,NULL,f,p,GIMP_RUN_NONINTERACTIVE,TRUE,FALSE,FALSE,&err):GIMP_PDB_EXECUTION_ERROR;if(err){fprintf(stderr,"fixture save: %s\n",err->message);g_clear_error(&err);}g_object_unref(f);return s==GIMP_PDB_SUCCESS;}
 static GlimsStatus worker(GlimsEngine *engine,gpointer work){
  GlimsLabLayerMap m={.width=4,.height=4,.count=2,.mode=GLIMS_LAB_LAYER_MAP_MODE_LAB,.storage=GLIMS_LAB_LAYER_MAP_STORAGE_U8,.encoding=GLIMS_LAB_LAYER_MAP_ENCODING_LAB_D50};
@@ -165,6 +170,98 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
           "ordinary image refuses a Lab root identity and clears the output");
     CHECK(api->image_close(engine,ordinary)==GLIMS_STATUS_OK,"ordinary identity fixture closes");
    }
+   CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,"fill fixture selects its captured root");
+   GlimsLabLayerFillSettings fill={.struct_size=sizeof fill,.root=rows[0].id,.lightness=0,.a=0,.b=0,.opacity=1};
+   memcpy(fill.uuid,first_identity.uuid,16);
+   GlimsLabSelectOptions fill_selection={.struct_size=sizeof fill_selection,.operation=GLIMS_SELECT_REPLACE};
+   GlimsPoint fill_points[2]={{1,1},{3,3}};error=NULL;
+   CHECK(api->image_select_lab_shape(engine,id,GLIMS_SHAPE_RECTANGLE,fill_points,2,&fill_selection,&error)==GLIMS_STATUS_OK,
+         "public fill fixture selects part of the canvas");if(error)api->free_string(error);error=NULL;
+   guint8 fill_inside_before[4]={0},fill_outside_before[4]={0},fill_inside_after[4]={0},fill_outside_after[4]={0};
+   CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_before,4)==GLIMS_STATUS_OK&&
+         api->image_render(engine,id,1,(GlimsRect){0,0,1,1},fill_outside_before,4)==GLIMS_STATUS_OK,
+         "public fill fixture captures the original pixels");
+   GlimsUndoInfo fill_undo_before={0},fill_undo_after={0};
+   CHECK(api->image_undo_info(engine,id,&fill_undo_before)==GLIMS_STATUS_OK,"public fill captures selection history");
+   GlimsLabLayerFillSettings short_fill=fill;short_fill.struct_size=sizeof short_fill-1;
+   CHECK(api->image_fill_lab_layer(engine,id,&short_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses a short request");if(error)api->free_string(error);error=NULL;
+   GlimsLabLayerFillSettings zero_identity=fill;memset(zero_identity.uuid,0,16);
+   CHECK(api->image_fill_lab_layer(engine,id,&zero_identity,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses an empty UUID");if(error)api->free_string(error);error=NULL;
+   GlimsLabLayerFillSettings unselected=fill;unselected.root=rows[1].id;
+   memcpy(unselected.uuid,m.entries[1].group,16);
+   CHECK(api->image_fill_lab_layer(engine,id,&unselected,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses an unselected logical root");if(error)api->free_string(error);error=NULL;
+   identity_open=glims_lookup_image(engine,id);
+   identity_valid=identity_open&&glims_lab_layer_storage_read(identity_open->image,&identity_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+   if(identity_valid){
+    GlimsLabLayerFillSettings hidden_fill=fill;
+    hidden_fill.root=gimp_item_get_id(GIMP_ITEM(identity_storage.layers[0].planes[0]));
+    CHECK(api->image_fill_lab_layer(engine,id,&hidden_fill,&error)==GLIMS_STATUS_NOT_FOUND,
+          "public fill refuses a hidden scalar plane");if(error)api->free_string(error);error=NULL;
+   }
+   GlimsLabLayerFillSettings stale_fill=fill;stale_fill.uuid[0]^=0xff;
+   CHECK(api->image_fill_lab_layer(engine,id,&stale_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses a stale root UUID");if(error)api->free_string(error);error=NULL;
+   GlimsLabLayerFillSettings invalid=fill;invalid.lightness=NAN;
+   CHECK(api->image_fill_lab_layer(engine,id,&invalid,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses a nonfinite physical color");if(error)api->free_string(error);error=NULL;
+   GlimsLabLayerFillSettings range_fill=fill;range_fill.lightness=100.5;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses L* above 100");if(error)api->free_string(error);error=NULL;
+   range_fill=fill;range_fill.a=-128.5;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses a* below -128");if(error)api->free_string(error);error=NULL;
+   range_fill=fill;range_fill.b=127.5;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses b* above 127");if(error)api->free_string(error);error=NULL;
+   range_fill=fill;range_fill.opacity=1.0001;
+   CHECK(api->image_fill_lab_layer(engine,id,&range_fill,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "public fill refuses opacity above one");if(error)api->free_string(error);error=NULL;
+   guint8 unaligned_fill[sizeof fill+2];memset(unaligned_fill,0xa5,sizeof unaligned_fill);memcpy(unaligned_fill+1,&fill,sizeof fill);
+   request_fill_cancel=TRUE;fill_cancel_scheduled=FALSE;fill_cancelled=FALSE;
+   GlimsStatus fill_status=api->image_fill_lab_layer(engine,id,(const GlimsLabLayerFillSettings*)(unaligned_fill+1),&error);
+   request_fill_cancel=FALSE;
+   if(fill_cancel_source){g_source_remove(fill_cancel_source);fill_cancel_source=0;}
+   CHECK(fill_cancel_scheduled&&fill_cancelled&&fill_status==GLIMS_STATUS_CANCELLED,
+         "public fill honors cancellation after staging");if(error)api->free_string(error);error=NULL;
+   CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+         !memcmp(fill_inside_before,fill_inside_after,4)&&api->image_undo_info(engine,id,&fill_undo_after)==GLIMS_STATUS_OK&&
+         fill_undo_before.undo_count==fill_undo_after.undo_count&&fill_undo_before.redo_count==fill_undo_after.redo_count,
+         "cancelled and refused public fills preserve pixels and history");
+   fill_status=api->image_fill_lab_layer(engine,id,(const GlimsLabLayerFillSettings*)(unaligned_fill+1),&error);
+   CHECK(fill_status==GLIMS_STATUS_OK&&unaligned_fill[0]==0xa5&&unaligned_fill[sizeof unaligned_fill-1]==0xa5,
+         "public fill accepts an unaligned captured request");if(error)api->free_string(error);error=NULL;
+   if(fill_status==GLIMS_STATUS_OK){
+    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          api->image_render(engine,id,1,(GlimsRect){0,0,1,1},fill_outside_after,4)==GLIMS_STATUS_OK&&
+          memcmp(fill_inside_before,fill_inside_after,4)&&!memcmp(fill_outside_before,fill_outside_after,4),
+          "public fill changes only the selected pixels");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          !memcmp(fill_inside_before,fill_inside_after,4),"one Undo restores the public four-plane fill");
+    CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&
+          api->image_render(engine,id,1,(GlimsRect){1,1,1,1},fill_inside_after,4)==GLIMS_STATUS_OK&&
+          memcmp(fill_inside_before,fill_inside_after,4),"Redo restores the public fill");
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"public fill undo restores the original before no-op");
+    GlimsLabLayerFillSettings zero_opacity=fill;zero_opacity.opacity=0;
+    CHECK(api->image_undo_info(engine,id,&fill_undo_before)==GLIMS_STATUS_OK&&
+          api->image_fill_lab_layer(engine,id,&zero_opacity,&error)==GLIMS_STATUS_OK&&
+          api->image_undo_info(engine,id,&fill_undo_after)==GLIMS_STATUS_OK&&
+          fill_undo_before.undo_count==fill_undo_after.undo_count&&fill_undo_before.redo_count==fill_undo_after.redo_count,
+          "zero-opacity public fill preserves Undo and Redo");if(error)api->free_string(error);error=NULL;
+    GlimsOpenImage *fill_open=glims_lookup_image(engine,id);GlimsLabLayerStorage fill_storage;
+    gboolean fill_valid=fill_open&&glims_lab_layer_storage_read(fill_open->image,&fill_storage)==GLIMS_LAB_LAYER_STORAGE_VALID;
+    CHECK(fill_valid,"public fill preserves the layered Lab carrier");
+    if(fill_valid){
+     guint8 other_sample=0;GimpDrawable *other_plane=GIMP_DRAWABLE(fill_storage.layers[1].planes[0]);
+     gegl_buffer_get(gimp_drawable_get_buffer(other_plane),GEGL_RECTANGLE(1,1,1,1),1,
+                     gimp_drawable_get_format(other_plane),&other_sample,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
+     CHECK(other_sample==255,"public fill leaves the other logical root unchanged");
+    }
+   }
+   CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"public fill fixture restores the empty selection");
    GlimsItemID duplicate=0;error=NULL;
    GlimsStatus duplicated=api->layer_command(engine,id,rows[0].id,GLIMS_LAYER_DUPLICATE,&duplicate,&error);
    CHECK(duplicated==GLIMS_STATUS_OK&&duplicate!=0,"public command duplicates a logical Lab layer");
@@ -753,4 +850,4 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
  }
  CHECK(g_file_get_contents(path,&after,&after_size,NULL)&&before&&before_size==after_size&&!memcmp(before,after,before_size),"open/read leaves source XCF bytes unchanged");g_free(before);g_free(after);g_free(path);return GLIMS_STATUS_OK;
 }
-int main(int argc,char **argv){if(argc!=2)return 2;api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);if(!api)return 2;gchar *u=g_build_filename(argv[1],"user",NULL),*c=g_build_filename(argv[1],"cache",NULL);GlimsEngineConfig cfg={.struct_size=sizeof cfg,.user_directory=u,.cache_directory=c};GlimsEngine *engine=NULL;char *error=NULL;GlimsStatus s=api->start(&cfg,&engine,&error);g_free(u);g_free(c);if(s||!engine){fprintf(stderr,"start: %s\n",error?error:"");api->free_string(error);return 2;}api->free_string(error);s=glims_engine_call(engine,worker,argv[1]);api->stop(engine);printf("checks=%u failures=%u\n",checks,failures);return s==GLIMS_STATUS_OK&&!failures?0:1;}
+int main(int argc,char **argv){if(argc!=2)return 2;api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);if(!api)return 2;gchar *u=g_build_filename(argv[1],"user",NULL),*c=g_build_filename(argv[1],"cache",NULL);GlimsEngineConfig cfg={.struct_size=sizeof cfg,.user_directory=u,.cache_directory=c,.on_event=on_event};GlimsEngine *engine=NULL;char *error=NULL;GlimsStatus s=api->start(&cfg,&engine,&error);g_free(u);g_free(c);if(s||!engine){fprintf(stderr,"start: %s\n",error?error:"");api->free_string(error);return 2;}api->free_string(error);running_engine=engine;s=glims_engine_call(engine,worker,argv[1]);running_engine=NULL;api->stop(engine);printf("checks=%u failures=%u\n",checks,failures);return s==GLIMS_STATUS_OK&&!failures?0:1;}
