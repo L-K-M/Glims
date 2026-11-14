@@ -6236,3 +6236,12 @@ builds, covering both signatures, odd/even padding, streaming and failure
 paths. The development engine emits upstream cache cleanup warnings. Real-window,
 bundle, full editor and hosted qualification remain in progress. Retaining
 this data does not enable a color preview or establish Photoshop printing fidelity.
+
+### Photoshop composite file errors (candidate)
+
+Opening a Photoshop composite now reports the operating system's reason when
+the file cannot be opened, inspected or read. Invalid signatures and nonregular
+files still receive the format refusal; named pipes remain nonblocking. A
+missing-file regression reproduced the former misleading format message, and
+the FIFO check has a watchdog. Four-engine and release qualification are in
+progress.
