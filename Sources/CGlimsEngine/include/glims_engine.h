@@ -4319,6 +4319,14 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_lab_layer_snapshot) (GlimsEngine *engine, GlimsImageID image,
                                           GlimsLabLayerSnapshotRow *rows,
                                           int32_t capacity, int32_t *count);
+  /* Slot226: export an ordinary grayscale/indexed document's visible canvas
+   * as a flat 1-bit Bitmap PSD. Every composited pixel must be fully opaque,
+   * exactly black or white; no threshold or color conversion is implied.
+   * Layers, metadata, resolution and profiles are omitted. Absolute local PSD
+   * path only; atomic publication and cancellation match slot182. The source
+   * pixels, history and file identity remain unchanged. Clears *error. */
+  GlimsStatus (*image_export_bitmap_psd) (GlimsEngine *engine, GlimsImageID image,
+                                          const char *path, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

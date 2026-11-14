@@ -50,7 +50,7 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
     let policyPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let policyNote = NSTextField(wrappingLabelWithString: "")
     let outputKindPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    let exportForm = ExportOptionsForm()
+    let exportForm: ExportOptionsForm
     let statusField = NSTextField(wrappingLabelWithString: "")
     let progressIndicator = NSProgressIndicator()
     let resultsView = NSTextView()
@@ -82,6 +82,7 @@ final class RecorderBatchWindowController: NSWindowController, NSWindowDelegate 
 
     init(session: EngineSession) {
         service = RecorderBatchService(session: session)
+        exportForm = ExportOptionsForm(supportsBitmapPSD: session.supportsBitmapPSD)
         let panel = BatchPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 560),
                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                backing: .buffered, defer: false)

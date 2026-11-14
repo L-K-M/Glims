@@ -103,6 +103,38 @@ final class ExportOptionsFormTests: XCTestCase {
         XCTAssertEqual(form.psdLayoutPopup.indexOfSelectedItem, 1)
     }
 
+    func testBitmapPSDChoiceIsExplicitAndKeepsOnlyMergedContent() throws {
+        let form = ExportOptionsForm(supportsBitmapPSD: true)
+        form.selectFormat(.psd)
+        let index = try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap))
+        XCTAssertTrue(try XCTUnwrap(form.psdColorPopup.item(at: index)).isEnabled)
+        form.psdColorPopup.selectItem(at: index)
+        fire(form.psdColorPopup)
+        XCTAssertEqual(form.settings.psdColor, .bitmap)
+        XCTAssertEqual(form.settings.psdLayout, .merged)
+        XCTAssertFalse(form.psdLayoutPopup.isEnabled)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("transparency"))
+        XCTAssertTrue(form.commitEditing())
+        XCTAssertThrowsError(try form.settings.nativeValue(), "Bitmap may never fall through to indexed PSD export")
+        form.psdColorPopup.selectItem(at: try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .document)))
+        fire(form.psdColorPopup)
+        XCTAssertTrue(form.psdLayoutPopup.isEnabled)
+    }
+
+    func testBitmapPSDIsUnavailableWithoutEngineCapability() throws {
+        var value = ExportSettings()
+        value.format = .psd
+        value.psdColor = .bitmap
+        value.psdLayout = .merged
+        let form = ExportOptionsForm(settings: value)
+        let index = try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap))
+        XCTAssertFalse(try XCTUnwrap(form.psdColorPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(form.commitEditing())
+        XCTAssertTrue(form.lastError?.contains("not available") == true)
+        value.psdLayout = .layers
+        XCTAssertFalse(value.isReadyToExport)
+    }
+
     // MARK: Validation gate
 
     func testValidateEnforcesTheTypedQualityRange() {

@@ -1,0 +1,118 @@
+#define _POSIX_C_SOURCE 200809L
+#include "glims_engine.h"
+#include <dlfcn.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+static int failures, checks;
+#define CHECK(c, text) do { int ok = !!(c); checks++; failures += !ok; \
+  printf("%s %s\n", ok ? "ok" : "FAIL", text); fflush(stdout); } while (0)
+
+static int write_bytes(const char *path, const void *bytes, size_t count)
+{
+  FILE *f = fopen(path, "wb"); if (!f) return 0;
+  int ok = fwrite(bytes, 1, count, f) == count;
+  return fclose(f) == 0 && ok;
+}
+static int has_bytes(const char *path, const void *bytes, size_t count)
+{
+  unsigned char data[64]; FILE *f = fopen(path, "rb"); if (!f) return 0;
+  size_t n = fread(data, 1, sizeof data, f); int ok = !ferror(f) && n == count && !memcmp(data, bytes, count);
+  fclose(f); return ok;
+}
+static void free_error(const GlimsEngineAPI *api, char **error)
+{
+  if (*error) api->free_string(*error);
+  *error = NULL;
+}
+int main(int argc, char **argv)
+{
+  if (argc != 3) { fprintf(stderr, "usage: %s ADAPTER WORK\n", argv[0]); return 2; }
+  void *library = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!library) { fprintf(stderr, "%s\n", dlerror()); return 2; }
+  GlimsEngineGetAPIFunction get_api = (GlimsEngineGetAPIFunction) dlsym(library, "glims_engine_get_api");
+  const GlimsEngineAPI *api = get_api ? get_api(GLIMS_ENGINE_API_VERSION) : NULL;
+  if (!api || api->struct_size < offsetof(GlimsEngineAPI, image_export_bitmap_psd) + sizeof api->image_export_bitmap_psd || !api->image_export_bitmap_psd) return 2;
+  char user[1024], cache[1024], input[1024], nonbinary[1024], single[1024], output[1024];
+  snprintf(user,sizeof user,"%s/user",argv[2]); snprintf(cache,sizeof cache,"%s/cache",argv[2]);
+  snprintf(input,sizeof input,"%s/input.pgm",argv[2]); snprintf(nonbinary,sizeof nonbinary,"%s/gray.pgm",argv[2]);
+  snprintf(output,sizeof output,"%s/output.psd",argv[2]); snprintf(single,sizeof single,"%s/single.pgm",argv[2]);
+  static const unsigned char pgm[] = "P5\n9 2\n255\n"
+    "\000\377\000\377\000\377\000\377\000"
+    "\377\000\377\000\377\000\377\000\377";
+  static const unsigned char gray[] = "P5\n1 1\n255\n\200";
+  static const unsigned char white[] = "P5\n1 1\n255\n\377";
+  static const unsigned char psd[] = {
+    '8','B','P','S',0,1, 0,0,0,0,0,0, 0,1, 0,0,0,2, 0,0,0,9, 0,1, 0,0,
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0, 0xaa,0x80,0x55,0x00
+  };
+  if (!write_bytes(input,pgm,sizeof pgm-1) || !write_bytes(nonbinary,gray,sizeof gray-1) || !write_bytes(single,white,sizeof white-1)) return 2;
+  GlimsEngineConfig config = { .struct_size=sizeof config, .user_directory=user, .cache_directory=cache };
+  GlimsEngine *engine = NULL; char *error = NULL;
+  GlimsStatus status = api->start(&config,&engine,&error);
+  CHECK(status == GLIMS_STATUS_OK && engine, "engine starts");
+  if (!engine) { if(error) fprintf(stderr,"%s\n",error); free_error(api,&error); return 1; }
+  free_error(api,&error);
+  GlimsImageID image = 0, reopened = 0, bad = 0;
+  status=api->image_open(engine,input,&image,&error);
+  CHECK(status==GLIMS_STATUS_OK && image, "open binary grayscale fixture");
+  if (error) fprintf(stderr,"open: %s\n",error); free_error(api,&error);
+  if (image) {
+    GlimsImageInfo before={0},after={0}; GlimsUndoInfo undo_before={0},undo_after={0};
+    CHECK(api->image_info(engine,image,&before)==GLIMS_STATUS_OK && api->image_undo_info(engine,image,&undo_before)==GLIMS_STATUS_OK, "capture source state");
+    status=api->image_export_bitmap_psd(engine,image,output,&error);
+    CHECK(status==GLIMS_STATUS_OK && has_bytes(output,psd,sizeof psd), "export writes literal one-bit Bitmap PSD pixels");
+    if(error) fprintf(stderr,"export: %s\n",error); free_error(api,&error);
+    CHECK(api->image_info(engine,image,&after)==GLIMS_STATUS_OK && api->image_undo_info(engine,image,&undo_after)==GLIMS_STATUS_OK && before.dirty==after.dirty && undo_before.undo_count==undo_after.undo_count && undo_before.redo_count==undo_after.redo_count, "export leaves source dirty state and history unchanged");
+    status=api->image_open(engine,output,&reopened,&error);
+    CHECK(status==GLIMS_STATUS_OK && reopened, "GIMP opens the exported Bitmap PSD");
+    if(error) fprintf(stderr,"reopen: %s\n",error); free_error(api,&error);
+    if(reopened) {
+      unsigned char pixels[9*2*4]={0};
+      CHECK(api->image_render(engine,reopened,1.0,(GlimsRect){0,0,9,2},pixels,9*4)==GLIMS_STATUS_OK && pixels[0]==0 && pixels[4]==255 && pixels[9*4]==255 && pixels[10*4]==0, "GIMP round trip retains black and white pixels");
+      CHECK(api->image_export_bitmap_psd(engine,reopened,output,&error)==GLIMS_STATUS_OK && has_bytes(output,psd,sizeof psd), "indexed Bitmap import re-exports with Bitmap mode"); free_error(api,&error);
+      api->image_close(engine,reopened);
+    }
+    GlimsLayerInfo layer; int32_t count=0;
+    if(api->image_layers(engine,image,&layer,1,&count)==GLIMS_STATUS_OK && count>0) {
+      GlimsLayerChange change={.struct_size=sizeof change,.properties=GLIMS_LAYER_OPACITY,.opacity=0.5};
+      CHECK(api->layer_change(engine,image,layer.id,&change,&error)==GLIMS_STATUS_OK, "make a partially transparent source"); free_error(api,&error);
+      static const char sentinel[]="existing"; write_bytes(output,sentinel,sizeof sentinel-1);
+      status=api->image_export_bitmap_psd(engine,image,output,&error);
+      CHECK(status!=GLIMS_STATUS_OK && has_bytes(output,sentinel,sizeof sentinel-1), "transparency refuses and preserves existing destination"); free_error(api,&error);
+    } else CHECK(0,"find fixture layer");
+    api->image_close(engine,image);
+  }
+  status=api->image_open(engine,nonbinary,&bad,&error);
+  CHECK(status==GLIMS_STATUS_OK && bad, "open intermediate-gray fixture"); free_error(api,&error);
+  if(bad) {
+    static const char sentinel[]="existing"; write_bytes(output,sentinel,sizeof sentinel-1);
+    status=api->image_export_bitmap_psd(engine,bad,output,&error);
+    CHECK(status!=GLIMS_STATUS_OK && has_bytes(output,sentinel,sizeof sentinel-1), "intermediate gray refuses and preserves destination"); free_error(api,&error);
+    api->image_close(engine,bad);
+  }
+  GlimsImageID one=0, rgb=0;
+  status=api->image_open(engine,single,&one,&error);
+  CHECK(status==GLIMS_STATUS_OK && one, "open one-pixel white fixture"); free_error(api,&error);
+  if (one) {
+    unsigned char expected[41]={ '8','B','P','S',0,1 };
+    expected[13]=1; expected[17]=1; expected[21]=1; expected[23]=1;
+    status=api->image_export_bitmap_psd(engine,one,output,&error);
+    CHECK(status==GLIMS_STATUS_OK && has_bytes(output,expected,sizeof expected), "one-pixel projection exports fresh white with zero padding"); free_error(api,&error);
+    api->image_close(engine,one);
+  }
+  status=api->image_new(engine,1,1,&rgb,&error);
+  CHECK(status==GLIMS_STATUS_OK && rgb, "create ordinary RGB source"); free_error(api,&error);
+  if (rgb) {
+    static const char sentinel[]="existing"; write_bytes(output,sentinel,sizeof sentinel-1);
+    status=api->image_export_bitmap_psd(engine,rgb,output,&error);
+    CHECK(status==GLIMS_STATUS_UNSUPPORTED && has_bytes(output,sentinel,sizeof sentinel-1), "RGB source refuses without replacing destination"); free_error(api,&error);
+    api->image_close(engine,rgb);
+  }
+  api->stop(engine); dlclose(library);
+  printf("%d checks, %d failures\n",checks,failures);
+  return failures ? 1 : 0;
+}
