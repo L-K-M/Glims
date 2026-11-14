@@ -50,7 +50,7 @@ extension RecorderFileCodec {
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
-                fileVersion = max(fileVersion, strokeVersion)
+                fileVersion = max(fileVersion, stroke.settings.tool.isSponge ? spongeStrokeVersion : strokeVersion)
             case .success(.channelToSelection, _):
                 // Version 3 covers both extensions; keep the highest.
                 fileVersion = max(fileVersion, channelVersion)

@@ -3,7 +3,11 @@ import Foundation
 /// One whole gesture. The owning document keeps the native layer binding
 /// separately. These values contain no session IDs or event objects.
 struct RecorderStrokeCommand: Equatable {
-    enum Tool: String { case pencil, eraser, paintbrush }
+    enum Tool: String {
+        case pencil, eraser, paintbrush, spongeDesaturate, spongeSaturate
+
+        var isSponge: Bool { self == .spongeDesaturate || self == .spongeSaturate }
+    }
 
     struct Settings: Equatable {
         let tool: Tool
@@ -34,6 +38,8 @@ struct RecorderStrokeCommand: Equatable {
             case .pencil: tool = .pencil
             case .eraser: tool = .eraser
             case .paintbrush: tool = .paintbrush
+            case .spongeDesaturate: tool = .spongeDesaturate
+            case .spongeSaturate: tool = .spongeSaturate
             default: return nil
             }
             self.init(tool: tool, size: brush.size, opacity: brush.opacity,
@@ -48,6 +54,8 @@ struct RecorderStrokeCommand: Equatable {
             case .pencil: result.tool = .pencil
             case .eraser: result.tool = .eraser
             case .paintbrush: result.tool = .paintbrush
+            case .spongeDesaturate: result.tool = .spongeDesaturate
+            case .spongeSaturate: result.tool = .spongeSaturate
             }
             result.size = size
             result.opacity = opacity
@@ -70,6 +78,8 @@ struct RecorderStrokeCommand: Equatable {
         case .pencil: return "Pencil Stroke"
         case .eraser: return "Eraser Stroke"
         case .paintbrush: return "Paintbrush Stroke"
+        case .spongeDesaturate: return "Sponge Desaturate Stroke"
+        case .spongeSaturate: return "Sponge Saturate Stroke"
         }
     }
 
