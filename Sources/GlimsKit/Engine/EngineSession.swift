@@ -1793,6 +1793,31 @@ final class EngineSession: @unchecked Sendable {
         return image
     }
 
+    var supportsPhotoshopCompositeImport: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_open_psd_composite),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_open_psd_composite) else { return false }
+        return api.image_open_psd_composite != nil
+    }
+
+    func openPhotoshopComposite(path: String) throws -> Int32 {
+        guard supportsPhotoshopCompositeImport, let open = api.image_open_psd_composite else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot open a Photoshop composite.")
+        }
+        guard (path as NSString).isAbsolutePath else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a local Photoshop PSD or PSB file.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(open(engine, path, &image, &error), error)
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Photoshop composite has no valid image identity.")
+        }
+        return image
+    }
+
     func openImage(path: String) throws -> Int32 {
         var image: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?

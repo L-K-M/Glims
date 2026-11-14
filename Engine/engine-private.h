@@ -308,6 +308,7 @@ GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID imag
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open       (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
+GlimsStatus glims_image_open_psd_composite (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
 /* Scoped compatibility guard for native 3.2.0 vector loading. */
 typedef struct GlimsVectorLoadGuard GlimsVectorLoadGuard;
 GlimsVectorLoadGuard *glims_vector_load_guard_begin (GlimsEngine *e, GimpImage *destination);

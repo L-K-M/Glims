@@ -10,6 +10,8 @@ final class BitmapPSDTransportTests: XCTestCase {
         var threshold: UInt32?
         var diffusionCalls = 0
         var duotoneCalls = 0
+        var compositeCalls = 0
+        var compositeResult: Int32 = 27
         var path = ""
         var stopped = false
         static func from(_ engine: OpaquePointer?) -> Producer {
@@ -20,6 +22,7 @@ final class BitmapPSDTransportTests: XCTestCase {
     private func withSession(short: Bool = false, missing: Bool = false, shortThreshold: Bool = false, missingThreshold: Bool = false,
                              shortDiffusion: Bool = false, missingDiffusion: Bool = false,
                              shortDuotone: Bool = false, missingDuotone: Bool = false,
+                             shortComposite: Bool = false, missingComposite: Bool = false,
                              _ body: (EngineSession, Producer) throws -> Void) throws {
         let producer = Producer()
         var api = GlimsEngineAPI()
@@ -28,6 +31,7 @@ final class BitmapPSDTransportTests: XCTestCase {
                                  shortThreshold ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_threshold_psd)! :
                                  shortDiffusion ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_diffusion_psd)! :
                                  shortDuotone ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_duotone_psd)! :
+                                 shortComposite ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_open_psd_composite)! :
                                  MemoryLayout<GlimsEngineAPI>.size)
         api.start = { config, result, _ in
             guard let path = config?.pointee.user_directory,
@@ -82,9 +86,19 @@ final class BitmapPSDTransportTests: XCTestCase {
                 return GLIMS_STATUS_OK
             }
         }
+        if !missingComposite {
+            api.image_open_psd_composite = { engine, path, image, error in
+                let owner = Producer.from(engine)
+                owner.compositeCalls += 1
+                owner.path = path.map { String(cString: $0) } ?? ""
+                image?.pointee = owner.compositeResult
+                error?.pointee = nil
+                return GLIMS_STATUS_OK
+            }
+        }
         let directory = URL(fileURLWithPath: "/fixture/\(UInt(bitPattern: Unmanaged.passUnretained(producer).toOpaque()))")
         try withExtendedLifetime(producer) {
-            if short || shortThreshold || shortDiffusion || shortDuotone {
+            if short || shortThreshold || shortDiffusion || shortDuotone || shortComposite {
                 let page = Int(getpagesize()), size = Int(api.struct_size)
                 let memory = mmap(nil, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)!
                 guard memory != MAP_FAILED else { throw POSIXError(.ENOMEM) }
@@ -104,6 +118,26 @@ final class BitmapPSDTransportTests: XCTestCase {
             }
         }
         XCTAssertTrue(producer.stopped)
+    }
+
+    func testCompositeOpenRequiresItsOwnSlotAndNeverFallsBack() throws {
+        for (short, missing) in [(true, false), (false, true)] {
+            try withSession(shortComposite: short, missingComposite: missing) { session, producer in
+                XCTAssertTrue(session.supportsDuotonePSD)
+                XCTAssertFalse(session.supportsPhotoshopCompositeImport)
+                XCTAssertThrowsError(try session.openPhotoshopComposite(path: "/tmp/input.psd"))
+                XCTAssertEqual(producer.compositeCalls, 0)
+            }
+        }
+        try withSession { session, producer in
+            XCTAssertTrue(session.supportsPhotoshopCompositeImport)
+            XCTAssertThrowsError(try session.openPhotoshopComposite(path: "relative.psd"))
+            XCTAssertEqual(producer.compositeCalls, 0)
+            XCTAssertEqual(try session.openPhotoshopComposite(path: "/tmp/input.psd"), 27)
+            XCTAssertEqual(producer.path, "/tmp/input.psd")
+            producer.compositeResult = 0
+            XCTAssertThrowsError(try session.openPhotoshopComposite(path: "/tmp/input.psd"))
+        }
     }
 
     func testDuotoneRequiresItsOwnSlotAndNeverFallsBack() throws {

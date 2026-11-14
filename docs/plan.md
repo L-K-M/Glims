@@ -6163,3 +6163,15 @@ full editor and hosted review remain in qualification. Development
 GIMP's layered fixture import loses a Gradient Fill; it is refused as
 transparent, while an independent flat fixture exercises its exporter. See
 [duotone-psd.md](duotone-psd.md).
+
+### Explicit Photoshop composite import (candidate)
+
+The File menu offers a separate, explicitly flattened import using the PSD or
+PSB file's stored merged appearance. This gives access to the visible result
+when the development engine cannot reconstruct an adjustment layer; it does
+not restore individual layers and the stored composite may be stale. The
+imported copy cannot overwrite its source, and Revert uses the same loader.
+Native checks against a Photoshop Gradient Fill fixture pass on four engines;
+the development engine's complete composite matches ImageIO within two 8-bit
+levels. Real-window, bundle, full editor and review qualification remain open.
+See [psd-composite-import.md](psd-composite-import.md).
