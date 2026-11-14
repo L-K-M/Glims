@@ -1068,7 +1068,8 @@ glims_stroke_cancel_lab_layer (GlimsEngine *engine, GlimsStrokeID id)
 GlimsStatus
 glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
                               GlimsResourceID brush_id, const GlimsLabLayerBrushSettings *settings,
-                              const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+                              const GlimsStrokePacketV2 *packet, GlimsStrokeID *out,
+                              gboolean pressure_size, char **error)
 {
   if (out) *out = 0;
   if (error) *error = NULL;
@@ -1151,7 +1152,13 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
     "expand-use", FALSE, NULL);
   stroke->options->jitter_options->use_jitter = FALSE;
   stroke->options->smoothing_options->use_smoothing = FALSE;
-  gimp_paint_options_enable_dynamics (stroke->options, FALSE);
+  if (pressure_size && !glims_lab_layer_brush_enable_pressure_size (stroke->options))
+    {
+      g_free (samples);
+      glims_strokes_free (stroke);
+      return glims_fail (error, NULL, "The Lab brush pressure settings could not be created.");
+    }
+  if (!pressure_size) gimp_paint_options_enable_dynamics (stroke->options, FALSE);
   gimp_context_define_property (GIMP_CONTEXT (stroke->options), GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
   gimp_context_set_paint_mode (GIMP_CONTEXT (stroke->options), GIMP_LAYER_MODE_NORMAL);
   stroke->core = glims_lab_layer_brush_core_new (CLAMP ((double)lab[0], 0, 100),

@@ -14,10 +14,14 @@ class FacadePolicyCoverageTests(unittest.TestCase):
     def test_current_bindings_are_complete(self):
         errors, count = COVERAGE.check(ROOT)
         self.assertEqual(errors, [])
-        self.assertEqual(count, 218)
+        self.assertEqual(count, 219)
 
     def test_missing_misrouted_and_bypassing_bindings_refuse(self):
         cases = [
+            ('Engine/engine.c', 'GLIMS_FACADE_OP_stroke_begin_lab_layer_pressure,', 'GLIMS_FACADE_OP_stroke_begin_lab_layer,'),
+            ('Engine/facade-operations.def',
+             'GLIMS_FACADE(stroke_begin_lab_layer_pressure, api_stroke_begin_lab_layer_pressure, IMAGE, COMPONENT)',
+             'GLIMS_FACADE(stroke_begin_lab_layer_pressure, api_stroke_begin_lab_layer_pressure, IMAGE, ORDINARY)'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_stroke_begin_lab_layer,', 'GLIMS_FACADE_OP_stroke_begin_lab,'),
             ('Engine/engine.c', 'GLIMS_FACADE_OP_stroke_cancel_lab_layer,', 'GLIMS_FACADE_OP_stroke_cancel_lab,'),
             ('Engine/facade-operations.def',
