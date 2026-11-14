@@ -37,6 +37,8 @@ jobs:
         run: bash scripts/test-plate-map.sh
       - name: Check optimized and sanitized native CMYK PSD codec
         run: bash scripts/test-cmyk-psd-codec.sh
+      - name: Check optimized and sanitized Bitmap PSD codec
+        run: bash scripts/test-bitmap-psd-codec.sh
       - name: Check optimized and sanitized native CMYK PSD reader
         run: bash scripts/test-cmyk-psd-reader.sh
       - name: Check optimized and sanitized native CMYK PSD file transaction
@@ -110,6 +112,9 @@ jobs:
       - name: Check private native CMYK PSD codec
         timeout-minutes: 5
         run: bash scripts/test-cmyk-psd-codec.sh optimized
+      - name: Check private Bitmap PSD codec
+        timeout-minutes: 5
+        run: bash scripts/test-bitmap-psd-codec.sh optimized
       - name: Check private native CMYK PSD reader
         timeout-minutes: 5
         run: bash scripts/test-cmyk-psd-reader.sh optimized
