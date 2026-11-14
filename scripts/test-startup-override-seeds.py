@@ -143,7 +143,8 @@ def main():
                 label = f'{code}-launch-{launch_defaults}'
                 discovered, discovered_labels = run(f'discovery-{label}', f'fresh {label} oracle',
                                                       language=code, locale=locale, launch_defaults=launch_defaults)
-                assert not discovered and seeded_catalogs[code, launch_defaults] == discovered_labels, \
+                assert not discovered, f'{label}: a packaged seed matched when native discovery was required'
+                assert seeded_catalogs[code, launch_defaults] == discovered_labels, \
                     f'{label}: override seed differs from native discovery'
         print('PASS: exact locale override seed matches native discovery and refuses unmatched environments')
 
