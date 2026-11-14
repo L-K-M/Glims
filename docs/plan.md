@@ -6215,3 +6215,18 @@ found no concrete defect and did not execute tests or inspect upstream GIMP
 ownership internals. Full editor, standalone bundle and hosted CI remain in
 progress. This retains data for a future color preview; it does not display or
 recalculate that preview.
+
+### Retaining alternate Duotone colors on PSD export (candidate)
+
+Duotone PSD export now carries a retained resource 1066 body and its 8BIM or
+MeSa signature into the flat output. It refuses conflicting, empty or
+oversized retained resources rather than silently discarding them. The source
+image and Undo history remain unchanged. Resources absent from a source remain
+absent, and other image resources are still not exported.
+
+The previous adapter reproduced loss of the Photoshop fixture's alternate
+colors; the updated pinned adapter preserves the exact resource across export
+and XCF reopen/export. Codec tests cover both signatures, odd/even padding and
+failure paths in optimized and sanitizer builds. Four-engine, real-window,
+bundle and hosted qualification remain in progress. Retaining this data does
+not enable a color preview or establish Photoshop printing fidelity.
