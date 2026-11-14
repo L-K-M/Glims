@@ -26,8 +26,8 @@ typedef enum {
  * are borrowed for the callback only. Any other pixel value is refused. */
 typedef bool (*GlimsBitmapPsdRead) (void *context, uint32_t y, uint32_t x,
                                    uint32_t count, uint8_t *samples);
-/* Return true only if all borrowed bytes were accepted. The caller must not
- * publish a partial stream if a later callback fails. */
+/* Return true only if all borrowed bytes were accepted. Any failure from
+ * glims_bitmap_psd_write can leave a partial stream; do not publish it. */
 typedef bool (*GlimsBitmapPsdWrite) (void *context, const uint8_t *bytes, size_t size);
 
 /* Clears *size on failure. The complete PSD v1 output is bounded by the
