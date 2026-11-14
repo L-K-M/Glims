@@ -18,6 +18,37 @@ extension EngineSmokeTest {
             return check(false, "Duotone fixture contains a bounded color-mode block")
         }
         let block = input.subdata(in: 30..<(30 + length))
+        // Independently locate the fixture's resource rather than relying on
+        // the engine's metadata reader to supply the expected bytes.
+        func alternateResource() -> Data? {
+            let start = 30 + length
+            guard input.count - start >= 4 else { return nil }
+            let resourceSize = input[start..<(start + 4)].reduce(0) { ($0 << 8) | Int($1) }
+            var position = start + 4
+            guard resourceSize <= input.count - position else { return nil }
+            let end = position + resourceSize
+            var found: Data?
+            while position < end {
+                guard end - position >= 12,
+                      input[position..<(position + 4)].elementsEqual([0x38, 0x42, 0x49, 0x4d]) else { return nil }
+                let id = (Int(input[position + 4]) << 8) | Int(input[position + 5])
+                let nameSize = (Int(input[position + 6]) + 2) & ~1
+                guard nameSize <= end - position - 6, end - position - 6 - nameSize >= 4 else { return nil }
+                let sizeOffset = position + 6 + nameSize
+                let count = input[sizeOffset..<(sizeOffset + 4)].reduce(0) { ($0 << 8) | Int($1) }
+                let dataStart = sizeOffset + 4
+                guard count <= end - dataStart, count % 2 == 0 || count < end - dataStart else { return nil }
+                if id == 1066 {
+                    guard found == nil else { return nil }
+                    found = input.subdata(in: dataStart..<(dataStart + count))
+                }
+                position = dataStart + count + count % 2
+            }
+            return position == end ? found : nil
+        }
+        guard let alternate = alternateResource(), alternate.count == 794 else {
+            return check(false, "Duotone fixture contains bounded alternate colors")
+        }
         let image = try session.openImage(path: fixture.path)
         let document = try ImageDocument(session: session, image: image, name: "Duotone fixture")
         documents.items.append(document)
@@ -45,6 +76,7 @@ extension EngineSmokeTest {
         guard finished, failure == nil, FileManager.default.fileExists(atPath: output.path) else { return }
         let saved = try Data(contentsOf: output)
         check(saved.range(of: block) != nil, "XCF contains the exact opaque Duotone block")
+        check(saved.range(of: alternate) != nil, "XCF contains the exact alternate Duotone colors")
         check(try session.copyPixels(image, merged: true).pixels == before && session.undoInfo(image).undoCount == undo,
               "saving preserves grayscale pixels and Undo history")
         let reopened = try session.openImage(path: output.path)
@@ -53,7 +85,7 @@ extension EngineSmokeTest {
         try session.save(reopened, to: again.path)
         let second = try Data(contentsOf: again)
         let originalAfter = try Data(contentsOf: fixture)
-        check(second.range(of: block) != nil && originalAfter == input,
-              "reopening and resaving retains the block without changing the source PSD")
+        check(second.range(of: block) != nil && second.range(of: alternate) != nil && originalAfter == input,
+              "reopening and resaving retains both Duotone blocks without changing the source PSD")
     }
 }
