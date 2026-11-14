@@ -48,11 +48,12 @@ for mode in "${modes[@]}"; do
   common=(-std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" -I"$ROOT/Engine")
   run_bounded "${compiler[@]}" "${common[@]}" -c "$ROOT/Engine/cmyk-psd-codec.c" -o "$WORK/codec-$mode.o"
   run_bounded "${compiler[@]}" "${common[@]}" -c "$ROOT/Engine/bitmap-psd-codec.c" -o "$WORK/bitmap-$mode.o"
+  run_bounded "${compiler[@]}" "${common[@]}" -c "$ROOT/Engine/duotone-psd-codec.c" -o "$WORK/duotone-$mode.o"
   run_bounded "${compiler[@]}" "${common[@]}" "${aliases[@]}" \
     -c "$ROOT/Engine/cmyk-psd-file.c" -o "$WORK/file-$mode.o"
   run_bounded "${compiler[@]}" "${common[@]}" \
     -c "$ROOT/Engine/tests/cmyk-psd-file-fault-tests.c" -o "$WORK/tests-$mode.o"
   run_bounded "${compiler[@]}" "${flags[@]}" "$WORK/codec-$mode.o" \
-    "$WORK/file-$mode.o" "$WORK/bitmap-$mode.o" "$WORK/tests-$mode.o" -o "$WORK/$mode"
+    "$WORK/file-$mode.o" "$WORK/bitmap-$mode.o" "$WORK/duotone-$mode.o" "$WORK/tests-$mode.o" -o "$WORK/$mode"
   run_bounded "$WORK/$mode"
 done

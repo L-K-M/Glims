@@ -34,7 +34,7 @@ for mode in "${modes[@]}"; do
     flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
   fi
   run_bounded "${compiler[@]}" -std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" \
-    -I"$ROOT/Engine" "$ROOT/Engine/cmyk-psd-codec.c" "$ROOT/Engine/bitmap-psd-codec.c" "$ROOT/Engine/cmyk-psd-file.c" "$ROOT/Engine/tests/cmyk-psd-file-tests.c" \
+    -I"$ROOT/Engine" "$ROOT/Engine/cmyk-psd-codec.c" "$ROOT/Engine/bitmap-psd-codec.c" "$ROOT/Engine/duotone-psd-codec.c" "$ROOT/Engine/cmyk-psd-file.c" "$ROOT/Engine/tests/cmyk-psd-file-tests.c" \
     -o "$WORK/$mode"
   run_bounded "$WORK/$mode"
 done

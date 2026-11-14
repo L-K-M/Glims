@@ -6148,3 +6148,18 @@ editing, a color preview or Duotone PSD export. A focused real-window Save
 check passes with the updated adapter. Full editor qualification and review
 remain open. See
 [duotone-preservation.md](duotone-preservation.md).
+
+### Duotone PSD export with retained settings (candidate)
+
+An explicit export choice writes opaque 8-bit grayscale and the exact retained
+Duotone settings through a streaming, atomic PSD writer. It refuses missing
+settings, transparency, linked layers and unsupported precision. Layers and
+other metadata are omitted; inks, curves and color preview are not implemented.
+The three pinned engines pass native Photoshop-fixture export, pixel round
+trip, XCF reopen, and real-window Export and Repeat Export checks. Batch
+passes with the Photoshop fixture. The development engine passes the same
+native and real-window workflows with the independent flat fixture. Bundle,
+full editor and hosted review remain in qualification. Development
+GIMP's layered fixture import loses a Gradient Fill; it is refused as
+transparent, while an independent flat fixture exercises its exporter. See
+[duotone-psd.md](duotone-psd.md).

@@ -172,7 +172,7 @@ struct ExportSettings: Equatable {
         if format == .psd, psdColor == .cmyk {
             return psdCmykProfile != nil
         }
-        if format == .psd, psdColor == .bitmap {
+        if format == .psd, psdColor == .bitmap || psdColor == .duotone {
             return psdLayout == .merged
         }
         return true
@@ -413,6 +413,7 @@ final class ExportOptionsForm: NSView {
     private let supportsBitmapPSD: Bool
     private let supportsBitmapThresholdPSD: Bool
     private let supportsBitmapDiffusionPSD: Bool
+    private let supportsDuotonePSD: Bool
     private var nativeCmyk: Bool {
         if case .nativeCmyk = context { return true }
         return false
@@ -423,11 +424,13 @@ final class ExportOptionsForm: NSView {
          supportsBitmapPSD: Bool = false,
          supportsBitmapThresholdPSD: Bool = false,
          supportsBitmapDiffusionPSD: Bool = false,
+         supportsDuotonePSD: Bool = false,
          psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
         self.context = context
         self.supportsBitmapPSD = supportsBitmapPSD
         self.supportsBitmapThresholdPSD = supportsBitmapThresholdPSD
         self.supportsBitmapDiffusionPSD = supportsBitmapDiffusionPSD
+        self.supportsDuotonePSD = supportsDuotonePSD
         var initial = settings
         if case .nativeCmyk = context {
             initial.format = .psd
@@ -471,6 +474,9 @@ final class ExportOptionsForm: NSView {
         psdColorPopup.menu?.autoenablesItems = false
         if let index = PsdOutputColor.allCases.firstIndex(of: .bitmap) {
             psdColorPopup.item(at: index)?.isEnabled = supportsBitmapPSD
+        }
+        if let index = PsdOutputColor.allCases.firstIndex(of: .duotone) {
+            psdColorPopup.item(at: index)?.isEnabled = supportsDuotonePSD
         }
         bitmapMethodPopup.addItems(withTitles: ExportSettings.BitmapMethod.allCases.map(\.title))
         bitmapMethodPopup.setAccessibilityLabel("Bitmap conversion")
@@ -658,7 +664,7 @@ final class ExportOptionsForm: NSView {
         for (format, rows) in optionRows {
             rows.forEach { $0.isHidden = format != settings.format }
         }
-        psdLayoutPopup.isEnabled = !nativeCmyk && settings.psdColor != .bitmap
+        psdLayoutPopup.isEnabled = !nativeCmyk && settings.psdColor != .bitmap && settings.psdColor != .duotone
         let showBitmap = settings.format == .psd && !nativeCmyk && settings.psdColor == .bitmap
         bitmapMethodGridRow?.isHidden = !showBitmap
         bitmapThresholdGridRow?.isHidden = !showBitmap || settings.bitmapMethod != .threshold
@@ -677,6 +683,8 @@ final class ExportOptionsForm: NSView {
             psdExplanation.stringValue = settings.psdLayout.explanation
         case .cmyk:
             psdExplanation.stringValue = "\(settings.psdLayout.explanation) \(PsdOutputColor.cmyk.explanation)"
+        case .duotone:
+            psdExplanation.stringValue = PsdOutputColor.duotone.explanation
         case .bitmap:
             switch settings.bitmapMethod {
             case .existing:
@@ -847,7 +855,7 @@ final class ExportOptionsForm: NSView {
         let choices = PsdOutputColor.allCases
         guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
         settings.psdColor = choices[sender.indexOfSelectedItem]
-        if settings.psdColor == .bitmap {
+        if settings.psdColor == .bitmap || settings.psdColor == .duotone {
             settings.psdLayout = .merged
             psdLayoutPopup.selectItem(at: popupIndex(of: .merged, in: ExportSettings.PsdLayout.allCases))
         }
@@ -949,6 +957,12 @@ final class ExportOptionsForm: NSView {
             }
             if settings.bitmapMethod == .diffusion && !supportsBitmapDiffusionPSD {
                 refuse("Diffusion Bitmap export is not available for this document or image engine.")
+                return false
+            }
+        }
+        if settings.format == .psd, settings.psdColor == .duotone {
+            guard supportsDuotonePSD, settings.psdLayout == .merged else {
+                refuse("Duotone PSD export is not available with these settings or this image engine.")
                 return false
             }
         }
