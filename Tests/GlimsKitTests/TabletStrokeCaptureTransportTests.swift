@@ -259,6 +259,26 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
             XCTAssertEqual(p.freed, 4)
         }
     }
+    func testEraserBackgroundRequiresCapabilityAndReachesTabletCapture() throws {
+        var brush = EngineSession.Brush(tool: .eraser)
+        brush.eraserBackground = .init(red: 0.1, green: 0.4, blue: 0.7)
+        let prefix = MemoryLayout<GlimsEngineAPI>.offset(of: \.brush_settings_features)!
+        try withSession(configure: { $0.struct_size = UInt32(prefix) }, guarded: true) { session, producer in
+            self.assertStatus(GLIMS_STATUS_UNSUPPORTED) {
+                _ = try session.beginTabletStrokeCapturing(image: 9, drawable: 4, brush: brush, first: self.sample())
+            }
+            XCTAssertTrue(producer.calls.isEmpty)
+        }
+        try withSession(configure: { $0.brush_settings_features = { 1 } }) { session, producer in
+            _ = try session.beginTabletStrokeCapturing(image: 9, drawable: 4, brush: brush, first: self.sample())
+            let native = try XCTUnwrap(producer.beginBrush)
+            XCTAssertTrue(native.has_eraser_background)
+            XCTAssertEqual(native.eraser_background_red, 0.1, accuracy: 0.0001)
+            XCTAssertEqual(native.eraser_background_green, 0.4, accuracy: 0.0001)
+            XCTAssertEqual(native.eraser_background_blue, 0.7, accuracy: 0.0001)
+        }
+    }
+
     func testReplaySendsV2BatchesAndEndsAfterSuccessOrFailure() throws {
         let identity = EngineSession.ResourceIdentity(name: "Expected", collection: nil, isInternal: false)
         let fingerprint = String(repeating: "b", count: 64)

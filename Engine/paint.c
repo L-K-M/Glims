@@ -447,6 +447,17 @@ glims_make_paint_options (Gimp                     *gimp,
   gimp_context_set_foreground (context, color);
   g_object_unref (color);
 
+  if (brush->tool == GLIMS_PAINT_ERASER && brush->has_eraser_background)
+    {
+      color = gegl_color_new (NULL);
+      gegl_color_set_rgba_with_space (color, brush->eraser_background_red,
+                                     brush->eraser_background_green,
+                                     brush->eraser_background_blue, 1.0, NULL);
+      gimp_context_define_property (context, GIMP_CONTEXT_PROP_BACKGROUND, TRUE);
+      gimp_context_set_background (context, color);
+      g_object_unref (color);
+    }
+
   gimp_context_define_property (context, GIMP_CONTEXT_PROP_OPACITY, TRUE);
   gimp_context_set_opacity (context, CLAMP (brush->opacity, 0.0, 1.0));
 
@@ -490,7 +501,7 @@ glims_read_brush (const GlimsBrushSettings *brush,
   memset (settings, 0, sizeof (*settings));
   memcpy (settings, brush, MIN (brush->struct_size, sizeof (*settings)));
 
-  if (brush->struct_size < sizeof (*settings))
+  if (brush->struct_size < offsetof (GlimsBrushSettings, has_eraser_background))
     {
       settings->tool     = GLIMS_PAINT_PAINTBRUSH;
       settings->hardness = -1.0;
@@ -498,8 +509,16 @@ glims_read_brush (const GlimsBrushSettings *brush,
       settings->flow     = -1.0;
       settings->exposure = -1.0;
     }
+  /* Never interpret an incomplete tail, even when its flag byte is present. */
+  if (brush->struct_size < sizeof (*settings))
+    settings->has_eraser_background = FALSE;
   settings->struct_size = sizeof (*settings);
 
+  if (settings->tool == GLIMS_PAINT_ERASER && settings->has_eraser_background &&
+      (!isfinite (settings->eraser_background_red) || settings->eraser_background_red < 0 || settings->eraser_background_red > 1 ||
+       !isfinite (settings->eraser_background_green) || settings->eraser_background_green < 0 || settings->eraser_background_green > 1 ||
+       !isfinite (settings->eraser_background_blue) || settings->eraser_background_blue < 0 || settings->eraser_background_blue > 1))
+    return FALSE;
   return settings->tool < G_N_ELEMENTS (paint_infos);
 }
 
@@ -1632,7 +1651,8 @@ glims_stroke_begin_ink_with_capture_facts (GlimsEngine *engine, GlimsImageID ima
   if (out) *out = 0;
   if (error) *error = NULL;
   if (!clear_lab_stroke_facts (facts) || !out || !target ||
-      target->struct_size < sizeof *target || !settings || settings->struct_size < sizeof *settings)
+      target->struct_size < sizeof *target || !settings ||
+      settings->struct_size < offsetof (GlimsBrushSettings, has_eraser_background))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   if (settings->tool != GLIMS_PAINT_PAINTBRUSH && settings->tool != GLIMS_PAINT_PENCIL)
     return GLIMS_STATUS_UNSUPPORTED;

@@ -186,8 +186,10 @@ What the tools do:
   click; Select by Color takes every similar pixel in the image.
   Eyedropper sets the foreground color from the pixel you click.
 
-  Brush, Pencil and Airbrush paint with the foreground color; Eraser
-  removes pixels. Clone and Heal copy from another spot: Option-click
+  Brush, Pencil and Airbrush paint with the foreground color. Eraser
+  removes pixels on layers with transparency; on an opaque layer it
+  paints with the background color selected when the stroke begins.
+  Clone and Heal copy from another spot: Option-click
   to set the source, then paint. Smudge, Blur and Sharpen retouch what
   is already painted, and Dodge and Burn lighten and darken it.
   Sponge Desaturate and Sponge Saturate reduce or increase saturation under

@@ -342,6 +342,14 @@ final class ToolState {
         brush.red = Double(color.redComponent)
         brush.green = Double(color.greenComponent)
         brush.blue = Double(color.blueComponent)
+        if tool.paintTool == .eraser {
+            let background = background.usingColorSpace(.sRGB) ?? .white
+            brush.eraserBackground = .init(red: Double(background.redComponent),
+                                          green: Double(background.greenComponent),
+                                          blue: Double(background.blueComponent))
+        } else {
+            brush.eraserBackground = nil
+        }
         brush.source = cloneSource
         return brush
     }
