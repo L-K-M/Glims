@@ -11,9 +11,10 @@ import subprocess
 import sys
 import tempfile
 
-# These seeds cover common single-language macOS preference lists. All other
-# lists still use native discovery; a partial language match is never safe.
-LOCALIZED_SEEDS = ('en', 'de', 'fr', 'it', 'es', 'ja')
+# Each seed is captured for the entire macOS preference list, including its
+# order. Other lists still use native discovery; a partial match is not safe.
+LOCALIZED_SEEDS = ('en', 'de', 'fr', 'it', 'es', 'ja',
+                   'en-US,en', 'de-CH,de,en')
 OVERRIDE_SEEDS = (('en', 'en_US.UTF-8'), ('de', 'de_DE.UTF-8'),
                   ('fr', 'fr_FR.UTF-8'), ('it', 'it_IT.UTF-8'),
                   ('es', 'es_ES.UTF-8'), ('ja', 'ja_JP.UTF-8'))

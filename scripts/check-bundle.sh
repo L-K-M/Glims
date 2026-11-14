@@ -76,4 +76,10 @@ if ! python3 "$ROOT/scripts/test-startup-override-seeds.py" "$APP"; then
   status=1
 fi
 
+echo "==> Exact preferred-language list seed and native discovery checks"
+if ! python3 -I "$ROOT/scripts/test-startup-localized-seeds.py" "$APP"; then
+  echo "!! the bundled preferred-language seed checks failed"
+  status=1
+fi
+
 exit "$status"

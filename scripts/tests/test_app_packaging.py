@@ -21,6 +21,8 @@ class AppPackagingTests(unittest.TestCase):
         # fixture here; its real behavior is exercised on packaged engines.
         (self.root / "scripts/test-startup-override-seeds.py").write_text(
             "print('override seed fixture executed')\n")
+        (self.root / "scripts/test-startup-localized-seeds.py").write_text(
+            "assert __debug__\nprint('preferred-language seed fixture executed')\n")
         # If preflight succeeds, stop at Swift. No test should build or modify
         # a real bundle or engine; this marks that the chosen mode reached it.
         tools = self.root / "tools"
@@ -95,16 +97,24 @@ class AppPackagingTests(unittest.TestCase):
         executable.write_text(source)
         executable.chmod(0o755)
         self.env["GLIMS_ADAPTER_ROOT"] = str(outputs)
+        self.env["PYTHONOPTIMIZE"] = "1"
         result = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
                                 env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 checks passed", result.stdout)
         self.assertIn("override seed fixture executed", result.stdout)
+        self.assertIn("preferred-language seed fixture executed", result.stdout)
         (self.root / "scripts/test-startup-override-seeds.py").write_text("raise SystemExit(7)\n")
         failed = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
                                 env=self.env, capture_output=True, text=True)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("bundled locale override seed checks failed", failed.stdout)
+        (self.root / "scripts/test-startup-override-seeds.py").write_text("pass\n")
+        (self.root / "scripts/test-startup-localized-seeds.py").write_text("raise SystemExit(7)\n")
+        failed = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
+                                env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("bundled preferred-language seed checks failed", failed.stdout)
 
     def test_shell_only_is_explicit(self):
         result = self.run_build("--shell-only")

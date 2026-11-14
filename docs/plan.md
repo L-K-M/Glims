@@ -6032,3 +6032,20 @@ unmatched locale categories and invalid identities on the reference override;
 bundle qualification runs this regression. A matching engine probe took about 3.8 seconds under load; this
 is not an ordinary app-launch measurement or a five-second guarantee. The final
 bundle, four-engine editor checks and review remain open.
+
+### Exact multi-language startup seeds (candidate)
+
+The packaged clean-environment registries now include the complete macOS
+preference lists `en-US,en` and `de-CH,de,en`, in addition to the existing
+single-language seeds. The entire ordered list must match; other lists and
+unmatched locale overrides still use native discovery. The baseline bundle
+reproduces a missing seed for `en-US,en`. The expanded regression compares
+seeded command labels with fresh discovery, exercises a newly installed
+plug-in and checks that a different fallback order does not reuse a seed.
+In one fresh-profile ordinary-launch comparison per list on the same built app,
+`en-US,en` reached its document in 1.80 seconds with the seed and 11.62 seconds
+with access to the seed denied; `de-CH,de,en` took 2.37 and 11.78 seconds.
+Each run verified the complete native language identity and whether the seed
+was used. These are individual measurements, not a guarantee for every Mac.
+Standalone bundle, review and CI qualification remain in progress. Other
+language lists and unmatched overrides do not have a five-second guarantee.
