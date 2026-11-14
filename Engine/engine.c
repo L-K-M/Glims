@@ -855,9 +855,8 @@ startup_override_registry_path (const gchar *cache_directory,
   const gchar *parts[] = { GIMP_VERSION, language, contents, user_directory, selected_registry, fingerprint };
   for (guint i = 0; i < G_N_ELEMENTS (parts); i++)
     g_checksum_update (sum, (const guchar *) parts[i], strlen (parts[i]) + 1);
-  /* App updates can replace plug-ins or change seed identity without
-   * changing GIMP's version or bundle path. Bind the cache to all three
-   * bounded seed files, including presence and length for each one. */
+  /* Bind registry provenance to the host and matching locale seeds,
+   * including the presence, length and contents of every bounded file. */
   g_autofree gchar *escaped_language = g_strescape (language, NULL);
   g_autofree gchar *override_key = startup_override_seed_key (escaped_language, fingerprint);
   g_autofree gchar *localized_key = g_compute_checksum_for_string (G_CHECKSUM_SHA256, escaped_language, -1);

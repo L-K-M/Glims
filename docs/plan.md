@@ -6006,7 +6006,7 @@ registries and treats selected registries from older builds as unverified.
 A fresh seeded catalog handles migration without replacing the selected file;
 verified catalogs remain usable through the ordinary selected-registry path.
 Cache identities include the engine, bundle, profile, selected path, locale
-environment and packaged seed metadata. The regression checks transitions,
+environment and the host and matching localized seed contents. The regression checks transitions,
 legacy migration, updated seeds and identities, alternate registries, corrupt
 and symlinked caches, and concurrent different-environment launches.
 
