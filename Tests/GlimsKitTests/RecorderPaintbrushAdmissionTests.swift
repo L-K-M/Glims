@@ -69,6 +69,46 @@ final class RecorderPaintbrushAdmissionTests: XCTestCase {
         XCTAssertNil(prepared.log.replayRefusal, file: file, line: line)
     }
 
+    func testLiveEraserSettingsRetainBackgroundByValue() throws {
+        var source = brush(.eraser)
+        source.eraserBackground = .init(red: 0.1, green: 0.4, blue: 0.7)
+        let settings = try XCTUnwrap(RecorderStrokeCommand.Settings(source))
+        source.eraserBackground = .init(red: 0.8, green: 0.2, blue: 0.1)
+        XCTAssertEqual(settings.brush.eraserBackground, .init(red: 0.1, green: 0.4, blue: 0.7))
+    }
+
+    func testLiveEraserSettingsRejectInvalidBackgroundComponents() {
+        for component in [Double.nan, -.infinity, -0.01, 1.01, .infinity] {
+            var source = brush(.eraser)
+            source.eraserBackground = .init(red: component, green: 0.4, blue: 0.7)
+            XCTAssertNil(RecorderStrokeCommand.Settings(source))
+            source.eraserBackground = .init(red: 0.1, green: component, blue: 0.7)
+            XCTAssertNil(RecorderStrokeCommand.Settings(source))
+            source.eraserBackground = .init(red: 0.1, green: 0.4, blue: component)
+            XCTAssertNil(RecorderStrokeCommand.Settings(source))
+        }
+    }
+
+    func testEraserBackgroundUsesStrictVersion22ForMouseStrokes() throws {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: literal(tool: "eraser", version: 22)) as? [String: Any])
+        var rows = try XCTUnwrap(root["records"] as? [[String: Any]])
+        var command = try XCTUnwrap(rows[0]["command"] as? [String: Any])
+        var settings = try XCTUnwrap(command["settings"] as? [String: Any])
+        settings["eraserBackground"] = ["red": 0.1, "green": 0.4, "blue": 0.7]
+        command["settings"] = settings; rows[0]["command"] = command; root["records"] = rows
+        let decoded = try RecorderFileCodec.decode(JSONSerialization.data(withJSONObject: root))
+        guard case .success(.completeStroke(let stroke), .layer) = decoded.records.first?.outcome else {
+            return XCTFail("missing mouse Eraser")
+        }
+        XCTAssertEqual(stroke.settings.brush.eraserBackground, .init(red: 0.1, green: 0.4, blue: 0.7))
+        let encoded = try RecorderFileCodec.encode(decoded)
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), decoded)
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: encoded) as? [String: Any])?["version"] as? Int, 22)
+        try assertPrepared(decoded, stroke: stroke)
+        root["version"] = 2
+        XCTAssertThrowsError(try RecorderFileCodec.decode(JSONSerialization.data(withJSONObject: root)))
+    }
+
     func testDefaultPressurePaintbrushAdmissionSurvivesVersionTwoCodecAndSemanticBridge() throws {
         let input = brush(.paintbrush)
         XCTAssertTrue(input.pressureSize)

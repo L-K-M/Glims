@@ -14,13 +14,17 @@ struct RecorderStrokeCommand: Equatable {
         let size, opacity, red, green, blue: Double
         let hardness: Double?
         let pressureSize, antiErase: Bool
+        let eraserBackground: EngineSession.Brush.EraserBackground?
 
         init?(tool: Tool, size: Double, opacity: Double, red: Double, green: Double, blue: Double,
-              hardness: Double?, pressureSize: Bool, antiErase: Bool) {
+              hardness: Double?, pressureSize: Bool, antiErase: Bool,
+              eraserBackground: EngineSession.Brush.EraserBackground? = nil) {
             guard size > 0, size <= 10_000,
                   [opacity, red, green, blue].allSatisfy({ (0...1).contains($0) }),
                   hardness.map({ (0...1).contains($0) }) != false,
-                  tool == .eraser || !antiErase else { return nil }
+                  tool == .eraser || (!antiErase && eraserBackground == nil),
+                  eraserBackground.map({ [$0.red, $0.green, $0.blue].allSatisfy { $0.isFinite && (0...1).contains($0) } }) != false
+            else { return nil }
             self.tool = tool
             self.size = size
             self.opacity = opacity
@@ -30,6 +34,7 @@ struct RecorderStrokeCommand: Equatable {
             self.hardness = hardness
             self.pressureSize = pressureSize
             self.antiErase = antiErase
+            self.eraserBackground = eraserBackground
         }
 
         init?(_ brush: EngineSession.Brush) {
@@ -45,7 +50,8 @@ struct RecorderStrokeCommand: Equatable {
             self.init(tool: tool, size: brush.size, opacity: brush.opacity,
                       red: brush.red, green: brush.green, blue: brush.blue,
                       hardness: brush.hardness, pressureSize: brush.pressureSize,
-                      antiErase: tool == .eraser && brush.antiErase)
+                      antiErase: tool == .eraser && brush.antiErase,
+                      eraserBackground: tool == .eraser ? brush.eraserBackground : nil)
         }
 
         var brush: EngineSession.Brush {
@@ -65,6 +71,7 @@ struct RecorderStrokeCommand: Equatable {
             result.hardness = hardness
             result.pressureSize = pressureSize
             result.antiErase = antiErase
+            result.eraserBackground = eraserBackground
             return result
         }
     }

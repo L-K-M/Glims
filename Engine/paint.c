@@ -510,8 +510,11 @@ glims_read_brush (const GlimsBrushSettings *brush,
       settings->exposure = -1.0;
     }
   /* Never interpret an incomplete tail, even when its flag byte is present. */
-  if (brush->struct_size < sizeof (*settings))
+  if (brush->struct_size < offsetof (GlimsBrushSettings, record_eraser_background))
     settings->has_eraser_background = FALSE;
+  if (brush->struct_size < offsetof (GlimsBrushSettings, record_eraser_background) +
+                           sizeof (settings->record_eraser_background))
+    settings->record_eraser_background = FALSE;
   settings->struct_size = sizeof (*settings);
 
   if (settings->tool == GLIMS_PAINT_ERASER && settings->has_eraser_background &&
@@ -566,7 +569,8 @@ capture_stroke_facts (GlimsEngine               *engine,
       (ink ? (brush->tool == GLIMS_PAINT_ERASER || !GIMP_IS_CHANNEL (drawable)) :
              (G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
               !gimp_drawable_is_rgb (drawable) ||
-              (brush->tool == GLIMS_PAINT_ERASER && !gimp_drawable_has_alpha (drawable)) ||
+              (brush->tool == GLIMS_PAINT_ERASER && !gimp_drawable_has_alpha (drawable) &&
+               (!brush->has_eraser_background || !brush->record_eraser_background)) ||
               gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL)) ||
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
@@ -652,12 +656,24 @@ capture_stroke_facts (GlimsEngine               *engine,
   /* On opaque RGB the Pencil and Paintbrush use different drawable
    * compositing semantics from an alpha-bearing layer. Preserve all existing
    * alpha and ink fingerprints, and bind new opaque captures to their target
-   * type so guarded replay cannot silently cross that boundary. Opaque Eraser
-   * remains unsupported: it inherits a background color not in the facts. */
+   * type so guarded replay cannot silently cross that boundary. */
   if (!ink && !sponge && !gimp_drawable_has_alpha (drawable))
     {
       static const gchar opaque_domain[] = "glims-stroke-opaque-rgb-v1";
       g_checksum_update (hash, (const guchar *) opaque_domain, sizeof opaque_domain);
+    }
+  if (!ink && brush->tool == GLIMS_PAINT_ERASER && !gimp_drawable_has_alpha (drawable))
+    {
+      static const gchar eraser_domain[] = "glims-stroke-opaque-eraser-background-v1";
+      const gdouble background[] = { brush->eraser_background_red, brush->eraser_background_green,
+                                     brush->eraser_background_blue };
+      g_checksum_update (hash, (const guchar *) eraser_domain, sizeof eraser_domain);
+      for (gsize i = 0; i < G_N_ELEMENTS (background); i++)
+        {
+          gchar number[G_ASCII_DTOSTR_BUF_SIZE];
+          g_ascii_dtostr (number, sizeof number, background[i] == 0 ? 0 : background[i]);
+          g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+        }
     }
   /* Sponge has two opposite operations. Bind both to distinct domains so a
    * recorded gesture cannot be replayed with the other direction, even when

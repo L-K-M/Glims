@@ -273,9 +273,40 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
             _ = try session.beginTabletStrokeCapturing(image: 9, drawable: 4, brush: brush, first: self.sample())
             let native = try XCTUnwrap(producer.beginBrush)
             XCTAssertTrue(native.has_eraser_background)
+            XCTAssertTrue(native.record_eraser_background)
             XCTAssertEqual(native.eraser_background_red, 0.1, accuracy: 0.0001)
             XCTAssertEqual(native.eraser_background_green, 0.4, accuracy: 0.0001)
             XCTAssertEqual(native.eraser_background_blue, 0.7, accuracy: 0.0001)
+        }
+    }
+
+    func testEraserBackgroundOptInIsOnlySetForCapture() throws {
+        var brush = EngineSession.Brush(tool: .eraser)
+        brush.eraserBackground = .init(red: 0.1, green: 0.4, blue: 0.7)
+        try withSession(configure: { api in
+            api.brush_settings_features = { 1 }
+            api.stroke_begin_v2 = { engine, _, _, _, settings, _, result, error in
+                let producer = Producer.from(engine); producer.beginBrush = settings?.pointee
+                result?.pointee = producer.returnedStroke; error?.pointee = nil
+                return GLIMS_STATUS_OK
+            }
+            api.stroke_begin = { engine, _, _, settings, _, result, error in
+                let producer = Producer.from(engine); producer.beginBrush = settings?.pointee
+                result?.pointee = producer.returnedStroke; error?.pointee = nil
+                return GLIMS_STATUS_OK
+            }
+            api.stroke_begin_with_capture_facts = { engine, _, _, _, settings, _, _, result, _, error in
+                let producer = Producer.from(engine); producer.beginBrush = settings?.pointee
+                result?.pointee = producer.returnedStroke; error?.pointee = nil
+                return GLIMS_STATUS_OK
+            }
+        }) { session, producer in
+            _ = try session.beginTabletStroke(image: 9, drawable: 4, brush: brush, first: self.sample())
+            XCTAssertEqual(producer.beginBrush?.record_eraser_background, false)
+            _ = try session.beginStroke(image: 9, drawable: 4, brush: brush, first: self.sample().point)
+            XCTAssertEqual(producer.beginBrush?.record_eraser_background, false)
+            _ = try session.beginStrokeCapturing(image: 9, drawable: 4, brush: brush, first: self.sample().point)
+            XCTAssertEqual(producer.beginBrush?.record_eraser_background, true)
         }
     }
 

@@ -2445,7 +2445,7 @@ final class EngineSession: @unchecked Sendable {
         }
         let identity = expected?.brush ?? brush.resource
         let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
-        var settings = Self.nativeBrush(brush)
+        var settings = Self.nativeBrush(brush, recordsEraserBackground: true)
         var point = Self.point(first)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
@@ -2529,7 +2529,7 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
                               message: "The brush could not be found for the captured tablet stroke.")
         }
-        var settings = Self.nativeBrush(brush)
+        var settings = Self.nativeBrush(brush, recordsEraserBackground: true)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
         var stroke: Int32 = 0
@@ -6260,7 +6260,7 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
-    private static func nativeBrush(_ brush: Brush) -> GlimsBrushSettings {
+    private static func nativeBrush(_ brush: Brush, recordsEraserBackground: Bool = false) -> GlimsBrushSettings {
         GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
                            size: brush.size, opacity: brush.opacity,
                            red: brush.red, green: brush.green, blue: brush.blue,
@@ -6274,7 +6274,8 @@ final class EngineSession: @unchecked Sendable {
                            has_eraser_background: brush.eraserBackground != nil,
                            eraser_background_red: brush.eraserBackground?.red ?? 0,
                            eraser_background_green: brush.eraserBackground?.green ?? 0,
-                           eraser_background_blue: brush.eraserBackground?.blue ?? 0)
+                           eraser_background_blue: brush.eraserBackground?.blue ?? 0,
+                           record_eraser_background: recordsEraserBackground && brush.tool == .eraser && brush.eraserBackground != nil)
     }
 
     private static func layer(_ row: GlimsLayerInfo) -> Layer {

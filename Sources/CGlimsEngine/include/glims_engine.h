@@ -245,6 +245,11 @@ typedef struct GlimsBrushSettings {
    * corresponding capability. The complete tail must be present. */
   bool        has_eraser_background;
   double      eraser_background_red, eraser_background_green, eraser_background_blue;
+
+  /* Capture callers set this only when they retain the explicit background
+   * in their recording and provide it again for replay. Absent on older
+   * callers, so an opaque Eraser remains live but returns no capture facts. */
+  bool        record_eraser_background;
 } GlimsBrushSettings;
 
 typedef struct GlimsStrokePoint {

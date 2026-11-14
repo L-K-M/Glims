@@ -21,7 +21,8 @@ struct RecorderTabletStrokeCommand: Equatable {
               [settings.opacity, settings.red, settings.green, settings.blue].allSatisfy({
                   $0.isFinite && (0...1).contains($0)
               }), settings.hardness.map({ $0.isFinite && (0...1).contains($0) }) != false,
-              settings.tool == .eraser || !settings.antiErase else {
+              settings.tool == .eraser || (!settings.antiErase && settings.eraserBackground == nil),
+              settings.eraserBackground.map({ [$0.red, $0.green, $0.blue].allSatisfy { $0.isFinite && (0...1).contains($0) } }) != false else {
             throw RecorderFileError.invalid("The recorded tablet brush settings are outside the supported range.")
         }
         let strings = [facts.brush.name] + (facts.brush.collection.map { [$0] } ?? [])
