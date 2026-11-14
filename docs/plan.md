@@ -6175,3 +6175,23 @@ Native checks against a Photoshop Gradient Fill fixture pass on four engines;
 the development engine's complete composite matches ImageIO within two 8-bit
 levels. Real-window, bundle, full editor and review qualification remain open.
 See [psd-composite-import.md](psd-composite-import.md).
+
+### Half-scale sRGB fallback sampling (candidate)
+
+The legacy sRGB fallback uses the sampler's validated projection footprint at
+exactly 50% instead of eagerly validating the same footprint twice. Other
+scales and the normal color-managed canvas path are unchanged. The legacy alpha
+fixture now also compares full and single-pixel half-scale reads across both
+renderer chunk seams, including a partial-alpha sample and padded rows.
+
+On one 24 MP, 20-layer fixture, six alternating baseline/candidate runs gave
+mean 50% cold, post-edit and post-Undo reads of 612/567, 667/587 and 682/563 ms;
+cached reads were about 15 ms in both. These native timings are not an app
+interaction guarantee. Two pairs had different pixel hashes at multiple scales,
+including unchanged 100% reads. Saved outputs differed by at most seven bytes
+per sampled image and one value per byte; the same variation occurred between
+baseline runs and between candidate runs. Its cause remains unverified.
+
+All four engines pass their conformance, display-sampling, legacy-alpha and
+component-editor checks; the extended legacy fixture passes 615 checks per
+engine. Full app, independent review and latest-head CI remain in progress.
