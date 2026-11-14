@@ -6018,25 +6018,32 @@ not end-to-end interaction timings.
 A separately advertised engine entry fills the captured logical Lab root only
 when the image selection is empty. It checks that condition on the engine
 thread before work and again before publishing the staged result. A nonempty
-or changed selection, stale root and cancellation refuse without publishing
-pixels or adding an Undo step. The existing selection-aware Fill is unchanged.
+selection at admission or publication, stale root and cancellation refuse
+without publishing pixels or adding an Undo step. The existing selection-aware
+Fill is unchanged.
 The four-engine conformance and public tests cover those refusals, cancellation,
-unaligned input and Undo. This is an engine prerequisite only: Recorder does
-not yet capture or replay layered Lab Fill. Review and CI remain pending.
+unaligned input and Undo. Review and CI remain pending.
 
 The Swift transport detects the optional guarded Fill entry by its complete
 API prefix and refuses guarded requests on older engines without invoking the
 ordinary Fill entry. Transport tests include a protected old-prefix boundary,
 request values and native error ownership. Real-window tests cover the new
 engine's selection refusal, empty-selection Fill and Undo, and the old-engine
-fallback. Recorder capture, persistence and replay remain separate work.
+fallback.
 
 A version 19 recording can own a layered Lab Fill's sRGB color and opacity,
 with a separately bound logical layer. The file decoder validates the values,
 version and layer kind; replay resolves the target afresh and uses the guarded
 engine entry. Real-window checks cover file installation, a different selected
 layer, an uncaptured selection, replay and Undo, and refusal on older engines.
-Live capture is not enabled yet; review and CI remain pending.
+Review and CI remain pending.
+
+The live Fill sheet now records the accepted color and opacity against the
+captured logical layer, using the guarded entry whenever recording is active.
+Real-window tests on all four engines cover capture, save, replay and Undo,
+as well as cancellation and refusal with an active selection; an older engine
+refuses recording without changing the image. These changes are candidates:
+review, CI and integrated bundle qualification remain open.
 
 ### Photoshop Bitmap PSD export (foundation)
 
