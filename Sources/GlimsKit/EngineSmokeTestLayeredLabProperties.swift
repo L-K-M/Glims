@@ -1412,8 +1412,9 @@ extension EngineSmokeTest {
                     EngineSmokeTestHost.pumpEvents(for: 0.02)
                 }
                 if let record = opened.recorder.records.first, case .success(.layerProperties) = record.resolution {
+                    let reentrantLayer = try session.layers(image).first(where: { $0.id == selected })
                     check(stoppedReentrantly && !opened.recorder.isRecording && opened.recorder.pendingCount == 0 &&
-                          (try session.layers(image).first(where: { $0.id == selected }))?.opacity == value,
+                          reentrantLayer?.opacity == value,
                           "reentrant Stop retains and settles the accepted Lab property edit")
                 } else { check(false, "reentrant Stop retains and settles the accepted Lab property edit") }
                 opened.undo(); drain("reentrant Lab property Undo")
