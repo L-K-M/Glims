@@ -6187,3 +6187,13 @@ color-mode data, so this is not yet an image editor or an interoperability
 claim. Encoding choices, color semantics, overprint updates and color preview
 remain required before exposing edits. Optimized and sanitizer tests pass 551
 checks each. See [duotone-options.md](duotone-options.md).
+
+### Duotone alternate-color table (private candidate)
+
+A bounded parser reads the documented version-1 PSD resource 1066 with up to
+four alternate ink colors and 256 encoded Lab samples. It declines other
+layouts without altering output. The Photoshop CC 2018 fixture contains a
+matching resource; optimized and sanitizer tests pass 814 checks each. The
+resource is not yet retained on import or used for preview, and its validity
+after changing inks or curves still needs a defined policy. See
+[duotone-preview-table.md](duotone-preview-table.md).
