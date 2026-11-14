@@ -6098,3 +6098,16 @@ the four-engine real-window checks above were local. Set
 `GLIMS_REQUIRE_LAB_LIVE_PROPERTIES=1` in the native fixture run to make a
 missing selection or identity fail instead of skipping this coverage. Hosted
 review, integration and bundle qualification remain open.
+
+### Photoshop Bitmap PSD export (candidate)
+
+An explicit one-bit Bitmap PSD export accepts opaque binary grayscale or
+indexed canvases, flattens the visible appearance, and refuses intermediate
+gray, transparency or linked layers instead of silently converting it. The source image and
+history remain untouched; metadata and layers are omitted. The real export
+sheet and Repeat Export pass a focused window test, with older adapters
+refusing safely. Literal codec and atomic file tests pass under sanitizers,
+and all four engines pass native round-trip and refusal tests. Full editor
+compatibility, review and integration remain open. Conversion, dithering,
+metadata and preserved editable Bitmap mode are separate work. See
+[bitmap-psd.md](bitmap-psd.md).
