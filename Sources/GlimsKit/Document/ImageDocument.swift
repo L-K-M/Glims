@@ -2809,6 +2809,8 @@ final class ImageDocument {
 
     private var labLayerFillPreparationPending = false
 
+    /// Cached admission for the sheet and live Fill. An accepted recording
+    /// must still reserve and settle its capture in `fillLabLayer`.
     func labLayerColorFillRefusal(root: Int32? = nil) -> String? {
         guard storage.layout == .layeredLab, storage.allowsLabLayerColorFill, session.supportsLabLayerColorFill else {
             return "This image engine cannot fill a Lab layer."
