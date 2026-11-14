@@ -72,6 +72,9 @@ jobs:
           scripts/build-engine.sh
           scripts/build-adapter.sh --test
 
+      - name: Check private layered Lab brush core
+        run: python3 scripts/test-lab-layer-brush-core.py
+
       - name: Build the app
         run: ./scripts/build-app.sh
 

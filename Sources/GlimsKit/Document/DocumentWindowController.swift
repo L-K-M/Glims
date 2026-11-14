@@ -2588,6 +2588,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 break
             case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
                 guard imageDocument.acceptsLabSelections else { return false }
+            case #selector(fill(_:)):
+                guard imageDocument.storage.allowsLabLayerColorFill else { return false }
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
                  #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
@@ -2620,6 +2622,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
             }
             if menuItem.action == #selector(fill(_:)) {
+                if imageDocument.storage.layout == .layeredLab {
+                    let reason = imageDocument.labLayerColorFillRefusal()
+                    menuItem.toolTip = reason
+                    return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
+                }
                 let reason: String?
                 if let axis = imageDocument.selectedLabAxis { reason = imageDocument.labFillRefusal(axis: axis) }
                 else { reason = "Select one Lab channel in the Channels palette." }
