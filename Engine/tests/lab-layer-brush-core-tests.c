@@ -8,6 +8,8 @@
 #include "core/gimpbrush-private.h"
 #include "core/gimpchannel.h"
 #include "core/gimpdrawable.h"
+#include "core/gimpdynamics.h"
+#include "core/gimpdynamicsoutput.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
@@ -109,6 +111,71 @@ static gboolean stroke(GlimsEngine *engine,GimpImage *image,GList *planes,double
   return started;
 }
 
+/* Exercise native brush geometry with a private, size-only dynamics object.
+ * The two separated dabs use different pressures in the same stroke; all
+ * four planes must agree on their coverage and cancellation must restore
+ * the complete pre-stroke state. */
+static gboolean pressure_probe(GlimsEngine *engine,GimpImage *image,GList *planes,int scenario) {
+  guint8 before[4][PIXELS],after[4][PIXELS],restored[4][PIXELS];
+  if(!read_root(image,0,before))return FALSE;
+  int undo=gimp_undo_stack_get_depth(gimp_image_get_undo_stack(image));
+  int redo=gimp_undo_stack_get_depth(gimp_image_get_redo_stack(image));
+  GimpBrush *brush=hard_brush();
+  GimpPaintInfo *info=glims_paint_info_for_tool(engine->gimp,GLIMS_PAINT_PAINTBRUSH);
+  if(!brush||!info){g_clear_object(&brush);return FALSE;}
+  GlimsBrushSettings settings={.struct_size=sizeof settings,.size=11,.opacity=1,
+    .tool=GLIMS_PAINT_PAINTBRUSH,.hardness=1,.rate=-1,.flow=-1,.exposure=-1};
+  GimpPaintOptions *options=glims_make_paint_options(engine->gimp,info,&settings,brush);
+  GimpDynamics *parent_dynamics=gimp_context_get_dynamics(gimp_get_user_context(engine->gimp));
+  if(!glims_lab_layer_brush_enable_pressure_size(options)){
+    g_object_unref(options);g_object_unref(brush);return FALSE;
+  }
+  GimpDynamics *dynamics=gimp_context_get_dynamics(GIMP_CONTEXT(options));
+  gboolean size_only=dynamics&&dynamics!=parent_dynamics&&
+    parent_dynamics==gimp_context_get_dynamics(gimp_get_user_context(engine->gimp))&&
+    gimp_paint_options_are_dynamics_enabled(options);
+  for(int output=GIMP_DYNAMICS_OUTPUT_OPACITY;output<=GIMP_DYNAMICS_OUTPUT_JITTER;output++)
+    size_only=size_only&&(gimp_dynamics_is_output_enabled(dynamics,output)==
+                          (output==GIMP_DYNAMICS_OUTPUT_SIZE));
+  CHECK(size_only,"private dynamics enables size alone");
+  g_object_set(options,"brush-spacing",.15,"brush-angle",0.0,"brush-aspect-ratio",0.0,
+               "brush-hardness",1.0,"hard",FALSE,"use-applicator",FALSE,NULL);
+  GimpPaintCore *core=glims_lab_layer_brush_core_new(100,64,-64,1);
+  GimpCoords point=GIMP_COORDS_DEFAULT_VALUES;point.x=8.5;point.y=10.5;
+  point.pressure=scenario==1?1:scenario==2?0:.25;
+  GError *error=NULL;
+  gboolean started=core&&gimp_paint_core_start(core,planes,options,&point,&error);
+  CHECK(started,"private size-only pressure stroke starts");
+  if(error){fprintf(stderr,"pressure start: %s\n",error->message);g_clear_error(&error);}
+  if(started){
+    core->last_coords=point;
+    gimp_paint_core_paint(core,planes,options,GIMP_PAINT_STATE_INIT,1);
+    gimp_paint_core_paint(core,planes,options,GIMP_PAINT_STATE_MOTION,1);
+    point.x=24.5;point.pressure=scenario==1?.25:1;core->cur_coords=point;
+    gimp_paint_core_paint(core,planes,options,GIMP_PAINT_STATE_MOTION,2);
+    gboolean valid=!glims_lab_layer_brush_core_error(core)&&read_root(image,0,after);
+    unsigned small=0,large=0,mismatch=0;
+    if(valid)for(unsigned y=4;y<17;y++)for(unsigned x=2;x<31;x++){
+      unsigned p=y*W+x;gboolean changed=after[3][p]!=before[3][p];
+      if(x<16)small+=changed;else large+=changed;
+      for(unsigned plane=0;plane<3;plane++)
+        if((after[plane][p]!=before[plane][p])!=changed)mismatch++;
+    }
+    CHECK(valid&&(scenario==2?small==0&&large>0:
+                  small>0&&large>0&&(scenario==1?small>large*2:large>small*2)),
+          "pressure changes the footprint of separated dabs");
+    CHECK(valid&&!mismatch,"pressure-driven coverage stays aligned across four planes");
+    gimp_paint_core_cancel(core,planes);gimp_image_flush(image);
+    CHECK(read_root(image,0,restored)&&!memcmp(before,restored,sizeof before)&&
+          undo==gimp_undo_stack_get_depth(gimp_image_get_undo_stack(image))&&
+          redo==gimp_undo_stack_get_depth(gimp_image_get_redo_stack(image)),
+          "cancelling pressure-driven dabs restores all four planes and history");
+    gimp_paint_core_cleanup(core);
+  }
+  g_clear_object(&core);g_object_unref(options);g_object_unref(brush);
+  return started;
+}
+
 static GlimsStatus worker(GlimsEngine *engine,gpointer context) {
   (void)context;
   GlimsLabLayerMap map={.width=W,.height=H,.count=2,.mode=3,.storage=1,.encoding=2};
@@ -165,6 +232,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer context) {
         gimp_undo_stack_get_depth(gimp_image_get_undo_stack(image))==depth,
         "invalid brush mask publishes no planes or history");
   CHECK(!glims_lab_layer_brush_core_new(NAN,0,0,1),"nonfinite physical color is refused");
+  CHECK(!glims_lab_layer_brush_enable_pressure_size(NULL),"missing pressure options are refused");
+  CHECK(pressure_probe(engine,image,planes,0),"private pressure geometry probe completes");
+  CHECK(pressure_probe(engine,image,planes,1),"reversed pressure geometry probe completes");
+  CHECK(pressure_probe(engine,image,planes,2),"zero pressure followed by full pressure completes");
   g_list_free(planes);g_object_unref(image);
   return GLIMS_STATUS_OK;
 }

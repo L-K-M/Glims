@@ -6,6 +6,8 @@
 #include "lab-brush-coverage.h"
 
 #include "core/gimpdrawable.h"
+#include "core/gimpdynamics.h"
+#include "core/gimpdynamicsoutput.h"
 #include "core/gimpimage.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
@@ -54,6 +56,23 @@ glims_lab_layer_brush_core_class_init (GlimsLabLayerBrushCoreClass *klass)
 }
 
 static void glims_lab_layer_brush_core_init (GlimsLabLayerBrushCore *self) { (void) self; }
+
+gboolean
+glims_lab_layer_brush_enable_pressure_size (GimpPaintOptions *options)
+{
+  if (!GIMP_IS_PAINT_OPTIONS (options)) return FALSE;
+  GimpDynamics *dynamics = GIMP_DYNAMICS (gimp_dynamics_new (GIMP_CONTEXT (options),
+                                                              "Glims Lab pressure size"));
+  if (!dynamics) return FALSE;
+  GimpDynamicsOutput *size = gimp_dynamics_get_output (dynamics, GIMP_DYNAMICS_OUTPUT_SIZE);
+  if (!size) { g_object_unref (dynamics); return FALSE; }
+  g_object_set (size, "use-pressure", TRUE, NULL);
+  gimp_context_define_property (GIMP_CONTEXT (options), GIMP_CONTEXT_PROP_DYNAMICS, TRUE);
+  gimp_context_set_dynamics (GIMP_CONTEXT (options), dynamics);
+  gimp_paint_options_enable_dynamics (options, TRUE);
+  g_object_unref (dynamics);
+  return TRUE;
+}
 
 GimpPaintCore *
 glims_lab_layer_brush_core_new (double lightness, double a, double b, double opacity)

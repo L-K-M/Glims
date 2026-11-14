@@ -246,6 +246,68 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
          brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
          "refused public strokes preserve pixels and history");
+   CHECK(api->stroke_begin_lab_layer_pressure!=NULL,"pressure brush has its own optional API entry");
+   if(api->stroke_begin_lab_layer_pressure){
+    brush_id=123;invalid_brush=brush;invalid_brush.struct_size=sizeof invalid_brush-1;
+    CHECK(api->stroke_begin_lab_layer_pressure(engine,id,0,&invalid_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+          "pressure brush refuses a short captured request");if(error)api->free_string(error);error=NULL;
+    brush_id=123;invalid_brush=brush;invalid_brush.uuid[0]^=0xff;
+    CHECK(api->stroke_begin_lab_layer_pressure(engine,id,0,&invalid_brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&brush_id==0,
+          "pressure brush refuses a stale logical identity");if(error)api->free_string(error);error=NULL;
+    brush_id=123;engine->busy++;
+    CHECK(api->stroke_begin_lab_layer_pressure(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_BUSY&&brush_id==0,
+          "pressure brush refuses a busy engine");engine->busy--;if(error)api->free_string(error);error=NULL;
+    guint8 pressure_unaligned[sizeof brush+2];memset(pressure_unaligned,0xa5,sizeof pressure_unaligned);
+    memcpy(pressure_unaligned+1,&brush,sizeof brush);
+    brush_point.pressure=0;brush_point.time_ms=1;brush_id=0;
+    CHECK(api->image_undo_info(engine,id,&brush_history_before)==GLIMS_STATUS_OK&&
+          api->stroke_begin_lab_layer_pressure(engine,id,0,(const GlimsLabLayerBrushSettings*)(pressure_unaligned+1),
+                                               &brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id&&
+          pressure_unaligned[0]==0xa5&&pressure_unaligned[sizeof pressure_unaligned-1]==0xa5,
+          "pressure brush accepts an unaligned request and zero-pressure start");
+    if(error)api->free_string(error);error=NULL;
+    if(brush_id){
+     CHECK(brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+           "zero-pressure first sample leaves all four planes untouched");
+     brush_point.x=2.5;brush_point.pressure=1;brush_point.time_ms=2;
+     CHECK(api->stroke_continue_v2(engine,brush_id,&brush_packet,&error)==GLIMS_STATUS_OK&&
+           brush_raw(engine,id,0,brush_after)&&memcmp(brush_before,brush_after,sizeof brush_before),
+           "full-pressure continuation paints after a zero-pressure start");
+     if(error)api->free_string(error);error=NULL;
+     CHECK(api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_OK&&
+           brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before)&&
+           api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
+           brush_history_before.undo_count==brush_history_after.undo_count&&
+           brush_history_before.redo_count==brush_history_after.redo_count,
+           "cancelling a public pressure stroke restores planes and history");
+    }
+    brush_point.x=1.5;brush_point.pressure=1;brush_point.time_ms=1;
+    brush_id=0;
+    CHECK(api->stroke_begin_lab_layer_pressure(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id,
+          "full-pressure public stroke begins");if(error)api->free_string(error);error=NULL;
+    if(brush_id){
+     guint8 pressure_painted[4][16];
+     CHECK(api->stroke_end(engine,brush_id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,pressure_painted)&&
+           memcmp(brush_before,pressure_painted,sizeof brush_before)&&
+           api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
+           brush_history_after.undo_count==brush_history_before.undo_count+1,
+           "pressure stroke commits as one Undo step");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+           !memcmp(brush_before,brush_after,sizeof brush_before),"pressure Undo restores all four planes");
+     CHECK(api->image_redo(engine,id)==GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+           !memcmp(pressure_painted,brush_after,sizeof pressure_painted),"pressure Redo restores all four planes");
+     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"pressure fixture restores original planes");
+    }
+    brush_point.pressure=0;brush_id=0;
+    CHECK(api->stroke_begin_lab_layer(engine,id,0,&brush,&brush_packet,&brush_id,&error)==GLIMS_STATUS_OK&&brush_id&&
+          brush_raw(engine,id,0,brush_after)&&memcmp(brush_before,brush_after,sizeof brush_before),
+          "original brush entry retains fixed-size behavior at zero pressure");
+    if(error)api->free_string(error);error=NULL;
+    if(brush_id)CHECK(api->stroke_cancel_lab_layer(engine,brush_id)==GLIMS_STATUS_OK&&
+      brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+      "fixed-size compatibility witness cancels cleanly");
+    brush_point.pressure=1;
+   }
    guint8 unaligned_brush[sizeof brush+2];memset(unaligned_brush,0xa5,sizeof unaligned_brush);memcpy(unaligned_brush+1,&brush,sizeof brush);
    brush_event_image=id;brush_projection_events=0;
    brush_id=0;GlimsStatus brush_status=api->stroke_begin_lab_layer(engine,id,0,(const GlimsLabLayerBrushSettings*)(unaligned_brush+1),&brush_packet,&brush_id,&error);
