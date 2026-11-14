@@ -42,7 +42,7 @@ def check(root=ROOT):
     component.add('image_convert_lab_copy')
     component.add('stroke_begin_lab')
     component.update({'stroke_begin_lab_layer', 'stroke_begin_lab_layer_pressure',
-                      'stroke_begin_lab_layer_with_capture_facts'})
+                      'stroke_begin_lab_layer_with_capture_facts', 'stroke_begin_lab_layer_empty_selection'})
     component.add('stroke_begin_lab_with_capture_facts')
     component.add('stroke_begin_ink_with_capture_facts')
     component.update({'image_select_lab_shape', 'image_select_lab_command'})

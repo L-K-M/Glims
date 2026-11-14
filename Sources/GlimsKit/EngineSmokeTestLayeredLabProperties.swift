@@ -1,4 +1,5 @@
 import AppKit
+import CGlimsEngine
 import RigiUI
 
 extension EngineSmokeTest {
@@ -491,18 +492,30 @@ extension EngineSmokeTest {
                 if let facts = captured.facts, let settings = RecorderStrokeCommand.Settings(brush) {
                     let trace = RecorderTabletStrokeTrace(first: try .init(native: sample), batches: [])
                     let command = RecorderLabLayerStrokeCommand(settings: settings, trace: trace, facts: facts)
-                    let wrongTarget = EngineSession.LabLayerFillTarget(root: target.root, uuid: UUID())
-                    var refused = false
-                    do { try command.apply(session: session, image: image, target: wrongTarget) }
-                    catch { refused = true }
-                    check(refused && pixel(session, image, x: 1, y: 1) == captureBefore,
-                          "recorded layered Brush refuses a changed logical identity")
-                    try command.apply(session: session, image: image, target: target)
-                    check(pixel(session, image, x: 1, y: 1) == expectedPixel,
-                          "recorded layered Brush command reproduces the captured pixel")
-                    try session.undo(image)
-                    check(pixel(session, image, x: 1, y: 1) == captureBefore,
-                          "one Undo restores recorded layered Brush pixels")
+                    if session.supportsLabLayerBrushEmptySelection {
+                        let wrongTarget = EngineSession.LabLayerFillTarget(root: target.root, uuid: UUID())
+                        var refused = false
+                        do { try command.apply(session: session, image: image, target: wrongTarget) }
+                        catch let failure as EngineSession.EngineError {
+                            refused = failure.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue)
+                        }
+                        check(refused && pixel(session, image, x: 1, y: 1) == captureBefore,
+                              "recorded layered Brush refuses a changed logical identity")
+                        try command.apply(session: session, image: image, target: target)
+                        check(pixel(session, image, x: 1, y: 1) == expectedPixel,
+                              "recorded layered Brush command reproduces the captured pixel")
+                        try session.undo(image)
+                        check(pixel(session, image, x: 1, y: 1) == captureBefore,
+                              "one Undo restores recorded layered Brush pixels")
+                    } else {
+                        var unavailable = false
+                        do { try command.apply(session: session, image: image, target: target) }
+                        catch let failure as EngineSession.EngineError {
+                            unavailable = failure.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue)
+                        }
+                        check(unavailable && pixel(session, image, x: 1, y: 1) == captureBefore,
+                              "older engine refuses Recorder replay without a selection guard")
+                    }
                 } else { check(false, "recorded layered Brush has replayable settings and facts") }
             }
         }
