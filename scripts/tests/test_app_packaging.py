@@ -87,6 +87,9 @@ class AppPackagingTests(unittest.TestCase):
                   + "echo 'ok development output denied'\n")
         runner.write_text(source)
         runner.chmod(0o755)
+        duotone = runner.parent / "glims-duotone-preservation-tests"
+        duotone.write_text(source)
+        duotone.chmod(0o755)
         executable = app / "Contents/MacOS/Glims"
         executable.write_text(source)
         executable.chmod(0o755)
@@ -95,6 +98,29 @@ class AppPackagingTests(unittest.TestCase):
                                 env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 checks passed", result.stdout)
+
+    def test_bundle_check_propagates_duotone_failure(self):
+        app = self.root / "dist/Glims.app"
+        (app / "Contents/Frameworks").mkdir(parents=True)
+        (app / "Contents/MacOS").mkdir()
+        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        outputs = self.root / "isolated-adapters"
+        outputs.mkdir()
+        runners = outputs / "test-engine"
+        runners.mkdir()
+        for name, content in (("glims-engine-tests", "#!/bin/sh\necho 'ok engine'\n"),
+                              ("glims-duotone-preservation-tests", "#!/bin/sh\necho 'FAIL duotone'\nexit 1\n")):
+            path = runners / name
+            path.write_text(content)
+            path.chmod(0o755)
+        executable = app / "Contents/MacOS/Glims"
+        executable.write_text("#!/bin/sh\necho 'ok app'\n")
+        executable.chmod(0o755)
+        self.env["GLIMS_ADAPTER_ROOT"] = str(outputs)
+        result = subprocess.run(["bash", str(self.root / "scripts/check-bundle.sh"), str(app)],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Duotone preservation checks failed", result.stdout)
 
     def test_shell_only_is_explicit(self):
         result = self.run_build("--shell-only")

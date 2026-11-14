@@ -36,12 +36,16 @@ PY_PROFILE
 
 TESTS="$(ls -t "$ADAPTER_ROOT"/*/glims-engine-tests 2>/dev/null | head -1)"
 [[ -n "$TESTS" ]] || { echo "error: no conformance test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
+DUOTONE_TESTS="$(dirname "$TESTS")/glims-duotone-preservation-tests"
+[[ -x "$DUOTONE_TESTS" ]] || { echo "error: no matching Duotone test binary; run scripts/build-adapter.sh first" >&2; exit 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-check-bundle.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home" "$WORK/tests"
 # The test binary lives in _engine/; run a copy so the sandbox can deny it.
 cp "$TESTS" "$WORK/glims-engine-tests"
+cp "$DUOTONE_TESTS" "$WORK/glims-duotone-preservation-tests"
+mkdir -p "$WORK/duotone/home" "$WORK/duotone/cache"
 
 
 status=0
@@ -57,6 +61,20 @@ fi
 if grep -q -E "$ROOT/_(engine|deps)" "$WORK/tests.log"; then
   echo "!! the engine still looked for files in the build trees:"
   grep -E "$ROOT/_(engine|deps)" "$WORK/tests.log" | head -5
+  status=1
+fi
+
+echo "==> Duotone preservation against the bundled adapter (build trees unreadable)"
+if sandbox-exec -p "$PROFILE" env HOME="$WORK/duotone/home" XDG_CACHE_HOME="$WORK/duotone/cache" TMPDIR="$WORK" \
+     "$WORK/glims-duotone-preservation-tests" "$ADAPTER" "$WORK/duotone" "$ROOT/Engine/tests/fixtures" > "$WORK/duotone.log" 2>&1; then
+  echo "-- $(grep -c '^ok' "$WORK/duotone.log") checks passed"
+else
+  grep -E '^FAIL' "$WORK/duotone.log" || tail -20 "$WORK/duotone.log"
+  echo "!! the Duotone preservation checks failed against the bundle"
+  status=1
+fi
+if grep -q -E "$ROOT/_(engine|deps)" "$WORK/duotone.log"; then
+  echo "!! Duotone preservation looked for files in the build trees"
   status=1
 fi
 

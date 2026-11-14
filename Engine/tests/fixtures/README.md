@@ -91,3 +91,11 @@ has x=600000, y=0, radius=0 and grow-radius=0. Its raw group projection
 extends to 600008 pixels horizontally even though the item and displayed
 masked bounds remain 8×8. This bounded, narrow fixture checks transform
 admission against raw projection extents, not the visible mask bounds.
+
+`photoshop-cc2018-duotone.psd` is a 4×4, 8-bit PSD from the
+[psd-tools test corpus](https://github.com/psd-tools/psd-tools/blob/6c5faf1dbfb274831ec0fa26011a7de663b0e8ec/tests/psd_files/colormodes/4x4_8bit_duotone.psd).
+Its embedded XMP names Adobe Photoshop CC 2018 as the creator. SHA-256:
+`4169c367a7e4698f55955901849c38b8bd284dd61f8ddcbef8bafa70e54bb19b`.
+The corpus is MIT-licensed; its copyright and license are in
+[psd-tools-LICENSE.txt](psd-tools-LICENSE.txt). This fixture is test data,
+not bundled with the app.
