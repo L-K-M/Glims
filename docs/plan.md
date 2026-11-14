@@ -6042,8 +6042,9 @@ unmatched locale overrides still use native discovery. The baseline bundle
 reproduces a missing seed for `en-US,en`. The expanded regression compares
 seeded command labels with fresh discovery, exercises a newly installed
 plug-in and checks that a different fallback order does not reuse a seed.
-In fresh-profile ordinary launches of the same built app, three `en-US,en`
-runs reached a document in 1.78–1.86 seconds with the seed; two runs with
+In fresh-profile direct launches of the same built app, with a clean locale
+environment and an explicit preferred-language list, three `en-US,en` runs
+reached a document in 1.78–1.86 seconds with the seed; two runs with
 access denied took 11.62–12.18 seconds. For `de-CH,de,en`, three seeded runs
 took 1.80–2.37 seconds and two denied runs took 11.78–12.13 seconds. Each run
 verified the complete native language identity and whether the seed was used.
