@@ -93,7 +93,7 @@ extension EngineSmokeTest {
             }
         }
         let docA = try newDocument(width: 1200, height: 900, name: "Destination A")
-        let docB = try newDocument(width: 220, height: 160, name: "Destination B")
+        let docB = try newDocument(width: 220, height: 160, name: "Caf\u{e9}")
         let imageA = docA.image
         // Baseline precedes attachment, which starts automatic rendering.
         let infoBefore = try session.info(imageA)
@@ -118,8 +118,13 @@ extension EngineSmokeTest {
         let (windowA, scrollA, canvasA) = attach(docA, p3)
         let (windowB, _, canvasB) = attach(docB, srgb)
         check(canvasA.isAccessibilityElement() && canvasA.accessibilityRole() == .image &&
-              canvasA.accessibilityLabel() == "Image canvas",
-              "the image canvas is exposed with a meaningful accessibility identity")
+              canvasA.accessibilityLabel() == "Destination A" &&
+              canvasB.accessibilityLabel() == "Caf\u{e9}",
+              "each image canvas exposes its own document name to accessibility")
+        canvasB.setAccessibilityLabel("Cafe\u{301}")
+        canvasB.refreshAccessibilityLabel()
+        check(canvasB.accessibilityLabel().map { Array($0.utf8) } == Array(docB.name.utf8),
+              "the canvas updates a canonically equivalent accessibility label byte-for-byte")
         check(canvasA.acceptsFirstResponder && windowA.makeFirstResponder(canvasA) &&
               windowA.firstResponder === canvasA,
               "the accessible canvas continues to accept keyboard focus")
