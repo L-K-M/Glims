@@ -793,6 +793,33 @@ startup_locale_environment_is_clean (void)
   return clean;
 }
 
+static gboolean
+startup_checksum_seed_file (GChecksum *sum, const gchar *path, const gchar *tag)
+{
+  struct stat st;
+  gchar *data = NULL;
+  gsize length = 0;
+  guchar present = 0;
+  if (g_lstat (path, &st) == 0)
+    {
+      if (!S_ISREG (st.st_mode) || st.st_size < 0 || st.st_size > 16 * 1024 * 1024 ||
+          !g_file_get_contents (path, &data, &length, NULL) || length > 16 * 1024 * 1024)
+        { g_free (data); return FALSE; }
+      present = 1;
+    }
+  else if (errno != ENOENT) return FALSE;
+  g_checksum_update (sum, (const guchar *) tag, strlen (tag) + 1);
+  g_checksum_update (sum, &present, 1);
+  if (present)
+    {
+      guint64 size = GUINT64_TO_BE ((guint64) length);
+      g_checksum_update (sum, (const guchar *) &size, sizeof size);
+      g_checksum_update (sum, (const guchar *) data, length);
+    }
+  g_free (data);
+  return TRUE;
+}
+
 /* Locale overrides are not part of GIMP's prev-language setting. Keep their
  * registries separate so a later launch cannot reuse labels queried under a
  * different environment. The private directory also keeps the user's chosen
@@ -815,33 +842,20 @@ startup_override_registry_path (const gchar *cache_directory,
   const gchar *parts[] = { GIMP_VERSION, language, contents, user_directory, selected_registry, fingerprint };
   for (guint i = 0; i < G_N_ELEMENTS (parts); i++)
     g_checksum_update (sum, (const guchar *) parts[i], strlen (parts[i]) + 1);
-  /* App updates can replace plug-ins or change seed identity without
-   * changing GIMP's version or bundle path. Bind the cache to all three
-   * bounded seed files, including presence and length for each one. */
+  /* Both the host and matching localized seeds affect registry provenance. */
+  g_autofree gchar *escaped_language = g_strescape (language, NULL);
+  g_autofree gchar *localized_key = g_compute_checksum_for_string (G_CHECKSUM_SHA256, escaped_language, -1);
   const gchar *leaves[] = { "identity", "environment", "pluginrc" };
   for (guint i = 0; i < G_N_ELEMENTS (leaves); i++)
     {
-      g_autofree gchar *seed_path = g_build_filename (contents, "Resources", "Engine-Startup", leaves[i], NULL);
-      gchar *seed = NULL;
-      gsize seed_length = 0;
-      guchar has_seed = 0;
-      if (g_lstat (seed_path, &st) == 0)
-        {
-          if (!S_ISREG (st.st_mode) || st.st_size < 0 || st.st_size > 16 * 1024 * 1024 ||
-              !g_file_get_contents (seed_path, &seed, &seed_length, NULL) || seed_length > 16 * 1024 * 1024)
-            { g_free (seed); g_checksum_free (sum); return NULL; }
-          has_seed = 1;
-        }
-      else if (errno != ENOENT) { g_checksum_free (sum); return NULL; }
-      g_checksum_update (sum, (const guchar *) leaves[i], strlen (leaves[i]) + 1);
-      g_checksum_update (sum, &has_seed, 1);
-      if (has_seed)
-        {
-          guint64 length = GUINT64_TO_BE ((guint64) seed_length);
-          g_checksum_update (sum, (const guchar *) &length, sizeof length);
-          g_checksum_update (sum, (const guchar *) seed, seed_length);
-        }
-      g_free (seed);
+      g_autofree gchar *host_path = g_build_filename (contents, "Resources", "Engine-Startup", leaves[i], NULL);
+      g_autofree gchar *localized_path = g_build_filename (contents, "Resources", "Engine-Startup",
+                                                           "localized", localized_key, leaves[i], NULL);
+      g_autofree gchar *host_tag = g_strconcat ("host/", leaves[i], NULL);
+      g_autofree gchar *localized_tag = g_strconcat ("localized/", leaves[i], NULL);
+      if (!startup_checksum_seed_file (sum, host_path, host_tag) ||
+          !startup_checksum_seed_file (sum, localized_path, localized_tag))
+        { g_checksum_free (sum); return NULL; }
     }
   g_autofree gchar *digest = g_strdup (g_checksum_get_string (sum));
   g_checksum_free (sum);
