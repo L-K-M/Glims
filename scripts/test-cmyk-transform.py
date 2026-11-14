@@ -48,7 +48,7 @@ def main():
             env=env, text=True, timeout=30))
         compiler = ['xcrun', 'clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2']
         if args.sanitize:
-            compiler += ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+            compiler += ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer']
         command = compiler + ['-I', str(ROOT / 'Engine'), '-I', str(install / 'include/gimp-3.0'),
             str(ROOT / 'Engine/cmyk-transform.c'), str(ROOT / 'Engine/tests/cmyk-transform-tests.c'),
             str(install / 'lib/libgimpcolor-3.0.0.dylib'), str(install / 'lib/libgimpbase-3.0.0.dylib'),
