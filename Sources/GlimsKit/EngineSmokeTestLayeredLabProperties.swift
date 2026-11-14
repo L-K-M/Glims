@@ -159,11 +159,78 @@ extension EngineSmokeTest {
                 } else { check(false, "canvas selection events can be created") }
             } else { check(false, "layered Lab window exists for selection gesture") }
             try opened.startRecording()
-            check(!windowController.validateMenuItem(selectAll), "layered Lab selection is disabled while recording")
-            windowController.selectAll(nil); drain("selection refusal during recording")
-            check(opened.selectionBounds == nil && opened.recorder.records.isEmpty,
-                  "a direct selection action during recording changes neither mask nor recording")
+            check(windowController.validateMenuItem(selectAll), "layered Lab selection is enabled while recording")
+            windowController.selectAll(nil); drain("recorded Select All")
+            if let window = windowController.window {
+                let canvas = windowController.canvas
+                func event(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+                    NSEvent.mouseEvent(with: type,
+                        location: canvas.convert(CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale), to: nil),
+                        modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                }
+                if let down = event(.leftMouseDown, CGPoint(x: 1, y: 1)),
+                   let drag = event(.leftMouseDragged, CGPoint(x: 3, y: 3)),
+                   let up = event(.leftMouseUp, CGPoint(x: 3, y: 3)) {
+                    canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
+                } else { check(false, "recorded selection canvas events can be created") }
+            } else { check(false, "layered Lab window exists for recorded selection") }
+            drain("recorded Lab rectangle")
             try opened.stopRecording()
+            let deadline = Date().addingTimeInterval(15)
+            while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+            let records = opened.recorder.records
+            if records.count == 2,
+               case .success(.labSelection) = records[0].resolution,
+               case .success(.labSelection) = records[1].resolution {
+                check(opened.selectionBounds == CGRect(x: 1, y: 1, width: 2, height: 2),
+                      "Recorder captures layered Lab All and rectangle selections in order")
+                let url = work.appendingPathComponent("layered-lab-selection.glims-recording")
+                var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+                opened.saveRecording(to: url, checkpoint: try opened.recorderSaveCheckpoint()) { saved = $0 }
+                drain("save layered Lab selections")
+                guard let saved else { throw NSError(domain: "LayeredLabSmoke", code: 6) }
+                _ = try saved.get()
+                let data = try Data(contentsOf: url)
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                check(json?["version"] as? Int == 15, "layered Lab selections use recording version 15")
+                let file = try RecorderFileCodec.decode(data)
+                check(file.records.count == 2 && file.records.allSatisfy {
+                    if case .success(.labSelection, .none) = $0.outcome { return true }
+                    return false
+                }, "layered Lab selections save without a layer binding")
+                undo.undo(); drain("recorded rectangle Undo")
+                undo.undo(); drain("recorded Select All Undo")
+                check(opened.selectionBounds == nil, "Undo restores the mask before recorded Lab selections")
+                try opened.startReplay(); drain("layered Lab selection replay")
+                let replayDeadline = Date().addingTimeInterval(15)
+                while opened.recorder.isReplaying && Date() < replayDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                if case .finished = opened.replayStatus {
+                    check(opened.selectionBounds == CGRect(x: 1, y: 1, width: 2, height: 2),
+                          "recorded Lab selections replay on the layered root mask")
+                } else { check(false, "recorded Lab selections replay on the layered root mask") }
+                undo.undo(); drain("replayed rectangle Undo")
+                undo.undo(); drain("replayed Select All Undo")
+                check(opened.selectionBounds == nil, "Undo restores the mask after Lab selection replay")
+                _ = opened.clearRecording()
+                let prepared = try RecorderFileSemanticBridge.prepare(file)
+                var installed: Result<Void, Error>?
+                opened.installRecording(prepared, checkpoint: try opened.recorderInstallCheckpoint(), choices: [:]) { installed = $0 }
+                drain("install layered Lab selection recording")
+                guard let installed else { throw NSError(domain: "LayeredLabSmoke", code: 7) }
+                try installed.get()
+                try opened.startReplay(); drain("loaded layered Lab selection replay")
+                let loadedDeadline = Date().addingTimeInterval(15)
+                while opened.recorder.isReplaying && Date() < loadedDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                if case .finished = opened.replayStatus {
+                    check(opened.selectionBounds == CGRect(x: 1, y: 1, width: 2, height: 2),
+                          "loaded Lab selections replay on the layered root mask")
+                } else { check(false, "loaded Lab selections replay on the layered root mask") }
+                undo.undo(); drain("loaded rectangle Undo")
+                undo.undo(); drain("loaded Select All Undo")
+                check(opened.selectionBounds == nil, "Undo restores the mask after loaded Lab selection replay")
+            } else { check(false, "Recorder captures layered Lab All and rectangle selections in order") }
+            _ = opened.clearRecording()
         } else {
             check(!opened.toolIsAvailable(.rectangleSelect), "older engines keep layered Lab selection disabled")
         }

@@ -6045,6 +6045,15 @@ as well as cancellation and refusal with an active selection; an older engine
 refuses recording without changing the image. These changes are candidates:
 review, CI and integrated bundle qualification remain open.
 
+### Layered Lab selection recording (candidate)
+
+The typed Lab selection commands can also capture edits to the root mask of a
+layered Lab image. Select All and canvas rectangle selection record in order;
+the saved version 15 commands have no layer binding and replay against the
+destination Lab image's root mask. The native operation still validates the
+document on execution. A real-window test covers capture, Save, loaded-file
+replay and Undo. Wider engine checks, CI and release qualification remain open.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels
