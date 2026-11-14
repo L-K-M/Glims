@@ -148,8 +148,15 @@ class AppPackagingTests(unittest.TestCase):
 
     def test_build_from_restrictive_umask_creates_traversable_app(self):
         self.allow_successful_assembly()
-        (self.root / "Resources/Info.plist").chmod(0o644)
-        (self.root / "tools/Glims").chmod(0o755)
+        (self.root / "Resources/Info.plist").chmod(0o600)
+        (self.root / "Resources/AppIcon.icns").chmod(0o666)
+        (self.root / "tools/Glims").chmod(0o700)
+        external = self.root / "private-file"
+        external.write_text("private")
+        external.chmod(0o600)
+        bundle = self.root / "tools/Test.bundle"
+        bundle.mkdir()
+        (bundle / "external-link").symlink_to(external)
         result = self.run_build_with_restrictive_umask("--shell-only")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         app = self.root / "dist/Glims.app"
@@ -158,7 +165,10 @@ class AppPackagingTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o755)
         self.assertEqual((app / "Contents/Info.plist").stat().st_mode & 0o777, 0o644)
+        self.assertEqual((app / "Contents/Resources/AppIcon.icns").stat().st_mode & 0o777, 0o644)
         self.assertEqual((app / "Contents/MacOS/Glims").stat().st_mode & 0o777, 0o755)
+        self.assertTrue((app / "Contents/Resources/Test.bundle/external-link").is_symlink())
+        self.assertEqual(external.stat().st_mode & 0o777, 0o600)
 
     def test_normal_build_contains_the_engine(self):
         self.allow_successful_assembly()

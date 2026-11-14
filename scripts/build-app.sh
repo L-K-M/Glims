@@ -21,10 +21,6 @@
 # CODE_SIGN_IDENTITY selects a signing identity; without it the
 # bundle is ad-hoc signed, which runs locally but cannot be notarized.
 set -euo pipefail
-# Bundles must remain traversable and readable when installed for other users,
-# even when the invoking shell uses a restrictive umask. Temporary staging
-# remains private because mktemp creates it with mode 0700.
-umask 022
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${GLIMS_BUILD_DIR:-$PROJECT_ROOT/.build}"
@@ -130,6 +126,11 @@ if [[ -n "${CODE_SIGN_IDENTITY:-}" ]]; then
 else
   codesign --force --sign - "$APP_PATH"
 fi
+# Copied sources can already be owner-only, and signing creates new files.
+# Normalize the finished bundle for other users without following its symlinks
+# or changing the private staging directory that contains it.
+find "$APP_PATH" -type d -exec chmod a+rx,go-w {} +
+find "$APP_PATH" -type f -exec chmod a+rX,go-w {} +
 codesign --verify --strict --verbose=2 "$APP_PATH"
 # Publish only a signed, complete app. Finder or a running plug-in can
 # write caches in the old bundle, so deleting it in place is unreliable.
