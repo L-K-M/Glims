@@ -546,7 +546,7 @@ final class ImageDocument {
     }
     var acceptsLabSelections: Bool {
         acceptsEdits || (storage.layout == .layeredLab && storage.allowsLabSelections &&
-                         session.supportsLabSelections && acceptsImageReads && !recorder.isReplaying && !recorder.isRecording)
+                         session.supportsLabSelections && acceptsImageReads && !recorder.isReplaying)
     }
     var acceptsLayerSelection: Bool {
         acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
@@ -1802,10 +1802,6 @@ final class ImageDocument {
     /// They change the root selection mask without interpreting Lab samples.
     private func runLabSelection(_ request: LabSelectionRequest) {
         let layered = storage.layout == .layeredLab && storage.allowsLabSelections
-        if layered && recorder.isRecording {
-            onError?("Stop recording before changing a layered Lab selection.")
-            return
-        }
         guard !isClosing, !refuseWhileEditingUnavailable(allowingLayerProperties: layered), !refuseWhileTargetPending() else { return }
         // Admission observers can synchronously start a stroke or close.
         guard !isClosing, acceptsLabSelections, !targetCommandIsPending else { return }
