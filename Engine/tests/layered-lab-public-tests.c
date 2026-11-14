@@ -8,10 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/gimp.h"
+#include "core/gimpbrush.h"
+#include "core/gimpbrush-private.h"
 #include "core/gimpimage.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
+#include "core/gimptempbuf.h"
 #include "file/file-save.h"
 #include "plug-in/gimppluginmanager.h"
 #include "plug-in/gimppluginmanager-file.h"
@@ -246,6 +249,162 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
          api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
          brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
          "refused public strokes preserve pixels and history");
+   CHECK(api->stroke_begin_lab_layer_with_capture_facts!=NULL,"layered Lab brush facts entry is available");
+   if(api->stroke_begin_lab_layer_with_capture_facts){
+    GlimsStrokeCaptureFacts facts={.struct_size=sizeof facts},replayed={.struct_size=sizeof replayed};
+    GlimsStrokeID capture_id=123;
+    CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,0,&brush,false,&brush_packet,NULL,
+          &capture_id,NULL,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&capture_id==0,
+          "capture requires a facts output");if(error)api->free_string(error);error=NULL;
+    char sentinel[]="sentinel";
+    GlimsStrokeCaptureFacts short_facts={.struct_size=sizeof short_facts-1,.brush_name=sentinel};
+    capture_id=123;
+    CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,0,&brush,false,&brush_packet,NULL,
+          &capture_id,&short_facts,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&capture_id==0&&
+          short_facts.brush_name==sentinel,"short facts output is refused without overwriting it");
+    if(error)api->free_string(error);error=NULL;
+    capture_id=123;facts.struct_size=sizeof facts;
+    CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,0,&brush,false,NULL,NULL,
+          &capture_id,&facts,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&!capture_id&&!facts.fingerprint,
+          "capture refuses a null first packet and clears its output");
+    if(error)api->free_string(error);error=NULL;
+    brush_retargeted=FALSE;brush_retarget_image=id;brush_retarget_root=rows[1].id;
+    brush_update_handler=g_signal_connect(identity_storage.layers[0].planes[0],"update",G_CALLBACK(retarget_on_brush_update),NULL);
+    capture_id=123;facts.struct_size=sizeof facts;
+    GlimsStatus retargeted_capture=api->stroke_begin_lab_layer_with_capture_facts(engine,id,0,&brush,false,
+      &brush_packet,NULL,&capture_id,&facts,&error);
+    g_signal_handler_disconnect(identity_storage.layers[0].planes[0],brush_update_handler);
+    CHECK(brush_retargeted&&retargeted_capture==GLIMS_STATUS_INVALID_ARGUMENT&&!capture_id&&
+      !facts.brush_name&&!facts.brush_collection&&!facts.fingerprint&&
+      brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+      "retargeting during first dab cancels capture and clears its facts");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_OK,
+          "captured-brush retarget fixture restores the selected root");
+    capture_id=0;
+    GlimsStatus captured=api->stroke_begin_lab_layer_with_capture_facts(engine,id,0,&brush,false,
+      &brush_packet,NULL,&capture_id,&facts,&error);
+    CHECK(captured==GLIMS_STATUS_OK&&capture_id&&facts.brush_name&&facts.fingerprint&&strlen(facts.fingerprint)==64,
+          "live brush returns same-call resource identity and fingerprint");
+    if(error)api->free_string(error);error=NULL;
+    guint8 first_capture[4][16];
+    gboolean captured_pixels=capture_id&&brush_raw(engine,id,0,first_capture)&&memcmp(brush_before,first_capture,sizeof brush_before);
+    if(capture_id)CHECK(api->stroke_cancel_lab_layer(engine,capture_id)==GLIMS_STATUS_OK&&
+      brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+      "cancelled captured brush restores its source planes");
+    GlimsResourceID captured_brush=0;
+    if(facts.brush_name&&facts.fingerprint){
+     CHECK(api->resource_resolve(engine,GLIMS_RESOURCE_BRUSH,facts.brush_name,facts.brush_collection,
+           facts.brush_internal,&captured_brush,&error)==GLIMS_STATUS_OK&&captured_brush,
+           "captured brush identity resolves in the resource catalog");
+     if(error)api->free_string(error);error=NULL;
+     char wrong[65];memset(wrong,'0',64);wrong[64]=0;
+     if(!strcmp(wrong,facts.fingerprint))wrong[0]='1';
+     capture_id=123;replayed.struct_size=sizeof replayed;
+     CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,false,
+       &brush_packet,"invalid",&capture_id,&replayed,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&
+       !capture_id&&!replayed.fingerprint,"malformed fingerprint is refused before painting");
+     if(error)api->free_string(error);error=NULL;
+     capture_id=123;replayed.struct_size=sizeof replayed;
+     CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,0,&brush,false,
+       &brush_packet,facts.fingerprint,&capture_id,&replayed,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&
+       !capture_id&&!replayed.fingerprint,"guarded replay requires an explicit brush identity");
+     if(error)api->free_string(error);error=NULL;
+     capture_id=123;replayed.struct_size=sizeof replayed;
+     CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,false,
+       &brush_packet,wrong,&capture_id,&replayed,&error)!=GLIMS_STATUS_OK&&capture_id==0&&
+       !replayed.brush_name&&!replayed.brush_collection&&!replayed.fingerprint&&
+       brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+       "mismatched fingerprint refuses before painting and clears returned facts");
+     if(error)api->free_string(error);error=NULL;
+     capture_id=0;replayed.struct_size=sizeof replayed;
+     GlimsStatus replay_status=api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,
+       &brush,false,&brush_packet,facts.fingerprint,&capture_id,&replayed,&error);
+     CHECK(replay_status==GLIMS_STATUS_OK&&capture_id&&replayed.fingerprint&&
+       !strcmp(facts.fingerprint,replayed.fingerprint)&&captured_pixels&&
+       brush_raw(engine,id,0,brush_after)&&!memcmp(first_capture,brush_after,sizeof first_capture),
+       "matching fingerprint reproduces captured four-plane pixels");
+     if(error)api->free_string(error);error=NULL;
+     if(capture_id)CHECK(api->stroke_cancel_lab_layer(engine,capture_id)==GLIMS_STATUS_OK&&
+       brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+       "guarded replay can be cancelled without changing the source");
+     guint8 unaligned_settings[sizeof brush+2],unaligned_facts[sizeof facts+2];
+     memset(unaligned_settings,0xa5,sizeof unaligned_settings);memcpy(unaligned_settings+1,&brush,sizeof brush);
+     memset(unaligned_facts,0xa5,sizeof unaligned_facts);
+     GlimsStrokeCaptureFacts aligned_facts={.struct_size=sizeof aligned_facts};
+     memcpy(unaligned_facts+1,&aligned_facts,sizeof aligned_facts);capture_id=0;
+     GlimsStatus unaligned_status=api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,
+       (const GlimsLabLayerBrushSettings *)(unaligned_settings+1),false,&brush_packet,facts.fingerprint,
+       &capture_id,(GlimsStrokeCaptureFacts *)(unaligned_facts+1),&error);
+     memcpy(&aligned_facts,unaligned_facts+1,sizeof aligned_facts);
+     CHECK(unaligned_status==GLIMS_STATUS_OK&&capture_id&&aligned_facts.fingerprint&&
+       !strcmp(facts.fingerprint,aligned_facts.fingerprint)&&unaligned_settings[0]==0xa5&&
+       unaligned_settings[sizeof unaligned_settings-1]==0xa5&&unaligned_facts[0]==0xa5&&
+       unaligned_facts[sizeof unaligned_facts-1]==0xa5,
+       "unaligned request and facts preserve surrounding bytes");
+     if(error)api->free_string(error);error=NULL;
+     if(capture_id)api->stroke_cancel_lab_layer(engine,capture_id);
+     api->free_string(aligned_facts.brush_name);api->free_string(aligned_facts.brush_collection);api->free_string(aligned_facts.fingerprint);
+     GlimsStrokeCaptureFacts pressure_facts={.struct_size=sizeof pressure_facts};
+     capture_id=0;brush_point.pressure=.5;
+     GlimsStatus pressure_capture=api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,
+       &brush,true,&brush_packet,NULL,&capture_id,&pressure_facts,&error);
+     CHECK(pressure_capture==GLIMS_STATUS_OK&&capture_id&&pressure_facts.fingerprint&&
+       strcmp(facts.fingerprint,pressure_facts.fingerprint),"pressure capture has distinct brush facts");
+     if(error)api->free_string(error);error=NULL;
+     guint8 pressure_pixels[4][16];
+     gboolean had_pressure=capture_id&&brush_raw(engine,id,0,pressure_pixels)&&
+       memcmp(brush_before,pressure_pixels,sizeof brush_before);
+     if(capture_id)api->stroke_cancel_lab_layer(engine,capture_id);
+     if(pressure_facts.fingerprint){
+      GlimsStrokeCaptureFacts wrong_mode={.struct_size=sizeof wrong_mode};capture_id=123;
+      CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,false,
+        &brush_packet,pressure_facts.fingerprint,&capture_id,&wrong_mode,&error)!=GLIMS_STATUS_OK&&
+        !capture_id&&!wrong_mode.fingerprint&&brush_raw(engine,id,0,brush_after)&&
+        !memcmp(brush_before,brush_after,sizeof brush_before),
+        "pressure fingerprint refuses fixed-size replay before painting");
+      if(error)api->free_string(error);error=NULL;
+      capture_id=0;wrong_mode.struct_size=sizeof wrong_mode;
+      CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,true,
+        &brush_packet,pressure_facts.fingerprint,&capture_id,&wrong_mode,&error)==GLIMS_STATUS_OK&&
+        capture_id&&wrong_mode.fingerprint&&!strcmp(pressure_facts.fingerprint,wrong_mode.fingerprint)&&
+        had_pressure&&brush_raw(engine,id,0,brush_after)&&!memcmp(pressure_pixels,brush_after,sizeof pressure_pixels),
+        "equivalent pressure dynamics reproduce captured four-plane pixels");
+      if(error)api->free_string(error);error=NULL;
+      if(capture_id)api->stroke_cancel_lab_layer(engine,capture_id);
+      api->free_string(wrong_mode.brush_name);api->free_string(wrong_mode.brush_collection);api->free_string(wrong_mode.fingerprint);
+     }
+     api->free_string(pressure_facts.brush_name);api->free_string(pressure_facts.brush_collection);api->free_string(pressure_facts.fingerprint);
+     brush_point.pressure=1;
+     GimpBrush *native_brush=NULL;
+     gboolean plain_brush=glims_lookup_brush(engine,captured_brush,&native_brush)==GLIMS_STATUS_OK&&
+       native_brush&&!native_brush->priv->pixmap;
+     CHECK(plain_brush,"unsupported-capture fixture has a registered mask brush");
+     if(plain_brush){
+      GimpTempBuf *pixmap=gimp_temp_buf_new(1,1,babl_format("R'G'B'A u8"));
+      memset(gimp_temp_buf_get_data(pixmap),255,gimp_temp_buf_get_data_size(pixmap));
+      native_brush->priv->pixmap=pixmap;
+      GlimsStrokeCaptureFacts unsupported={.struct_size=sizeof unsupported};capture_id=0;
+      CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,false,
+        &brush_packet,NULL,&capture_id,&unsupported,&error)==GLIMS_STATUS_OK&&capture_id&&
+        !unsupported.brush_name&&!unsupported.brush_collection&&!unsupported.fingerprint&&
+        brush_raw(engine,id,0,brush_after)&&memcmp(brush_before,brush_after,sizeof brush_before),
+        "unsupported brush still paints live but returns no recording facts");
+      if(error)api->free_string(error);error=NULL;
+      if(capture_id)api->stroke_cancel_lab_layer(engine,capture_id);
+      capture_id=123;unsupported.struct_size=sizeof unsupported;
+      CHECK(api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,false,
+        &brush_packet,facts.fingerprint,&capture_id,&unsupported,&error)!=GLIMS_STATUS_OK&&
+        !capture_id&&!unsupported.fingerprint&&brush_raw(engine,id,0,brush_after)&&
+        !memcmp(brush_before,brush_after,sizeof brush_before),
+        "unsupported brush refuses guarded replay before painting");
+      if(error)api->free_string(error);error=NULL;
+      native_brush->priv->pixmap=NULL;gimp_temp_buf_unref(pixmap);
+     }
+    }
+    api->free_string(facts.brush_name);api->free_string(facts.brush_collection);api->free_string(facts.fingerprint);
+    api->free_string(replayed.brush_name);api->free_string(replayed.brush_collection);api->free_string(replayed.fingerprint);
+   }
    CHECK(api->stroke_begin_lab_layer_pressure!=NULL,"pressure brush has its own optional API entry");
    if(api->stroke_begin_lab_layer_pressure){
     brush_id=123;invalid_brush=brush;invalid_brush.struct_size=sizeof invalid_brush-1;

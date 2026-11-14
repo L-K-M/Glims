@@ -41,7 +41,8 @@ def check(root=ROOT):
     component.update({'image_levels_lab', 'image_lab_snapshot_levels', 'image_lab_snapshot_apply_levels'})
     component.add('image_convert_lab_copy')
     component.add('stroke_begin_lab')
-    component.update({'stroke_begin_lab_layer', 'stroke_begin_lab_layer_pressure'})
+    component.update({'stroke_begin_lab_layer', 'stroke_begin_lab_layer_pressure',
+                      'stroke_begin_lab_layer_with_capture_facts'})
     component.add('stroke_begin_lab_with_capture_facts')
     component.add('stroke_begin_ink_with_capture_facts')
     component.update({'image_select_lab_shape', 'image_select_lab_command'})
