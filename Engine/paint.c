@@ -16,6 +16,7 @@
 #include "component-paint.h"
 #include "lab-brush-core.h"
 #include "lab-layer-brush-core.h"
+#include "lab-layer-brush-facts.h"
 #include "lab-layer-storage.h"
 #include "lab-transform.h"
 #include "lab-fill.h"
@@ -508,6 +509,8 @@ drop_stroke_facts (GlimsStrokeCaptureFacts *facts)
   g_clear_pointer (&facts->brush_collection, g_free);
   g_clear_pointer (&facts->fingerprint, g_free);
 }
+
+static gboolean valid_lab_expected_fingerprint (const gchar *fingerprint);
 
 static gboolean
 recordable_first_point (const GlimsStrokePoint *point)
@@ -1069,10 +1072,14 @@ GlimsStatus
 glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
                               GlimsResourceID brush_id, const GlimsLabLayerBrushSettings *settings,
                               const GlimsStrokePacketV2 *packet, GlimsStrokeID *out,
-                              gboolean pressure_size, char **error)
+                              gboolean pressure_size, const char *expected_fingerprint,
+                              GlimsStrokeCaptureFacts *facts, char **error)
 {
   if (out) *out = 0;
   if (error) *error = NULL;
+  if ((facts && facts->struct_size < sizeof *facts) || (expected_fingerprint && !facts) ||
+      (expected_fingerprint && (!brush_id || !valid_lab_expected_fingerprint (expected_fingerprint))))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
   if (!settings || !out || settings->struct_size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
   GlimsLabLayerBrushSettings request = *settings;
   const double components[] = { request.color.red, request.color.green, request.color.blue,
@@ -1161,6 +1168,19 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
   if (!pressure_size) gimp_paint_options_enable_dynamics (stroke->options, FALSE);
   gimp_context_define_property (GIMP_CONTEXT (stroke->options), GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
   gimp_context_set_paint_mode (GIMP_CONTEXT (stroke->options), GIMP_LAYER_MODE_NORMAL);
+  GlimsStrokeCaptureFacts captured = { .struct_size = sizeof captured };
+  if (facts && !glims_lab_layer_brush_capture_facts (engine, open->image, stroke->options,
+                                                     &request, &captured))
+    drop_stroke_facts (&captured);
+  g_autofree gchar *captured_name = captured.brush_name;
+  g_autofree gchar *captured_collection = captured.brush_collection;
+  g_autofree gchar *captured_fingerprint = captured.fingerprint;
+  if (expected_fingerprint && g_strcmp0 (expected_fingerprint, captured.fingerprint))
+    {
+      g_free (samples);
+      glims_strokes_free (stroke);
+      return glims_fail (error, NULL, "The recorded Lab layer brush or configuration changed.");
+    }
   stroke->core = glims_lab_layer_brush_core_new (CLAMP ((double)lab[0], 0, 100),
     CLAMP ((double)lab[1], -128, 127), CLAMP ((double)lab[2], -128, 127),
     request.opacity * request.color.alpha);
@@ -1216,6 +1236,14 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
   if (status != GLIMS_STATUS_OK)
     { glims_stroke_cancel_lab_layer (engine, id); return status; }
   *out = id;
+  if (facts)
+    {
+      captured.struct_size = facts->struct_size;
+      *facts = captured;
+      g_steal_pointer (&captured_name);
+      g_steal_pointer (&captured_collection);
+      g_steal_pointer (&captured_fingerprint);
+    }
   return GLIMS_STATUS_OK;
 }
 

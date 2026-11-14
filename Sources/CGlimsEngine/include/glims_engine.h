@@ -4252,6 +4252,19 @@ typedef struct GlimsEngineAPI {
                                                   const GlimsLabLayerBrushSettings *settings,
                                                   const GlimsStrokePacketV2 *first,
                                                   GlimsStrokeID *result, char **error);
+  /* Slot220: begin with same-call brush/configuration facts. NULL expected
+   * permits a live stroke with no facts for an unsupported brush. Replay
+   * supplies an explicit brush and captured lowercase SHA-256 fingerprint;
+   * mismatch or unavailable facts refuse before the first dab. The root
+   * and UUID still validate the selected logical target separately. Clear
+   * facts except struct_size before the call; release strings with free_string. */
+  GlimsStatus (*stroke_begin_lab_layer_with_capture_facts) (GlimsEngine *engine,
+                                                  GlimsImageID image, GlimsResourceID brush,
+                                                  const GlimsLabLayerBrushSettings *settings,
+                                                  bool pressure_size, const GlimsStrokePacketV2 *first,
+                                                  const char *expected_fingerprint,
+                                                  GlimsStrokeID *result,
+                                                  GlimsStrokeCaptureFacts *facts, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

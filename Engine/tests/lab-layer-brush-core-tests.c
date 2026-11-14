@@ -2,11 +2,14 @@
  * observed independently of the private brush implementation. */
 #include "engine-private.h"
 #include "lab-layer-brush-core.h"
+#include "lab-layer-brush-facts.h"
 #include "lab-layer-storage.h"
 #include "core/gimp.h"
 #include "core/gimpbrush.h"
 #include "core/gimpbrush-private.h"
 #include "core/gimpchannel.h"
+#include "core/gimpcontainer.h"
+#include "core/gimpdatafactory.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpdynamics.h"
 #include "core/gimpdynamicsoutput.h"
@@ -128,7 +131,7 @@ static gboolean pressure_probe(GlimsEngine *engine,GimpImage *image,GList *plane
   GimpPaintOptions *options=glims_make_paint_options(engine->gimp,info,&settings,brush);
   GimpDynamics *parent_dynamics=gimp_context_get_dynamics(gimp_get_user_context(engine->gimp));
   if(!glims_lab_layer_brush_enable_pressure_size(options)){
-    g_object_unref(options);g_object_unref(brush);return FALSE;
+    g_clear_object(&options);g_object_unref(brush);return FALSE;
   }
   GimpDynamics *dynamics=gimp_context_get_dynamics(GIMP_CONTEXT(options));
   gboolean size_only=dynamics&&dynamics!=parent_dynamics&&
@@ -174,6 +177,108 @@ static gboolean pressure_probe(GlimsEngine *engine,GimpImage *image,GList *plane
   }
   g_clear_object(&core);g_object_unref(options);g_object_unref(brush);
   return started;
+}
+
+static void free_facts(GlimsStrokeCaptureFacts *facts) {
+  g_free(facts->brush_name);g_free(facts->brush_collection);g_free(facts->fingerprint);
+  memset(facts,0,sizeof *facts);
+}
+
+static void facts_probe(GlimsEngine *engine,GimpImage *image) {
+  GimpPaintInfo *info=glims_paint_info_for_tool(engine->gimp,GLIMS_PAINT_PAINTBRUSH);
+  GimpBrush *brush=gimp_context_get_brush(gimp_get_user_context(engine->gimp));
+  GimpContainer *factory=gimp_data_factory_get_container(engine->gimp->brush_factory);
+  GimpBrush *other=GIMP_BRUSH(gimp_container_get_child_by_name(factory,"2. Block 01"));
+  if(other==brush)other=GIMP_BRUSH(gimp_container_get_child_by_name(factory,"2. Hardness 025"));
+  CHECK(info&&brush&&other&&brush!=other,"facts fixture finds distinct registered mask brushes");
+  if(!info||!brush||!other||brush==other)return;
+  GlimsBrushSettings geometry={.struct_size=sizeof geometry,.size=11,.opacity=.8,
+    .tool=GLIMS_PAINT_PAINTBRUSH,.hardness=.7,.rate=-1,.flow=-1,.exposure=-1};
+  GlimsLabLayerBrushSettings settings={.struct_size=sizeof settings,.root=1,
+    .color={.2,.4,.6,.9},.opacity=.8,.size=11,.hardness=.7};
+  GimpPaintOptions *options=glims_make_paint_options(engine->gimp,info,&geometry,brush);
+  g_object_set(options,"brush-spacing",.15,"brush-angle",0.0,"brush-aspect-ratio",0.0,
+               "brush-hardness",.7,"use-applicator",FALSE,"application-mode",GIMP_PAINT_CONSTANT,
+               "brush-lock-to-view",FALSE,"expand-use",FALSE,NULL);
+  options->jitter_options->use_jitter=FALSE;options->smoothing_options->use_smoothing=FALSE;
+  gimp_paint_options_enable_dynamics(options,FALSE);
+  gimp_context_define_property(GIMP_CONTEXT(options),GIMP_CONTEXT_PROP_PAINT_MODE,TRUE);
+  gimp_context_set_paint_mode(GIMP_CONTEXT(options),GIMP_LAYER_MODE_NORMAL);
+  GlimsStrokeCaptureFacts a={.struct_size=sizeof a},b={.struct_size=sizeof b};
+  gboolean captured=glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&a);
+  CHECK(captured&&a.brush_name&&a.fingerprint&&strlen(a.fingerprint)==64,
+        "fixed-size brush yields owned resource identity and fingerprint");
+  if(captured&&a.fingerprint)printf("OBS engine=%s fingerprint=%s\n",GIMP_VERSION,a.fingerprint);
+  settings.root=987;memset(settings.uuid,0x7a,sizeof settings.uuid);
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        !strcmp(a.fingerprint,b.fingerprint),"logical target identity is excluded from brush facts");
+  free_facts(&b);b.struct_size=sizeof b;
+  settings.color.red=.3;
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        strcmp(a.fingerprint,b.fingerprint),"foreground color changes brush fingerprint");
+  free_facts(&b);b.struct_size=sizeof b;settings.color.red=-0.0;
+  gboolean negative_zero=glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b);
+  gchar *zero_fingerprint=g_strdup(b.fingerprint);
+  free_facts(&b);b.struct_size=sizeof b;settings.color.red=0.0;
+  CHECK(negative_zero&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        zero_fingerprint&&!strcmp(zero_fingerprint,b.fingerprint),
+        "equivalent signed-zero colors share a stable fingerprint");
+  g_free(zero_fingerprint);free_facts(&b);b.struct_size=sizeof b;settings.color.red=.2;
+  settings.color.alpha=.5;
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        strcmp(a.fingerprint,b.fingerprint),"foreground alpha changes brush fingerprint");
+  free_facts(&b);b.struct_size=sizeof b;settings.color.alpha=.9;
+  settings.opacity=.5;
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        strcmp(a.fingerprint,b.fingerprint),"captured opacity changes brush fingerprint");
+  free_facts(&b);b.struct_size=sizeof b;settings.opacity=.8;
+  g_object_set(options,"brush-spacing",.2,NULL);
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        strcmp(a.fingerprint,b.fingerprint),"effective brush spacing changes fingerprint");
+  free_facts(&b);b.struct_size=sizeof b;g_object_set(options,"brush-spacing",.15,NULL);
+  gimp_context_set_brush(GIMP_CONTEXT(options),other);
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        strcmp(a.fingerprint,b.fingerprint),"different registered brush content changes fingerprint");
+  free_facts(&b);b.struct_size=sizeof b;gimp_context_set_brush(GIMP_CONTEXT(options),brush);
+  CHECK(glims_lab_layer_brush_enable_pressure_size(options),"facts fixture enables private pressure sizing");
+  CHECK(captured&&glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        strcmp(a.fingerprint,b.fingerprint),"pressure sizing changes brush fingerprint");
+  gchar *pressure_fingerprint=g_strdup(b.fingerprint);
+  free_facts(&b);b.struct_size=sizeof b;
+  CHECK(glims_lab_layer_brush_enable_pressure_size(options)&&
+        glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        pressure_fingerprint&&!strcmp(pressure_fingerprint,b.fingerprint),
+        "fresh equivalent pressure dynamics retain the same fingerprint");
+  g_free(pressure_fingerprint);free_facts(&b);b.struct_size=sizeof b;
+  GimpDynamics *dynamics=gimp_context_get_dynamics(GIMP_CONTEXT(options));
+  GimpDynamicsOutput *size=gimp_dynamics_get_output(dynamics,GIMP_DYNAMICS_OUTPUT_SIZE);
+  g_object_set(size,"use-random",TRUE,NULL);
+  CHECK(!glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        !b.brush_name&&!b.brush_collection&&!b.fingerprint,
+        "unsupported random dynamics refuse without partial facts");
+  g_object_set(size,"use-random",FALSE,NULL);
+  options->jitter_options->use_jitter=TRUE;
+  CHECK(!glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        !b.brush_name&&!b.brush_collection&&!b.fingerprint,
+        "jitter refuses without partial facts");
+  options->jitter_options->use_jitter=FALSE;
+  g_object_set(options,"use-applicator",TRUE,NULL);
+  CHECK(!glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        !b.brush_name&&!b.brush_collection&&!b.fingerprint,
+        "an RGB applicator refuses without partial facts");
+  g_object_set(options,"use-applicator",FALSE,NULL);
+  settings.color.red=NAN;
+  CHECK(!glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        !b.brush_name&&!b.brush_collection&&!b.fingerprint,
+        "nonfinite color refuses without partial facts");
+  settings.color.red=.2;
+  GimpBrush *unregistered=hard_brush();
+  gimp_context_set_brush(GIMP_CONTEXT(options),unregistered);
+  CHECK(!glims_lab_layer_brush_capture_facts(engine,image,options,&settings,&b)&&
+        !b.brush_name&&!b.brush_collection&&!b.fingerprint,
+        "an unregistered brush refuses without partial facts");
+  g_object_unref(unregistered);
+  free_facts(&a);free_facts(&b);g_object_unref(options);
 }
 
 static GlimsStatus worker(GlimsEngine *engine,gpointer context) {
@@ -236,6 +341,7 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer context) {
   CHECK(pressure_probe(engine,image,planes,0),"private pressure geometry probe completes");
   CHECK(pressure_probe(engine,image,planes,1),"reversed pressure geometry probe completes");
   CHECK(pressure_probe(engine,image,planes,2),"zero pressure followed by full pressure completes");
+  facts_probe(engine,image);
   g_list_free(planes);g_object_unref(image);
   return GLIMS_STATUS_OK;
 }

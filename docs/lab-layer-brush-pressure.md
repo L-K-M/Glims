@@ -21,3 +21,11 @@ older clients do not reject the image. The pinned-engine public fixture
 checks unaligned and invalid requests, stale identity, busy admission, a
 zero-pressure start followed by a full-pressure continuation, cancellation,
 commit and grouped Undo/Redo. Other engine runs and review remain pending.
+
+The application candidate enables “Pen pressure sets size” for layered Lab
+when the engine exposes the optional pressure entry. A disabled setting uses
+the original fixed-size entry. Older engines keep the pressure checkbox
+disabled and use the fixed-size entry even if a saved brush preset enables
+pressure. Flat Lab remains fixed-size. A real-window fixture checks the
+checkbox and synthetic pressure samples; physical tablet delivery remains to
+be qualified.

@@ -219,3 +219,4 @@ GLIMS_FACADE(image_fill_lab_layer_srgb, api_image_fill_lab_layer_srgb, IMAGE, CO
 GLIMS_FACADE(stroke_begin_lab_layer, api_stroke_begin_lab_layer, IMAGE, COMPONENT)
 GLIMS_FACADE(stroke_cancel_lab_layer, api_stroke_cancel_lab_layer, STROKE, CLEANUP)
 GLIMS_FACADE(stroke_begin_lab_layer_pressure, api_stroke_begin_lab_layer_pressure, IMAGE, COMPONENT)
+GLIMS_FACADE(stroke_begin_lab_layer_with_capture_facts, api_stroke_begin_lab_layer_with_capture_facts, IMAGE, COMPONENT)

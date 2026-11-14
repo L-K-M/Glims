@@ -27,10 +27,12 @@ spec = importlib.util.spec_from_file_location("lab_storage_runner", FRAMEWORK)
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 SOURCES = [ROOT / "Engine/tests/lab-layer-brush-core-tests.c",
-           ROOT / "Engine/lab-layer-brush-core.c"]
+           ROOT / "Engine/lab-layer-brush-core.c",
+           ROOT / "Engine/lab-layer-brush-facts.c"]
 HEADERS = [ROOT / "Engine" / name for name in
            ("engine-private.h", "lab-layer-brush-core.h", "lab-layer-paint.h",
-            "lab-brush-coverage.h", "lab-layer-storage.h", "lab-layer-map.h")]
+            "lab-brush-coverage.h", "lab-layer-storage.h", "lab-layer-map.h",
+            "lab-layer-brush-facts.h", "brush-fingerprint.h", "stroke-dynamics-fingerprint.h")]
 HEADERS.append(ROOT / "Sources/CGlimsEngine/include/glims_engine.h")
 
 
@@ -41,10 +43,10 @@ def run(args, work: Path) -> int:
     required = {"engine.o", "lab-layer-paint.o", "lab-brush-coverage.o", "lab-layer-storage.o"}
     if not required.issubset(names):
         raise RuntimeError(f"Producer lacks required existing objects: {producer}")
-    # Compile the current source under test. An adapter built from a newer
-    # checkout may already contain the same core; keep that object in the
-    # immutable-input audit but omit it from the link to avoid duplicates.
-    objects = [path for path in producer_objects if path.name != "lab-layer-brush-core.o"]
+    # Compile current sources under test. A producer may already contain
+    # those objects; audit them as immutable inputs but omit duplicate symbols.
+    compiled_names = {source.stem + ".o" for source in SOURCES}
+    objects = [path for path in producer_objects if path.name not in compiled_names]
     inputs = set(producer_objects)
     responses = runner.checked_responses(producer, inputs)
     inputs.update(SOURCES + HEADERS + [Path(__file__), FRAMEWORK, runner.RESPONSE_HELPER])
