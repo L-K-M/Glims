@@ -6153,3 +6153,13 @@ locale categories and invalid identities; bundle qualification runs this
 regression. A matching engine probe took about 3.8 seconds under load; this
 is not an ordinary app-launch measurement or a five-second guarantee. The final
 bundle, four-engine editor checks and review remain open.
+
+### Photoshop Bitmap PSD export (foundation)
+
+A private bounded serializer can write opaque binary black-and-white pixels
+as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
+chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
+independently decoded a small fixture. It is not wired to a file transaction,
+engine operation or user interface yet. Color conversion, alpha, metadata,
+non-binary input and preserved editable document mode remain separate work.
+See [bitmap-psd.md](bitmap-psd.md).
