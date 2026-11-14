@@ -53,6 +53,14 @@ final class ImageStorageTests: XCTestCase {
         let selection = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAB_SELECTIONS)))
         XCTAssertTrue(selection.allowsLabSelections)
+        XCTAssertFalse(selection.allowsLabLayerColorFill, "older engines do not advertise Lab layer color fill")
+        let fill = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL)))
+        XCTAssertTrue(fill.allowsLabLayerColorFill)
+        XCTAssertFalse(fill.allowsLabLayerBrush, "older engines do not advertise Lab layer brushing")
+        let brush = try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAB_LAYER_BRUSH)))
+        XCTAssertTrue(brush.allowsLabLayerBrush)
     }
 
     func testUnknownOrInconsistentCapabilitiesFailClosed() {
@@ -85,6 +93,16 @@ final class ImageStorageTests: XCTestCase {
             flags: UInt64(GLIMS_IMAGE_STORAGE_LAB_SELECTIONS))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAB_SELECTIONS))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAB_LAYER_BRUSH))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_LAB_LAYER_BRUSH))))
+        XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
+            flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL))))
         XCTAssertThrowsError(try EngineSession.ImageStorage.decode(info(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue,
             flags: UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES))))
         var short = info(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue)

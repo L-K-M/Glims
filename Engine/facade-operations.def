@@ -214,3 +214,7 @@ GLIMS_FACADE(image_lab_snapshot_levels, api_image_lab_snapshot_levels, IMAGE, CO
 GLIMS_FACADE(image_lab_snapshot_apply_levels, api_image_lab_snapshot_apply_levels, IMAGE, COMPONENT)
 GLIMS_FACADE(image_storage_info, api_image_storage_info, IMAGE, COMPONENT)
 GLIMS_FACADE(image_lab_layer_identity, api_image_lab_layer_identity, IMAGE, COMPONENT)
+GLIMS_FACADE(image_fill_lab_layer, api_image_fill_lab_layer, IMAGE, COMPONENT)
+GLIMS_FACADE(image_fill_lab_layer_srgb, api_image_fill_lab_layer_srgb, IMAGE, COMPONENT)
+GLIMS_FACADE(stroke_begin_lab_layer, api_stroke_begin_lab_layer, IMAGE, COMPONENT)
+GLIMS_FACADE(stroke_cancel_lab_layer, api_stroke_cancel_lab_layer, STROKE, CLEANUP)

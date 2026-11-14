@@ -12,13 +12,18 @@ are retained across dispatch, then their identities, the selection and Undo
 state are rechecked before publication. The caller must prevent direct native
 mutation throughout; this private helper does not make that safe.
 
-There is no public ABI entry, app control or brush integration in this slice.
-The private helper reports progress and accepts engine procedure cancellation,
-but no app control invokes it yet. In particular, it does not make
-layered Lab painting available in the editor. A future public operation must
-bind the captured logical root and its identity across queued work, provide
-an app-facing cancellation and progress flow, and reconcile errors and close. A brush needs
+The public engine operation binds the captured runtime root and durable UUID
+before entering this helper. It accepts physical Lab values and engine
+procedure cancellation; no app control invokes it yet. In particular, it does
+not make layered Lab painting available in the editor. App integration must
+provide a color workflow and cancellation/progress UI, and reconcile errors
+and close. A brush needs
 separate coverage accumulation and a single stroke-wide Undo transaction.
+
+A separate typed operation accepts bounded straight sRGB, converts its transfer
+curve and D50 Lab values with the same transform used for display, and combines
+color alpha with fill opacity. It shares the same captured target and transaction.
+An independent ICC oracle checks primary red, mid-gray and translucent blending.
 
 The standalone row tests exercise output staging, aliases, unaligned coverage,
 in-place rows, invisible stored colors and invalid late coverage. An independent

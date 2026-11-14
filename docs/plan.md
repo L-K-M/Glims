@@ -5940,6 +5940,18 @@ map and scalar samples. A hosted palette test drives visibility and opacity,
 Undo/Redo and Save Copy. This is still under review and needs final CI and
 integration; pixel editing, other layer changes and soft proof remain open.
 
+### Layered Lab color Fill (candidate)
+
+The candidate fills one captured logical Lab layer using a chosen sRGB color
+and opacity, respecting the image selection and grouping changed pixels into
+one undoable operation. The sheet captures a durable root identity and refuses
+the operation if the target changes. Older engines leave Fill unavailable, and
+Recorder does not yet support this operation. Four-engine public and conformance
+checks and real-window tests cover Fill, selection, Undo/Redo, cancellation,
+target changes and Recorder refusal. Review, CI and complete application
+qualification remain pending; paintbrush and other layered Lab editing are
+separate work.
+
 ### Special temporary paths during cache recovery (candidate)
 
 When a private recovery registry's temporary path contains GIMP config-path
@@ -6032,3 +6044,13 @@ unmatched locale categories and invalid identities on the reference override;
 bundle qualification runs this regression. A matching engine probe took about 3.8 seconds under load; this
 is not an ordinary app-launch measurement or a five-second guarantee. The final
 bundle, four-engine editor checks and review remain open.
+
+### Photoshop Bitmap PSD export (foundation)
+
+A private bounded serializer can write opaque binary black-and-white pixels
+as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
+chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
+independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
+user interface yet. Color conversion, alpha, metadata,
+non-binary input and preserved editable document mode remain separate work.
+See [bitmap-psd.md](bitmap-psd.md).
