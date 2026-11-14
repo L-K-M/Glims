@@ -31,7 +31,7 @@ PY
 for mode in "${modes[@]}"; do
   flags=(-O2)
   if [[ "$mode" == sanitized ]]; then
-    flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+    flags=(-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
   fi
   run_bounded "${compiler[@]}" -std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" \
     -I"$ROOT/Engine" "$ROOT/Engine/plate-map.c" "$ROOT/Engine/tests/plate-map-tests.c" \
