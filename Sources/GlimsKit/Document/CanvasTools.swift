@@ -416,7 +416,7 @@ final class CanvasToolController {
         guard document.toolIsAvailable(tool),
               !(document.colorInfo.mode.usesNativeChannels && optionDown && tool.paintTool != nil) else {
             onStatus?(document.colorInfo.mode == .lab
-                ? "Choose an available Brush, selection, Hand or Zoom tool for Lab."
+                ? "Choose an available Lab editing or navigation tool."
                 : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
             return
         }
@@ -1245,8 +1245,13 @@ final class CanvasToolController {
             return
         }
         do {
-            let sample = try document.session.sampleColor(document.image,
-                x: Int(floor(point.x)), y: Int(floor(point.y)))
+            let x = Int(floor(point.x)), y = Int(floor(point.y))
+            let sample: EngineSession.SampledColor
+            if document.storage.layout == .layeredLab {
+                sample = try document.session.sampleLayeredLabColor(document.image, x: x, y: y)
+            } else {
+                sample = try document.session.sampleColor(document.image, x: x, y: y)
+            }
             // Editing colors use bounded sRGB and opaque alpha. Keep the
             // native fraction; clipping is separate from display quantization.
             let components = sample.alpha > 0 ? [sample.red, sample.green, sample.blue] : [0, 0, 0]

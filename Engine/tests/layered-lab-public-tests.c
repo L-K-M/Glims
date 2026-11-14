@@ -83,6 +83,42 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
  gchar *before=NULL,*after=NULL;gsize before_size=0,after_size=0;CHECK(g_file_get_contents(path,&before,&before_size,NULL),"source XCF bytes captured");
  GlimsImageID id=0;error=NULL;GlimsStatus s=api->image_open(engine,path,&id,&error);printf("OPEN status=%d id=%d error=%s\n",s,id,error?error:"");CHECK(s==GLIMS_STATUS_OK&&id!=0,"public open accepts valid layered Lab XCF");if(error)api->free_string(error);
  if(s==GLIMS_STATUS_OK&&id){
+  gboolean can_sample=api->struct_size>=offsetof(GlimsEngineAPI,image_sample_layered_lab)+sizeof api->image_sample_layered_lab && api->image_sample_layered_lab;
+  CHECK(can_sample,"layered Lab composited color sampling is available");
+  if(can_sample){
+   GlimsUndoInfo history_before={0},history_after={0};GlimsImageInfo info_before={0},info_after={0};
+   gboolean captured_state=api->image_undo_info(engine,id,&history_before)==GLIMS_STATUS_OK&&
+                           api->image_info(engine,id,&info_before)==GLIMS_STATUS_OK;
+   GlimsSampledColor picked={0};guint8 rendered[4]={0};error=NULL;
+   GlimsStatus pick_status=api->image_sample_layered_lab(engine,id,1,1,&picked,&error);
+   CHECK(pick_status==GLIMS_STATUS_OK&&!error&&api->image_render(engine,id,1,(GlimsRect){1,1,1,1},rendered,4)==GLIMS_STATUS_OK&&
+         picked.alpha>.999&&fabs(picked.red*255-rendered[0])<2&&fabs(picked.green*255-rendered[1])<2&&fabs(picked.blue*255-rendered[2])<2,
+         "sampled layered Lab color matches its opaque composited preview");
+   if(error)api->free_string(error);error=NULL;
+   CHECK(captured_state&&api->image_undo_info(engine,id,&history_after)==GLIMS_STATUS_OK&&
+         api->image_info(engine,id,&info_after)==GLIMS_STATUS_OK&&
+         history_before.undo_count==history_after.undo_count&&history_before.redo_count==history_after.redo_count&&
+         info_before.dirty==info_after.dirty,"layered Lab color sampling leaves history and dirty state unchanged");
+   picked=(GlimsSampledColor){1,1,1,1};
+   CHECK(api->image_sample_layered_lab(engine,id,-1,1,&picked,&error)==GLIMS_STATUS_INVALID_ARGUMENT&&
+         picked.red==0&&picked.green==0&&picked.blue==0&&picked.alpha==0,
+         "out-of-bounds layered Lab sample refuses and clears the result");
+   if(error)api->free_string(error);error=NULL;
+   CHECK(api->image_sample_layered_lab(engine,id,1,1,NULL,&error)==GLIMS_STATUS_INVALID_ARGUMENT,
+         "layered Lab sample refuses a null result");
+   if(error)api->free_string(error);error=NULL;
+   GlimsOpenImage *sample_open=glims_lookup_image(engine,id);
+   if(sample_open){
+    sample_open->display_sample_active=TRUE;picked=(GlimsSampledColor){1,1,1,1};
+    CHECK(api->image_sample_layered_lab(engine,id,1,1,&picked,&error)==GLIMS_STATUS_BUSY&&picked.alpha==0,
+          "reentrant layered Lab sampling refuses and clears the result");
+    sample_open->display_sample_active=FALSE;
+    if(error)api->free_string(error);error=NULL;
+   }
+   CHECK(api->image_sample_color(engine,id,1,1,&picked,&error)==GLIMS_STATUS_UNSUPPORTED,
+         "ordinary projection sampler remains closed for layered Lab");
+   if(error)api->free_string(error);error=NULL;
+  }
   guint8 info_bytes[sizeof(GlimsImageStorageInfo)+2];memset(info_bytes,0xa5,sizeof info_bytes);
   guint32 info_size=sizeof(GlimsImageStorageInfo);memcpy(info_bytes+1,&info_size,sizeof info_size);
   s=api->image_storage_info(engine,id,(GlimsImageStorageInfo*)(info_bytes+1));
@@ -114,6 +150,35 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
   GlimsColorInfo color;CHECK(api->image_color_info(engine,id,&color)==GLIMS_STATUS_OK&&color.mode==GLIMS_COLOR_MODE_LAB,"public color info reports Lab");
   GlimsLayerInfo rows[8];int32_t count=0;CHECK(api->image_layers(engine,id,rows,8,&count)==GLIMS_STATUS_OK&&count==2,"only two logical layer roots are exposed");
   if(count==2){
+   if(can_sample){
+    GlimsLayerChange hide={.struct_size=sizeof hide,.properties=GLIMS_LAYER_VISIBLE,.visible=FALSE};
+    GlimsLayerChange half={.struct_size=sizeof half,.properties=GLIMS_LAYER_OPACITY,.opacity=.5};
+    GlimsSampledColor partial={0};guint8 partial_render[4]={0};
+    gboolean partial_ready=api->layer_change(engine,id,rows[1].id,&hide,&error)==GLIMS_STATUS_OK;
+    if(error)api->free_string(error);error=NULL;
+    partial_ready=partial_ready&&api->layer_change(engine,id,rows[0].id,&half,&error)==GLIMS_STATUS_OK;
+    if(error)api->free_string(error);error=NULL;
+    CHECK(partial_ready&&api->image_sample_layered_lab(engine,id,1,1,&partial,&error)==GLIMS_STATUS_OK&&
+          api->image_render(engine,id,1,(GlimsRect){1,1,1,1},partial_render,4)==GLIMS_STATUS_OK&&
+          fabs(partial.alpha-.5)<.01&&fabs(partial.red*partial.alpha*255-partial_render[0])<2&&
+          fabs(partial.green*partial.alpha*255-partial_render[1])<2&&
+          fabs(partial.blue*partial.alpha*255-partial_render[2])<2,
+          "partially transparent layered Lab sample is straight color with true alpha");
+    if(error)api->free_string(error);error=NULL;
+    if(partial_ready)CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_undo(engine,id)==GLIMS_STATUS_OK,
+                           "sampling fixture restores opacity and lower visibility");
+    GlimsSampledColor transparent={1,1,1,1};
+    gboolean hidden=api->layer_change(engine,id,rows[0].id,&hide,&error)==GLIMS_STATUS_OK;
+    if(error)api->free_string(error);error=NULL;
+    hidden=hidden&&api->layer_change(engine,id,rows[1].id,&hide,&error)==GLIMS_STATUS_OK;
+    if(error)api->free_string(error);error=NULL;
+    CHECK(hidden&&api->image_sample_layered_lab(engine,id,1,1,&transparent,&error)==GLIMS_STATUS_OK&&
+          transparent.red==0&&transparent.green==0&&transparent.blue==0&&transparent.alpha==0,
+          "fully transparent layered Lab composite samples as zero RGBA");
+    if(error)api->free_string(error);error=NULL;
+    if(hidden)CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK&&api->image_undo(engine,id)==GLIMS_STATUS_OK,
+                    "sampling fixture restores both layer visibilities");
+   }
    CHECK(rows[0].depth==0&&rows[1].depth==0&&rows[0].parent==0&&rows[1].parent==0,"logical rows are top-level");
    GlimsPoint points[2]={{1,1},{3,3}};
    GlimsLabSelectOptions select_options={.struct_size=sizeof select_options,.operation=GLIMS_SELECT_REPLACE};
@@ -207,6 +272,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->image_new(engine,2,2,&ordinary,&error)==GLIMS_STATUS_OK&&ordinary,
          "ordinary image fixture for identity refusal opens");if(error)api->free_string(error);error=NULL;
    if(ordinary){
+    GlimsSampledColor ordinary_sample={1,1,1,1};
+    CHECK(can_sample&&api->image_sample_layered_lab(engine,ordinary,0,0,&ordinary_sample,&error)==GLIMS_STATUS_UNSUPPORTED&&
+          ordinary_sample.red==0&&ordinary_sample.alpha==0,"ordinary image refuses the layered Lab sampler");
+    if(error)api->free_string(error);error=NULL;
     memset(second_identity.uuid,0xa5,sizeof second_identity.uuid);
     CHECK(api->image_lab_layer_identity(engine,ordinary,rows[0].id,&second_identity)==GLIMS_STATUS_UNSUPPORTED&&
           !memcmp(second_identity.uuid,"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",16),
@@ -759,16 +828,42 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"public fill fixture restores the empty selection");
    GlimsLabLayerColorFillSettings color_fill={.struct_size=sizeof color_fill,.root=rows[0].id,
      .color={1,0,0,1},.opacity=1};memcpy(color_fill.uuid,first_identity.uuid,16);
+   GlimsSampledColor before_color_fill={0};
+   CHECK(can_sample&&api->image_sample_layered_lab(engine,id,1,1,&before_color_fill,&error)==GLIMS_STATUS_OK,
+         "sample cache is populated before a color fill");
+   if(error)api->free_string(error);error=NULL;
+   GlimsLabLayerFillSettings extreme=fill;extreme.lightness=50;extreme.a=127;extreme.b=-128;
+   GlimsStatus extreme_status=api->image_fill_lab_layer(engine,id,&extreme,&error);
+   CHECK(extreme_status==GLIMS_STATUS_OK,"out-of-gamut Lab sampling fixture fills");
+   if(error)api->free_string(error);error=NULL;
+   if(extreme_status==GLIMS_STATUS_OK){
+    GlimsSampledColor wide={0};
+    CHECK(can_sample&&api->image_sample_layered_lab(engine,id,1,1,&wide,&error)==GLIMS_STATUS_OK&&
+          (wide.red<0||wide.red>1||wide.green<0||wide.green>1||wide.blue<0||wide.blue>1),
+          "layered Lab sample retains out-of-sRGB values before UI clipping");
+    if(error)api->free_string(error);error=NULL;
+    CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"out-of-gamut sampling fixture restores its pixels");
+   }
    guint8 color_request[sizeof color_fill+2];memset(color_request,0xa5,sizeof color_request);
    memcpy(color_request+1,&color_fill,sizeof color_fill);
    GlimsStatus color_status=api->image_fill_lab_layer_srgb(engine,id,(const GlimsLabLayerColorFillSettings*)(color_request+1),&error);
    CHECK(color_status==GLIMS_STATUS_OK&&color_request[0]==0xa5&&color_request[sizeof color_request-1]==0xa5,
          "unaligned sRGB fill request succeeds");if(error)api->free_string(error);error=NULL;
    if(color_status==GLIMS_STATUS_OK){
+    GlimsSampledColor red_sample={0},undo_sample={0};
+    CHECK(can_sample&&api->image_sample_layered_lab(engine,id,1,1,&red_sample,&error)==GLIMS_STATUS_OK&&
+          red_sample.red>.95&&red_sample.green<.08&&red_sample.blue<.08&&red_sample.alpha>.999,
+          "layered Lab sample sees the new red pixels immediately after fill");
+    if(error)api->free_string(error);error=NULL;
     guint8 red[4]={0};
     CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},red,4)==GLIMS_STATUS_OK&&
           red[0]>245&&red[1]<20&&red[2]<20&&red[3]==255,"sRGB red fills the logical Lab root as red");
     CHECK(api->image_undo(engine,id)==GLIMS_STATUS_OK,"one Undo restores the sRGB fill");
+    CHECK(can_sample&&api->image_sample_layered_lab(engine,id,1,1,&undo_sample,&error)==GLIMS_STATUS_OK&&
+          fabs(undo_sample.red-before_color_fill.red)<1e-5&&fabs(undo_sample.green-before_color_fill.green)<1e-5&&
+          fabs(undo_sample.blue-before_color_fill.blue)<1e-5&&fabs(undo_sample.alpha-before_color_fill.alpha)<1e-5,
+          "layered Lab sample sees restored pixels immediately after Undo");
+    if(error)api->free_string(error);error=NULL;
    }
    cmsHPROFILE color_srgb=cmsCreate_sRGBProfile(),color_lab=cmsCreateLab4Profile(NULL);
    cmsHTRANSFORM color_oracle=color_srgb&&color_lab?cmsCreateTransform(color_srgb,TYPE_RGB_DBL,color_lab,TYPE_Lab_DBL,INTENT_RELATIVE_COLORIMETRIC,0):NULL;
@@ -1385,6 +1480,10 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
    CHECK(api->image_render(engine,id,1,(GlimsRect){1,1,1,1},pixel,4)==GLIMS_STATUS_UNSUPPORTED &&
          pixel[0]==0x5a&&pixel[1]==0x5a&&pixel[2]==0x5a&&pixel[3]==0x5a,
          "render rejects damaged storage without writing output");
+   GlimsSampledColor damaged_sample={1,1,1,1};error=NULL;
+   CHECK(can_sample&&api->image_sample_layered_lab(engine,id,1,1,&damaged_sample,&error)==GLIMS_STATUS_UNSUPPORTED&&
+         damaged_sample.red==0&&damaged_sample.alpha==0,"damaged storage refuses and clears the layered Lab sample");
+   if(error)api->free_string(error);error=NULL;
    if(count==2)CHECK(api->layer_select(engine,id,rows[0].id)==GLIMS_STATUS_UNSUPPORTED,
                      "selection rejects damaged storage");
    if(count==2){

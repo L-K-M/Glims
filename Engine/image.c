@@ -1095,6 +1095,50 @@ glims_image_render (GlimsEngine  *engine,
 }
 
 GlimsStatus
+glims_image_sample_layered_lab (GlimsEngine       *engine,
+                                GlimsImageID       id,
+                                int32_t            x,
+                                int32_t            y,
+                                GlimsSampledColor *out,
+                                char             **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!out) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    return GLIMS_STATUS_UNSUPPORTED;
+  if (x < 0 || y < 0 || x >= gimp_image_get_width (open->image) ||
+      y >= gimp_image_get_height (open->image))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (open->display_sample_active) return GLIMS_STATUS_BUSY;
+  open->display_sample_active = TRUE;
+  engine->busy++;
+  gfloat linear[4];
+  gdouble rgba[4];
+  GlimsStatus status = glims_lab_layer_preview_read (open->image, &open->layered_lab_preview,
+      1.0, (GlimsRect) {x, y, 1, 1}, linear, sizeof linear);
+  if (status == GLIMS_STATUS_OK)
+    {
+      const Babl *fish = babl_fish (babl_format ("RGBA float"), babl_format ("R'G'B'A double"));
+      if (!fish) status = GLIMS_STATUS_FAILED;
+      else
+        {
+          babl_process (fish, linear, rgba, 1);
+          if (!isfinite (rgba[0]) || !isfinite (rgba[1]) || !isfinite (rgba[2]) ||
+              !isfinite (rgba[3]) || rgba[3] < 0 || rgba[3] > 1)
+            status = GLIMS_STATUS_FAILED;
+          else
+            *out = (GlimsSampledColor) {rgba[0], rgba[1], rgba[2], rgba[3]};
+        }
+    }
+  if (status == GLIMS_STATUS_FAILED && error)
+    *error = strdup ("The layered Lab color could not be sampled.");
+  engine->busy--;
+  open->display_sample_active = FALSE;
+  return status;
+}
+
+GlimsStatus
 glims_image_sample_color (GlimsEngine       *engine,
                           GlimsImageID       id,
                           int32_t            x,
