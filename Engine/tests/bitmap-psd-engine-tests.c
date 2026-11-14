@@ -101,6 +101,32 @@ int main(int argc, char **argv)
       CHECK(api->image_export_bitmap_psd(engine,reopened,output,&error)==GLIMS_STATUS_OK && has_bytes(output,psd,sizeof psd), "indexed Bitmap import re-exports with Bitmap mode"); free_error(api,&error);
       api->image_close(engine,reopened);
     }
+    GlimsItemID link = 0;
+    status=api->image_place_link(engine,image,input,&link,&error);
+    free_error(api,&error);
+    if (status==GLIMS_STATUS_OK && link) {
+      static const char link_sentinel[]="before-link";
+      if (!write_bytes(output,link_sentinel,sizeof link_sentinel-1)) return 2;
+      status=api->image_export_bitmap_psd(engine,image,output,&error);
+      CHECK(status==GLIMS_STATUS_UNSUPPORTED && has_bytes(output,link_sentinel,sizeof link_sentinel-1),
+            "linked-layer source refuses before replacing destination");
+      free_error(api,&error);
+      GlimsLayerChange hidden={.struct_size=sizeof hidden,.properties=GLIMS_LAYER_VISIBLE,.visible=false};
+      CHECK(api->layer_change(engine,image,link,&hidden,&error)==GLIMS_STATUS_OK, "hide the linked layer"); free_error(api,&error);
+      status=api->image_export_bitmap_psd(engine,image,output,&error);
+      CHECK(status==GLIMS_STATUS_UNSUPPORTED && has_bytes(output,link_sentinel,sizeof link_sentinel-1),
+            "hidden linked layer still refuses safely"); free_error(api,&error);
+      CHECK(api->layer_command(engine,image,link,GLIMS_LAYER_RASTERIZE,NULL,&error)==GLIMS_STATUS_OK,
+            "rasterize linked test layer"); free_error(api,&error);
+      status=api->image_export_bitmap_psd(engine,image,output,&error);
+      CHECK(status==GLIMS_STATUS_UNSUPPORTED && has_bytes(output,link_sentinel,sizeof link_sentinel-1),
+            "retained rasterized link still refuses safely"); free_error(api,&error);
+      CHECK(api->image_undo(engine,image)==GLIMS_STATUS_OK && api->image_undo(engine,image)==GLIMS_STATUS_OK &&
+            api->image_undo(engine,image)==GLIMS_STATUS_OK, "remove linked test layer and changes with Undo");
+    } else {
+      CHECK(status==GLIMS_STATUS_UNSUPPORTED, "engine without linked layers explicitly refuses placement");
+      CHECK(link==0, "unavailable linked-layer placement creates no layer");
+    }
     static const char cancellation_sentinel[]="before-cancel";
     if (!write_bytes(output,cancellation_sentinel,sizeof cancellation_sentinel-1)) return 2;
     cancel.armed=1;

@@ -4322,6 +4322,7 @@ typedef struct GlimsEngineAPI {
   /* Slot226: export an ordinary grayscale/indexed document's visible canvas
    * as a flat 1-bit Bitmap PSD. Every composited pixel must be fully opaque,
    * exactly black or white; no threshold or color conversion is implied.
+   * Documents containing linked layers refuse, including hidden/frozen links.
    * Layers, metadata, resolution and profiles are omitted. Absolute local PSD
    * path only; atomic publication and cancellation match slot182. The source
    * pixels, history and file identity remain unchanged. Clears *error. */

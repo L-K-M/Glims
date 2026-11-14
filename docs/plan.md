@@ -6103,7 +6103,7 @@ review, integration and bundle qualification remain open.
 
 An explicit one-bit Bitmap PSD export accepts opaque binary grayscale or
 indexed canvases, flattens the visible appearance, and refuses intermediate
-gray or transparency instead of silently converting it. The source image and
+gray, transparency or linked layers instead of silently converting it. The source image and
 history remain untouched; metadata and layers are omitted. The real export
 sheet and Repeat Export pass a focused window test, with older adapters
 refusing safely. Literal codec and atomic file tests pass under sanitizers,

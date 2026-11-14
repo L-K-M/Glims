@@ -5,8 +5,8 @@ exporter emits indexed PSD instead of Bitmap mode. This candidate adds an
 explicit Bitmap (1-bit) option to the PSD export sheet and Batch. It writes
 the visible canvas of a grayscale or indexed document as a flat one-bit PSD.
 All composited pixels must be exactly black or white and fully opaque; the
-export refuses intermediate gray, color or transparency instead of converting
-silently. Layers, profile, resolution and other metadata are omitted. Save an
+export refuses intermediate gray, color, transparency or linked layers instead
+of converting silently or relying on mutable linked files. Layers, profile, resolution and other metadata are omitted. Save an
 XCF to keep the editable source. Repeat Export retains this explicit choice.
 Old adapters do not advertise the option. Conversion, dithering and a preserved
 editable Bitmap document mode remain future work.

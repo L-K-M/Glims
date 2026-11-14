@@ -12,6 +12,9 @@
 #include "core/gimpprojectable.h"
 #include "core/gimpprojection.h"
 #include "gegl/gimptilehandlervalidate.h"
+#if GIMP_CHECK_VERSION (3, 2, 0)
+#include "core/gimplinklayer.h"
+#endif
 
 typedef struct {
   GlimsEngine *engine;
@@ -81,6 +84,25 @@ bitmap_read (void *data, uint32_t y, uint32_t x, uint32_t count, uint8_t *sample
   return true;
 }
 
+/* A duplicate can retain a monitored link, and an already queued update can
+ * still run after its monitor is frozen. Refuse the whole class, including
+ * hidden/nested/frozen links, until the export can capture it safely. */
+static gboolean
+bitmap_has_link_layer (GimpImage *image)
+{
+#if GIMP_CHECK_VERSION (3, 2, 0)
+  GList *layers = gimp_image_get_layer_list (image);
+  gboolean found = FALSE;
+  for (GList *it = layers; it && !found; it = it->next)
+    found = GIMP_IS_LINK_LAYER (it->data);
+  g_list_free (layers);
+  return found;
+#else
+  (void) image;
+  return FALSE;
+#endif
+}
+
 GlimsStatus
 glims_image_export_bitmap_psd (GlimsEngine *engine, GlimsImageID id,
                                const char *path, char **error)
@@ -101,6 +123,11 @@ glims_image_export_bitmap_psd (GlimsEngine *engine, GlimsImageID id,
   if (open->component_document || (base != GIMP_GRAY && base != GIMP_INDEXED))
     {
       if (error) *error = strdup ("Bitmap PSD export requires a grayscale or indexed document.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+  if (bitmap_has_link_layer (open->image))
+    {
+      if (error) *error = strdup ("Bitmap PSD export cannot safely snapshot linked layers. Remove them from a copy before exporting.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
   GlimsBitmapPsdSpec spec = { (uint32_t) gimp_image_get_width (open->image),
