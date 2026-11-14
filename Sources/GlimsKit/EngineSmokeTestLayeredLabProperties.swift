@@ -64,8 +64,8 @@ extension EngineSmokeTest {
         check(opened.colorInfo.mode == .lab && opened.labAxes == nil && opened.channels.isEmpty,
               "document does not expose private Lab planes as channels")
         check(opened.layers.count == 2, "document shows two logical layers")
-        check(!opened.toolIsAvailable(.paintbrush) && opened.toolIsAvailable(.zoom),
-              "editing tools are unavailable while zoom remains available")
+        check(opened.toolIsAvailable(.paintbrush) == opened.storage.allowsLabLayerBrush && opened.toolIsAvailable(.zoom),
+              "Brush follows its layered Lab capability while zoom remains available")
         let originalTool = ToolState.shared.current
         defer { ToolState.shared.select(originalTool) }
         let toolPalette = ToolsPaletteController()
@@ -89,7 +89,26 @@ extension EngineSmokeTest {
             let enabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.rectangleSelect.rawValue }?.isEnabled
             check(enabled == opened.storage.allowsLabSelections,
                   "Tools palette updates selection availability when switching between Lab layouts")
+            let brushEnabled = grid.slots.flatMap(\.tools).first { $0.id == ToolID.paintbrush.rawValue }?.isEnabled
+            check(brushEnabled == opened.storage.allowsLabLayerBrush,
+                  "Tools palette updates Brush availability for the layered Lab layout")
         } else { check(false, "Tools palette contains its tool grid") }
+        do {
+            let previousTool = ToolState.shared.current
+            defer { ToolState.shared.select(previousTool) }
+            ToolState.shared.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func optionDescendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap { optionDescendants($0) }
+            }
+            let labels = optionDescendants(options.view).compactMap { ($0 as? NSTextField)?.stringValue }
+            let activeHint = labels.contains { $0.contains("Paint the selected Lab layer") }
+            check(activeHint == opened.toolIsAvailable(.paintbrush),
+                  "Brush hint matches layered Lab tool availability")
+        }
         func drain(_ step: String) {
             let deadline = Date().addingTimeInterval(15)
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
@@ -248,6 +267,125 @@ extension EngineSmokeTest {
             }
         } else if opened.storage.allowsLabLayerColorFill {
             check(false, "layered Lab Fill fixture has a window and selected root")
+        }
+        if opened.storage.allowsLabLayerBrush, let window = windowController.window {
+            let state = ToolState.shared
+            let oldTool = state.current, oldForeground = state.foreground, oldBrush = state.brush(for: .paintbrush)
+            defer { state.foreground = oldForeground; state.update(.paintbrush) { $0 = oldBrush }; state.select(oldTool) }
+            state.foreground = .red
+            state.update(.paintbrush) { $0.size = 4; $0.opacity = 1; $0.hardness = 1; $0.resource = nil }
+            state.select(.paintbrush)
+            let options = ToolOptionsPaletteController()
+            _ = options.view
+            options.retarget(to: flatDocument); options.retarget(to: opened)
+            defer { options.retarget(to: nil) }
+            func descendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
+            let optionViews = descendants(options.view)
+            let optionText = optionViews.compactMap { ($0 as? NSTextField)?.stringValue }
+            let pressure = optionViews.compactMap { $0 as? NSButton }.first { $0.title == "Pen pressure sets size" }
+            check(optionText.contains(where: { $0.contains("foreground color") }) &&
+                  !optionText.contains(where: { $0.contains("Select one Lab channel") }) && pressure?.isEnabled == false,
+                  "layered Brush options show foreground color and fixed pressure behavior")
+            let oldError = opened.onError
+            var errors: [String] = []
+            opened.onError = { errors.append($0) }
+            defer { opened.onError = oldError }
+            let oldProjection = opened.onProjectionChange
+            var brushDamage: [CGRect] = []
+            opened.onProjectionChange = { rect in brushDamage.append(rect); oldProjection?(rect) }
+            defer { opened.onProjectionChange = oldProjection }
+            let before = pixel(session, image, x: 1, y: 1)
+            var invalidBrush = state.brush(for: .paintbrush)
+            invalidBrush.size = .nan
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: invalidBrush)
+            drain("failed layered Brush begin")
+            check(!opened.strokeIsActive && !opened.labBrushStrokeIsActive && !errors.isEmpty,
+                  "a failed layered Brush begin releases gesture admission without mouse-up")
+            if opened.strokeIsActive { opened.endStroke(); drain("clean up failed Brush begin") }
+            errors.removeAll()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            drain("Brush begin after failure")
+            check(opened.labBrushStrokeIsActive && errors.isEmpty,
+                  "a valid layered Brush begins after a failed begin")
+            opened.cancelLabBrushStroke(); drain("cancel Brush after failed begin")
+            check(pixel(session, image, x: 1, y: 1) == before,
+                  "the recovery stroke cancels without changing pixels")
+            try opened.startRecording()
+            opened.beginStroke(at: .init(x: 1.5, y: 1.5), brush: state.brush(for: .paintbrush))
+            check(!opened.strokeIsActive && !errors.isEmpty && opened.recorder.records.isEmpty,
+                  "layered Lab Brush refuses recording without starting a gesture")
+            try opened.stopRecording(); errors.removeAll()
+            opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
+            drain("brush selection")
+            let outside = pixel(session, image, x: 0, y: 0)
+            let canvas = windowController.canvas
+            func mouse(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
+                NSEvent.mouseEvent(with: type,
+                    location: canvas.convert(CGPoint(x: point.x * canvas.scale, y: point.y * canvas.scale), to: nil),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
+               let drag = mouse(.leftMouseDragged, CGPoint(x: 2.5, y: 1.5)),
+               let up = mouse(.leftMouseUp, CGPoint(x: 2.5, y: 1.5)) {
+                brushDamage.removeAll()
+                canvas.mouseDown(with: down); canvas.mouseDragged(with: drag); canvas.mouseUp(with: up)
+                drain("layered Lab canvas Brush gesture")
+                let painted = pixel(session, image, x: 1, y: 1)
+                if !errors.isEmpty || painted == before || pixel(session, image, x: 0, y: 0) != outside {
+                    print("BRUSH_DIAGNOSTIC errors=\(errors) before=\(String(describing: before)) painted=\(String(describing: painted)) outside=\(String(describing: outside)) outsideAfter=\(String(describing: pixel(session, image, x: 0, y: 0)))")
+                }
+                check(errors.isEmpty && painted != before && pixel(session, image, x: 0, y: 0) == outside,
+                      "canvas Brush paints selected pixels and preserves outside pixels")
+                check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
+                      "canvas receives brush damage for the painted pixel")
+                let undo = EngineUndoManager(document: opened)
+                check(undo.canUndo, "layered Lab Brush offers Undo")
+                undo.undo(); drain("layered Lab Brush Undo")
+                check(pixel(session, image, x: 1, y: 1) == before, "Undo restores the canvas Brush stroke")
+                undo.redo(); drain("layered Lab Brush Redo")
+                check(pixel(session, image, x: 1, y: 1) == painted, "Redo restores the canvas Brush stroke")
+                undo.undo(); drain("restore canvas Brush pixels")
+                undo.undo(); drain("restore canvas Brush selection")
+            } else { check(false, "layered Lab Brush events can be created") }
+            if let down = mouse(.leftMouseDown, CGPoint(x: 1.5, y: 1.5)),
+               let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53) {
+                let undoBefore = try? session.undoInfo(image)
+                canvas.mouseDown(with: down); drain("begin canvas Brush cancellation")
+                if !opened.labBrushStrokeIsActive || pixel(session, image, x: 1, y: 1) == before {
+                    print("BRUSH_CANCEL_DIAGNOSTIC active=\(opened.labBrushStrokeIsActive) errors=\(errors) before=\(String(describing: before)) after=\(String(describing: pixel(session, image, x: 1, y: 1)))")
+                }
+                check(opened.labBrushStrokeIsActive && pixel(session, image, x: 1, y: 1) != before,
+                      "cancellation fixture begins a visible Brush stroke")
+                brushDamage.removeAll()
+                window.makeFirstResponder(canvas); canvas.keyDown(with: escape)
+                drain("cancel canvas Brush with Escape")
+                let undoAfter = try? session.undoInfo(image)
+                check(undoBefore != nil && undoAfter != nil && !opened.strokeIsActive && pixel(session, image, x: 1, y: 1) == before &&
+                      undoBefore?.undoCount == undoAfter?.undoCount && undoBefore?.redoCount == undoAfter?.redoCount,
+                      "Escape restores the canvas Brush pixels and history")
+                check(brushDamage.contains(where: { $0.contains(CGPoint(x: 1, y: 1)) }),
+                      "Escape invalidates the restored canvas pixels")
+                let rapidUndo = try? session.undoInfo(image)
+                let entered = DispatchSemaphore(value: 0)
+                let release = DispatchSemaphore(value: 0)
+                opened.inputQueue.async { entered.signal(); _ = release.wait(timeout: .now() + 20) }
+                let held = entered.wait(timeout: .now() + 3) == .success
+                canvas.mouseDown(with: down)
+                let accepted = opened.labBrushStrokeIsActive
+                canvas.keyDown(with: escape)
+                release.signal()
+                drain("cancel queued canvas Brush immediately")
+                let rapidAfter = try? session.undoInfo(image)
+                check(held && accepted && rapidUndo != nil && rapidAfter != nil && !opened.strokeIsActive &&
+                      pixel(session, image, x: 1, y: 1) == before && rapidUndo == rapidAfter,
+                      "immediate Escape cancels a queued Brush begin without a history change")
+            } else { check(false, "canvas Brush cancellation events can be created") }
         }
         func outline(in view: NSView) -> NSOutlineView? {
             if let outline = view as? NSOutlineView { return outline }

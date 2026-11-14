@@ -1243,7 +1243,9 @@ enum {
   /* Typed Lab shape and All/None/Invert commands edit the root mask. */
   GLIMS_IMAGE_STORAGE_LAB_SELECTIONS = 1u << 7,
   /* Captured sRGB fills of a single logical Lab root are supported. */
-  GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL = 1u << 8
+  GLIMS_IMAGE_STORAGE_LAB_LAYER_COLOR_FILL = 1u << 8,
+  /* Captured color brush strokes on a single logical Lab root. */
+  GLIMS_IMAGE_STORAGE_LAB_LAYER_BRUSH = 1u << 9
 };
 typedef struct GlimsImageStorageInfo {
   uint32_t struct_size; /* >= sizeof(GlimsImageStorageInfo), extension tail untouched */

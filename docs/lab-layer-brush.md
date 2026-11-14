@@ -22,8 +22,8 @@ restores the full stroke. Native painting runs under a reentrancy guard, and
 closing a document with an active typed stroke guards its rollback. A changed
 stroke has one native Undo step; cancellation and no-op strokes preserve
 history. Changed dabs invalidate their bounded canvas area; cancellation
-invalidates the restored stroke bounds. This candidate does not enable the canvas tool or Recorder, and its
-brush dynamics are disabled, including pressure effects. Engine compatibility,
+invalidates the restored stroke bounds. The API alone does not enable the
+canvas tool or Recorder; brush dynamics are disabled, including pressure effects. Engine compatibility,
 review and full application qualification remain required.
 
 The native fixture uses real brush masks and independent plane snapshots. It
@@ -33,10 +33,19 @@ nonfinite mask. The fixture must be run against each supported engine with
 `scripts/test-lab-layer-brush-core.py` before integrating this core. Full app
 performance and behavior have not been qualified.
 
-On this Mac, a separate native observation on an initially transparent,
-sparse 24 MP carrier measured three runs of 64 small hard dabs at 4.51–5.39 ms
-total; stroke start took 0.81–1.25 ms and finish 0.40–0.46 ms. The fixture
-checks actual first and last pixels and Undo. These are isolated engine timings
-without UI, display rendering, tablet input, or a populated large image; they
-are not an interactive performance guarantee. The benchmark is available as
-`scripts/bench-lab-layer-brush-core.py`.
+On this Mac, three native runs on both initially transparent and uniformly
+populated 24 MP carriers measured 64 small hard dabs at 3.80–4.92 ms total;
+stroke start took 0.67–1.17 ms and finish 0.29–0.44 ms. The fixture checks
+actual first and last pixels and Undo. These are isolated engine timings
+without UI, display rendering, tablet input, or a varied photographic image;
+they are not an interactive performance guarantee. The benchmark is available
+as `scripts/bench-lab-layer-brush-core.py`.
+
+## Canvas Brush (candidate)
+
+The Brush tool uses the selected logical Lab layer and the foreground color.
+It captures the layer identity and brush settings at the start of the gesture,
+respects the selection, and supports Undo/Redo and Escape cancellation. The
+tool stays disabled with older adapters. Recorder must be stopped before
+painting, and the options palette identifies the fixed-size pressure behavior.
+Tablet pressure dynamics and Recorder support are separate remaining work.
