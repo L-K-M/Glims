@@ -117,6 +117,12 @@ extension EngineSmokeTest {
         }
         let (windowA, scrollA, canvasA) = attach(docA, p3)
         let (windowB, _, canvasB) = attach(docB, srgb)
+        check(canvasA.isAccessibilityElement() && canvasA.accessibilityRole() == .image &&
+              canvasA.accessibilityLabel() == "Image canvas",
+              "the image canvas is exposed with a meaningful accessibility identity")
+        check(canvasA.acceptsFirstResponder && windowA.makeFirstResponder(canvasA) &&
+              windowA.firstResponder === canvasA,
+              "the accessible canvas continues to accept keyboard focus")
         check((windowA.colorSpace?.iccProfileData as Data?) == p3ICC
                 && (windowB.colorSpace?.iccProfileData as Data?) == srgbICC,
               "both windows carry their explicit backing color spaces")
