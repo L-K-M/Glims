@@ -9,11 +9,13 @@ struct LayerListSnapshot {
     /// Each layer's effect rows by layer id, built once for the
     /// snapshot's lifetime — same staleness argument as the tree.
     private let effectItems: [Int32: [EffectItem]]
+    private let labIdentities: [Int32: UUID]
 
     init(document: AnyObject?, layers: [EngineSession.Layer],
-         effects: [Int32: [EngineSession.Effect]] = [:]) {
+         effects: [Int32: [EngineSession.Effect]] = [:], labIdentities: [Int32: UUID] = [:]) {
         self.document = document
         self.tree = LayerTree(layers: layers)
+        self.labIdentities = labIdentities
         var items: [Int32: [EffectItem]] = [:]
         if let document {
             for (id, effects) in effects where !effects.isEmpty {
@@ -22,6 +24,9 @@ struct LayerListSnapshot {
         }
         self.effectItems = items
     }
+
+    /// The identity captured with this displayed row, not a later lookup by ID.
+    func labIdentity(for id: Int32) -> UUID? { labIdentities[id] }
 
     /// The effect rows `node` shows ahead of its layer children, top first.
     func effects(of node: LayerTree.Node) -> [EffectItem] {

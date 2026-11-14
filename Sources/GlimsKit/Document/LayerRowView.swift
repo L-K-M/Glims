@@ -14,6 +14,13 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     struct Context {
         let document: AnyObject
         let layerID: Int32
+        let labIdentity: UUID?
+
+        init(document: AnyObject, layerID: Int32, labIdentity: UUID? = nil) {
+            self.document = document
+            self.layerID = layerID
+            self.labIdentity = labIdentity
+        }
     }
 
     /// Commits a change to the row's layer; returns false when the document

@@ -1526,6 +1526,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // Layer Properties is a single-layer command; under a
         // multi-selection it refuses instead of editing the primary alone.
         guard !imageDocument.refuseSingleLayerCommand("Layer Properties") else { return }
+        let labIdentity = imageDocument.labLayerIdentities[id]
         let name = NSTextField(string: layer.name)
         let mode = NSPopUpButton(frame: .zero, pullsDown: false)
         mode.addItems(withTitles: Self.blendModes)
@@ -1552,7 +1553,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             if name.stringValue != layer.name, !name.stringValue.isEmpty { change.name = name.stringValue }
             if let title = mode.titleOfSelectedItem, title != layer.mode { change.mode = title }
             if (visible.state == .on) != layer.isVisible { change.isVisible = visible.state == .on }
-            if change != EngineSession.LayerChange() { self.imageDocument.changeLayer(id, change) }
+            if change != EngineSession.LayerChange() { self.imageDocument.changeLayer(id, change, labIdentity: labIdentity) }
         }
     }
 
