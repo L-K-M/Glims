@@ -6067,8 +6067,16 @@ The Swift bridge checks the complete optional API prefix and the identity
 entry before using the guarded operation. It can obtain a property target
 without requiring color Fill support, and it never falls back to the
 unguarded layer-change entry. Transport tests cover older protected prefixes,
-missing entries, request values and native error ownership. Recorder capture
-and replay remain separate work.
+missing entries, request values and native error ownership.
+
+Loaded layer-property recordings can bind a supported name, visibility or
+opacity change to an explicit layered Lab root and its UUID. Replay keeps
+that target even when another layer is selected; a removed or changed target
+refuses without editing a different layer. Older engines and incompatible
+mixed property packets refuse installation without replacing the current
+recording. Existing file versions and ordinary RGB layer-property behavior
+remain unchanged. Live capture is still separate work; review, CI and bundle
+qualification are pending.
 
 ### Photoshop Bitmap PSD export (foundation)
 
