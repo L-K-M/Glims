@@ -6009,6 +6009,27 @@ environment overrides and invalid identities. These are engine timings, not
 ordinary app-launch measurements, and do not establish a universal
 five-second startup. Full bundle checks, review and CI remain open.
 
+### Locale override cache transitions (candidate)
+
+A changed locale environment can previously reuse command labels from an
+older registry even though the macOS preferred-language list is unchanged.
+The candidate keeps exact override environments in private, profile-scoped
+registries and treats selected registries from older builds as unverified.
+A fresh seeded catalog handles migration without replacing the selected file;
+verified catalogs remain usable through the ordinary selected-registry path.
+Cache identities include the engine, bundle, profile, selected path, locale
+environment and the host and matching localized seed contents. The regression checks transitions,
+legacy migration, updated seeds and identities, alternate registries, corrupt
+and symlinked caches, and concurrent different-environment launches.
+
+All four native conformance suites and the packaged startup and locale tests
+pass locally. In loaded engine probes, an initial unknown override still took
+roughly 10–13 seconds, while a repeated matching override took about one
+second; a matching packaged host seed took about 1.8 seconds. These are not
+ordinary application-launch measurements. Full editor compatibility, hosted
+review, CI and integration remain open, and the five-second target is not
+established for first-time overrides or incompatible seeds.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels

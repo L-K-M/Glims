@@ -75,7 +75,15 @@ def prepare(app):
             # Keep native escaped strings verbatim; runtime compares g_strescape().
             actual = re.search(r'^\(prev-language "((?:[^"\\]|\\.)*)"\)$', rc, re.M)
             version = re.search(r'^\(config-version "([0-9.]+)"\)$', rc, re.M)
-            registry = (profile / "user/pluginrc").read_bytes()
+            registry_path = profile / "user/pluginrc"
+            if not registry_path.is_file():
+                # A host locale override uses a private, environment-keyed
+                # registry instead of the selected user registry.
+                registries = list((profile / "cache/glims-pluginrc-environments").glob("*/pluginrc"))
+                if len(registries) != 1 or not registries[0].is_file() or registries[0].is_symlink():
+                    raise RuntimeError(f"{name}: expected exactly one generated command registry")
+                registry_path = registries[0]
+            registry = registry_path.read_bytes()
             if not actual or not version or b'(plug-in-def "${gimp_plug_in_dir}/' not in registry:
                 raise RuntimeError(f"Engine did not write a relocatable startup registry and identity for {name}")
             if language and actual[1] != language:
