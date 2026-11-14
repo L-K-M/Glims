@@ -4265,6 +4265,17 @@ typedef struct GlimsEngineAPI {
                                                   const char *expected_fingerprint,
                                                   GlimsStrokeID *result,
                                                   GlimsStrokeCaptureFacts *facts, char **error);
+  /* Slot221: slot220 with an atomically checked empty image selection. The
+   * selection must remain empty for the full stroke; a changed selection
+   * cancels the gesture and restores its pixels. This permits recording a
+   * gesture only when no uncaptured selection mask can affect the result. */
+  GlimsStatus (*stroke_begin_lab_layer_empty_selection) (GlimsEngine *engine,
+                                                  GlimsImageID image, GlimsResourceID brush,
+                                                  const GlimsLabLayerBrushSettings *settings,
+                                                  bool pressure_size, const GlimsStrokePacketV2 *first,
+                                                  const char *expected_fingerprint,
+                                                  GlimsStrokeID *result,
+                                                  GlimsStrokeCaptureFacts *facts, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

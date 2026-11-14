@@ -558,6 +558,13 @@ final class EngineSession: @unchecked Sendable {
         return api.stroke_begin_lab_layer_with_capture_facts != nil
     }
 
+    var supportsLabLayerBrushEmptySelection: Bool {
+        guard supportsLabLayerBrushCapture,
+              let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_begin_lab_layer_empty_selection),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_begin_lab_layer_empty_selection) else { return false }
+        return api.stroke_begin_lab_layer_empty_selection != nil
+    }
+
     func beginLabLayerStroke(image: Int32, target: LabLayerFillTarget,
                              brush: Brush, first: StrokeSampleV2) throws -> Int32 {
         guard supportsLabLayerBrush, let fixedSizeBegin = api.stroke_begin_lab_layer else {
@@ -598,9 +605,16 @@ final class EngineSession: @unchecked Sendable {
     /// Capture actual brush facts with the first dab. On an older adapter a
     /// live stroke still works, but replay must refuse before it paints.
     func beginLabLayerStrokeCapturing(image: Int32, target: LabLayerFillTarget, brush: Brush,
-                                      first: StrokeSampleV2, expected: StrokeCaptureFacts? = nil)
+                                      first: StrokeSampleV2, expected: StrokeCaptureFacts? = nil,
+                                      requireEmptySelection: Bool = false)
         throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
-        guard supportsLabLayerBrushCapture, let begin = api.stroke_begin_lab_layer_with_capture_facts else {
+        if requireEmptySelection && !supportsLabLayerBrushEmptySelection {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This engine cannot verify the Lab layer selection for Recorder.")
+        }
+        let selectedBegin = requireEmptySelection ? api.stroke_begin_lab_layer_empty_selection
+                                                   : api.stroke_begin_lab_layer_with_capture_facts
+        guard supportsLabLayerBrushCapture, let begin = selectedBegin else {
             guard expected == nil else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                   message: "This engine cannot replay recorded Lab layer strokes.")
@@ -650,7 +664,11 @@ final class EngineSession: @unchecked Sendable {
             } else { captured = nil }
         } else { captured = nil }
         if let expected, captured != expected {
-            try? cancelLabLayerStroke(stroke)
+            do { try cancelLabLayerStroke(stroke) }
+            catch {
+                throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                  message: "The recorded Lab layer brush could not be verified, and its partial stroke could not be cancelled: \(error.localizedDescription)")
+            }
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
                               message: "The recorded Lab layer brush could not be verified.")
         }

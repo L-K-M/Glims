@@ -10,6 +10,7 @@
 #include "core/gimp.h"
 #include "core/gimpbrush.h"
 #include "core/gimpbrush-private.h"
+#include "core/gimpchannel.h"
 #include "core/gimpimage.h"
 #include "core/gimpdrawable.h"
 #include "core/gimpitem.h"
@@ -47,6 +48,12 @@ static void retarget_on_brush_update(GimpDrawable *drawable,gint x,gint y,gint w
   }
   if(brush_retarget_root)api->layer_select(running_engine,brush_retarget_image,brush_retarget_root);
  }
+}
+typedef struct { GimpImage *image; gboolean fired; } BrushMaskMutation;
+static void select_all_on_brush_update(GimpDrawable *drawable,gint x,gint y,gint width,gint height,gpointer data){
+ (void)drawable;(void)x;(void)y;(void)width;(void)height;
+ BrushMaskMutation *mutation=data;
+ if(!mutation->fired){mutation->fired=TRUE;gimp_channel_all(gimp_image_get_mask(mutation->image),FALSE);}
 }
 static gboolean brush_raw(GlimsEngine *engine,GlimsImageID image,unsigned root,guint8 pixels[4][16]){
  GlimsOpenImage *open=glims_lookup_image(engine,image);GlimsLabLayerStorage storage;
@@ -317,6 +324,82 @@ static GlimsStatus worker(GlimsEngine *engine,gpointer work){
        brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
        "mismatched fingerprint refuses before painting and clears returned facts");
      if(error)api->free_string(error);error=NULL;
+     CHECK(api->stroke_begin_lab_layer_empty_selection!=NULL,"selection-guarded capture entry is available");
+     if(api->stroke_begin_lab_layer_empty_selection){
+      GimpChannel *mask=gimp_image_get_mask(identity_open->image);
+      gimp_channel_all(mask,FALSE);
+      GlimsStrokeCaptureFacts guarded={.struct_size=sizeof guarded};capture_id=123;
+      GlimsStatus blocked=api->stroke_begin_lab_layer_empty_selection(engine,id,captured_brush,&brush,false,
+        &brush_packet,facts.fingerprint,&capture_id,&guarded,&error);
+      CHECK(blocked!=GLIMS_STATUS_OK&&!capture_id&&!guarded.fingerprint&&brush_raw(engine,id,0,brush_after)&&
+        !memcmp(brush_before,brush_after,sizeof brush_before),"active selection refuses guarded replay before painting");
+      if(error)api->free_string(error);error=NULL;
+      guarded.struct_size=sizeof guarded;capture_id=123;
+      blocked=api->stroke_begin_lab_layer_empty_selection(engine,id,0,&brush,false,
+        &brush_packet,NULL,&capture_id,&guarded,&error);
+      CHECK(blocked!=GLIMS_STATUS_OK&&!capture_id&&!guarded.fingerprint&&brush_raw(engine,id,0,brush_after)&&
+        !memcmp(brush_before,brush_after,sizeof brush_before),"active selection refuses guarded live capture before painting");
+      if(error)api->free_string(error);error=NULL;
+      guarded.struct_size=sizeof guarded;capture_id=0;
+      GlimsStatus legacy=api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,&brush,false,
+        &brush_packet,NULL,&capture_id,&guarded,&error);
+      CHECK(legacy==GLIMS_STATUS_OK&&capture_id,"older capture entry still supports selected live painting");
+      if(error)api->free_string(error);error=NULL;
+      if(capture_id)api->stroke_cancel_lab_layer(engine,capture_id);
+      api->free_string(guarded.brush_name);api->free_string(guarded.brush_collection);api->free_string(guarded.fingerprint);
+      gimp_channel_clear(mask,NULL,FALSE);
+      guarded=(GlimsStrokeCaptureFacts){.struct_size=sizeof guarded};capture_id=0;
+      GlimsStatus live=api->stroke_begin_lab_layer_empty_selection(engine,id,0,&brush,true,
+        &brush_packet,NULL,&capture_id,&guarded,&error);
+      CHECK(live==GLIMS_STATUS_OK&&capture_id&&guarded.fingerprint,"empty selection admits pressure capture");
+      if(error)api->free_string(error);error=NULL;
+      if(capture_id)api->stroke_cancel_lab_layer(engine,capture_id);
+      api->free_string(guarded.brush_name);api->free_string(guarded.brush_collection);api->free_string(guarded.fingerprint);
+      guarded=(GlimsStrokeCaptureFacts){.struct_size=sizeof guarded};capture_id=0;
+      GlimsStatus begin=api->stroke_begin_lab_layer_empty_selection(engine,id,captured_brush,&brush,false,
+        &brush_packet,facts.fingerprint,&capture_id,&guarded,&error);
+      CHECK(begin==GLIMS_STATUS_OK&&capture_id&&guarded.fingerprint,"empty selection admits verified replay");
+      if(error)api->free_string(error);error=NULL;
+      if(capture_id){
+       gimp_channel_all(mask,FALSE);brush_point.time_ms=2;
+       GlimsStatus continued=api->stroke_continue_v2(engine,capture_id,&brush_packet,&error);
+       CHECK(continued!=GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+         !memcmp(brush_before,brush_after,sizeof brush_before)&&
+         api->stroke_cancel_lab_layer(engine,capture_id)==GLIMS_STATUS_NOT_FOUND,
+         "a selection changed during replay cancels and restores the whole stroke");
+       if(error)api->free_string(error);error=NULL;
+       brush_point.time_ms=1;gimp_channel_clear(mask,NULL,FALSE);
+      }
+      api->free_string(guarded.brush_name);api->free_string(guarded.brush_collection);api->free_string(guarded.fingerprint);
+      guarded=(GlimsStrokeCaptureFacts){.struct_size=sizeof guarded};capture_id=0;
+      begin=api->stroke_begin_lab_layer_empty_selection(engine,id,captured_brush,&brush,false,
+        &brush_packet,facts.fingerprint,&capture_id,&guarded,&error);
+      CHECK(begin==GLIMS_STATUS_OK&&capture_id,"empty selection admits stroke before finalization test");
+      if(error)api->free_string(error);error=NULL;
+      if(capture_id){
+       gimp_channel_all(mask,FALSE);
+       CHECK(api->stroke_end(engine,capture_id)!=GLIMS_STATUS_OK&&brush_raw(engine,id,0,brush_after)&&
+         !memcmp(brush_before,brush_after,sizeof brush_before)&&
+         api->stroke_cancel_lab_layer(engine,capture_id)==GLIMS_STATUS_NOT_FOUND,
+         "a selection changed before stroke end cancels and restores the stroke");
+       gimp_channel_clear(mask,NULL,FALSE);
+      }
+      api->free_string(guarded.brush_name);api->free_string(guarded.brush_collection);api->free_string(guarded.fingerprint);
+      BrushMaskMutation mutation={identity_open->image,FALSE};
+      gulong changed_handler=g_signal_connect(identity_storage.layers[0].planes[0],"update",G_CALLBACK(select_all_on_brush_update),&mutation);
+      guarded=(GlimsStrokeCaptureFacts){.struct_size=sizeof guarded};capture_id=123;
+      GlimsStatus changed_at_begin=api->stroke_begin_lab_layer_empty_selection(engine,id,captured_brush,&brush,false,
+        &brush_packet,facts.fingerprint,&capture_id,&guarded,&error);
+      g_signal_handler_disconnect(identity_storage.layers[0].planes[0],changed_handler);
+      CHECK(mutation.fired&&changed_at_begin!=GLIMS_STATUS_OK&&!capture_id&&!guarded.fingerprint&&
+        brush_raw(engine,id,0,brush_after)&&!memcmp(brush_before,brush_after,sizeof brush_before),
+        "a synchronous selection change during the first dab rolls back and returns no facts");
+      if(error)api->free_string(error);error=NULL;
+      gimp_channel_clear(mask,NULL,FALSE);
+      CHECK(api->image_undo_info(engine,id,&brush_history_after)==GLIMS_STATUS_OK&&
+        brush_history_before.undo_count==brush_history_after.undo_count&&brush_history_before.redo_count==brush_history_after.redo_count,
+        "selection guard refusals and rollback preserve history");
+     }
      capture_id=0;replayed.struct_size=sizeof replayed;
      GlimsStatus replay_status=api->stroke_begin_lab_layer_with_capture_facts(engine,id,captured_brush,
        &brush,false,&brush_packet,facts.fingerprint,&capture_id,&replayed,&error);

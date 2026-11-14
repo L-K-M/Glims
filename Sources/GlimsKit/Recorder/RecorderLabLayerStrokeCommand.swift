@@ -35,7 +35,7 @@ struct RecorderLabLayerStrokeCommand: Equatable {
         var brush = settings.brush
         brush.resource = facts.brush
         let started = try session.beginLabLayerStrokeCapturing(image: image, target: target,
-            brush: brush, first: trace.first.nativeSample, expected: facts)
+            brush: brush, first: trace.first.nativeSample, expected: facts, requireEmptySelection: true)
         do {
             for batch in trace.batches {
                 try session.continueTabletStroke(started.stroke, points: batch.map(\.nativeSample))

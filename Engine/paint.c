@@ -84,6 +84,7 @@ typedef struct
   gboolean         lab_stroke;
   gboolean         lab_layer_stroke;
   gboolean         lab_layer_dispatching;
+  gboolean         lab_layer_require_empty_selection;
   GimpLayer        *lab_layer_root;
   guint8           lab_layer_uuid[16];
   GlimsLabBrushSettings lab;
@@ -1004,6 +1005,14 @@ glims_stroke_cancel_lab (GlimsEngine *engine, GlimsStrokeID id)
   return GLIMS_STATUS_OK;
 }
 
+/* A missing native mask cannot prove that selection-dependent replay is safe. */
+static gboolean
+lab_layer_selection_is_empty (GimpImage *image)
+{
+  GimpChannel *mask = gimp_image_get_mask (image);
+  return mask && gimp_channel_is_empty (mask);
+}
+
 static GlimsStatus
 lab_layer_stroke_target_ready (GlimsEngine *engine, GlimsStroke *stroke, char **error)
 {
@@ -1022,6 +1031,12 @@ lab_layer_stroke_target_ready (GlimsEngine *engine, GlimsStroke *stroke, char **
     goto changed;
   GList *selected = gimp_image_get_selected_layers (stroke->image);
   if (!selected || selected->next || selected->data != stroke->lab_layer_root) goto changed;
+  if (stroke->lab_layer_require_empty_selection &&
+      !lab_layer_selection_is_empty (stroke->image))
+    {
+      if (error) *error = g_strdup ("The selection changed. The Lab brush stroke was cancelled.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
   GList *plane = stroke->drawables;
   for (guint i = 0; i < 4; i++, plane = plane ? plane->next : NULL)
     if (!plane || plane->data != storage->layers[index].planes[i]) goto changed;
@@ -1072,8 +1087,8 @@ GlimsStatus
 glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
                               GlimsResourceID brush_id, const GlimsLabLayerBrushSettings *settings,
                               const GlimsStrokePacketV2 *packet, GlimsStrokeID *out,
-                              gboolean pressure_size, const char *expected_fingerprint,
-                              GlimsStrokeCaptureFacts *facts, char **error)
+                              gboolean pressure_size, gboolean require_empty_selection,
+                              const char *expected_fingerprint, GlimsStrokeCaptureFacts *facts, char **error)
 {
   if (out) *out = 0;
   if (error) *error = NULL;
@@ -1112,6 +1127,9 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
   GimpLayer *root = storage->layers[index].group;
   GList *selected = gimp_image_get_selected_layers (open->image);
   if (!selected || selected->next || selected->data != root) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (require_empty_selection &&
+      !lab_layer_selection_is_empty (open->image))
+    return glims_fail (error, NULL, "Deselect the image before recording or replaying this Lab brush.");
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (open->image);
   if (!symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY) return GLIMS_STATUS_UNSUPPORTED;
 
@@ -1148,6 +1166,7 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
   stroke->lab_layer_root = g_object_ref (root);
   memcpy (stroke->lab_layer_uuid, request.uuid, 16);
   stroke->lab_layer_stroke = TRUE;
+  stroke->lab_layer_require_empty_selection = require_empty_selection;
   stroke->component_stroke = TRUE;
   stroke->input_version = GLIMS_STROKE_INPUT_V2;
   stroke->last_time_ms = samples[0].time_ms;
@@ -1200,6 +1219,14 @@ glims_stroke_begin_lab_layer (GlimsEngine *engine, GlimsImageID image_id,
       glims_strokes_free (stroke);
       engine->busy--;
       return glims_fail (error, native_error, "The Lab layer brush could not start.");
+    }
+  if (require_empty_selection &&
+      !lab_layer_selection_is_empty (open->image))
+    {
+      glims_strokes_free (stroke);
+      gimp_image_flush (open->image);
+      engine->busy--;
+      return glims_fail (error, NULL, "The selection changed before the Lab brush began.");
     }
   stroke->core->last_coords = coords;
   gimp_paint_core_paint (stroke->core, stroke->drawables, stroke->options, GIMP_PAINT_STATE_INIT, stroke->last_time_ms);
