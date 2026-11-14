@@ -6153,3 +6153,40 @@ locale categories and invalid identities; bundle qualification runs this
 regression. A matching engine probe took about 3.8 seconds under load; this
 is not an ordinary app-launch measurement or a five-second guarantee. The final
 bundle, four-engine editor checks and review remain open.
+
+### Photoshop Bitmap PSD export (candidate)
+
+An explicit one-bit Bitmap PSD export accepts opaque binary grayscale or
+indexed canvases, flattens the visible appearance, and refuses intermediate
+gray, transparency or linked layers instead of silently converting it. The source image and
+history remain untouched; metadata and layers are omitted. The real export
+sheet and Repeat Export pass a focused window test, with older adapters
+refusing safely. Literal codec and atomic file tests pass under sanitizers,
+and all four engines pass native round-trip and refusal tests. Full editor
+compatibility, review and integration remain open. Conversion, dithering,
+metadata and preserved editable Bitmap mode are separate work. See
+[bitmap-psd.md](bitmap-psd.md).
+
+### Explicit grayscale threshold for Bitmap PSD (candidate)
+
+The Bitmap PSD export sheet adds an explicit threshold method for opaque
+grayscale canvases, retaining strict existing black and white as the default.
+A chosen 0–255 cutoff maps its value and darker samples to black, after
+rounding the document-encoded grayscale to eight bits. The output is flat;
+transparency, out-of-range/nonfinite pixels and linked layers are refused.
+The source stays unchanged and Repeat Export and Batch retain the choice.
+Native ramp, boundary, destination and cancellation checks and focused Swift
+checks pass on the pinned engine. Four-engine, real-window, full editor,
+review and integration checks remain open; dithering remains separate work.
+
+### Diffusion dithering for Bitmap PSD (candidate)
+
+The export sheet offers an explicit diffusion method for opaque grayscale,
+using left-to-right Floyd–Steinberg error diffusion in the document's Y-prime
+encoding. The default remains strict black and white. Two bounded error rows
+carry across streaming chunks; input, history and identity remain untouched.
+Transparency, out-of-range/nonfinite values and linked layers refuse.
+Optimized and sanitized core tests include independent rational patterns,
+one-pixel rows and the 4096-pixel chunk boundary; pinned native output,
+cancellation and focused Swift transport tests pass. Four-engine, actual
+window, Batch, full editor, hosted review and integration remain open.

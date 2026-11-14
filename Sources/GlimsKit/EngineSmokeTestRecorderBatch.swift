@@ -92,6 +92,52 @@ extension EngineSmokeTest {
         check(try FileManager.default.contentsOfDirectory(atPath: outputs.path).allSatisfy { !$0.hasPrefix(".glims-batch-") },
               "Completed Batch leaves no temporary export directories")
 
+        if session.supportsBitmapPSD && session.supportsBitmapThresholdPSD {
+            let grayInput = root.appendingPathComponent("Threshold input.pgm")
+            var gray = Data("P5\n5 1\n255\n".utf8)
+            gray.append(contentsOf: [0, 64, 127, 128, 255])
+            try gray.write(to: grayInput)
+            var bitmapSettings = ExportSettings()
+            bitmapSettings.format = .psd
+            bitmapSettings.psdColor = .bitmap
+            bitmapSettings.psdLayout = .merged
+            bitmapSettings.bitmapMethod = .threshold
+            bitmapSettings.bitmapThreshold = 127
+            let destination = try folder("bitmap-threshold")
+            let items = try run(flip, [grayInput], destination, format: .exported(bitmapSettings))
+            try require(items.count == 1, "Bitmap threshold Batch result missing")
+            let output = try saved(items[0])
+            let bitmapBytes = try Data(contentsOf: output)
+            check(bitmapBytes.count == 41 && bitmapBytes[23] == 1 && bitmapBytes[25] == 0 && bitmapBytes[40] == 0x38,
+                  "Batch applies its recording and the captured threshold to a Bitmap PSD")
+            check(try Data(contentsOf: grayInput) == gray,
+                  "Bitmap threshold Batch preserves the original input file")
+            check(try FileManager.default.contentsOfDirectory(atPath: destination.path).allSatisfy { !$0.hasPrefix(".glims-batch-") },
+                  "Bitmap threshold Batch removes its staging directory")
+        }
+
+        if session.supportsBitmapPSD && session.supportsBitmapDiffusionPSD {
+            let grayInput = root.appendingPathComponent("Diffusion input.pgm")
+            var gray = Data("P5\n4 4\n255\n".utf8)
+            gray.append(contentsOf: Array(repeating: UInt8(128), count: 16))
+            try gray.write(to: grayInput)
+            var bitmapSettings = ExportSettings()
+            bitmapSettings.format = .psd
+            bitmapSettings.psdColor = .bitmap
+            bitmapSettings.psdLayout = .merged
+            bitmapSettings.bitmapMethod = .diffusion
+            let destination = try folder("bitmap-diffusion")
+            let items = try run(flip, [grayInput], destination, format: .exported(bitmapSettings))
+            try require(items.count == 1, "Bitmap diffusion Batch result missing")
+            let output = try saved(items[0])
+            let bitmapBytes = try Data(contentsOf: output)
+            check(bitmapBytes.count == 44 && bitmapBytes[23] == 1 && bitmapBytes[25] == 0 &&
+                  Array(bitmapBytes[40..<44]) == [0x50, 0xa0, 0x50, 0xa0],
+                  "Batch publishes the independently expected diffusion-dithered Bitmap PSD")
+            check(try Data(contentsOf: grayInput) == gray,
+                  "Bitmap diffusion Batch preserves the original input file")
+        }
+
         // The shared export form must carry its PSD layout through Batch's
         // private document, staging filename and asynchronous publication.
         let layeredInput = root.appendingPathComponent("Layered.xcf")

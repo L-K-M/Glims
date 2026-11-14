@@ -24,6 +24,14 @@
 #define GLIMS_TYPE_PROGRESS (glims_progress_get_type ())
 G_DECLARE_FINAL_TYPE (GlimsProgress, glims_progress, GLIMS, PROGRESS, GObject)
 
+/* Flat binary Bitmap output from an ordinary image. */
+GlimsStatus glims_image_export_bitmap_psd (GlimsEngine *engine, GlimsImageID image,
+                                           const char *path, char **error);
+GlimsStatus glims_image_export_bitmap_threshold_psd (GlimsEngine *engine, GlimsImageID image,
+                                                     const char *path, uint32_t threshold,
+                                                     char **error);
+GlimsStatus glims_image_export_bitmap_diffusion_psd (GlimsEngine *engine, GlimsImageID image,
+                                                     const char *path, char **error);
 /* Native scalar CMYK output, deliberately separate from RGB-to-CMYK export. */
 GlimsStatus glims_image_export_native_cmyk_psd (GlimsEngine *engine, GlimsImageID image,
                                                const char *path, char **error);

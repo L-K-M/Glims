@@ -4319,6 +4319,30 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_lab_layer_snapshot) (GlimsEngine *engine, GlimsImageID image,
                                           GlimsLabLayerSnapshotRow *rows,
                                           int32_t capacity, int32_t *count);
+  /* Slot226: export an ordinary grayscale/indexed document's visible canvas
+   * as a flat 1-bit Bitmap PSD. Every composited pixel must be fully opaque,
+   * exactly black or white; no threshold or color conversion is implied.
+   * Documents containing linked layers refuse, including hidden/frozen links.
+   * Layers, metadata, resolution and profiles are omitted. Absolute local PSD
+   * path only; atomic publication and cancellation match slot182. The source
+   * pixels, history and file identity remain unchanged. Clears *error. */
+  GlimsStatus (*image_export_bitmap_psd) (GlimsEngine *engine, GlimsImageID image,
+                                          const char *path, char **error);
+  /* Slot227: export an ordinary grayscale canvas as flat Bitmap PSD with an
+   * explicit threshold in 0..255. Each finite opaque Y-prime sample in [0,1]
+   * is rounded to nearest 8-bit value; samples <= threshold become black,
+   * others white. No dithering. Linked layers refuse. Source and destination
+   * transaction, cancellation and metadata policy match slot226. */
+  GlimsStatus (*image_export_bitmap_threshold_psd) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, uint32_t threshold,
+                                                    char **error);
+  /* Slot228: flat Bitmap PSD from opaque grayscale, using left-to-right
+   * Floyd-Steinberg diffusion on finite document-encoded Y-prime samples in
+   * [0,1]. One half is the white decision; row state is bounded by image
+   * width. Linked layers refuse. Source, atomic destination and cancellation
+   * rules match slot227. */
+  GlimsStatus (*image_export_bitmap_diffusion_psd) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

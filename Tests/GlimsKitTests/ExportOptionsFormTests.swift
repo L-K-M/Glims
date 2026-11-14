@@ -103,6 +103,93 @@ final class ExportOptionsFormTests: XCTestCase {
         XCTAssertEqual(form.psdLayoutPopup.indexOfSelectedItem, 1)
     }
 
+    func testBitmapPSDChoiceIsExplicitAndKeepsOnlyMergedContent() throws {
+        let form = ExportOptionsForm(supportsBitmapPSD: true)
+        form.selectFormat(.psd)
+        let index = try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap))
+        XCTAssertTrue(try XCTUnwrap(form.psdColorPopup.item(at: index)).isEnabled)
+        form.psdColorPopup.selectItem(at: index)
+        fire(form.psdColorPopup)
+        XCTAssertEqual(form.settings.psdColor, .bitmap)
+        XCTAssertEqual(form.settings.psdLayout, .merged)
+        XCTAssertFalse(form.psdLayoutPopup.isEnabled)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("transparency"))
+        XCTAssertTrue(form.commitEditing())
+        XCTAssertThrowsError(try form.settings.nativeValue(), "Bitmap may never fall through to indexed PSD export")
+        form.psdColorPopup.selectItem(at: try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .document)))
+        fire(form.psdColorPopup)
+        XCTAssertTrue(form.psdLayoutPopup.isEnabled)
+    }
+
+    func testBitmapPSDIsUnavailableWithoutEngineCapability() throws {
+        var value = ExportSettings()
+        value.format = .psd
+        value.psdColor = .bitmap
+        value.psdLayout = .merged
+        let form = ExportOptionsForm(settings: value)
+        let index = try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap))
+        XCTAssertFalse(try XCTUnwrap(form.psdColorPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(form.commitEditing())
+        XCTAssertTrue(form.lastError?.contains("not available") == true)
+        value.psdLayout = .layers
+        XCTAssertFalse(value.isReadyToExport)
+    }
+
+    func testBitmapThresholdIsExplicitAndRejectsInvalidDraft() throws {
+        let form = ExportOptionsForm(supportsBitmapPSD: true, supportsBitmapThresholdPSD: true)
+        form.selectFormat(.psd)
+        form.psdColorPopup.selectItem(at: try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap)))
+        fire(form.psdColorPopup)
+        XCTAssertEqual(form.settings.bitmapMethod, .existing)
+        form.bitmapMethodPopup.selectItem(at: try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .threshold)))
+        fire(form.bitmapMethodPopup)
+        XCTAssertEqual(form.settings.bitmapMethod, .threshold)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("at or below"))
+        form.bitmapThresholdRow.field.stringValue = "128"
+        XCTAssertTrue(form.commitEditing())
+        XCTAssertEqual(form.settings.bitmapThreshold, 128)
+        form.bitmapThresholdRow.field.stringValue = "256"
+        XCTAssertFalse(form.commitEditing())
+        XCTAssertEqual(form.settings.bitmapThreshold, 128)
+        XCTAssertTrue(form.lastError?.contains("0 to 255") == true)
+        form.bitmapMethodPopup.selectItem(at: try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .existing)))
+        fire(form.bitmapMethodPopup)
+        XCTAssertTrue(form.commitEditing(), "a hidden threshold draft does not block strict output")
+    }
+
+    func testBitmapThresholdCannotFallBackOnOlderAdapter() throws {
+        var settings = ExportSettings()
+        settings.format = .psd
+        settings.psdColor = .bitmap
+        settings.psdLayout = .merged
+        settings.bitmapMethod = .threshold
+        let form = ExportOptionsForm(settings: settings, supportsBitmapPSD: true)
+        let index = try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .threshold))
+        XCTAssertFalse(try XCTUnwrap(form.bitmapMethodPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(form.commitEditing())
+        XCTAssertTrue(form.lastError?.contains("not available") == true)
+    }
+
+    func testDiffusionChoiceIsExplicitAndRequiresItsCapability() throws {
+        let index = try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .diffusion))
+        let form = ExportOptionsForm(supportsBitmapPSD: true, supportsBitmapThresholdPSD: true,
+                                     supportsBitmapDiffusionPSD: true)
+        form.selectFormat(.psd)
+        form.psdColorPopup.selectItem(at: try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap)))
+        fire(form.psdColorPopup)
+        XCTAssertTrue(try XCTUnwrap(form.bitmapMethodPopup.item(at: index)).isEnabled)
+        form.bitmapMethodPopup.selectItem(at: index)
+        fire(form.bitmapMethodPopup)
+        XCTAssertEqual(form.settings.bitmapMethod, .diffusion)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("dithering"))
+        XCTAssertTrue(form.commitEditing())
+        let unsupported = ExportOptionsForm(settings: form.settings, supportsBitmapPSD: true,
+                                            supportsBitmapThresholdPSD: true)
+        XCTAssertFalse(try XCTUnwrap(unsupported.bitmapMethodPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(unsupported.commitEditing())
+        XCTAssertTrue(unsupported.lastError?.contains("not available") == true)
+    }
+
     // MARK: Validation gate
 
     func testValidateEnforcesTheTypedQualityRange() {
