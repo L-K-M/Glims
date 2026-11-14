@@ -6175,3 +6175,15 @@ Native checks against a Photoshop Gradient Fill fixture pass on four engines;
 the development engine's complete composite matches ImageIO within two 8-bit
 levels. Real-window, bundle, full editor and review qualification remain open.
 See [psd-composite-import.md](psd-composite-import.md).
+
+### Duotone settings structure (private candidate)
+
+A bounded codec reads the documented 524-byte Photoshop `.ADO` settings
+structure and makes byte-preserving ink name, color and curve changes. It
+rejects malformed active fields and leaves unrelated fields intact. The
+Photoshop CC 2018 PSD fixture's 524-byte block matches the documented layout
+for its plate count, names and curves. Adobe does not document PSD Duotone
+color-mode data, so this is not yet an image editor or an interoperability
+claim. Encoding choices, color semantics, overprint updates and color preview
+remain required before exposing edits. Optimized and sanitizer tests pass 551
+checks each. See [duotone-options.md](duotone-options.md).
