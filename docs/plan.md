@@ -6017,3 +6017,16 @@ second; a matching packaged host seed took about 1.8 seconds. These are not
 ordinary application-launch measurements. Full editor compatibility, hosted
 review, CI and integration remain open, and the five-second target is not
 established for first-time overrides or incompatible seeds.
+
+### Exact locale override seeds (candidate)
+
+The bundle can also prepare six exact `LANGUAGE` and `LC_ALL` pairs for the
+packager's complete macOS preferred-language list. The complete locale
+environment and language identity must match before an override seed is used;
+other configurations still perform native discovery. Cache keys include the
+matching override seed contents so replacing a seed refreshes warm caches.
+A disposable prototype checked discovery of a new plug-in, changed seed
+contents, unmatched locale categories and invalid identities against native
+discovery. Its matching engine probe took about 3.8 seconds under load; this
+is not an ordinary app-launch measurement or a five-second guarantee. The final
+bundle, four-engine editor checks and review remain open.
