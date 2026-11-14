@@ -344,13 +344,13 @@ It is refused in a version 1 file. Like every successful record it carries a
 `settings` has required `tool`, `size`, `opacity`, `red`, `green`, `blue`,
 `pressureSize` and `antiErase`, plus optional `hardness`.
 
-- `tool` is exactly one of `pencil`, `eraser`, `paintbrush`: the lowercase
-  Swift enum raw values on the wire.
+- `tool` is `pencil`, `eraser` or `paintbrush`; version 20 also permits
+  `spongeDesaturate` and `spongeSaturate`.
 - `size` is greater than 0 and at most 10,000.
 - `opacity`, `red`, `green` and `blue` are inside 0...1.
 - `hardness`, when present, is inside 0...1.
 - `pressureSize` and `antiErase` are Booleans. `antiErase` may be true only for
-  `eraser`; pencil and paintbrush require false.
+  `eraser`; all other tools require false.
 
 `facts` has `brush` and `fingerprint`. `brush` is the capture-time identity:
 required `name` and `isInternal`, optional `collection`. Names and collections

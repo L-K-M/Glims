@@ -67,7 +67,8 @@ capture. There is no promise of portable pixels across engine versions.
 The trace stores image coordinates, pressure, signed tilt and millisecond
 timestamps, with the accepted batch boundaries intact. It does not infer
 velocity or direction. For the ordinary RGB/gray stroke path, only pixel layers can be bound; painting a mask/channel or using another paint tool produces an
-explicit unsupported row. Saved strokes use recording format version 2;
+explicit unsupported row. Pencil, Eraser and Paintbrush strokes use recording
+format version 2; Sponge strokes require version 20. Otherwise,
 recordings without successful strokes retain version 1; Channel ▸ To Selection
 raises the file to version 3, a committed Transform-tool layer affine
 raises it to version 4, a committed Levels adjustment raises it to
