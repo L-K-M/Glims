@@ -312,6 +312,7 @@ enum RecorderFileCommand: Equatable {
     case applyLabCurves(LabCurves)
     case completeLabStroke(RecorderLabStrokeCommand)
     case completeLabLayerStroke(RecorderLabLayerStrokeCommand)
+    case fillLabLayer(RecorderLabLayerFillValue)
     /// A newly applied Curves adjustment with its whole accepted settings:
     /// the owned TRC tag and all five named channels, each preserving both
     /// curve representations and the HDR bypass flag. The explicit layer is
@@ -337,7 +338,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

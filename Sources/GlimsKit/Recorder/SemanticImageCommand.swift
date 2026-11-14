@@ -90,6 +90,7 @@ enum SemanticImageCommand {
     case applyLabCurves(EngineSession.LabCurvesSettings)
     case completeLabStroke(RecorderLabStrokeCommand)
     case completeLabLayerStroke(RecorderLabLayerStrokeCommand)
+    case fillLabLayer(RecorderLabLayerFillValue)
     case completeStroke(RecorderStrokeCommand)
 
     var isLayerAdjustment: Bool {
@@ -102,7 +103,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .resizeCanvas, .crop, .completeStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -158,6 +159,7 @@ enum SemanticImageCommand {
         case .applyLabCurves: return "Lab Curves"
         case .completeLabStroke(let stroke): return stroke.title
         case .completeLabLayerStroke(let stroke): return stroke.title
+        case .fillLabLayer: return "Lab Layer Fill"
         case .completeStroke(let stroke): return stroke.title
         }
     }
@@ -181,7 +183,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeLabLayerStroke:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeLabLayerStroke, .fillLabLayer:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
@@ -192,7 +194,7 @@ enum SemanticImageCommand {
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
         switch self {
-        case .completeLabLayerStroke:
+        case .completeLabLayerStroke, .fillLabLayer:
             // A logical Lab layer needs its captured UUID, not just a
             // session-local layer number.
             throw MissingLayerBinding()
@@ -291,8 +293,13 @@ enum SemanticImageCommand {
     /// installation. The native begin validates it and the empty selection
     /// atomically before the first dab.
     func apply(session: EngineSession, image: Int32, labLayerTarget: EngineSession.LabLayerFillTarget) throws {
-        guard case .completeLabLayerStroke(let stroke) = self else { throw MissingLayerBinding() }
-        try stroke.apply(session: session, image: image, target: labLayerTarget)
+        switch self {
+        case .completeLabLayerStroke(let stroke):
+            try stroke.apply(session: session, image: image, target: labLayerTarget)
+        case .fillLabLayer(let fill):
+            try fill.apply(session: session, image: image, target: labLayerTarget)
+        default: throw MissingLayerBinding()
+        }
     }
 
     /// The document confirms the explicit axis identity and precision on its

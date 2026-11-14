@@ -172,6 +172,7 @@ enum RecorderFileSemanticBridge {
             return .applyInkLevels(settings)
         case .completeLabStroke(let value): return .completeLabStroke(try value.validated())
         case .completeLabLayerStroke(let value): return .completeLabLayerStroke(try value.validated())
+        case .fillLabLayer(let value): return .fillLabLayer(try value.validated())
         case .completeInkStroke(let value): return .completeInkStroke(try value.validated())
         case .fillLab(let value): return .fillLab(value: value.value, opacity: value.opacity)
         case .applyLabLevels(let value):

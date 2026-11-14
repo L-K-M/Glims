@@ -6959,10 +6959,12 @@ final class ImageDocument {
             case .unavailable(let reason): throw RecorderFileError.invalid(reason)
             case .layer(let symbol):
                 let id = try layer(symbol)
-                if case .completeLabLayerStroke = command {
+                switch command {
+                case .completeLabLayerStroke, .fillLabLayer:
                     let target = try session.labLayerFillTarget(image, root: id)
                     contexts[row.ordinal] = .labLayer(root: id, identity: target.uuid)
-                } else { contexts[row.ordinal] = .layer(id) }
+                default: contexts[row.ordinal] = .layer(id)
+                }
             case .channel(let symbol): contexts[row.ordinal] = .channel(try channel(symbol))
             case .ink(let symbol, let recorded):
                 let id = try channel(symbol)
@@ -7127,7 +7129,7 @@ final class ImageDocument {
                 case .labLayer(let root, let identity):
                     guard identity != nil, storage.layout == .layeredLab,
                           selectedLayerIDs == [root], layers.contains(where: { $0.id == root }) else {
-                        throw RecorderReplayError(message: "Select the bound Lab layer before replaying this stroke.")
+                        throw RecorderReplayError(message: "Select the bound Lab layer before replaying this edit.")
                     }
                 case .channel(let channel):
                     guard channels.contains(where: { $0.id == channel }) else {
@@ -7261,7 +7263,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeLabLayerStroke: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeLabLayerStroke, .fillLabLayer: return true
         default: return false
         }
     }

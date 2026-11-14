@@ -26,6 +26,8 @@ extension RecorderFileCodec {
                     pointCount += points.count
                 }
                 fileVersion = max(fileVersion, labSelectionVersion)
+            case .success(.fillLabLayer, _):
+                fileVersion = max(fileVersion, labLayerFillVersion)
             case .success(.completeLabLayerStroke(let stroke), _):
                 let count = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
@@ -135,6 +137,12 @@ extension RecorderFileCodec {
             return false
         }) {
             throw RecorderFileError.invalid("Version 18 requires a successful Lab layer stroke.")
+        }
+        if fileVersion == labLayerFillVersion, !value.records.contains(where: {
+            if case .success(.fillLabLayer, _) = $0.outcome { return true }
+            return false
+        }) {
+            throw RecorderFileError.invalid("Version 19 requires a successful Lab layer Fill.")
         }
         let symbols = try value.symbols.map { symbol in
             RecorderJSON.object(["id": id(symbol.id), "description": try descriptionJSON(symbol.description)])
@@ -369,6 +377,9 @@ extension RecorderFileCodec {
             return .object(["tag": .string("applyInkCurves"), "samples": .array(try curves.samples.map { try d($0) })])
         case .completeLabStroke(let stroke): return try labStrokeJSON(stroke)
         case .completeLabLayerStroke(let stroke): return try labLayerStrokeJSON(stroke)
+        case .fillLabLayer(let fill):
+            let value = try fill.validated()
+            return .object(["tag": .string("fillLabLayer"), "color": try colorJSON(value.color), "opacity": try d(value.opacity)])
         case .completeInkStroke(let stroke): return try inkStrokeJSON(stroke)
         case .completeStroke(let stroke): return try strokeJSON(stroke)
         }

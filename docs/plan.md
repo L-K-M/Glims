@@ -6017,3 +6017,10 @@ ordinary Fill entry. Transport tests include a protected old-prefix boundary,
 request values and native error ownership. Real-window tests cover the new
 engine's selection refusal, empty-selection Fill and Undo, and the old-engine
 fallback. Recorder capture, persistence and replay remain separate work.
+
+A version 19 recording can own a layered Lab Fill's sRGB color and opacity,
+with a separately bound logical layer. The file decoder validates the values,
+version and layer kind; replay resolves the target afresh and uses the guarded
+engine entry. Real-window checks cover file installation, a different selected
+layer, an uncaptured selection, replay and Undo, and refusal on older engines.
+Live capture is not enabled yet; review and CI remain pending.
