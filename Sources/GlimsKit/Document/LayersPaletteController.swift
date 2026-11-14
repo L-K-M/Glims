@@ -46,7 +46,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         var isAvailable: Bool {
             guard let document else { return false }
-            return document.acceptsEdits && !document.targetCommandIsPending
+            return document.acceptsLayerProperties && !document.targetCommandIsPending
                 && document.layers.contains { $0.id == layer }
         }
     }
@@ -140,7 +140,15 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
 
     private func bind(_ command: Command) -> ClassicPaletteButtonBar.Item {
         ClassicPaletteButtonBar.Item(id: command.id, title: command.title, image: command.image) { [weak self] in
-            guard let document = self?.document, !document.colorInfo.mode.usesNativeChannels else { return }
+            guard let self, let document = self.document else { return }
+            if document.storage.layout == .layeredLab {
+                switch command.id {
+                case "new": guard self.createAdmission(document) else { return }
+                case "duplicate": guard self.duplicateAdmission(document) else { return }
+                case "delete": guard self.deleteAdmission(document) else { return }
+                default: return
+                }
+            } else if document.colorInfo.mode.usesNativeChannels { return }
             command.run(document)
         }
     }
@@ -412,6 +420,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             : #selector(DocumentWindowController.restoreLayerSource(_:))
     }
 
+    // Detached palettes still resolve their document's window. If the window
+    // is gone or closing, fail closed: sheet and activity admission cannot be
+    // verified from a windowless document.
     private func sourceWindow(for captured: ImageDocument) -> DocumentWindowController? {
         NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
             .first { $0.imageDocument === captured && !$0.closeStarted }
@@ -429,8 +440,13 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     }
 
     @objc private func runLayerCommand(_ sender: NSMenuItem) {
-        guard document?.colorInfo.mode.usesNativeChannels != true else { return }
         guard let command = EngineSession.LayerCommand(rawValue: UInt32(sender.tag)) else { return }
+        if document?.storage.layout == .layeredLab && !validateMenuItem(sender) { return }
+        guard document?.colorInfo.mode.usesNativeChannels != true ||
+              (document?.storage.layout == .layeredLab &&
+               ((command == .duplicate && document?.acceptsLayerDuplicate == true) ||
+                (command == .new && document?.acceptsLayerCreate == true) ||
+                (command == .delete && document?.acceptsLayerDelete == true))) else { return }
         if command == .duplicate, document?.hasMultipleSelectedLayers == true {
             document?.duplicateSelectedLayers()
         } else {
@@ -628,8 +644,41 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 && ids.allSatisfy { document.layerSources[$0]?.kind == .pixel }))
     }
 
+    private func duplicateAdmission(_ document: ImageDocument) -> Bool {
+        if document.storage.layout == .layeredLab {
+            guard let owner = sourceWindow(for: document) else { return false }
+            let item = NSMenuItem(title: "Duplicate Layer", action: #selector(DocumentWindowController.duplicateLayer(_:)), keyEquivalent: "")
+            return owner.validateMenuItem(item)
+        }
+        return layerBatchAdmission(document)
+    }
+
+    private func createAdmission(_ document: ImageDocument) -> Bool {
+        if document.storage.layout == .layeredLab {
+            guard let owner = sourceWindow(for: document) else { return false }
+            let item = NSMenuItem(title: "New Layer", action: #selector(DocumentWindowController.newLayer(_:)), keyEquivalent: "")
+            return owner.validateMenuItem(item)
+        }
+        return document.acceptsEdits && !document.colorInfo.mode.usesNativeChannels && !document.floatingState.isActive
+    }
+
+    private func deleteAdmission(_ document: ImageDocument) -> Bool {
+        if document.storage.layout == .layeredLab {
+            guard let owner = sourceWindow(for: document) else { return false }
+            let item = NSMenuItem(title: "Delete Layer", action: #selector(DocumentWindowController.deleteLayer(_:)), keyEquivalent: "")
+            return owner.validateMenuItem(item)
+        }
+        return layerBatchAdmission(document)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard document?.colorInfo.mode.usesNativeChannels != true else { return false }
+        if document?.colorInfo.mode.usesNativeChannels == true {
+            guard menuItem.action == #selector(runLayerCommand(_:)),
+                  (menuItem.tag == Int(EngineSession.LayerCommand.duplicate.rawValue) ||
+                   menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) ||
+                   menuItem.tag == Int(EngineSession.LayerCommand.delete.rawValue)),
+                  document?.storage.layout == .layeredLab else { return false }
+        }
         if let item = menuItem.representedObject as? EffectItem {
             return validateEffectItem(menuItem, item)
         }
@@ -657,15 +706,24 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                 : readiness.reason
             return readiness.allowed
         case #selector(runLayerCommand(_:)):
-            guard let document, document.acceptsEdits,
+            guard let document,
                   let command = EngineSession.LayerCommand(rawValue: UInt32(menuItem.tag)) else { return false }
+            if command == .new && document.storage.layout == .layeredLab {
+                return createAdmission(document)
+            }
             if command == .duplicate || command == .delete {
                 let verb = command == .duplicate ? "Duplicate" : "Delete"
                 menuItem.title = "\(verb) \(document.hasMultipleSelectedLayers ? "Layers" : "Layer")"
-                menuItem.toolTip = layerBatchAdmission(document) ? nil
-                    : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
-                return layerBatchAdmission(document)
+                let admitted = command == .duplicate ? duplicateAdmission(document) : deleteAdmission(document)
+                if document.storage.layout == .layeredLab {
+                    menuItem.toolTip = admitted ? nil : "Select one logical layer to \(verb.lowercased())."
+                } else {
+                    menuItem.toolTip = admitted ? nil
+                        : "Select ordinary pixel layers for a batch. \(verb) groups or editable sources individually."
+                }
+                return admitted
             }
+            guard document.acceptsEdits else { return false }
             if command == .fitToImage {
                 menuItem.title = document.hasMultipleSelectedLayers ? "Layers to Image Size" : "Layer to Image Size"
                 if document.hasMultipleSelectedLayers {
@@ -785,10 +843,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         // commands are gated resolve-first, so their buttons go quiet too.
         let floatingActive = document?.floatingState.isActive == true
         // Duplicate and Delete admit bounded ordinary-pixel batches.
-        buttonBar.setEnabled(editable && !floatingActive, forItem: "new")
+        buttonBar.setEnabled(document.map(createAdmission) == true, forItem: "new")
         buttonBar.setEnabled(editable && !floatingActive, forItem: "group")
-        buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "duplicate")
-        buttonBar.setEnabled(document.map(layerBatchAdmission) == true, forItem: "delete")
+        buttonBar.setEnabled(document.map(duplicateAdmission) == true, forItem: "duplicate")
+        buttonBar.setEnabled(document.map(deleteAdmission) == true, forItem: "delete")
         // The floating-selection footer appears only while the shown
         // document's cached floating state is active; its buttons read
         // the cached readiness, never the engine.
@@ -979,7 +1037,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// when the change was refused, so the row shows the layer's
     /// authoritative state again.
     private func commitLayerChange(_ context: LayerRowView.Context, _ change: EngineSession.LayerChange) -> Bool {
-        guard let document, document.acceptsEdits,
+        guard let document, document.acceptsLayerProperties,
+              (document.acceptsEdits || change.isLimitedLayerPropertyChange),
+              (change.name == nil || document.acceptsLayerRename),
               LayerRowView.canChange(context, document: document, layers: document.layers) else { return false }
         document.changeLayer(context.layerID, change)
         return true
@@ -1057,9 +1117,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
                                    locks: locks, mask: mask, activeTarget: target) { [weak self] context, change in
             self?.commitLayerChange(context, change) ?? false
         }
-        rowView.checkbox.isEnabled = document.acceptsEdits
-        rowView.nameField.isEditable = document.acceptsEdits
-        rowView.layerThumb.isEnabled = document.acceptsEdits
+        rowView.checkbox.isEnabled = document.acceptsLayerProperties
+        rowView.nameField.isEditable = document.acceptsLayerRename
+        rowView.layerThumb.isEnabled = document.acceptsLayerSelection
         rowView.maskThumb?.isEnabled = document.acceptsEdits
         rowView.onThumbnail = { [weak self, weak rowView] pick, option in
             guard let self, let rowView else { return }
@@ -1068,7 +1128,9 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         rowView.onEditEnded = { [weak self] in
             DispatchQueue.main.async { self?.reload() }
         }
-        requestThumbnails(layer: layer, mask: mask, into: rowView, document: document)
+        if document.storage.layout != .layeredLab {
+            requestThumbnails(layer: layer, mask: mask, into: rowView, document: document)
+        }
         return rowView
     }
 
@@ -1077,16 +1139,18 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     /// layer still in it.
     private func thumbnailPicked(_ pick: LayerRowView.ThumbnailPick, _ option: Bool,
                                  row: LayerRowView) {
-        guard let document, document.acceptsEdits,
+        guard let document, document.acceptsLayerSelection,
               LayerRowView.canChange(row.context, document: document, layers: document.layers)
         else { return }
         switch (pick, option) {
         case (.layer, _):
             document.selectLayer(row.context.layerID)
         case (.mask, true):
+            guard document.acceptsEdits else { return }
             // Option-click is View Mask, a display flag on that layer.
             document.toggleMaskShowing(row.context.layerID)
         case (.mask, false):
+            guard document.acceptsEdits else { return }
             document.editMask(row.context.layerID)
         }
     }
@@ -1165,7 +1229,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         }
         guard let layer = snapshot.layer(for: item, for: document,
                                          currentLayers: document.layers) else { return false }
-        guard document.acceptsEdits else {
+        guard document.acceptsLayerSelection else {
             // The pick is refused; asking the document still shows why.
             document.selectLayer(layer.id)
             return false

@@ -283,6 +283,11 @@ final class ImageDocument {
             role: axis.role, component: colorInfo.component).map(\.value)
     }
     func toolIsAvailable(_ tool: ToolID) -> Bool {
+        if storage.layout == .layeredLab {
+            return [.hand, .zoom].contains(tool) || (storage.allowsLabSelections && session.supportsLabSelections &&
+                [.rectangleSelect, .ellipseSelect, .lasso].contains(tool))
+        }
+        if storage.readOnly { return [.hand, .zoom].contains(tool) }
         guard tool.isAvailable(in: colorInfo.mode) else { return false }
         guard colorInfo.mode == .lab else { return true }
         switch tool {
@@ -302,6 +307,7 @@ final class ImageDocument {
     /// the Precision form and the Image Information sheet all read this
     /// cache; none of them asks the engine while it validates a menu.
     private(set) var colorInfo: EngineSession.ColorInfo
+    private(set) var storage = EngineSession.ImageStorage(layout: .legacyUnknown, readOnly: false)
     /// Bumped by every reload; thumbnail caches key on it so a result
     /// read for an older state never lands on a newer row.
     private(set) var stateVersion = 0
@@ -504,7 +510,32 @@ final class ImageDocument {
             && !EngineActivity.shared.isBusy
     }
 
-    var acceptsEdits: Bool { acceptsImageReads && !recorder.isReplaying }
+    var acceptsEdits: Bool { acceptsImageReads && !storage.readOnly && storage.layout != .layeredLab && !recorder.isReplaying }
+    var acceptsLayerProperties: Bool {
+        acceptsEdits || (acceptsImageReads && storage.allowsLayerProperties && !recorder.isReplaying && !recorder.isRecording)
+    }
+    var acceptsLayerRename: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerRename)
+    }
+    var acceptsLayerDuplicate: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerDuplicate)
+    }
+    var acceptsLayerCreate: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerCreate)
+    }
+    var acceptsLayerDelete: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerDelete)
+    }
+    var acceptsLayerReorder: Bool {
+        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerReorder)
+    }
+    var acceptsLabSelections: Bool {
+        acceptsEdits || (storage.layout == .layeredLab && storage.allowsLabSelections &&
+                         session.supportsLabSelections && acceptsImageReads && !recorder.isReplaying && !recorder.isRecording)
+    }
+    var acceptsLayerSelection: Bool {
+        acceptsImageReads && !recorder.isReplaying && (acceptsEdits || storage.layout == .layeredLab)
+    }
 
     /// A queued target command's drawable is still unknown. Menu
     /// validation reads this cached flag instead of asking the engine.
@@ -550,7 +581,12 @@ final class ImageDocument {
         info = try session.info(image)
         fileState.syncDirty(info.isDirty)
         colorInfo = try session.colorInfo(image)
-        if colorInfo.mode == .lab && !(session.supportsLabCreation && session.supportsLabAxes && session.supportsLabFill) {
+        storage = try session.imageStorage(image)
+        if storage.layout == .layeredLab && colorInfo.mode != .lab {
+            throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                            message: "The image storage does not match its color mode.")
+        }
+        if colorInfo.mode == .lab && storage.layout != .layeredLab && !(session.supportsLabCreation && session.supportsLabAxes && session.supportsLabFill) {
             throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                             message: "This image engine cannot edit Lab documents.")
         }
@@ -580,7 +616,11 @@ final class ImageDocument {
             }
         }
         maskStates = masks
-        if colorInfo.mode == .lab {
+        if storage.layout == .layeredLab {
+            labAxes = nil
+            components = nil
+            channels = []
+        } else if colorInfo.mode == .lab {
             let axes = try session.labAxes(image)
             guard axes.component == colorInfo.component else {
                 throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
@@ -771,6 +811,7 @@ final class ImageDocument {
     /// own thumbnail does in GIMP.
     func selectLayer(_ id: Int32) {
         guard !isClosing else { return }
+        if storage.layout == .layeredLab { selectLayers([id]); return }
         guard !refuseWhileEditingUnavailable() else { return }
         // A target switch would implicitly anchor an active floating
         // selection in the engine; this slice refuses it instead.
@@ -866,7 +907,19 @@ final class ImageDocument {
     /// it can never land on another document or the front window.
     func selectLayers(_ ids: [Int32]) {
         guard !isClosing else { return }
-        guard !refuseWhileEditingUnavailable() else { return }
+        if storage.layout == .layeredLab {
+            guard acceptsImageReads, !recorder.isReplaying else {
+                let reason: String
+                if recorder.isReplaying { reason = "Cancel Recorder replay before choosing a layer." }
+                else if let activity = EngineActivity.shared.label { reason = "\(activity)… Wait for it to finish before choosing a layer." }
+                else { reason = "Wait for the current operation to finish before choosing a layer." }
+                onUserCommand?()
+                onError?(reason)
+                return
+            }
+        } else {
+            guard !refuseWhileEditingUnavailable() else { return }
+        }
         // A selection switch would implicitly anchor an active floating
         // selection; the resolve-first gate refuses it, like selectLayer.
         guard !refuseWhileFloatingActive() else { return }
@@ -910,16 +963,17 @@ final class ImageDocument {
         for id in ids { maskStates[id]?.editing = false }
         channels = channels.map { channelRow($0, selected: false) }
         selectedChannelIDs = []
+        let readOnlySelection = storage.layout == .layeredLab
         enqueue(on: inputQueue) { [session, image] in
             var failure: Error?
             self.paintTargetIsValid = false
             do {
-                try session.channelCommand(.select, channel: 0, image: image)
+                if !readOnlySelection { try session.channelCommand(.select, channel: 0, image: image) }
                 try session.selectLayers(ids, image: image)
                 guard try session.selectedLayers(image) == ids else {
                     throw DocumentError.targetChanged
                 }
-                self.paintTargetIsValid = true
+                self.paintTargetIsValid = !readOnlySelection
             } catch {
                 failure = error
             }
@@ -1621,9 +1675,14 @@ final class ImageDocument {
     /// Only these typed requests may bypass the general Lab mutation gate.
     /// They change the root selection mask without interpreting Lab samples.
     private func runLabSelection(_ request: LabSelectionRequest) {
-        guard !isClosing, !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        let layered = storage.layout == .layeredLab && storage.allowsLabSelections
+        if layered && recorder.isRecording {
+            onError?("Stop recording before changing a layered Lab selection.")
+            return
+        }
+        guard !isClosing, !refuseWhileEditingUnavailable(allowingLayerProperties: layered), !refuseWhileTargetPending() else { return }
         // Admission observers can synchronously start a stroke or close.
-        guard !isClosing, acceptsEdits, !targetCommandIsPending else { return }
+        guard !isClosing, acceptsLabSelections, !targetCommandIsPending else { return }
         guard !strokeIsActive else {
             onError?("Finish the current stroke before changing the selection.")
             return
@@ -2971,6 +3030,50 @@ final class ImageDocument {
     /// id the interface last saw selected. Palette rows name their
     /// layer explicitly instead.
     func layerCommand(_ command: EngineSession.LayerCommand) {
+        if storage.layout == .layeredLab && [.raise, .lower, .toTop, .toBottom].contains(command) {
+            guard acceptsLayerReorder, selectedLayerIDs.count == 1,
+                  let captured = selectedLayerIDs.first, !refuseWhileTargetPending(),
+                  !refuseWhileFloatingActive() else { return }
+            endPendingUserEdits()
+            guard !isClosing else { return }
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(command, image: image, layer: captured)
+            }
+            return
+        }
+        if storage.layout == .layeredLab && command == .delete {
+            guard acceptsLayerDelete, selectedLayerIDs.count == 1,
+                  let captured = selectedLayerIDs.first, !refuseWhileTargetPending(),
+                  !refuseWhileFloatingActive() else { return }
+            endPendingUserEdits()
+            guard !isClosing else { return }
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(.delete, image: image, layer: captured)
+            }
+            return
+        }
+        if storage.layout == .layeredLab && command == .new {
+            guard acceptsLayerCreate, selectedLayerIDs.count <= 1,
+                  !refuseWhileTargetPending(), !refuseWhileFloatingActive() else { return }
+            let captured = selectedLayerIDs.first ?? 0
+            endPendingUserEdits()
+            guard !isClosing else { return }
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(.new, image: image, layer: captured)
+            }
+            return
+        }
+        if storage.layout == .layeredLab && command == .duplicate {
+            guard acceptsLayerDuplicate, selectedLayerIDs.count == 1,
+                  let captured = selectedLayerIDs.first, !refuseWhileTargetPending(),
+                  !refuseWhileFloatingActive() else { return }
+            endPendingUserEdits()
+            guard !isClosing else { return }
+            enqueueTargetCommand { session, image in
+                _ = try session.layerCommand(.duplicate, image: image, layer: captured)
+            }
+            return
+        }
         if command == .delete && hasMultipleSelectedLayers { return deleteSelectedLayers() }
         if command == .fitToImage && hasMultipleSelectedLayers { return fitSelectedLayers() }
         guard !refuseWhileEditingUnavailable() else { return }
@@ -3234,21 +3337,35 @@ final class ImageDocument {
 
     func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange,
                      completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
-        guard !refuseWhileEditingUnavailable() else {
+        let limited = storage.layout == .layeredLab
+        if limited {
+            guard acceptsLayerProperties, change.isLimitedLayerPropertyChange,
+                  change.name == nil || acceptsLayerRename else {
+                completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+            }
+        }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: limited) else {
             completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
         }
         endPendingUserEdits()
         // Finishing a field can close the document or start exclusive work.
-        guard !refuseWhileEditingUnavailable() else {
+        if limited && !acceptsLayerProperties {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: limited) else {
+            completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
+        }
+        if limited && !acceptsLayerProperties {
             completion?(.failure(isClosing ? DocumentError.closed : DocumentError.busy)); return
         }
         let semantic = SemanticImageCommand.layerProperties(.init(change))
-        guard let completion else {
+        if completion == nil && !limited {
             run(semantic: semantic, recorderLayer: layer) { session, image in
                 try session.changeLayer(layer, image: image, change)
             }
             return
         }
+        let completion = completion ?? { _ in }
         let capture: RecorderCapture?
         do { capture = try reserveRecording(semantic, explicitLayer: layer) }
         catch {
@@ -4384,13 +4501,13 @@ final class ImageDocument {
     /// target commands and edits accepted meanwhile are refused instead
     /// of landing on the drawable the move is about to leave behind.
     func undo() {
-        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
         enqueueTargetCommand { session, image in try session.undo(image) }
     }
 
     func redo() {
-        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
         enqueueTargetCommand { session, image in try session.redo(image) }
     }
@@ -4502,8 +4619,13 @@ final class ImageDocument {
     /// while its own filter preview is open; say why instead of failing
     /// later. `forPreviewWork` lets the preview's own updates and its
     /// commit through.
-    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false, allowingReplayRead: Bool = false) -> Bool {
+    private func refuseWhileEditingUnavailable(forPreviewWork: Bool = false, allowingReplayRead: Bool = false,
+                                               allowingLayerProperties: Bool = false) -> Bool {
         onUserCommand?()
+        if (storage.readOnly || storage.layout == .layeredLab) && !allowingReplayRead && !allowingLayerProperties {
+            onError?(storage.restrictedEditingMessage)
+            return true
+        }
         if recorder.isReplaying && !allowingReplayRead {
             onError?("Cancel Recorder replay before editing the image.")
             return true
@@ -6214,6 +6336,7 @@ final class ImageDocument {
         }
         nextTargetCommandToken += 1
         let token = nextTargetCommandToken
+        let allowsPaintTarget = storage.layout != .layeredLab
         pendingTargetCommands.insert(token)
         // Hold the deferred cache/completion stage too, so an exclusive
         // operation admitted after this input cannot overtake its cleanup.
@@ -6228,7 +6351,7 @@ final class ImageDocument {
             self.paintTargetIsValid = false
             let result = Result { try work(session, image) }
             self.paintTargetIsValid = rejectFailedTarget ? false : targetWasValid
-            if case .success = result { self.paintTargetIsValid = true }
+            if case .success = result { self.paintTargetIsValid = allowsPaintTarget }
             self.dispatchReadWhenReady {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }

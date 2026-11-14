@@ -420,7 +420,9 @@ final class CanvasToolController {
                 : "Choose Brush, Pencil, Airbrush or a selection tool to edit ink channels.")
             return
         }
-        guard document.acceptsEdits || [.hand, .zoom, .eyedropper].contains(tool) else {
+        let labSelectionTool = document.storage.layout == .layeredLab && document.acceptsLabSelections &&
+            [.rectangleSelect, .ellipseSelect, .lasso].contains(tool)
+        guard document.acceptsEdits || labSelectionTool || [.hand, .zoom, .eyedropper].contains(tool) else {
             onStatus?("Finish the current operation before editing the image.")
             return
         }

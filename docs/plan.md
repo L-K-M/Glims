@@ -5903,6 +5903,43 @@ catalogs unchanged; one ordinary launch showed its document window at 1.51
 seconds. Corrupt caches, language changes and incompatible packaged registries
 still fall back to a slower scan. Review and release qualification remain open.
 
+### Logical Lab layer names (candidate)
+
+The limited layered Lab editor can rename a logical root without changing its
+scalar planes or identity map. Rename is a separate, undoable property change;
+invalid names and combinations with other edits are refused before mutation.
+The engine advertises this separately from visibility and opacity, so an older
+adapter leaves the name field disabled. The public fixture passes 146 checks
+on each of four engines, including rename, Undo/Redo, XCF persistence and
+refusal. The actual palette smoke test exercises rename and window Undo/Redo;
+the full Swift suite passes 1,764 tests. Review and release qualification remain
+in progress; pixel editing is not enabled by this.
+
+### Layered Lab read-only adoption (experimental branch)
+
+The candidate opens a strictly validated v2 layered Lab XCF as logical layer
+roots, renders its derived Lab composite to sRGB or a display profile, and
+allows root selection and XCF saves. It rejects ordinary edits and private
+plane access. The window labels the document read-only and disables editing
+commands; the Layers palette selects roots without showing scalar thumbnails.
+The public native probe passed on all four engine sets, including rejection of
+damaged in-memory storage and private-plane selection. A hosted AppKit test
+also opened the document, selected a logical layer, rendered and saved a copy.
+The prototype is not yet qualified for release: broaden the public rendering
+and facade-bypass tests, complete independent review and latest-head CI before
+merging. Editing, interchange and soft proof for layered Lab remain future
+work; this does not establish Photoshop 4 parity.
+
+### Layered Lab properties (experimental follow-up)
+
+The follow-up adds narrowly scoped visibility and opacity changes on logical
+layer roots, grouped Undo/Redo, and a capability flag so the app exposes only
+those controls. A native four-engine probe checks edits, rejection of private
+planes and damaged storage, history, rendering, and XCF preservation of the
+map and scalar samples. A hosted palette test drives visibility and opacity,
+Undo/Redo and Save Copy. This is still under review and needs final CI and
+integration; pixel editing, other layer changes and soft proof remain open.
+
 ### Special temporary paths during cache recovery (candidate)
 
 When a private recovery registry's temporary path contains GIMP config-path
@@ -5946,3 +5983,16 @@ checks; a disposable special-profile app launch reached its document window
 in 1.51 seconds on this Mac. Other packaged engine versions and independent
 review remain in progress. This does not qualify language changes or complete
 the application.
+
+### Localized startup registries (candidate)
+
+The bundle can carry registries for several exact macOS language identities,
+plus a clean-environment copy for the packager's full preferred-language
+list. The host registry is also bound to the locale environment that produced
+it. Other language lists or locale overrides fall back to native discovery;
+the cache never substitutes a partial language match. In isolated engine
+probes, French and German discovery took about 10 seconds and matching seeds
+took about 1.2 seconds. Tests compare native labels, new plug-in discovery,
+environment overrides and invalid identities. These are engine timings, not
+ordinary app-launch measurements, and do not establish a universal
+five-second startup. Full bundle checks, review and CI remain open.

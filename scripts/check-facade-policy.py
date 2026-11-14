@@ -35,6 +35,8 @@ def check(root=ROOT):
                       'image_lab_snapshot_apply_curves'})
     component.add('image_ink_channel_identity')
     component.add('image_lab_axes')
+    component.add('image_storage_info')
+    component.add('image_lab_layer_identity')
     component.add('image_fill_lab')
     component.update({'image_levels_lab', 'image_lab_snapshot_levels', 'image_lab_snapshot_apply_levels'})
     component.add('image_convert_lab_copy')

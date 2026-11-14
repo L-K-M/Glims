@@ -1054,6 +1054,11 @@ final class EngineSession: @unchecked Sendable {
         var isVisible: Bool?
         var opacity: Double?
         var mode: String?
+
+        var isLimitedLayerPropertyChange: Bool {
+            mode == nil && ((name != nil && isVisible == nil && opacity == nil)
+                || (name == nil && (isVisible != nil || opacity != nil)))
+        }
     }
 
     struct Progress: Equatable {
@@ -1309,6 +1314,96 @@ final class EngineSession: @unchecked Sendable {
     }
 
     // MARK: Images
+
+    enum ImageStorageLayout: Equatable {
+        case legacyUnknown, ordinary, flatComponent, layeredLab
+    }
+
+    struct ImageStorage: Equatable {
+        let layout: ImageStorageLayout
+        let readOnly: Bool
+        let allowsLayerProperties: Bool
+        let allowsLayerRename: Bool
+        let allowsLayerDuplicate: Bool
+        let allowsLayerCreate: Bool
+        let allowsLayerDelete: Bool
+        let allowsLayerReorder: Bool
+        let allowsLabSelections: Bool
+
+        var restrictedEditingMessage: String {
+            if allowsLayerDuplicate { return "This layered Lab document supports viewing and limited layer edits." }
+            return allowsLayerProperties
+                ? "This layered Lab document supports viewing and limited layer-property edits."
+                : "This document is read-only. You can view it and save an XCF copy."
+        }
+
+        init(layout: ImageStorageLayout, readOnly: Bool, allowsLayerProperties: Bool = false,
+             allowsLayerRename: Bool = false, allowsLayerDuplicate: Bool = false, allowsLayerCreate: Bool = false,
+             allowsLayerDelete: Bool = false, allowsLayerReorder: Bool = false,
+             allowsLabSelections: Bool = false) {
+            self.layout = layout
+            self.readOnly = readOnly
+            self.allowsLayerProperties = allowsLayerProperties
+            self.allowsLayerRename = allowsLayerRename
+            self.allowsLayerDuplicate = allowsLayerDuplicate
+            self.allowsLayerCreate = allowsLayerCreate
+            self.allowsLayerDelete = allowsLayerDelete
+            self.allowsLayerReorder = allowsLayerReorder
+            self.allowsLabSelections = allowsLabSelections
+        }
+
+        static func decode(_ info: GlimsImageStorageInfo) throws -> ImageStorage {
+            guard info.struct_size == UInt32(MemoryLayout<GlimsImageStorageInfo>.size),
+                  info.flags & ~UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY | GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES | GLIMS_IMAGE_STORAGE_LAYER_RENAME | GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE | GLIMS_IMAGE_STORAGE_LAYER_CREATE | GLIMS_IMAGE_STORAGE_LAYER_DELETE | GLIMS_IMAGE_STORAGE_LAYER_REORDER | GLIMS_IMAGE_STORAGE_LAB_SELECTIONS) == 0 else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This image uses an unsupported storage capability.")
+            }
+            let layout: ImageStorageLayout
+            switch info.layout {
+            case UInt32(GLIMS_IMAGE_LAYOUT_ORDINARY.rawValue): layout = .ordinary
+            case UInt32(GLIMS_IMAGE_LAYOUT_FLAT_COMPONENT.rawValue): layout = .flatComponent
+            case UInt32(GLIMS_IMAGE_LAYOUT_LAYERED_LAB.rawValue): layout = .layeredLab
+            default:
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This image uses an unsupported storage layout.")
+            }
+            let readOnly = info.flags & UInt64(GLIMS_IMAGE_STORAGE_READ_ONLY) != 0
+            let allowsLayerProperties = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_PROPERTIES) != 0
+            let allowsLayerRename = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_RENAME) != 0
+            let allowsLayerDuplicate = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_DUPLICATE) != 0
+            let allowsLayerCreate = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_CREATE) != 0
+            let allowsLayerDelete = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_DELETE) != 0
+            let allowsLayerReorder = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAYER_REORDER) != 0
+            let allowsLabSelections = info.flags & UInt64(GLIMS_IMAGE_STORAGE_LAB_SELECTIONS) != 0
+            guard (layout == .layeredLab || (!allowsLayerProperties && !allowsLayerRename && !allowsLayerDuplicate && !allowsLayerCreate && !allowsLayerDelete && !allowsLayerReorder && !allowsLabSelections)) &&
+                  (!allowsLayerRename || allowsLayerProperties) && (!allowsLayerDuplicate || allowsLayerProperties) &&
+                  (!allowsLayerCreate || allowsLayerProperties) && (!allowsLayerDelete || allowsLayerProperties) &&
+                  (!allowsLayerReorder || allowsLayerProperties) && (!allowsLabSelections || allowsLayerProperties) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This image uses an unsupported storage capability.")
+            }
+            guard layout != .layeredLab || readOnly != allowsLayerProperties else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "This engine cannot safely open layered Lab documents.")
+            }
+            return ImageStorage(layout: layout, readOnly: readOnly, allowsLayerProperties: allowsLayerProperties,
+                                allowsLayerRename: allowsLayerRename, allowsLayerDuplicate: allowsLayerDuplicate,
+                                allowsLayerCreate: allowsLayerCreate, allowsLayerDelete: allowsLayerDelete,
+                                allowsLayerReorder: allowsLayerReorder, allowsLabSelections: allowsLabSelections)
+        }
+    }
+
+    func imageStorage(_ image: Int32) throws -> ImageStorage {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_storage_info),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_storage_info),
+              let slot = api.image_storage_info else {
+            return ImageStorage(layout: .legacyUnknown, readOnly: false)
+        }
+        var info = GlimsImageStorageInfo()
+        info.struct_size = UInt32(MemoryLayout<GlimsImageStorageInfo>.size)
+        try check(slot(engine, image, &info), nil)
+        return try ImageStorage.decode(info)
+    }
 
     func newImage(width: Int, height: Int) throws -> Int32 {
         var image: Int32 = 0

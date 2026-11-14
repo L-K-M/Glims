@@ -9,6 +9,10 @@
  * layer commands follow app/actions/layers-commands.c.
  */
 #include "engine-private.h"
+#include "lab-layer-storage.h"
+#include "lab-layer-duplicate.h"
+#include "lab-layer-create.h"
+#include "lab-layer-delete.h"
 
 #include <math.h>
 #include <string.h>
@@ -535,6 +539,14 @@ glims_gradient_resource (GlimsEngine                           *engine,
 
 /* ---- Layers ------------------------------------------------------------ */
 
+static gboolean
+layered_lab_contains_root (const GlimsLabLayerStorage *storage, GimpLayer *layer)
+{
+  for (guint i = 0; i < storage->map.count; i++)
+    if (storage->layers[i].group == layer) return TRUE;
+  return FALSE;
+}
+
 GlimsStatus
 glims_layer_select (GlimsEngine  *engine,
                     GlimsImageID  id,
@@ -550,6 +562,13 @@ glims_layer_select (GlimsEngine  *engine,
   layer = find_layer (open->image, layer_id);
   if (! layer || layer_id == 0)
     return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!storage) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (open->image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID ||
+          !layered_lab_contains_root (storage, layer)) return GLIMS_STATUS_UNSUPPORTED;
+    }
 
   /* Plug-ins, fills and filters act on the engine's selected layers. */
   layers = g_list_prepend (NULL, layer);
@@ -621,6 +640,15 @@ glims_image_select_layers (GlimsEngine       *engine,
     return GLIMS_STATUS_NOT_FOUND;
   image = open->image;
 
+  g_autofree GlimsLabLayerStorage *layered = NULL;
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      layered = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!layered) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (image, layered) != GLIMS_LAB_LAYER_STORAGE_VALID)
+        return GLIMS_STATUS_UNSUPPORTED;
+    }
+
   if (count > 0 && ! layers)
     {
       glims_fail (error, NULL, "A NULL layer list needs count 0.");
@@ -673,6 +701,11 @@ glims_image_select_layers (GlimsEngine       *engine,
                 {
                   glims_fail (error, NULL, "The id names a mask, channel or path, not a layer.");
                   status = GLIMS_STATUS_INVALID_ARGUMENT;
+                }
+              else if (layered && !layered_lab_contains_root (layered, GIMP_LAYER (item)))
+                {
+                  glims_fail (error, NULL, "Only logical Lab layer roots can be selected.");
+                  status = GLIMS_STATUS_UNSUPPORTED;
                 }
               else
                 {
@@ -783,6 +816,83 @@ glims_layer_command (GlimsEngine  *engine,
 
   if (! image)
     return status;
+
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (open && open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      /* Never let a generic layer command mutate the physical scalar tree. */
+      if (result) *result = 0;
+      if (command != GLIMS_LAYER_DUPLICATE && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_DELETE &&
+          command != GLIMS_LAYER_RAISE && command != GLIMS_LAYER_LOWER &&
+          command != GLIMS_LAYER_TO_TOP && command != GLIMS_LAYER_TO_BOTTOM)
+        return GLIMS_STATUS_UNSUPPORTED;
+      if (!layer_id && g_list_length (gimp_image_get_selected_layers (image)) != 1)
+        {
+          if (command != GLIMS_LAYER_NEW || gimp_image_get_selected_layers (image))
+            return GLIMS_STATUS_UNSUPPORTED;
+        }
+      layer = find_layer (image, layer_id);
+      if (!layer && (layer_id || command != GLIMS_LAYER_NEW)) return GLIMS_STATUS_NOT_FOUND;
+      if (command == GLIMS_LAYER_NEW)
+        {
+          g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+          if (!storage) return GLIMS_STATUS_FAILED;
+          if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+            return GLIMS_STATUS_UNSUPPORTED;
+          guint position = 0;
+          if (layer)
+            {
+              for (; position < storage->map.count; position++)
+                if (storage->layers[position].group == layer) break;
+              if (position == storage->map.count) return GLIMS_STATUS_UNSUPPORTED;
+            }
+          status = glims_lab_layer_create (engine, image, position, NULL, &created, error);
+        }
+      else if (command == GLIMS_LAYER_DUPLICATE)
+        status = glims_lab_layer_duplicate (engine, image, layer, &created, error);
+      else if (command == GLIMS_LAYER_DELETE)
+        status = glims_lab_layer_delete (engine, image, layer, error);
+      else if (command == GLIMS_LAYER_RAISE || command == GLIMS_LAYER_LOWER ||
+               command == GLIMS_LAYER_TO_TOP || command == GLIMS_LAYER_TO_BOTTOM)
+        {
+          g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+          if (!storage) return GLIMS_STATUS_FAILED;
+          if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+            return GLIMS_STATUS_UNSUPPORTED;
+          guint position = 0;
+          for (; position < storage->map.count; position++)
+            if (storage->layers[position].group == layer) break;
+          if (position == storage->map.count) return GLIMS_STATUS_UNSUPPORTED;
+          if (engine->busy || g_hash_table_size (engine->strokes) || g_hash_table_size (engine->filters) ||
+              !gimp_image_undo_is_enabled (image) || gimp_image_get_undo_group_count (image))
+            return GLIMS_STATUS_BUSY;
+          guint target = position;
+          if (command == GLIMS_LAYER_RAISE && position > 0) target--;
+          if (command == GLIMS_LAYER_LOWER && position + 1 < storage->map.count) target++;
+          if (command == GLIMS_LAYER_TO_TOP) target = 0;
+          if (command == GLIMS_LAYER_TO_BOTTOM) target = storage->map.count - 1;
+          if (target == position) return GLIMS_STATUS_OK;
+          engine->busy++;
+          gboolean moved = gimp_image_reorder_item (image, GIMP_ITEM (layer), NULL, target,
+                                                     TRUE, "Reorder Lab Layer");
+          engine->busy--;
+          if (!moved) return glims_fail (error, NULL, "The logical Lab layer could not be reordered.");
+          if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID)
+            return glims_fail (error, NULL, "The reordered Lab storage failed validation; its state may have changed.");
+          gimp_image_flush (image);
+          GeglRectangle full = { 0, 0, gimp_image_get_width (image), gimp_image_get_height (image) };
+          glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &full, NULL);
+          return GLIMS_STATUS_OK;
+        }
+      else
+        return GLIMS_STATUS_UNSUPPORTED;
+      if (status == GLIMS_STATUS_OK)
+        {
+          if (result && created) *result = gimp_item_get_id (GIMP_ITEM (created));
+          gimp_image_flush (image);
+        }
+      return status;
+    }
 
   layer = find_layer (image, layer_id);
   if (! layer && command != GLIMS_LAYER_NEW && command != GLIMS_LAYER_FLATTEN)
@@ -1003,6 +1113,50 @@ glims_layer_change (GlimsEngine            *engine,
   layer = find_layer (image, layer_id);
   if (! layer)
     return GLIMS_STATUS_NOT_FOUND;
+
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (open->component_layout == GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
+    {
+      g_autofree GlimsLabLayerStorage *storage = g_try_new0 (GlimsLabLayerStorage, 1);
+      if (!storage) return GLIMS_STATUS_FAILED;
+      if (glims_lab_layer_storage_read (image, storage) != GLIMS_LAB_LAYER_STORAGE_VALID ||
+          !layered_lab_contains_root (storage, layer)) return GLIMS_STATUS_UNSUPPORTED;
+      /* Rename is a separate operation so an invalid name or a failed
+       * native rename cannot partially apply visibility or opacity changes. */
+      if (change->properties == GLIMS_LAYER_NAME)
+        {
+          if (!memchr (change->name, '\0', sizeof change->name) || !change->name[0] ||
+              !g_utf8_validate (change->name, -1, NULL))
+            return GLIMS_STATUS_INVALID_ARGUMENT;
+          status = glims_edit_ready (engine, open, error);
+          if (status != GLIMS_STATUS_OK) return status;
+          if (!gimp_item_rename (GIMP_ITEM (layer), change->name, &gerror))
+            return glims_fail (error, gerror, "The layer could not be renamed.");
+          gimp_image_flush (image);
+          return GLIMS_STATUS_OK;
+        }
+      if (!change->properties || (change->properties & ~(GLIMS_LAYER_VISIBLE | GLIMS_LAYER_OPACITY)) ||
+          ((change->properties & GLIMS_LAYER_OPACITY) &&
+           (!isfinite (change->opacity) || change->opacity < 0 || change->opacity > 1)))
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+      status = glims_edit_ready (engine, open, error);
+      if (status != GLIMS_STATUS_OK) return status;
+      if (!gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_ITEM_PROPERTIES, "Lab Layer Properties"))
+        return GLIMS_STATUS_FAILED;
+      if ((change->properties & GLIMS_LAYER_VISIBLE) &&
+          !gimp_item_set_visible (GIMP_ITEM (layer), change->visible, TRUE))
+        {
+          gimp_image_undo_group_end (image);
+          return glims_fail (error, NULL, "The layer visibility could not be changed.");
+        }
+      if (change->properties & GLIMS_LAYER_OPACITY)
+        gimp_layer_set_opacity (layer, change->opacity, TRUE);
+      gimp_image_undo_group_end (image);
+      gimp_drawable_update_all (GIMP_DRAWABLE (layer));
+      gimp_image_flush (image);
+      return GLIMS_STATUS_OK;
+    }
 
   if (change->properties & GLIMS_LAYER_MODE)
     {
