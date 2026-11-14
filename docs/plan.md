@@ -6225,8 +6225,11 @@ image and Undo history remain unchanged. Resources absent from a source remain
 absent, and other image resources are still not exported.
 
 The previous adapter reproduced loss of the Photoshop fixture's alternate
-colors; the updated pinned adapter preserves the exact resource across export
-and XCF reopen/export. Codec tests cover both signatures, odd/even padding and
-failure paths in optimized and sanitizer builds. Four-engine, real-window,
-bundle and hosted qualification remain in progress. Retaining this data does
-not enable a color preview or establish Photoshop printing fidelity.
+colors; all four updated adapters preserve the exact resource across export
+and XCF reopen/export, and still export sources without it. Each passes nine
+direct admission checks for conflicting, empty and oversized resources and
+MeSa serialization. Codec tests pass 25 checks each in optimized and sanitizer
+builds, covering both signatures, odd/even padding, streaming and failure
+paths. The development engine emits upstream cache cleanup warnings. Real-window,
+bundle, full editor and hosted qualification remain in progress. Retaining
+this data does not enable a color preview or establish Photoshop printing fidelity.

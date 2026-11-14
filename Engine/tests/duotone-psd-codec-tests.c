@@ -99,6 +99,18 @@ int main(void)
   f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8,.fail_write=3};
   CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED && f.reads==0,
         "late metadata write failure never reads pixels");
+  free(wide);
+  spec.alternate=large_meta;spec.alternate_size=large_meta_size;
+  if(glims_duotone_psd_size(&spec,&size)!=GLIMS_DUOTONE_PSD_OK)return 2;
+  wide=malloc((size_t)size);if(!wide)return 2;
+  f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_OK &&
+        f.used==size && f.max_write==GLIMS_DUOTONE_PSD_METADATA_CHUNK &&
+        !memcmp(wide+30+large_meta_size+4+12,large_meta,large_meta_size),
+        "large alternate resources stream in bounded exact chunks");
+  f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8,.fail_write=7};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED && f.reads==0,
+        "late alternate resource write failure never reads pixels");
   free(wide);free(large_meta);
   spec=(GlimsDuotonePsdSpec){.width=30000,.height=30000,.depth=16,.metadata=metadata,.metadata_size=sizeof metadata};
   CHECK(glims_duotone_psd_size(&spec,&size)==GLIMS_DUOTONE_PSD_OK && size==UINT64_C(1800000043),"maximum dimensions size without overflow");
