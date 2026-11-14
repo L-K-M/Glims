@@ -51,6 +51,8 @@ jobs:
         run: bash scripts/test-bitmap-psd-file.sh
       - name: Check optimized and sanitized Bitmap diffusion
         run: bash scripts/test-bitmap-diffusion.sh
+      - name: Check optimized and sanitized Bitmap PSD transaction faults
+        run: bash scripts/test-bitmap-psd-file-faults.sh
       - name: Check optimized and sanitized CMYK PSD transaction faults
         run: bash scripts/test-cmyk-psd-file-faults.sh
       - name: Check optimized and sanitized scalar ink arithmetic
@@ -143,6 +145,9 @@ jobs:
       - name: Check Bitmap diffusion
         timeout-minutes: 5
         run: bash scripts/test-bitmap-diffusion.sh optimized
+      - name: Check Bitmap PSD transaction faults
+        timeout-minutes: 5
+        run: bash scripts/test-bitmap-psd-file-faults.sh optimized
       - name: Check native CMYK PSD transaction faults
         timeout-minutes: 5
         run: bash scripts/test-cmyk-psd-file-faults.sh optimized
