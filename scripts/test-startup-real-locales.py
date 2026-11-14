@@ -6,6 +6,7 @@ negative oracle intentionally mislabels the clone's seed; it must demonstrate
 why the production language identity check is necessary. No GUI is opened.
 """
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -52,15 +53,16 @@ def main():
             profile = work / name
             profile.mkdir()
             environment = os.environ.copy()
+            for key in tuple(environment):
+                if key in ('LANG', 'LANGUAGE') or key.startswith('LC_'):
+                    environment.pop(key)
             for key, leaf in [('HOME', 'home'), ('CFFIXED_USER_HOME', 'home'),
                               ('XDG_CACHE_HOME', 'cache'), ('XDG_CONFIG_HOME', 'config'),
                               ('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state'),
                               ('GIMP3_DIRECTORY', 'user'), ('TMPDIR', 'tmp')]:
                 (profile / leaf).mkdir(exist_ok=True)
                 environment[key] = str(profile / leaf)
-            locale = {'fr': 'fr_FR.UTF-8', 'de': 'de_DE.UTF-8'}[language]
-            environment.update({'LANGUAGE': language, 'LC_ALL': locale,
-                                'GLIMS_STARTUP_TRACE': '1',
+            environment.update({'GLIMS_STARTUP_TRACE': '1',
                                 'GLIMS_STARTUP_CATALOG_REPORT': str(profile / 'catalog'),
                                 'GLIMS_STARTUP_LABEL_REPORT': str(profile / 'labels'),
                                 'GLIMS_TEST_METADATA_LABEL': label})
@@ -80,6 +82,14 @@ def main():
             print(f'{name}: {result.stdout.strip()}; {oracle[0]}', flush=True)
             return profile, oracle[0].split('\t', 1)[1]
 
+        # Exercise only the root seed and a locale-free process environment;
+        # packaged per-language and override seeds would mask this oracle.
+        shutil.rmtree(startup / 'localized', ignore_errors=True)
+        shutil.rmtree(startup / 'overrides', ignore_errors=True)
+        fingerprint = hashlib.sha256()
+        for key in ('LANG', 'LANGUAGE'):
+            fingerprint.update(key.encode() + b'\0\0')
+        (startup / 'environment').write_text(fingerprint.hexdigest() + '\n')
         identity.write_text('0.0.0\nincompatible-language\n')
         french, label = run('French discovery', 'fr', 'French oracle', False)
         assert label == 'French oracle'
