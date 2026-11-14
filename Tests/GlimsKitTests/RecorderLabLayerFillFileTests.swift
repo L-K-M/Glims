@@ -10,12 +10,13 @@ final class RecorderLabLayerFillFileTests: XCTestCase {
     }
 
     private func file(binding: RecorderBindingDescription? = nil,
-                      kind: RecorderTargetDescription.Kind = .pixel) throws -> RecorderFileValue {
+                      kind: RecorderTargetDescription.Kind = .pixel,
+                      opacity: Double = 0.625) throws -> RecorderFileValue {
         let symbol = RecorderFileValue.Symbol(id: layer, description: .init(name: "Layer", kind: kind,
             ancestors: [], siblingIndex: 0, bounds: .init(x: 0, y: 0, width: 7, height: 9)))
         return .init(recordingID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!, name: "Layer Fill",
                      origin: .init(imageLabel: "Lab.xcf", initialWidth: 7, initialHeight: 9), symbols: [symbol],
-                     records: [.init(ordinal: 0, outcome: .success(.fillLabLayer(try fill()), binding ?? .layer(layer)))])
+                     records: [.init(ordinal: 0, outcome: .success(.fillLabLayer(try fill(opacity: opacity)), binding ?? .layer(layer)))])
     }
 
     func testVersion19RoundTripsAndPreparesDetachedRecording() throws {
@@ -45,6 +46,7 @@ final class RecorderLabLayerFillFileTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""version":19"#, with: #""version":20"#).utf8)))
         XCTAssertThrowsError(try RecorderFileCodec.encode(file(binding: RecorderBindingDescription.none)))
         XCTAssertThrowsError(try RecorderFileCodec.encode(file(kind: .channel)))
+        XCTAssertThrowsError(try RecorderFileCodec.encode(file(opacity: 1.1)))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""opacity":0.625"#, with: #""opacity":1.1"#).utf8)))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""red":0.125"#, with: #""red":1.1"#).utf8)))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""space":"srgb""#, with: #""space":"lab""#).utf8)))
@@ -53,7 +55,7 @@ final class RecorderLabLayerFillFileTests: XCTestCase {
 
     func testOpacityMustBeFiniteAndWithinNativeRange() throws {
         for value in [-Double.infinity, -0.01, 1.01, Double.infinity, Double.nan] {
-            XCTAssertThrowsError(try fill(opacity: value).validated())
+            XCTAssertThrowsError(try fill(opacity: value).validated(), "opacity \(value) should be rejected")
         }
         XCTAssertNoThrow(try fill(opacity: 0).validated())
         XCTAssertNoThrow(try fill(opacity: 1).validated())
@@ -64,7 +66,8 @@ final class RecorderLabLayerFillFileTests: XCTestCase {
         let onlyFailure = RecorderFileValue(recordingID: original.recordingID, name: original.name, origin: original.origin,
                                            symbols: original.symbols, records: [.init(ordinal: 0, outcome: .failure("Failed"))])
         let json = try XCTUnwrap(String(data: RecorderFileCodec.encode(onlyFailure), encoding: .utf8))
-        XCTAssertTrue(json.contains(#""version":1"#))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(object["version"] as? Int, 1)
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""version":1"#, with: #""version":19"#).utf8)))
     }
 }

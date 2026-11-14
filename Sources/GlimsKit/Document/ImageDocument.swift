@@ -2818,7 +2818,13 @@ final class ImageDocument {
             return "This image engine cannot fill a Lab layer."
         }
         if isClosing { return DocumentError.closed.localizedDescription }
-        if recorder.isRecording || recorder.isReplaying { return "Stop Recorder before filling this layer." }
+        if recorder.isReplaying { return "Cancel Recorder replay before filling this layer." }
+        if recorder.isRecording && !session.supportsLabLayerColorFillEmptySelection {
+            return "This engine cannot verify the selection for a recorded Lab layer fill."
+        }
+        if recorder.isRecording && selectionBounds != nil {
+            return "Deselect the image before recording a Lab layer fill."
+        }
         guard acceptsImageReads, !strokeIsActive, pendingInput == 0, !targetCommandIsPending, !floatingState.isActive,
               !labLayerFillPreparationPending else {
             return "Finish the current operation before filling this layer."
@@ -2849,6 +2855,13 @@ final class ImageDocument {
         }
     }
 
+    private final class LabLayerFillAdmission: @unchecked Sendable {
+        // Set at main-thread admission before the ordered worker is enqueued.
+        var capture: RecorderCapture?
+        var value: RecorderLabLayerFillValue?
+        var error: Error?
+    }
+
     @discardableResult
     func fillLabLayer(_ target: EngineSession.LabLayerFillTarget, color: EngineSession.RGBAColor,
                       opacity: Double, completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> Bool {
@@ -2861,13 +2874,40 @@ final class ImageDocument {
         endPendingUserEdits()
         if let reason = labLayerColorFillRefusal(root: target.root) { refuse(reason); return false }
         var rejection = "Finish the current operation before filling this layer."
-        return enqueueExclusive(label: "Fill Layer", admission: {
+        let admission = LabLayerFillAdmission()
+        let accepted = enqueueExclusive(label: "Fill Layer", admission: {
             if let reason = self.labLayerColorFillRefusal(root: target.root) { rejection = reason; return false }
             return true
+        }, didAdmit: {
+            guard self.recorder.isRecording else { return }
+            do {
+                let recordedColor = try RecorderColor(red: color.red, green: color.green, blue: color.blue, alpha: color.alpha)
+                admission.value = try RecorderLabLayerFillValue(color: recordedColor, opacity: opacity).validated()
+                admission.capture = try self.reserveRecording(context: .labLayer(root: target.root, identity: target.uuid))
+            } catch { admission.error = error }
         }, rejected: {
             refuse(self.isClosing ? DocumentError.closed.localizedDescription : rejection)
         }) { [session, image] in
-            let result = Result { try session.fillLabLayer(image, target: target, color: color, opacity: opacity) }
+            let confirmed = Self.confirmRecordingCapture(admission.capture, session: session, image: image)
+            let result = Result<Void, Error> {
+                if let error = admission.error { throw error }
+                if admission.capture != nil {
+                    guard case .layer = confirmed.binding else {
+                        throw RecorderReplayError(message: "The Lab layer Fill target could not be recorded.")
+                    }
+                }
+                try session.fillLabLayer(image, target: target, color: color, opacity: opacity,
+                                         requireEmptySelection: admission.capture != nil)
+            }
+            if let capture = admission.capture {
+                let recorded = result.flatMap { _ -> Result<SemanticImageCommand, Error> in
+                    guard let value = admission.value else {
+                        return .failure(RecorderReplayError(message: "The Lab layer Fill settings could not be recorded."))
+                    }
+                    return .success(.fillLabLayer(value))
+                }
+                self.settleRecording(capture, result: recorded, confirmed: confirmed)
+            }
             self.dispatchReadWhenReady {
                 if !self.isClosing {
                     do { try self.reload() }
@@ -2877,6 +2917,8 @@ final class ImageDocument {
                 completion(result)
             }
         }
+        if accepted, admission.capture != nil { notifyRecorderChanged() }
+        return accepted
     }
 
     /// Cached admission only; the native operation independently revalidates
