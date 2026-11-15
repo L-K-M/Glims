@@ -6208,7 +6208,13 @@ cached reads were about 15 ms in both. These native timings are not an app
 interaction guarantee. Two pairs had different pixel hashes at multiple scales,
 including unchanged 100% reads. Saved outputs differed by at most seven bytes
 per sampled image and one value per byte; the same variation occurred between
-baseline runs and between candidate runs. Its cause remains unverified.
+baseline runs and between candidate runs. The initial cause was unclear.
+In a follow-up, two recorded babl conversion caches reproduced the two
+different baseline outputs. With the same cache and conversion paths, the
+baseline and candidate matched across 48 frames at four scales, including
+cold, pan, edit and Undo reads. This explains the observed fixture variation
+but does not establish general pixel equivalence. Those runs shared the Mac
+with other work, so a quiet timing comparison remains outstanding.
 
 All four engines pass their conformance, display-sampling, legacy-alpha and
 component-editor checks; the extended legacy fixture passes 620 checks per
