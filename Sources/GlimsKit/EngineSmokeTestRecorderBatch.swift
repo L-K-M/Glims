@@ -138,6 +138,27 @@ extension EngineSmokeTest {
                   "Bitmap diffusion Batch preserves the original input file")
         }
 
+        if session.supportsDuotonePSD, let path = ProcessInfo.processInfo.environment["GLIMS_DUOTONE_FIXTURE"] {
+            let input = URL(fileURLWithPath: path)
+            let original = try Data(contentsOf: input)
+            try require(original.count >= 30, "Duotone Batch fixture lacks a header")
+            let size = original[26..<30].reduce(0) { ($0 << 8) | Int($1) }
+            try require(size > 0 && size <= original.count - 30, "Duotone Batch settings are invalid")
+            var settings = ExportSettings()
+            settings.format = .psd
+            settings.psdColor = .duotone
+            settings.psdLayout = .merged
+            let destination = try folder("duotone")
+            let items = try run(flip, [input], destination, format: .exported(settings))
+            try require(items.count == 1, "Duotone Batch result missing")
+            let output = try saved(items[0])
+            let result = try Data(contentsOf: output)
+            check(result.count >= 30 + size && result[23] == 8 && result[25] == 8 &&
+                  result.subdata(in: 30..<(30 + size)) == original.subdata(in: 30..<(30 + size)),
+                  "Batch retains the original Duotone settings in its edited PSD")
+            check(try Data(contentsOf: input) == original, "Duotone Batch preserves the original input")
+        }
+
         // The shared export form must carry its PSD layout through Batch's
         // private document, staging filename and asynchronous publication.
         let layeredInput = root.appendingPathComponent("Layered.xcf")

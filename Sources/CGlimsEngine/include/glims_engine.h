@@ -4343,6 +4343,13 @@ typedef struct GlimsEngineAPI {
    * rules match slot227. */
   GlimsStatus (*image_export_bitmap_diffusion_psd) (GlimsEngine *engine, GlimsImageID image,
                                                     const char *path, char **error);
+  /* Slot229: export opaque 8-bit integer grayscale with its retained
+   * uninterpreted Duotone color-mode bytes. Samples are encoded Y-prime,
+   * rounded to the output depth. Requires retained nonempty settings and
+   * refuses linked layers. Output is flat; other metadata, profiles and
+   * resolution are omitted. Atomic publication and source rules match slot226. */
+  GlimsStatus (*image_export_duotone_psd) (GlimsEngine *engine, GlimsImageID image,
+                                           const char *path, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

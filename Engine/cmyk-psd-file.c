@@ -1,10 +1,11 @@
-/* Shared local-file transaction for the private CMYK and Bitmap PSD
+/* Shared local-file transaction for the private CMYK, Bitmap and Duotone PSD
  * serializers. Pure C11/POSIX; no GLib/GIMP dependency.
  */
 #define _POSIX_C_SOURCE 200809L
 
 #include "cmyk-psd-file.h"
 #include "bitmap-psd-file.h"
+#include "duotone-psd-file.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -670,5 +671,47 @@ glims_bitmap_psd_write_file (const GlimsBitmapPsdSpec *spec,
     case GLIMS_CMYK_PSD_FILE_IO_FAILED: return GLIMS_BITMAP_PSD_FILE_IO_FAILED;
     case GLIMS_CMYK_PSD_FILE_CANCELLED: return GLIMS_BITMAP_PSD_FILE_CANCELLED;
     case GLIMS_CMYK_PSD_FILE_INVALID: default: return GLIMS_BITMAP_PSD_FILE_INVALID;
+    }
+}
+
+
+typedef struct {
+  const GlimsDuotonePsdSpec *spec;
+  GlimsDuotonePsdRead read;
+  void *read_context;
+} DuotonePsdSource;
+
+static GlimsCmykPsdStatus
+serialize_duotone (void *context, GlimsCmykPsdWrite write, void *write_context)
+{
+  DuotonePsdSource *source = context;
+  switch (glims_duotone_psd_write (source->spec, source->read, source->read_context, write, write_context))
+    {
+    case GLIMS_DUOTONE_PSD_OK: return GLIMS_CMYK_PSD_OK;
+    case GLIMS_DUOTONE_PSD_READ_FAILED: return GLIMS_CMYK_PSD_READ_FAILED;
+    case GLIMS_DUOTONE_PSD_WRITE_FAILED: return GLIMS_CMYK_PSD_WRITE_FAILED;
+    case GLIMS_DUOTONE_PSD_INVALID: default: return GLIMS_CMYK_PSD_INVALID;
+    }
+}
+
+GlimsDuotonePsdFileStatus
+glims_duotone_psd_write_file (const GlimsDuotonePsdSpec *spec,
+                              GlimsDuotonePsdRead read, void *read_context,
+                              const char *path, GlimsDuotonePsdContinue proceed,
+                              void *proceed_context, int *os_error)
+{
+  uint64_t size;
+  if (os_error) *os_error = 0;
+  if (!read || !is_absolute_nonempty_filename (path) ||
+      glims_duotone_psd_size (spec, &size) != GLIMS_DUOTONE_PSD_OK)
+    return GLIMS_DUOTONE_PSD_FILE_INVALID;
+  DuotonePsdSource source = { spec, read, read_context };
+  switch (psd_write_file (path, proceed, proceed_context, serialize_duotone, &source, os_error))
+    {
+    case GLIMS_CMYK_PSD_FILE_OK: return GLIMS_DUOTONE_PSD_FILE_OK;
+    case GLIMS_CMYK_PSD_FILE_READ_FAILED: return GLIMS_DUOTONE_PSD_FILE_READ_FAILED;
+    case GLIMS_CMYK_PSD_FILE_IO_FAILED: return GLIMS_DUOTONE_PSD_FILE_IO_FAILED;
+    case GLIMS_CMYK_PSD_FILE_CANCELLED: return GLIMS_DUOTONE_PSD_FILE_CANCELLED;
+    case GLIMS_CMYK_PSD_FILE_INVALID: default: return GLIMS_DUOTONE_PSD_FILE_INVALID;
     }
 }

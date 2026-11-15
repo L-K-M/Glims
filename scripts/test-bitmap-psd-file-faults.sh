@@ -18,7 +18,7 @@ for mode in "${modes[@]}"; do
   common=(-std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" -I"$ROOT/Engine")
   "${compiler[@]}" "${common[@]}" -Dwrite=glims_test_write -Dfsync=glims_test_fsync -Drenameat=glims_test_renameat \
     -c "$ROOT/Engine/cmyk-psd-file.c" -o "$WORK/file.o"
-  "${compiler[@]}" "${common[@]}" "$ROOT/Engine/cmyk-psd-codec.c" "$ROOT/Engine/bitmap-psd-codec.c" \
+  "${compiler[@]}" "${common[@]}" "$ROOT/Engine/cmyk-psd-codec.c" "$ROOT/Engine/bitmap-psd-codec.c" "$ROOT/Engine/duotone-psd-codec.c" \
     "$ROOT/Engine/tests/bitmap-psd-file-fault-tests.c" "$WORK/file.o" -o "$WORK/test"
   python3 - "$WORK/test" <<'PY'
 import subprocess, sys
