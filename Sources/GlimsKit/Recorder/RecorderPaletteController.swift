@@ -93,10 +93,11 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         }
         let firstRow = NSStackView(views: [RecorderPaletteAction.record, .stop, .replay].compactMap { actionButtons[$0] })
         removeStepButton.title = "Remove Step"
+        removeStepButton.isEnabled = false
         removeStepButton.target = self
         removeStepButton.action = #selector(removeSelectedStep(_:))
         removeStepButton.setAccessibilityLabel("Remove selected Recorder step")
-        removeStepButton.toolTip = "Remove the selected recorded step."
+        removeStepButton.toolTip = "Open an image to use Recorder."
         let secondRow = NSStackView(views: [RecorderPaletteAction.cancelReplay, .clear].compactMap { actionButtons[$0] } + [removeStepButton])
         let fileRow = NSStackView(views: [RecorderPaletteAction.saveRecording, .loadRecording].compactMap { actionButtons[$0] })
         let recordingHeader = NSStackView(views: [recordingLabel])
@@ -235,16 +236,27 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
     }
 
     private func updateRemoveStepButton() {
-        guard isViewLoaded, let document, document === currentDocument(),
-              displayed.rows.indices.contains(table.selectedRow), let selectionCheckpoint,
-              let ready = try? document.recorderInstallCheckpoint() else {
-            removeStepButton.isEnabled = false
-            if isViewLoaded, view.window?.firstResponder === removeStepButton {
-                view.window?.makeFirstResponder(table)
+        guard isViewLoaded else { return }
+        var refusal: String?
+        let current = currentDocument()
+        if let document, document === current {
+            do {
+                let ready = try document.recorderInstallCheckpoint()
+                if !displayed.rows.indices.contains(table.selectedRow) || selectionCheckpoint == nil {
+                    refusal = "Select a Recorder step to remove."
+                } else if ready != selectionCheckpoint {
+                    refusal = "The recording changed. Select the Recorder step again."
+                }
+            } catch {
+                refusal = error.localizedDescription
             }
-            return
+        } else if document == nil && current == nil {
+            refusal = "Open an image to use Recorder."
+        } else {
+            refusal = "The active image changed. Select the Recorder step again."
         }
-        removeStepButton.isEnabled = ready == selectionCheckpoint
+        removeStepButton.isEnabled = refusal == nil
+        removeStepButton.toolTip = refusal ?? "Remove the selected recorded step."
         if !removeStepButton.isEnabled, view.window?.firstResponder === removeStepButton {
             view.window?.makeFirstResponder(table)
         }
