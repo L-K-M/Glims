@@ -4475,8 +4475,8 @@ to an existing effect remain outside this slice.
 
 The saved replay, Undo and stale-role refusal pass real-engine tests on all
 four supported engines. The preview-retarget refusal also passes on each
-engine. The full Swift suite passes 1,819 tests. Packaged-app qualification
-and merge remain open.
+engine. The full Swift suite passes 1,819 tests. The isolated signed bundle
+passes 2,268 native and 3,359 editor checks; integration and merge remain open.
 
 ### Recorded Curves on a layer mask (candidate)
 
