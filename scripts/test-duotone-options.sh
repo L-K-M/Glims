@@ -14,15 +14,35 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-duotone-options.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 run_bounded() {
   python3 - "$@" <<'PY'
+import os
+import signal
 import subprocess
 import sys
 print('+ ' + ' '.join(sys.argv[1:]), flush=True)
+process = subprocess.Popen(sys.argv[1:], start_new_session=True)
+def stop_group():
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+def interrupted(signum, frame):
+    stop_group()
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGHUP, interrupted)
 try:
-    result = subprocess.run(sys.argv[1:], timeout=60)
+    result = process.wait(timeout=60)
 except subprocess.TimeoutExpired:
     print('Duotone options check exceeded 60 seconds', file=sys.stderr, flush=True)
+    stop_group()
     raise SystemExit(124)
-raise SystemExit(result.returncode)
+except KeyboardInterrupt:
+    stop_group()
+    raise
+raise SystemExit(result)
 PY
 }
 for mode in "${modes[@]}"; do
