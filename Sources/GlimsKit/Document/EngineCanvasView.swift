@@ -279,8 +279,12 @@ final class EngineCanvasView: NSView {
     private var lastBackingFactor: Double
 
     func setZoom(percent: Int) {
+        // Repeating the current zoom does not change device-pixel tile
+        // geometry. Keep valid and stale tiles, but preserve the existing
+        // full retry behavior if any tile previously failed.
+        let clearTiles = percent != zoomPercent || !failedTiles.isEmpty
         zoomPercent = percent
-        advanceRenderGeneration(clearingTiles: true)
+        advanceRenderGeneration(clearingTiles: clearTiles)
         updateFrameSize()
         tools.canvasScaleDidChange()
         needsDisplay = true

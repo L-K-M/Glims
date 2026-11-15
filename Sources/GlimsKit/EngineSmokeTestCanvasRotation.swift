@@ -40,6 +40,15 @@ extension EngineSmokeTest {
         }
         controller.zoom(to: 100)
         wait { controller.canvas.renderedTileCount > 0 }
+        let cachedTiles = controller.canvas.renderedTileCount
+        controller.zoom(to: 100)
+        check(cachedTiles > 0 && controller.canvas.renderedTileCount == cachedTiles,
+              "choosing the current zoom retains rendered canvas tiles")
+        controller.zoom(to: 101)
+        check(controller.canvas.renderedTileCount == 0,
+              "a changed zoom discards tiles from the previous scale")
+        controller.zoom(to: 100)
+        wait { controller.canvas.renderedTileCount > 0 }
         func pictureMatches() -> Bool {
             let host = controller.rotationView
             guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds), host.bounds.width > 0 else { return false }
