@@ -4815,6 +4815,9 @@ final class ImageDocument {
 
     func labCopyRefusal(_ destination: EngineSession.LabCopyDestination) -> String? {
         let layered = storage.layout == .layeredLab
+        if layered && destination == .lab {
+            return "Layered Lab documents can only be copied to RGB."
+        }
         guard layered ? session.supportsLayeredLabConvertedCopy : session.supportsLabConvertedCopy else {
             return "This image engine cannot create converted Lab copies."
         }
@@ -4838,6 +4841,8 @@ final class ImageDocument {
 
     func newLabCopy(_ destination: EngineSession.LabCopyDestination) {
         guard let handler = labCopyHandler else { return }
+        // This read-only exception also admits layered storage; the separate
+        // refusal check still prevents a copy while Recorder is replaying.
         guard !refuseWhileEditingUnavailable(allowingReplayRead: storage.layout == .layeredLab) else { return }
         if let reason = labCopyRefusal(destination) { onError?(reason); return }
         handler(self, destination)
