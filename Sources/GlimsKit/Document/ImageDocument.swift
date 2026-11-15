@@ -232,6 +232,8 @@ final class ImageDocument {
 
     private(set) var info: EngineSession.ImageInfo
     private(set) var layers: [EngineSession.Layer] = []
+    /// Identities captured in the same native read as the displayed Lab rows.
+    private(set) var labLayerIdentities: [Int32: UUID] = [:]
     private(set) var undoInfo = EngineSession.UndoInfo(undoCount: 0, redoCount: 0, nextUndo: "", nextRedo: "")
     /// The undo history last read with the rest of the state: the
     /// revision these rows and the current position were seen with, so a
@@ -529,22 +531,26 @@ final class ImageDocument {
 
     var acceptsEdits: Bool { acceptsImageReads && !storage.readOnly && storage.layout != .layeredLab && !recorder.isReplaying }
     var acceptsLayerProperties: Bool {
-        acceptsEdits || (acceptsImageReads && storage.allowsLayerProperties && !recorder.isReplaying && !recorder.isRecording)
+        acceptsEdits || (acceptsImageReads && storage.allowsLayerProperties && !recorder.isReplaying &&
+                         (!recorder.isRecording || (session.supportsLabLayerSnapshot && session.supportsLabLayerPropertyChange)))
     }
     var acceptsLayerRename: Bool {
         acceptsEdits || (acceptsLayerProperties && storage.allowsLayerRename)
     }
+    var acceptsLayerHistory: Bool {
+        acceptsLayerProperties && !(storage.layout == .layeredLab && recorder.isRecording)
+    }
     var acceptsLayerDuplicate: Bool {
-        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerDuplicate)
+        acceptsEdits || (acceptsLayerProperties && !recorder.isRecording && storage.allowsLayerDuplicate)
     }
     var acceptsLayerCreate: Bool {
-        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerCreate)
+        acceptsEdits || (acceptsLayerProperties && !recorder.isRecording && storage.allowsLayerCreate)
     }
     var acceptsLayerDelete: Bool {
-        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerDelete)
+        acceptsEdits || (acceptsLayerProperties && !recorder.isRecording && storage.allowsLayerDelete)
     }
     var acceptsLayerReorder: Bool {
-        acceptsEdits || (acceptsLayerProperties && storage.allowsLayerReorder)
+        acceptsEdits || (acceptsLayerProperties && !recorder.isRecording && storage.allowsLayerReorder)
     }
     var acceptsLabSelections: Bool {
         acceptsEdits || (storage.layout == .layeredLab && storage.allowsLabSelections &&
@@ -608,7 +614,14 @@ final class ImageDocument {
             throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                                             message: "This image engine cannot edit Lab documents.")
         }
-        layers = try session.layers(image)
+        labLayerIdentities = [:]
+        if storage.layout == .layeredLab && session.supportsLabLayerSnapshot {
+            let snapshot = try session.labLayerSnapshot(image)
+            layers = snapshot.map(\.layer)
+            labLayerIdentities = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.layer.id, $0.identity) })
+        } else {
+            layers = try session.layers(image)
+        }
         var locks: [Int32: EngineSession.LayerLockState] = [:]
         var masks: [Int32: EngineSession.MaskState] = [:]
         var effects: [Int32: [EngineSession.Effect]] = [:]
@@ -3571,7 +3584,7 @@ final class ImageDocument {
         var value: Result<Void, Error>?
     }
 
-    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange,
+    func changeLayer(_ layer: Int32, _ change: EngineSession.LayerChange, labIdentity: UUID? = nil,
                      completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         let limited = storage.layout == .layeredLab
         if limited {
@@ -3603,7 +3616,29 @@ final class ImageDocument {
         }
         let completion = completion ?? { _ in }
         let capture: RecorderCapture?
-        do { capture = try reserveRecording(semantic, explicitLayer: layer) }
+        let labTarget: EngineSession.LabLayerFillTarget?
+        if limited && recorder.isRecording {
+            guard let identity = labIdentity else {
+                let error = RecorderReplayError(message: "The displayed Lab layer could not be identified for recording.")
+                onError?(error.localizedDescription)
+                completion(.failure(error))
+                return
+            }
+            guard labLayerIdentities[layer] == identity else {
+                let error = RecorderReplayError(message: "The displayed Lab layer is no longer available for recording.")
+                onError?(error.localizedDescription)
+                completion(.failure(error))
+                return
+            }
+            labTarget = .init(root: layer, uuid: identity)
+        } else { labTarget = nil }
+        do {
+            if let labTarget {
+                capture = try reserveRecording(context: .labLayerProperty(root: layer, identity: labTarget.uuid))
+            } else {
+                capture = try reserveRecording(semantic, explicitLayer: layer)
+            }
+        }
         catch {
             assertionFailure("A recording log refused an admitted layer change: \(error)")
             completion(.failure(error))
@@ -3624,7 +3659,16 @@ final class ImageDocument {
             }
         }) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            let answer = Result { try session.changeLayer(layer, image: image, change) }
+            let answer = Result {
+                if let labTarget {
+                    guard case .layer = confirmed.binding else {
+                        throw RecorderReplayError(message: "The Lab layer property target could not be recorded.")
+                    }
+                    try session.changeLabLayer(image, target: labTarget, change: change)
+                } else {
+                    try session.changeLayer(layer, image: image, change)
+                }
+            }
             result.value = answer
             if case .failure(let error) = answer { self.report(error) }
             self.settleRecording(capture, result: answer.map { semantic }, confirmed: confirmed)
@@ -4737,14 +4781,26 @@ final class ImageDocument {
     /// target commands and edits accepted meanwhile are refused instead
     /// of landing on the drawable the move is about to leave behind.
     func undo() {
+        if storage.layout == .layeredLab && recorder.isRecording {
+            onError?("Stop recording before undoing a Lab layer edit."); return
+        }
         guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
+        guard !(storage.layout == .layeredLab && recorder.isRecording) else {
+            onError?("Stop recording before undoing a Lab layer edit."); return
+        }
         enqueueTargetCommand { session, image in try session.undo(image) }
     }
 
     func redo() {
+        if storage.layout == .layeredLab && recorder.isRecording {
+            onError?("Stop recording before redoing a Lab layer edit."); return
+        }
         guard !refuseWhileEditingUnavailable(allowingLayerProperties: storage.allowsLayerProperties) else { return }
         endPendingUserEdits()
+        guard !(storage.layout == .layeredLab && recorder.isRecording) else {
+            onError?("Stop recording before redoing a Lab layer edit."); return
+        }
         enqueueTargetCommand { session, image in try session.redo(image) }
     }
 
@@ -6682,7 +6738,8 @@ final class ImageDocument {
         guard paintTargetIsValid else { throw DocumentError.targetChanged }
     }
 
-    /// Recorder-specific UI subscriptions leave the existing single callback
+    /// Recorder callbacks run on the main actor. Recorder-specific UI
+    /// subscriptions leave the existing single callback
     /// intact. A snapshot permits listeners to detach or retarget reentrantly.
     func addRecorderObserver(scope: RecorderObserverScope = .commands, _ observer: @escaping () -> Void) -> UUID {
         let token = UUID()
