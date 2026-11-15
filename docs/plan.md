@@ -4570,9 +4570,10 @@ queued preview edits, retaining its begin-time layer if selection changes.
 Each channel stores kind, identity, points and all 256 actual samples,
 including inactive points and noncanonical Smooth tables. Format version 7
 uses owned named tags and shares the existing point/resource budgets; versions
-1 through 6 retain their existing meaning. Cancel records nothing, failed
-commits settle failure and retain retry metadata, and mask/channel targets or
-existing-effect edits remain explicit unsupported rows.
+1 through 6 retain their existing meaning. Cancel records nothing and failed
+commits settle failure and retain retry metadata. At this stage mask/channel
+targets and existing-effect edits produced explicit unsupported rows; the
+later mask Curves candidate above extends that coverage.
 
 Additive facade slot 177 installs an independent whole native Curves value.
 Validation precedes cloning, raw table/identity restoration happens only in
