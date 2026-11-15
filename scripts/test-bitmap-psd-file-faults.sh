@@ -14,7 +14,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-bitmap-psd-faults.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 for mode in "${modes[@]}"; do
   flags=(-O2)
-  if [[ "$mode" == sanitized ]]; then flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer); fi
+  if [[ "$mode" == sanitized ]]; then flags=(-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer); fi
   common=(-std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" -I"$ROOT/Engine")
   "${compiler[@]}" "${common[@]}" -Dwrite=glims_test_write -Dfsync=glims_test_fsync -Drenameat=glims_test_renameat \
     -c "$ROOT/Engine/cmyk-psd-file.c" -o "$WORK/file.o"
