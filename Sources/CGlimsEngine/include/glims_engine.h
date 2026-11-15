@@ -1266,6 +1266,13 @@ typedef struct GlimsLabLayerIdentity {
   uint8_t uuid[16]; /* Durable root identity within this document. */
 } GlimsLabLayerIdentity;
 
+/* A logical layer's display data and document-scoped identity, captured
+ * together on the engine thread. The row has a fixed ABI size. */
+typedef struct GlimsLabLayerSnapshotRow {
+  GlimsLayerInfo layer;
+  uint8_t uuid[16];
+} GlimsLabLayerSnapshotRow;
+
 typedef struct GlimsLabLayerFillSettings {
   uint32_t struct_size;
   GlimsItemID root;       /* Explicit captured logical root. */
@@ -4304,6 +4311,14 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_change_lab_layer_properties) (GlimsEngine *engine, GlimsImageID image,
                                             const GlimsLabLayerPropertyChange *settings,
                                             char **error);
+  /* Slot225: read logical Lab rows and their UUIDs in one engine-thread
+   * snapshot. On success *count is the total row count; at most capacity
+   * rows are written, in display order. NULL rows require capacity zero.
+   * On failure *count is zero and rows are untouched. Rows may be unaligned.
+   * This read is allowed while busy and never changes image state. */
+  GlimsStatus (*image_lab_layer_snapshot) (GlimsEngine *engine, GlimsImageID image,
+                                          GlimsLabLayerSnapshotRow *rows,
+                                          int32_t capacity, int32_t *count);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
