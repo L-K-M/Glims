@@ -27,7 +27,7 @@ PY
 }
 for mode in "${modes[@]}"; do
   flags=(-O2)
-  if [[ "$mode" == sanitized ]]; then flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer); fi
+  if [[ "$mode" == sanitized ]]; then flags=(-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer); fi
   run_bounded "${compiler[@]}" -std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" \
     -I"$ROOT/Engine" "$ROOT/Engine/duotone-options.c" "$ROOT/Engine/tests/duotone-options-tests.c" -o "$WORK/$mode"
   run_bounded "$WORK/$mode" "$ROOT/Engine/tests/fixtures/photoshop-cc2018-duotone.psd"
