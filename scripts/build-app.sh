@@ -126,6 +126,11 @@ if [[ -n "${CODE_SIGN_IDENTITY:-}" ]]; then
 else
   codesign --force --sign - "$APP_PATH"
 fi
+# Copied sources can already be owner-only, and signing creates new files.
+# Normalize the finished bundle for other users without following its symlinks
+# or changing the private staging directory that contains it.
+find "$APP_PATH" -type d -exec chmod a+rx,go-w {} +
+find "$APP_PATH" -type f -exec chmod a+rX,go-w {} +
 codesign --verify --strict --verbose=2 "$APP_PATH"
 # Publish only a signed, complete app. Finder or a running plug-in can
 # write caches in the old bundle, so deleting it in place is unreliable.
