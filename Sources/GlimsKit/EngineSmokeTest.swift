@@ -108,7 +108,7 @@ enum EngineSmokeTest {
     }
 
     static func run() -> Int32 {
-        if ["duotone-export", "duotone-preservation", "bitmap-diffusion", "bitmap-threshold", "bitmap-psd", "multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-curves", "lab-levels", "recorder-lab", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "layered-lab-readonly", "layered-lab-properties", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
+        if ["psd-composite", "duotone-export", "duotone-preservation", "bitmap-diffusion", "bitmap-threshold", "bitmap-psd", "multichannel", "cmyk", "cmyk-import", "ink-edits", "ink-levels", "ink-curves", "lab-curves", "lab-levels", "recorder-lab", "lab-ui", "lab-brush-ui", "lab-selections-ui", "lab-copy", "lab-recovery", "layered-lab-readonly", "layered-lab-properties", "recorder-ink-bindings"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? ""), !NSApp.isRunning {
             return EngineSmokeTestHost.run()
         }
         if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents", !NSApp.isRunning {
@@ -168,6 +168,11 @@ enum EngineSmokeTest {
         defer { session.stop() }
 
         do {
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "psd-composite" {
+                try exercisePsdComposite(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Photoshop composite)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "duotone-export" {
                 try exerciseDuotoneExport(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Duotone export)" : "FAILED: \(failures) failure(s)")
