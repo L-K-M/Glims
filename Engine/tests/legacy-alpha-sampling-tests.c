@@ -207,7 +207,8 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  if(status||!id){g_object_unref(image);return GLIMS_STATUS_OK;}
  guint8 corner[4]={0};
  status=glims_image_render(engine,id,.5,(GlimsRect){2,1,1,1},corner,4);
- CHECK(status==GLIMS_STATUS_OK && abs((int)corner[0]-64)<=1 && abs((int)corner[3]-64)<=1,
+ CHECK(status==GLIMS_STATUS_OK && abs((int)corner[0]-64)<=1 && corner[1]==0 && corner[2]==0 &&
+       abs((int)corner[3]-64)<=1,
        "half-scale odd corner includes the final red source pixel");
  odd[4*(2*5+4)]=0;odd[4*(2*5+4)+2]=255;
  gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(layer)),GEGL_RECTANGLE(0,0,5,3),0,
@@ -215,7 +216,8 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  gimp_drawable_update(GIMP_DRAWABLE(layer),4,2,1,1);
  memset(corner,0,sizeof corner);
  status=glims_image_render(engine,id,.5,(GlimsRect){2,1,1,1},corner,4);
- CHECK(status==GLIMS_STATUS_OK && corner[0]==0 && abs((int)corner[2]-64)<=1 && abs((int)corner[3]-64)<=1,
+ CHECK(status==GLIMS_STATUS_OK && corner[0]==0 && corner[1]==0 &&
+       abs((int)corner[2]-64)<=1 && abs((int)corner[3]-64)<=1,
        "half-scale odd corner reflects a fresh edge edit");
  open=glims_lookup_image(engine,id);projection=NULL;
  status=open ? glims_projection_prepare_read(open,.5,(GlimsRect){2,1,1,1},&projection) : GLIMS_STATUS_FAILED;
