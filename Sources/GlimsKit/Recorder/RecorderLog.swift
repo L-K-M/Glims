@@ -62,6 +62,30 @@ struct RecorderLog<Command> {
         case noncontiguousOrdinals
     }
 
+    enum RowEditError: Error, Equatable {
+        case recording
+        case replaying
+        case pendingReservations
+        case invalidIndex
+    }
+
+    /// Remove one settled row; the owning document updates its sidecars in
+    /// the same transaction before publishing the edited log.
+    mutating func removeSettledRecord(at index: Int) throws {
+        guard !isRecording else { throw RowEditError.recording }
+        guard !isReplaying else { throw RowEditError.replaying }
+        guard unresolved.isEmpty, buffered.isEmpty else { throw RowEditError.pendingReservations }
+        guard records.indices.contains(index) else { throw RowEditError.invalidIndex }
+        records.remove(at: index)
+        records = records.enumerated().map { Record(ordinal: $0.offset, resolution: $0.element.resolution) }
+        nextOrdinal = records.count
+        epoch = UUID()
+        replayGeneration = UUID()
+        replayCommands.removeAll()
+        inFlight = nil
+        replayStatus = .idle
+    }
+
     private(set) var isRecording = false
     /// Only the settled acceptance-order prefix is published. Later outcomes
     /// wait for earlier reservations, including failures and cancellations.
