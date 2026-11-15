@@ -97,7 +97,7 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
         removeStepButton.target = self
         removeStepButton.action = #selector(removeSelectedStep(_:))
         removeStepButton.setAccessibilityLabel("Remove selected Recorder step")
-        removeStepButton.toolTip = "Select a Recorder step to remove."
+        removeStepButton.toolTip = "Open an image to use Recorder."
         let secondRow = NSStackView(views: [RecorderPaletteAction.cancelReplay, .clear].compactMap { actionButtons[$0] } + [removeStepButton])
         let fileRow = NSStackView(views: [RecorderPaletteAction.saveRecording, .loadRecording].compactMap { actionButtons[$0] })
         let recordingHeader = NSStackView(views: [recordingLabel])
@@ -238,7 +238,8 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
     private func updateRemoveStepButton() {
         guard isViewLoaded else { return }
         var refusal: String?
-        if let document, document === currentDocument() {
+        let current = currentDocument()
+        if let document, document === current {
             do {
                 let ready = try document.recorderInstallCheckpoint()
                 if !displayed.rows.indices.contains(table.selectedRow) || selectionCheckpoint == nil {
@@ -249,8 +250,10 @@ final class RecorderPaletteController: NSViewController, PaletteContent, NSTable
             } catch {
                 refusal = error.localizedDescription
             }
+        } else if document == nil && current == nil {
+            refusal = "Open an image to use Recorder."
         } else {
-            refusal = "Select a Recorder step to remove."
+            refusal = "The active image changed. Select the Recorder step again."
         }
         removeStepButton.isEnabled = refusal == nil
         removeStepButton.toolTip = refusal ?? "Remove the selected recorded step."

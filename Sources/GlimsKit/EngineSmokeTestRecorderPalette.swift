@@ -292,6 +292,8 @@ extension EngineSmokeTest {
                "palette observation never replaces the original image-state or error handlers")
         errors.removeAll()
         current = nil; palette.retarget(to: nil)
+        expect(removeStep?.isEnabled == false && removeStep?.toolTip == "Open an image to use Recorder.",
+               "Remove Step explains that an image is needed when the palette has no target")
         expect(RecorderPaletteAction.allCases.allSatisfy { button($0)?.isEnabled == false }
                 && table.numberOfRows == 0 && label("Recorder image")?.stringValue == "No image",
                "retarget to no document clears rows and disables every command")
