@@ -6252,3 +6252,13 @@ Canvas accessibility labels include the document name, refresh after a native
 save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.
