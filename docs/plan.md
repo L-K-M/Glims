@@ -6326,5 +6326,5 @@ binding; replay revalidates the native mask and commits one destructive Undo
 step. Cancel records nothing, and channel and existing-effect edits retain their
 explicit unsupported behavior. Saved and rebound replay, missing-mask refusal,
 Undo and changed-role refusal pass the real-editor checks on all four supported
-engines. The full Swift suite passes. The isolated app bundle, hosted review and
-integration of the prerequisite branches remain pending.
+engines. The full Swift suite and isolated app bundle checks pass. Hosted review
+and integration of the prerequisite branches remain pending.
