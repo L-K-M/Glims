@@ -4350,6 +4350,12 @@ typedef struct GlimsEngineAPI {
    * resolution are omitted. Atomic publication and source rules match slot226. */
   GlimsStatus (*image_export_duotone_psd) (GlimsEngine *engine, GlimsImageID image,
                                            const char *path, char **error);
+  /* Slot230: explicitly open the merged appearance of a PSD or PSB as a
+   * flattened imported image. Layer editability and layer-specific metadata
+   * are not preserved. Absolute local path only. On failure *image is zero;
+   * *error is cleared on entry. No automatic fallback to another loader. */
+  GlimsStatus (*image_open_psd_composite) (GlimsEngine *engine, const char *path,
+                                           GlimsImageID *image, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
