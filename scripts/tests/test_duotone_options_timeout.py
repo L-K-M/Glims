@@ -13,29 +13,34 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class DuotoneOptionsTimeoutTests(unittest.TestCase):
     def test_timeout_stops_compiler_descendant(self):
-        self.exercise_runner(interrupt=False)
+        for codec in ("options", "preview-table"):
+            with self.subTest(codec=codec):
+                self.exercise_runner(codec, interrupt=False)
 
     def test_termination_stops_compiler_descendant(self):
-        self.exercise_runner(interrupt=True)
+        for codec in ("options", "preview-table"):
+            with self.subTest(codec=codec):
+                self.exercise_runner(codec, interrupt=True)
 
-    def exercise_runner(self, interrupt):
+    def exercise_runner(self, codec, interrupt):
         if not shutil.which("python3"):
             self.skipTest("python3 is required")
         with tempfile.TemporaryDirectory(prefix="glims-duotone-timeout-") as folder:
             work = Path(folder)
             (work / "scripts").mkdir()
             (work / "tools").mkdir()
-            source = (ROOT / "scripts/test-duotone-options.sh").read_text()
+            script = f"test-duotone-{codec}.sh"
+            source = (ROOT / "scripts" / script).read_text()
             self.assertEqual(source.count("timeout=60"), 1)
             # The interrupt case needs time to deliver SIGTERM before the
             # runner's own timeout; it must actually test that signal path.
-            timeout = "10" if interrupt else "0.5"
-            (work / "scripts/test-duotone-options.sh").write_text(source.replace("timeout=60", f"timeout={timeout}"))
+            timeout = "10" if interrupt else "3"
+            (work / "scripts" / script).write_text(source.replace("timeout=60", f"timeout={timeout}"))
             compiler = work / "tools/clang"
             compiler.write_text("#!/usr/bin/env python3\n"
                 "import os, pathlib, subprocess, sys, time\n"
-                "code = 'import pathlib,sys,time; time.sleep(1.5); pathlib.Path(sys.argv[1]).write_text(\\\"escaped\\\")'\n"
-                "child = subprocess.Popen([sys.executable, '-c', code, os.environ['GLIMS_TIMEOUT_MARKER']], "
+                "code = 'import os,pathlib,sys,time\\nparent=int(sys.argv[2])\\nwhile os.getppid()==parent: time.sleep(.02)\\npathlib.Path(sys.argv[1]).write_text(\\\"escaped\\\")'\n"
+                "child = subprocess.Popen([sys.executable, '-c', code, os.environ['GLIMS_TIMEOUT_MARKER'], str(os.getpid())], "
                 "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
                 "pathlib.Path(os.environ['GLIMS_TIMEOUT_CHILD']).write_text(str(child.pid))\n"
                 "time.sleep(10)\n")
@@ -46,7 +51,7 @@ class DuotoneOptionsTimeoutTests(unittest.TestCase):
             marker, child = work / "escaped", work / "child"
             env = dict(os.environ, PATH=str(work / "tools") + os.pathsep + os.environ["PATH"],
                        GLIMS_TIMEOUT_MARKER=str(marker), GLIMS_TIMEOUT_CHILD=str(child))
-            command = ["bash", str(work / "scripts/test-duotone-options.sh"), "sanitized"]
+            command = ["bash", str(work / "scripts" / script), "sanitized"]
             if interrupt:
                 process = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, start_new_session=True)
