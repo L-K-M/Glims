@@ -61,6 +61,10 @@ extension EngineSmokeTest {
         expect(window.acceptsMouseMovedEvents, "the document window admits pointer movement")
         expect(owner.canvas.trackingAreas.contains { $0.options.contains(.mouseMoved) && $0.options.contains(.inVisibleRect) },
                "the canvas installs a visible-region movement tracking area")
+        let tracking = owner.canvas.trackingAreas.first { $0.options.contains(.mouseMoved) && $0.options.contains(.inVisibleRect) }
+        owner.canvas.updateTrackingAreas()
+        expect(tracking != nil && owner.canvas.trackingAreas.contains { $0 === tracking },
+               "layout retains the visible-region tracking area")
         let beforeColor = ToolState.shared.foreground
         let beforeUndo = try session.undoInfo(image)
         owner.zoom(to: 800)
@@ -95,6 +99,56 @@ extension EngineSmokeTest {
             expect(wait { labels(palette.view).contains("X: 0    Y: 0") },
                    "AppKit dispatches a movement event to the canvas")
         } else { expect(false, "a dispatchable pointer event can be constructed") }
+        expect(wait { labels(palette.view).contains { $0.hasPrefix("sRGB: R ") } },
+               "the stationary pointer has a settled sample before an image change")
+        owner.canvas.imageDidChange()
+        expect(wait { labels(palette.view).contains("X: 0    Y: 0") &&
+            labels(palette.view).contains { $0.hasPrefix("sRGB: R ") } },
+               "an image change refreshes a stationary pointer without movement")
+        let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        var activityFinished = false
+        let admitted = EngineActivity.shared.perform(label: "Info busy fixture", work: {
+            started.signal()
+            _ = release.wait(timeout: .now() + 20)
+        }, completion: { activityFinished = true })
+        var didStart = false
+        expect(admitted && wait {
+            if !didStart { didStart = started.wait(timeout: .now()) == .success }
+            return didStart
+        }, "a held engine operation starts")
+        owner.canvas.imageDidChange()
+        EngineSmokeTestHost.pumpEvents(for: 0.2)
+        release.signal()
+        expect(wait { activityFinished }, "the held engine operation finishes")
+        expect(wait { labels(palette.view).contains("X: 0    Y: 0") &&
+            labels(palette.view).contains { $0.hasPrefix("sRGB: R ") } },
+               "a stationary sample resumes after the engine becomes idle")
+        let draggedPoint = placePointer(x: 1.5, y: 0.5)
+        NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document)
+        if let event = NSEvent.mouseEvent(with: .leftMouseDragged, location: draggedPoint,
+                                          modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 3, clickCount: 1, pressure: 1) {
+            owner.canvas.mouseDragged(with: event)
+            expect(wait { labels(palette.view).contains("X: 1    Y: 0") },
+                   "pointer coordinates follow a drag event")
+        } else { expect(false, "a drag event can be constructed") }
+        owner.zoom(to: 400)
+        EngineSmokeTestHost.pumpEvents(for: 0.05)
+        let afterZoom = owner.canvas.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let zoomPoint = owner.canvas.imagePoint(at: afterZoom)
+        let zoomLabel: String
+        if owner.canvas.visibleRect.contains(afterZoom), zoomPoint.x >= 0, zoomPoint.y >= 0,
+           zoomPoint.x < 2, zoomPoint.y < 2 {
+            zoomLabel = "X: \(Int(floor(zoomPoint.x)))    Y: \(Int(floor(zoomPoint.y)))"
+        } else {
+            zoomLabel = "X: —    Y: —"
+        }
+        expect(zoomLabel != "X: 1    Y: 0", "the zoom fixture changes the pixel under the stationary pointer")
+        expect(wait { labels(palette.view).contains(zoomLabel) },
+               "zoom refreshes the stationary pointer's image coordinates")
+        owner.zoom(to: 800)
+        EngineSmokeTestHost.pumpEvents(for: 0.05)
         expect(owner.setViewRotation(degrees: 45), "the fixture can rotate its view")
         let rotatedPoint = placePointer(x: 0.5, y: 1.5)
         NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document)
@@ -126,6 +180,27 @@ extension EngineSmokeTest {
         EngineSmokeTestHost.pumpEvents(for: 0.15)
         expect(labels(palette.view).contains("X: —    Y: —"),
                "hiding the palette clears the pointer and cancels pending display")
+        let closeStarted = DispatchSemaphore(value: 0), closeRelease = DispatchSemaphore(value: 0)
+        defer { closeRelease.signal() }
+        var closeActivityFinished = false
+        let closeHold = EngineActivity.shared.perform(label: "Info close fixture", work: {
+            closeStarted.signal()
+            _ = closeRelease.wait(timeout: .now() + 20)
+        }, completion: { closeActivityFinished = true })
+        var closeDidStart = false
+        expect(closeHold && wait {
+            if !closeDidStart { closeDidStart = closeStarted.wait(timeout: .now()) == .success }
+            return closeDidStart
+        }, "a second engine operation can hold a sample before close")
+        var closedSample: Result<EngineSession.SampledColor, Error>?
+        otherDocument.sampleInfoColor(x: 0, y: 0) { closedSample = $0 }
+        otherDocument.closeImageWhenDrained()
+        closeRelease.signal()
+        expect(wait { closeActivityFinished && closedSample != nil && (try? session.info(otherImage)) == nil },
+               "closing while a sample waits drains the image and replies")
+        if case .failure(let error as ImageDocument.DocumentError)? = closedSample, case .closed = error {
+            expect(true, "a deferred sample refuses the closed document")
+        } else { expect(false, "a deferred sample refuses the closed document") }
         expect(NSApp.mainMenu?.item(withTitle: "Window")?.submenu?.item(withTitle: "Info")?.action == #selector(AppController.showInfo(_:)),
                "the Window menu can show Info")
     }

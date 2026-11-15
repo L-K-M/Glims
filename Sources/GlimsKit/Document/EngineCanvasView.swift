@@ -144,6 +144,7 @@ final class EngineCanvasView: NSView {
     private(set) lazy var tools = CanvasToolController(canvas: self)
     private var hintLifecycleObservers: [NSObjectProtocol] = []
     private var infoTrackingArea: NSTrackingArea?
+    private var infoPointerInside = false
 
     deinit {
         for token in hintLifecycleObservers { NotificationCenter.default.removeObserver(token) }
@@ -318,7 +319,7 @@ final class EngineCanvasView: NSView {
     /// Called when the image changed (`rect` in image pixels): the tiles
     /// under it go stale and are re-rendered, still drawn until replaced.
     func imageDidChange(in rect: CGRect? = nil) {
-        clearInfoPointer()
+        refreshInfoPointer()
         invalidateTransformPixelPreview()
         let device = rect.map { CGRect(x: $0.minX * deviceScale, y: $0.minY * deviceScale,
                                        width: $0.width * deviceScale, height: $0.height * deviceScale) }
@@ -559,6 +560,7 @@ final class EngineCanvasView: NSView {
         }
         swapDestinationObservers()
         if window == nil {
+            infoPointerInside = false
             clearInfoPointer()
             tools.cancelFloatingShape()
             tools.cancelPickedMove()
@@ -1094,7 +1096,9 @@ final class EngineCanvasView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let infoTrackingArea { removeTrackingArea(infoTrackingArea) }
+        // AppKit follows visible-rect changes for this area; retaining it
+        // avoids synthetic exit/enter pairs during scrolling and zooming.
+        guard infoTrackingArea == nil else { return }
         let area = NSTrackingArea(rect: .zero,
                                   options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
                                   owner: self, userInfo: nil)
@@ -1103,13 +1107,23 @@ final class EngineCanvasView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard window?.isMainWindow == true else { return }
-        let point = imagePoint(for: event)
-        guard point.x.isFinite, point.y.isFinite, point.x >= 0, point.y >= 0,
-              point.x < Double(document.info.width), point.y < Double(document.info.height) else {
+        publishInfoPointer(at: convert(event.locationInWindow, from: nil))
+    }
+
+    private func publishInfoPointer(at viewPoint: CGPoint) {
+        guard window?.isMainWindow == true, visibleRect.contains(viewPoint) else {
+            infoPointerInside = false
             clearInfoPointer()
             return
         }
+        let point = imagePoint(at: viewPoint)
+        guard point.x.isFinite, point.y.isFinite, point.x >= 0, point.y >= 0,
+              point.x < Double(document.info.width), point.y < Double(document.info.height) else {
+            infoPointerInside = false
+            clearInfoPointer()
+            return
+        }
+        infoPointerInside = true
         let position = InfoPointerSampling.Position(x: Int(floor(point.x)), y: Int(floor(point.y)))
         NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document,
                                         userInfo: ["position": position])
@@ -1120,7 +1134,18 @@ final class EngineCanvasView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        infoPointerInside = false
         clearInfoPointer()
+    }
+
+    private func refreshInfoPointer() {
+        guard infoPointerInside else { return }
+        guard NSApp.isActive, let window, window.isMainWindow else {
+            infoPointerInside = false
+            clearInfoPointer()
+            return
+        }
+        publishInfoPointer(at: convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 
     private func clearInfoPointer() {
@@ -1177,6 +1202,7 @@ final class EngineCanvasView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard !TabletEraserProximity.isProximityEvent(event) else { return }
+        publishInfoPointer(at: convert(event.locationInWindow, from: nil))
         tools.mouseDragged(with: event)
     }
 

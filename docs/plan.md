@@ -6238,8 +6238,10 @@ Window ▸ Info shows image-pixel coordinates and the committed composite's
 straight sRGB and alpha under the pointer. Sampling is asynchronous and
 bounded to one in-flight read, with the latest position retained; stale
 results are discarded on movement, document change, hide, or image change.
-The palette does not change the foreground color or image history. A focused
-real-window test covers event dispatch, rotation, alpha and document changes
-on the pinned engine. The other engines, whole-editor integration,
+The readout follows drags and refreshes a stationary pointer after an image
+change; a sample delayed by exclusive engine work resumes when it becomes
+available. The palette does not change the foreground color or image history.
+A focused real-window test covers event dispatch, drag, zoom, rotation, alpha,
+document changes and deferred reads on the pinned engine. The other engines, whole-editor integration,
 accessibility and review remain in qualification. Native CMYK/Lab readouts
 and sampling of temporary previews are not yet provided.

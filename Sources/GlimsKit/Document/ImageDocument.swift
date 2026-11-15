@@ -534,8 +534,17 @@ final class ImageDocument {
     func sampleInfoColor(x: Int, y: Int,
                          completion: @escaping @MainActor (Result<EngineSession.SampledColor, Error>) -> Void) {
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        guard acceptsImageReads, !EngineActivity.shared.isRenderingTransformPreview,
-              !strokeIsActive, pendingInput == 0, !targetCommandIsPending else {
+        if EngineActivity.shared.isBusy || EngineActivity.shared.isRenderingTransformPreview {
+            // The sampler retains only its newest pending point. Wait for a
+            // temporary global operation rather than leaving a stationary
+            // pointer unavailable after that operation ends.
+            EngineActivity.shared.whenReadyForSynchronousRead { [weak self] in
+                guard let self else { return completion(.failure(DocumentError.closed)) }
+                self.sampleInfoColor(x: x, y: y, completion: completion)
+            }
+            return
+        }
+        guard acceptsImageReads, !strokeIsActive, pendingInput == 0, !targetCommandIsPending else {
             return completion(.failure(DocumentError.busy))
         }
         guard x >= 0, y >= 0, x < info.width, y < info.height else {
