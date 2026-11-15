@@ -46,6 +46,41 @@ final class RecorderBrightnessContrastTests: XCTestCase {
     private var fileValue: RecorderBrightnessContrastValue { .init(brightness: 0.3, contrast: -0.25) }
     private var engineValue: EngineSession.BrightnessContrastSettings { .init(brightness: 0.3, contrast: -0.25) }
 
+    func testMaskBrightnessContrastRequiresItsOwnVersionAndAnEditingMask() throws {
+        let binding = #"{"kind":"context","context":{"layers":["66666666-6666-6666-6666-666666666666"],"channels":[],"target":{"kind":"mask","owner":"66666666-6666-6666-6666-666666666666"},"masks":[{"owner":"66666666-6666-6666-6666-666666666666","isPresent":true,"enabled":true,"editing":true,"showing":false}],"quickMask":{"enabled":false,"inverted":false,"color":{"space":"srgb","red":1,"green":0,"blue":0,"alpha":0.5}}}}"#
+        let literal = brightnessContrastDocument(binding: binding, version: 25)
+        let decoded = try RecorderFileCodec.decode(bytes(literal))
+        guard case .success(.applyBrightnessContrast(let settings), .context(let context)) = decoded.records[0].outcome else {
+            return XCTFail("The mask Brightness/Contrast command or target was lost")
+        }
+        XCTAssertEqual(settings, fileValue)
+        XCTAssertEqual(context.target, .mask(owner: symbol))
+        let encoded = try RecorderFileCodec.encode(decoded)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(json["version"] as? Int, 25)
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), decoded)
+        let channel = RecorderFileCommand.Levels.Channel(lowInput: 0, highInput: 1, gamma: 1,
+                                                        lowOutput: 0, highOutput: 1)
+        let levels = RecorderFileCommand.Levels(trc: .nonlinear, clampInput: true, clampOutput: true,
+            value: channel, red: channel, green: channel, blue: channel, alpha: channel)
+        let mixed = RecorderFileValue(recordingID: decoded.recordingID, name: decoded.name, origin: decoded.origin,
+            symbols: decoded.symbols, records: [
+                .init(ordinal: 0, outcome: .success(.applyLevels(levels), .context(context))),
+                .init(ordinal: 1, outcome: .success(.applyBrightnessContrast(settings), .context(context)))
+            ])
+        let mixedBytes = try RecorderFileCodec.encode(mixed)
+        let mixedJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: mixedBytes) as? [String: Any])
+        XCTAssertEqual(mixedJSON["version"] as? Int, 25)
+        XCTAssertEqual(try RecorderFileCodec.decode(mixedBytes), mixed)
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(brightnessContrastDocument(binding: binding, version: 24))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(brightnessContrastDocument(version: 25))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(literal, #""editing":true"#, #""editing":false"#))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(literal, #""isPresent":true"#, #""isPresent":false"#))))
+        let layer = #"{"kind":"layer","symbol":"66666666-6666-6666-6666-666666666666"}"#
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(literal,
+            #"{"kind":"mask","owner":"66666666-6666-6666-6666-666666666666"}"#, layer))))
+    }
+
     func testVersionTenApplyBrightnessContrastLiteralDecodes() throws {
         let value = try RecorderFileCodec.decode(bytes(brightnessContrastDocument()))
         XCTAssertEqual(value.records.count, 1)

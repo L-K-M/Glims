@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 22
+# Recorder file format, versions 1 to 25
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `22`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `25`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -19,11 +19,12 @@ The writer chooses the highest version required by a successful record:
 `completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15,
 `completeInkStroke` 16, `applyLabLevels` 17, `completeLabLayerStroke` 18,
 `fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
-and an Eraser stroke with an explicit background color 22. A file declaring one of those versions must contain at least one
+an Eraser stroke with an explicit background color 22, mask Levels 23,
+mask Curves 24, and mask Brightness/Contrast 25. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...22 refuse the file.
+version 1. Integers outside 1...25 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -88,11 +89,12 @@ worker to native resize. No NSColor or late conversion enters the file.
 
 Bindings are `kind:"none"`, `kind:"layer"` with `symbol`, `kind:"channel"`
 with `symbol`, or `kind:"context"` with `context`. Layer properties, layer
-transforms, Levels, Curves, Color Balance, Hue/Saturation and
-Brightness/Contrast require a layer symbol (any layer-kind description);
+transforms, Color Balance and Hue/Saturation require a layer symbol (any
+layer-kind description); Levels, Curves and Brightness/Contrast use a layer
+symbol for a layer adjustment or a context for an editing-mask adjustment.
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
-Select Alpha, color selection with `sampleMerged:false`, and mask Levels or Curves
+Select Alpha, color selection with `sampleMerged:false`, and mask Levels, Curves or Brightness/Contrast
 require context; other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
@@ -269,9 +271,10 @@ stored by reading the open native preview immediately before commit;
 visible panel fields or a read after commit never substitute.
 
 Every correction must be finite and inside −1...1, matching the typed
-native settings contract. The record's `layer` binding names the explicit
-target layer symbol, never the implicit paint target or selection; the
-command always requires one. Live filter, effect and native layer IDs are
+native settings contract. For a layer adjustment, the record's `layer` binding
+names the explicit target layer symbol, never the implicit paint target or
+selection. A mask adjustment uses the version 25 context described below.
+Live filter, effect and native layer IDs are
 never serialized. The command is refused in a version 1 through 9 file, and
 a version 10 file without a successful `applyBrightnessContrast` is
 refused, exactly as earlier extensions always required their own successful
@@ -281,10 +284,10 @@ remain replay duties; the codec cannot prove a binding-time target.
 
 Apply records final settings behind queued preview writes. Cancel adds no
 row. An accepted commit that later fails settles a failure row while
-retaining its capture metadata for retry. Mask/channel targets and
-existing-effect edits produce explicit unsupported rows instead of
-inventing layer actions. Replay checks current membership, color mode,
-locks and editing role, then commits one new effect with one Undo step.
+retaining its capture metadata for retry. Channel targets and existing-effect
+edits produce explicit unsupported rows instead of inventing layer actions.
+Replay checks current membership, color mode, locks and editing role, then
+commits one effect or destructive mask adjustment with one Undo step.
 
 ## Native ink commands (versions 11 and 12)
 
@@ -556,8 +559,8 @@ fingerprint, and refuses a mismatch before painting.
 ## Mask Levels (version 23)
 
 A Levels command can bind a context whose target is an editing layer mask.
-The context identifies the owning layer symbol, the mask flags and the
-selection and Quick Mask state; native mask handles are never stored.
+The context identifies the owning layer symbol, the mask flags, selected layers
+and channels, and Quick Mask state; native mask handles are never stored.
 Version 23 requires at least one successful mask Levels command. Older
 versions reject this binding, and replay confirms the rebound mask and its
 role before applying the settings as one destructive Undo step.
@@ -569,3 +572,11 @@ Version 24 requires at least one successful mask Curves command and can also
 contain version 23 mask Levels commands. Older versions reject the Curves
 mask binding. Rebinding and replay confirm the mask owner and editing role;
 the complete Curves settings apply as one destructive Undo step.
+
+## Mask Brightness/Contrast (version 25)
+
+A Brightness/Contrast command can bind the same editing-mask context as mask
+Levels and Curves. Version 25 requires at least one successful mask
+Brightness/Contrast command and can also contain the earlier mask adjustments.
+Older versions reject this binding. Rebinding and replay confirm the mask owner
+and editing role; the complete settings apply as one destructive Undo step.

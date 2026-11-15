@@ -6317,3 +6317,14 @@ Canvas accessibility labels include the document name, refresh after a native
 save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Recorder Brightness/Contrast on layer masks (local candidate)
+
+A newly applied Brightness/Contrast adjustment can record its captured mask
+owner, editing role and complete settings. Version 25 files preserve the
+binding; replay revalidates the native mask and commits one destructive Undo
+step. Cancel records nothing, and channel and existing-effect edits retain their
+explicit unsupported behavior. Saved and rebound replay, missing-mask refusal,
+Undo and changed-role refusal pass the real-editor checks on all four supported
+engines. The full Swift suite passes. The isolated app bundle, hosted review and
+integration of the prerequisite branches remain pending.

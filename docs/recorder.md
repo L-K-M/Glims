@@ -25,7 +25,7 @@ Current capture covers these command families:
 - A newly applied Levels, Curves, Color Balance, Hue/Saturation or
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
-- A newly applied Levels or Curves adjustment on a bound layer mask.
+- A newly applied Levels, Curves or Brightness/Contrast adjustment on a bound layer mask.
 
 - Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
   Levels/Curves Apply and complete Brush gestures, including
@@ -44,14 +44,15 @@ Levels, Curves, Color Balance, Hue/Saturation and Brightness/Contrast record
 the final native settings when Apply is admitted. Preview updates, Cancel and refused Apply
 add no row. An admitted Apply retains its place if recording stops while it
 is pending. A native failure becomes a failure row. Applying any of these
-ordinary adjustments to a channel, applying adjustments other than Levels or Curves to a
-mask, or editing an existing effect also produces an
+ordinary adjustments to a channel, applying adjustments other than Levels,
+Curves or Brightness/Contrast to a mask, or editing an existing effect also produces an
 explicit unsupported row after a successful commit, so the recording cannot
 silently replay an incomplete sequence. A settings capture failure preserves
 the live edit and marks the recording as failed.
 
-Mask Levels and Curves record the mask owner and its editing role. Rebinding requires a
-layer with a mask, and replay checks the current native target before changing
+Mask Levels, Curves and Brightness/Contrast record the mask owner and its
+editing role. Rebinding requires a layer with a mask, and replay checks the
+current native target before changing
 pixels. A target that changes before Apply cannot be saved as a replayable
 binding. The mask adjustment uses one Undo step.
 
@@ -93,7 +94,8 @@ Invert and Levels use version 11; native ink Curves uses version 12.
 Physical Lab Fill/Curves use version 13, Lab Brush version 14 and Lab selections
 version 15. Ink Brush uses 16, Lab Levels 17, layered Lab Brush 18, layered Lab
 Fill 19, Sponge strokes 20, and ordinary tablet strokes 21. Mixed recordings use
-the highest required version. See
+the highest required version. Mask Levels, Curves and Brightness/Contrast require
+versions 23, 24 and 25 respectively. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

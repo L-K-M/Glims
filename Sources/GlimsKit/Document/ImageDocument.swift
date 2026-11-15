@@ -6278,7 +6278,7 @@ final class ImageDocument {
         case .layer(let layer)? where !floatingState.isActive:
             coverage = .layer(layer)
         case .mask(let layer, let mask)?:
-            if ["gimp:levels", "gimp:curves"].contains(operation), !floatingState.isActive,
+            if ["gimp:levels", "gimp:curves", "gimp:brightness-contrast"].contains(operation), !floatingState.isActive,
                case .target(let target) = captureRecorderPaintTarget(),
                target.target == .mask(layer: layer, drawable: mask),
                target.layers == [layer], target.channels.isEmpty, !target.quickMask.enabled,
