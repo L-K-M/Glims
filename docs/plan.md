@@ -6192,6 +6192,27 @@ the development engine's complete composite matches ImageIO within two 8-bit
 levels. Real-window, bundle, full editor and review qualification remain open.
 See [psd-composite-import.md](psd-composite-import.md).
 
+### Duotone settings structure (private candidate)
+
+A bounded codec reads the documented 524-byte Photoshop `.ADO` settings
+structure and makes byte-preserving ink name, color and curve changes. It
+rejects malformed active fields and leaves unrelated fields intact. The
+Photoshop CC 2018 PSD fixture's 524-byte block matches the documented layout
+for its plate count, names and curves. Adobe does not document PSD Duotone
+color-mode data, so this is not yet an image editor or an interoperability
+claim. Encoding choices, color semantics, overprint updates and color preview
+remain required before exposing edits. Optimized and sanitizer tests pass 551
+checks each. See [duotone-options.md](duotone-options.md).
+
+### Duotone alternate-color table (private candidate)
+
+A bounded parser reads the documented version-1 PSD resource 1066 with up to
+four alternate ink colors and 256 encoded Lab samples. It declines other
+layouts without altering output. The Photoshop CC 2018 fixture contains a
+matching resource; optimized and sanitizer tests pass 814 checks each. The
+resource is not yet retained on import or used for preview, and its validity
+after changing inks or curves still needs a defined policy. See
+[duotone-preview-table.md](duotone-preview-table.md).
 ### Half-scale sRGB fallback sampling (candidate)
 
 The legacy sRGB fallback uses the sampler's validated projection footprint at
