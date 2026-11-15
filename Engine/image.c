@@ -1038,7 +1038,10 @@ render_legacy_scaled (GlimsEngine *engine, GlimsOpenImage *open, double scale,
   open->display_sample_active = TRUE;
   engine->busy++;
 
-  status = glims_projection_prepare_read (open, scale, area, &buffer);
+  /* The sampler validates the complete source footprint at 50%, so avoid
+   * a second eager projection validation at this common zoom. */
+  status = scale == 0.5 ? glims_projection_prepare_sample (open, scale, area, &buffer)
+                        : glims_projection_prepare_read (open, scale, area, &buffer);
   if (status != GLIMS_STATUS_OK) goto out;
   base = open->component_document ? GIMP_RGB : gimp_image_get_base_type (open->image);
   if (base != GIMP_RGB && base != GIMP_INDEXED && base != GIMP_GRAY)
