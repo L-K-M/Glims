@@ -427,6 +427,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             if document?.storage.layout == .layeredLab {
                 if tool == .paintbrush && document?.toolIsAvailable(.paintbrush) == true {
                     stack.addArrangedSubview(hint("Paint the selected Lab layer with the foreground color. Escape cancels a stroke."))
+                    if document?.session.supportsLayeredLabSampling == true {
+                        stack.addArrangedSubview(hint("Option-click or drag to sample a color."))
+                    }
                 } else {
                     stack.addArrangedSubview(hint("This tool is unavailable for this layered Lab document."))
                 }
