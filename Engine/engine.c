@@ -4389,6 +4389,24 @@ api_image_export_bitmap_threshold_psd (GlimsEngine *engine, GlimsImageID image,
 }
 
 static GlimsStatus
+image_export_bitmap_diffusion_psd_on_engine (GlimsEngine *engine, gpointer data)
+{
+  NativeCmykExportArgs *a = data;
+  return glims_image_export_bitmap_diffusion_psd (engine, a->image, a->path, a->error);
+}
+
+static GlimsStatus
+api_image_export_bitmap_diffusion_psd (GlimsEngine *engine, GlimsImageID image,
+                                      const char *path, char **error)
+{
+  if (error) *error = NULL;
+  NativeCmykExportArgs a = { image, path, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_export_bitmap_diffusion_psd,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_export_bitmap_diffusion_psd_on_engine, &a, error);
+}
+
+static GlimsStatus
 api_image_export_native_cmyk_psd (GlimsEngine *engine, GlimsImageID image,
                                   const char *path, char **error)
 {

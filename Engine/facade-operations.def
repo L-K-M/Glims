@@ -227,3 +227,4 @@ GLIMS_FACADE(image_change_lab_layer_properties, api_image_change_lab_layer_prope
 GLIMS_FACADE(image_lab_layer_snapshot, api_image_lab_layer_snapshot, IMAGE, COMPONENT)
 GLIMS_FACADE(image_export_bitmap_psd, api_image_export_bitmap_psd, IMAGE, ORDINARY)
 GLIMS_FACADE(image_export_bitmap_threshold_psd, api_image_export_bitmap_threshold_psd, IMAGE, ORDINARY)
+GLIMS_FACADE(image_export_bitmap_diffusion_psd, api_image_export_bitmap_diffusion_psd, IMAGE, ORDINARY)

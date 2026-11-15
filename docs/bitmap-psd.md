@@ -12,8 +12,10 @@ nearest 8-bit value before comparison. Neither method changes the source.
 Color and transparency are refused rather than silently converted; linked
 layers are also refused because their file contents may change during export. Layers, profile, resolution and other metadata are omitted. Save an
 XCF to keep the editable source. Repeat Export retains this explicit choice.
-Old adapters do not advertise methods they lack. Dithering and a preserved
-editable Bitmap document mode remain future work.
+An explicit Diffusion dither method converts opaque grayscale with bounded
+Floyd–Steinberg error diffusion. It is deterministic and keeps two rows of
+error, not an image-sized buffer. Old adapters do not advertise methods they
+lack. A preserved editable Bitmap document mode remains future work.
 
 The private serializer writes PSD v1 Bitmap mode, one one-bit channel, raw
 row-major image data, and empty color-mode, resource and layer sections. Rows

@@ -69,11 +69,12 @@ struct ExportSettings: Equatable {
     var pngPreserveTransparentColor = false
 
     enum BitmapMethod: String, CaseIterable {
-        case existing, threshold
+        case existing, threshold, diffusion
         var title: String {
             switch self {
             case .existing: return "Existing black and white"
             case .threshold: return "Threshold grayscale"
+            case .diffusion: return "Diffusion dither"
             }
         }
     }
@@ -411,6 +412,7 @@ final class ExportOptionsForm: NSView {
     private let context: Context
     private let supportsBitmapPSD: Bool
     private let supportsBitmapThresholdPSD: Bool
+    private let supportsBitmapDiffusionPSD: Bool
     private var nativeCmyk: Bool {
         if case .nativeCmyk = context { return true }
         return false
@@ -420,10 +422,12 @@ final class ExportOptionsForm: NSView {
          context: Context = .ordinary,
          supportsBitmapPSD: Bool = false,
          supportsBitmapThresholdPSD: Bool = false,
+         supportsBitmapDiffusionPSD: Bool = false,
          psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
         self.context = context
         self.supportsBitmapPSD = supportsBitmapPSD
         self.supportsBitmapThresholdPSD = supportsBitmapThresholdPSD
+        self.supportsBitmapDiffusionPSD = supportsBitmapDiffusionPSD
         var initial = settings
         if case .nativeCmyk = context {
             initial.format = .psd
@@ -473,6 +477,9 @@ final class ExportOptionsForm: NSView {
         bitmapMethodPopup.menu?.autoenablesItems = false
         if let index = ExportSettings.BitmapMethod.allCases.firstIndex(of: .threshold) {
             bitmapMethodPopup.item(at: index)?.isEnabled = supportsBitmapThresholdPSD
+        }
+        if let index = ExportSettings.BitmapMethod.allCases.firstIndex(of: .diffusion) {
+            bitmapMethodPopup.item(at: index)?.isEnabled = supportsBitmapDiffusionPSD
         }
         bitmapMethodPopup.target = self
         bitmapMethodPopup.action = #selector(bitmapMethodChanged(_:))
@@ -671,9 +678,14 @@ final class ExportOptionsForm: NSView {
         case .cmyk:
             psdExplanation.stringValue = "\(settings.psdLayout.explanation) \(PsdOutputColor.cmyk.explanation)"
         case .bitmap:
-            psdExplanation.stringValue = settings.bitmapMethod == .threshold
-                ? "Converts opaque grayscale pixels at or below the threshold to black, and the rest to white. Transparency and linked layers are refused. Layers and metadata are omitted. Save XCF to keep editing."
-                : PsdOutputColor.bitmap.explanation
+            switch settings.bitmapMethod {
+            case .existing:
+                psdExplanation.stringValue = PsdOutputColor.bitmap.explanation
+            case .threshold:
+                psdExplanation.stringValue = "Converts opaque grayscale pixels at or below the threshold to black, and the rest to white. Transparency and linked layers are refused. Layers and metadata are omitted. Save XCF to keep editing."
+            case .diffusion:
+                psdExplanation.stringValue = "Uses diffusion dithering to convert opaque grayscale to black and white. Transparency and linked layers are refused. Layers and metadata are omitted. Save XCF to keep editing."
+            }
         }
     }
 
@@ -934,6 +946,10 @@ final class ExportOptionsForm: NSView {
                     window?.makeFirstResponder(bitmapThresholdRow.field)
                     return false
                 }
+            }
+            if settings.bitmapMethod == .diffusion && !supportsBitmapDiffusionPSD {
+                refuse("Diffusion Bitmap export is not available for this document or image engine.")
+                return false
             }
         }
         if settings.format == .psd, settings.psdColor == .cmyk {

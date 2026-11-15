@@ -2,6 +2,7 @@
  * open document. Bitmap PSD has no alpha, color profile, or layer records. */
 #include "engine-private.h"
 #include "bitmap-psd-file.h"
+#include "bitmap-diffusion.h"
 #include <cairo.h>
 #include <math.h>
 #include <stdlib.h>
@@ -17,14 +18,17 @@
 #include "core/gimplinklayer.h"
 #endif
 
+typedef enum { BITMAP_EXISTING, BITMAP_THRESHOLD, BITMAP_DIFFUSION } BitmapMethod;
+
 typedef struct {
   GlimsEngine *engine;
   GeglBuffer *projection;
   const Babl *format;
   GlimsProgress *progress;
   guint components;
-  gboolean use_threshold;
+  BitmapMethod method;
   guint threshold;
+  GlimsBitmapDiffusion diffusion;
   guint64 samples, total;
   gint64 last_service;
   gboolean cancelled;
@@ -75,23 +79,37 @@ bitmap_read (void *data, uint32_t y, uint32_t x, uint32_t count, uint8_t *sample
     }
   gegl_buffer_get (state->projection, &area, 1.0, state->format, pixels,
                    GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
-  for (uint32_t i = 0; i < count; i++)
+  if (state->method == BITMAP_DIFFUSION)
     {
-      float *p = pixels + i * state->components;
-      gboolean opaque = p[state->components - 1] == 1.0f;
-      if (state->use_threshold)
+      float values[GLIMS_BITMAP_PSD_CHUNK_PIXELS];
+      gboolean valid = TRUE;
+      for (uint32_t i = 0; i < count; i++)
         {
-          gboolean valid = opaque && isfinite (p[0]) && p[0] >= 0.0f && p[0] <= 1.0f;
-          guint value = valid ? (guint) floorf (p[0] * 255.0f + 0.5f) : 0;
-          samples[i] = valid ? (value <= state->threshold ? 0 : 255) : 127;
+          float *p = pixels + i * state->components;
+          values[i] = p[0];
+          valid = valid && p[state->components - 1] == 1.0f;
         }
-      else
-        {
-          gboolean binary = p[0] == 0.0f || p[0] == 1.0f;
-          for (guint c = 1; c + 1 < state->components; c++) binary = binary && p[c] == p[0];
-          samples[i] = binary && opaque ? (p[0] == 0.0f ? 0 : 255) : 127;
-        }
+      if (!valid || !glims_bitmap_diffusion_apply (&state->diffusion, y, x, count, values, samples))
+        memset (samples, 127, count); /* serializer reports invalid pixel */
     }
+  else
+    for (uint32_t i = 0; i < count; i++)
+      {
+        float *p = pixels + i * state->components;
+        gboolean opaque = p[state->components - 1] == 1.0f;
+        if (state->method == BITMAP_THRESHOLD)
+          {
+            gboolean valid = opaque && isfinite (p[0]) && p[0] >= 0.0f && p[0] <= 1.0f;
+            guint value = valid ? (guint) floorf (p[0] * 255.0f + 0.5f) : 0;
+            samples[i] = valid ? (value <= state->threshold ? 0 : 255) : 127;
+          }
+        else
+          {
+            gboolean binary = p[0] == 0.0f || p[0] == 1.0f;
+            for (guint c = 1; c + 1 < state->components; c++) binary = binary && p[c] == p[0];
+            samples[i] = binary && opaque ? (p[0] == 0.0f ? 0 : 255) : 127;
+          }
+      }
   state->samples += count;
   return true;
 }
@@ -117,10 +135,10 @@ bitmap_has_link_layer (GimpImage *image)
 
 static GlimsStatus
 bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
-               gboolean use_threshold, uint32_t threshold, char **error)
+               BitmapMethod method, uint32_t threshold, char **error)
 {
   if (error) *error = NULL;
-  if (!path || !g_path_is_absolute (path) || (use_threshold && threshold > 255))
+  if (!path || !g_path_is_absolute (path) || (method == BITMAP_THRESHOLD && threshold > 255))
     return GLIMS_STATUS_INVALID_ARGUMENT;
   const char *extension = strrchr (path, '.');
   if (!extension || g_ascii_strcasecmp (extension, ".psd"))
@@ -138,9 +156,9 @@ bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
       if (error) *error = strdup ("Bitmap PSD export requires a grayscale or indexed document.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
-  if (use_threshold && base != GIMP_GRAY)
+  if (method != BITMAP_EXISTING && base != GIMP_GRAY)
     {
-      if (error) *error = strdup ("Threshold Bitmap export requires a grayscale document.");
+      if (error) *error = strdup ("Bitmap conversion requires a grayscale document.");
       return GLIMS_STATUS_UNSUPPORTED;
     }
   if (bitmap_has_link_layer (open->image))
@@ -170,14 +188,16 @@ bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
   gimp_projection_flush_now (projection, FALSE);
   const Babl *projection_format = gimp_projectable_get_format (GIMP_PROJECTABLE (copy));
   const Babl *space = projection_format ? babl_format_get_space (projection_format) : NULL;
-  const char *name = use_threshold ? "Y'A float" : base == GIMP_GRAY ? "YA float" : "RGBA float";
+  const char *name = method != BITMAP_EXISTING ? "Y'A float" : base == GIMP_GRAY ? "YA float" : "RGBA float";
   const Babl *format = space ? babl_format_with_space (name, space) : babl_format (name);
   if (!buffer || !format)
     { g_object_unref (copy); engine->busy--; return GLIMS_STATUS_FAILED; }
   BitmapExport state = { .engine = engine, .projection = buffer, .format = format,
                          .components = base == GIMP_GRAY ? 2u : 4u,
-                         .use_threshold = use_threshold, .threshold = threshold,
+                         .method = method, .threshold = threshold,
                          .total = (guint64) spec.width * spec.height };
+  if (method == BITMAP_DIFFUSION && !glims_bitmap_diffusion_begin (&state.diffusion, spec.width, spec.height))
+    { g_object_unref (copy); engine->busy--; return GLIMS_STATUS_FAILED; }
   state.progress = glims_progress_new (engine);
   engine->progress = state.progress;
   gulong cancel = g_signal_connect (state.progress, "cancel", G_CALLBACK (bitmap_cancel), &state);
@@ -189,6 +209,7 @@ bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
   gimp_progress_end (GIMP_PROGRESS (state.progress));
   engine->progress = NULL;
   g_object_unref (state.progress);
+  glims_bitmap_diffusion_end (&state.diffusion);
   g_object_unref (copy);
   engine->busy--;
 
@@ -197,8 +218,8 @@ bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
   if (error)
     {
       if (result == GLIMS_BITMAP_PSD_FILE_INVALID_PIXEL)
-        *error = strdup (use_threshold
-          ? "Threshold Bitmap PSD requires fully opaque grayscale pixels with finite values from 0 to 1."
+        *error = strdup (method != BITMAP_EXISTING
+          ? "Bitmap conversion requires fully opaque grayscale pixels with finite values from 0 to 1."
           : "Bitmap PSD requires fully opaque black and white pixels. Convert a copy before exporting.");
       else if (os_error)
         *error = strdup (g_strerror (os_error));
@@ -212,7 +233,7 @@ GlimsStatus
 glims_image_export_bitmap_psd (GlimsEngine *engine, GlimsImageID id,
                                const char *path, char **error)
 {
-  return bitmap_export (engine, id, path, FALSE, 0, error);
+  return bitmap_export (engine, id, path, BITMAP_EXISTING, 0, error);
 }
 
 GlimsStatus
@@ -220,5 +241,12 @@ glims_image_export_bitmap_threshold_psd (GlimsEngine *engine, GlimsImageID id,
                                          const char *path, uint32_t threshold,
                                          char **error)
 {
-  return bitmap_export (engine, id, path, TRUE, threshold, error);
+  return bitmap_export (engine, id, path, BITMAP_THRESHOLD, threshold, error);
+}
+
+GlimsStatus
+glims_image_export_bitmap_diffusion_psd (GlimsEngine *engine, GlimsImageID id,
+                                         const char *path, char **error)
+{
+  return bitmap_export (engine, id, path, BITMAP_DIFFUSION, 0, error);
 }

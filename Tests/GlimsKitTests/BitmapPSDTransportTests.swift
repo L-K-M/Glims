@@ -8,6 +8,7 @@ final class BitmapPSDTransportTests: XCTestCase {
         var calls = 0
         var image: Int32 = 0
         var threshold: UInt32?
+        var diffusionCalls = 0
         var path = ""
         var stopped = false
         static func from(_ engine: OpaquePointer?) -> Producer {
@@ -16,12 +17,14 @@ final class BitmapPSDTransportTests: XCTestCase {
     }
 
     private func withSession(short: Bool = false, missing: Bool = false, shortThreshold: Bool = false, missingThreshold: Bool = false,
+                             shortDiffusion: Bool = false, missingDiffusion: Bool = false,
                              _ body: (EngineSession, Producer) throws -> Void) throws {
         let producer = Producer()
         var api = GlimsEngineAPI()
         api.api_version = GLIMS_ENGINE_API_VERSION
         api.struct_size = UInt32(short ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_psd)! :
                                  shortThreshold ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_threshold_psd)! :
+                                 shortDiffusion ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_diffusion_psd)! :
                                  MemoryLayout<GlimsEngineAPI>.size)
         api.start = { config, result, _ in
             guard let path = config?.pointee.user_directory,
@@ -54,9 +57,20 @@ final class BitmapPSDTransportTests: XCTestCase {
                 return GLIMS_STATUS_OK
             }
         }
+        if !missingDiffusion {
+            api.image_export_bitmap_diffusion_psd = { engine, image, path, error in
+                let owner = Producer.from(engine)
+                owner.calls += 1
+                owner.diffusionCalls += 1
+                owner.image = image
+                owner.path = path.map { String(cString: $0) } ?? ""
+                error?.pointee = nil
+                return GLIMS_STATUS_OK
+            }
+        }
         let directory = URL(fileURLWithPath: "/fixture/\(UInt(bitPattern: Unmanaged.passUnretained(producer).toOpaque()))")
         try withExtendedLifetime(producer) {
-            if short || shortThreshold {
+            if short || shortThreshold || shortDiffusion {
                 let page = Int(getpagesize()), size = Int(api.struct_size)
                 let memory = mmap(nil, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)!
                 guard memory != MAP_FAILED else { throw POSIXError(.ENOMEM) }
@@ -76,6 +90,29 @@ final class BitmapPSDTransportTests: XCTestCase {
             }
         }
         XCTAssertTrue(producer.stopped)
+    }
+
+    func testDiffusionRequiresItsOwnSlotAndNeverFallsBack() throws {
+        var settings = ExportSettings()
+        settings.format = .psd
+        settings.psdColor = .bitmap
+        settings.psdLayout = .merged
+        settings.bitmapMethod = .diffusion
+        for (short, missing) in [(true, false), (false, true)] {
+            try withSession(shortDiffusion: short, missingDiffusion: missing) { session, producer in
+                XCTAssertTrue(session.supportsBitmapThresholdPSD)
+                XCTAssertFalse(session.supportsBitmapDiffusionPSD)
+                XCTAssertThrowsError(try session.export(17, to: "/tmp/output.psd", settings: settings))
+                XCTAssertEqual(producer.calls, 0)
+            }
+        }
+        try withSession { session, producer in
+            XCTAssertTrue(session.supportsBitmapDiffusionPSD)
+            try session.export(17, to: "/tmp/output.psd", settings: settings)
+            XCTAssertEqual(producer.diffusionCalls, 1)
+            XCTAssertEqual(producer.image, 17)
+            XCTAssertEqual(producer.path, "/tmp/output.psd")
+        }
     }
 
     func testThresholdRequiresItsOwnSlotAndCarriesExactCutoff() throws {
