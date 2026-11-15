@@ -791,7 +791,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 continue
             }
             if let existing = documents.first(where: {
-                guard $0.imageDocument.fileState.importStrategy != .photoshopComposite else { return false }
+                guard !$0.closeStarted, !$0.imageDocument.isClosing,
+                      $0.imageDocument.fileState.importStrategy != .photoshopComposite else { return false }
                 guard let source = $0.imageDocument.fileState.nativeURL ?? $0.imageDocument.fileState.importedSourceURL else { return false }
                 return FileWriteCoordinator.sameFile(source, url)
             }) {
