@@ -4328,6 +4328,14 @@ typedef struct GlimsEngineAPI {
    * pixels, history and file identity remain unchanged. Clears *error. */
   GlimsStatus (*image_export_bitmap_psd) (GlimsEngine *engine, GlimsImageID image,
                                           const char *path, char **error);
+  /* Slot227: export an ordinary grayscale canvas as flat Bitmap PSD with an
+   * explicit threshold in 0..255. Each finite opaque Y-prime sample in [0,1]
+   * is rounded to nearest 8-bit value; samples <= threshold become black,
+   * others white. No dithering. Linked layers refuse. Source and destination
+   * transaction, cancellation and metadata policy match slot226. */
+  GlimsStatus (*image_export_bitmap_threshold_psd) (GlimsEngine *engine, GlimsImageID image,
+                                                    const char *path, uint32_t threshold,
+                                                    char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

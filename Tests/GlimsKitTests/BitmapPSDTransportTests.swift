@@ -7,6 +7,7 @@ final class BitmapPSDTransportTests: XCTestCase {
     private final class Producer {
         var calls = 0
         var image: Int32 = 0
+        var threshold: UInt32?
         var path = ""
         var stopped = false
         static func from(_ engine: OpaquePointer?) -> Producer {
@@ -14,12 +15,14 @@ final class BitmapPSDTransportTests: XCTestCase {
         }
     }
 
-    private func withSession(short: Bool = false, missing: Bool = false,
+    private func withSession(short: Bool = false, missing: Bool = false, shortThreshold: Bool = false, missingThreshold: Bool = false,
                              _ body: (EngineSession, Producer) throws -> Void) throws {
         let producer = Producer()
         var api = GlimsEngineAPI()
         api.api_version = GLIMS_ENGINE_API_VERSION
-        api.struct_size = UInt32(short ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_psd)! : MemoryLayout<GlimsEngineAPI>.size)
+        api.struct_size = UInt32(short ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_psd)! :
+                                 shortThreshold ? MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_threshold_psd)! :
+                                 MemoryLayout<GlimsEngineAPI>.size)
         api.start = { config, result, _ in
             guard let path = config?.pointee.user_directory,
                   let address = UInt(URL(fileURLWithPath: String(cString: path)).lastPathComponent),
@@ -40,9 +43,20 @@ final class BitmapPSDTransportTests: XCTestCase {
                 return GLIMS_STATUS_OK
             }
         }
+        if !missingThreshold {
+            api.image_export_bitmap_threshold_psd = { engine, image, path, threshold, error in
+                let owner = Producer.from(engine)
+                owner.calls += 1
+                owner.image = image
+                owner.path = path.map { String(cString: $0) } ?? ""
+                owner.threshold = threshold
+                error?.pointee = nil
+                return GLIMS_STATUS_OK
+            }
+        }
         let directory = URL(fileURLWithPath: "/fixture/\(UInt(bitPattern: Unmanaged.passUnretained(producer).toOpaque()))")
         try withExtendedLifetime(producer) {
-            if short {
+            if short || shortThreshold {
                 let page = Int(getpagesize()), size = Int(api.struct_size)
                 let memory = mmap(nil, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)!
                 guard memory != MAP_FAILED else { throw POSIXError(.ENOMEM) }
@@ -62,6 +76,37 @@ final class BitmapPSDTransportTests: XCTestCase {
             }
         }
         XCTAssertTrue(producer.stopped)
+    }
+
+    func testThresholdRequiresItsOwnSlotAndCarriesExactCutoff() throws {
+        var settings = ExportSettings()
+        settings.format = .psd
+        settings.psdColor = .bitmap
+        settings.psdLayout = .merged
+        settings.bitmapMethod = .threshold
+        settings.bitmapThreshold = 128
+        try withSession(shortThreshold: true) { session, producer in
+            XCTAssertTrue(session.supportsBitmapPSD)
+            XCTAssertFalse(session.supportsBitmapThresholdPSD)
+            XCTAssertThrowsError(try session.export(17, to: "/tmp/output.psd", settings: settings))
+            XCTAssertEqual(producer.calls, 0)
+        }
+        try withSession(missingThreshold: true) { session, producer in
+            XCTAssertTrue(session.supportsBitmapPSD)
+            XCTAssertFalse(session.supportsBitmapThresholdPSD)
+            XCTAssertThrowsError(try session.export(17, to: "/tmp/output.psd", settings: settings))
+            XCTAssertEqual(producer.calls, 0)
+        }
+        try withSession { session, producer in
+            XCTAssertTrue(session.supportsBitmapThresholdPSD)
+            try session.export(17, to: "/tmp/output.psd", settings: settings)
+            XCTAssertEqual(producer.calls, 1)
+            XCTAssertEqual(producer.threshold, 128)
+            XCTAssertEqual(producer.image, 17)
+            settings.bitmapThreshold = 256
+            XCTAssertThrowsError(try session.export(17, to: "/tmp/output.psd", settings: settings))
+            XCTAssertEqual(producer.calls, 1)
+        }
     }
 
     func testBitmapUsesOptionalSlotAndRefusesOldOrMissingAdapter() throws {

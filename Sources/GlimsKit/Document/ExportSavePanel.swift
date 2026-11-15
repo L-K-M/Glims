@@ -9,8 +9,9 @@ final class ExportSavePanel: NSObject, NSOpenSavePanelDelegate {
     let form: ExportOptionsForm
 
     init(baseName: String, settings: ExportSettings, context: ExportOptionsForm.Context = .ordinary,
-         supportsBitmapPSD: Bool = false) {
-        form = ExportOptionsForm(settings: settings, context: context, supportsBitmapPSD: supportsBitmapPSD)
+         supportsBitmapPSD: Bool = false, supportsBitmapThresholdPSD: Bool = false) {
+        form = ExportOptionsForm(settings: settings, context: context, supportsBitmapPSD: supportsBitmapPSD,
+                                 supportsBitmapThresholdPSD: supportsBitmapThresholdPSD)
         super.init()
         panel.title = "Export Image"
         panel.prompt = "Export"

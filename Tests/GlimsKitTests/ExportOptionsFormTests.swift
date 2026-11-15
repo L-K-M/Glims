@@ -135,6 +135,41 @@ final class ExportOptionsFormTests: XCTestCase {
         XCTAssertFalse(value.isReadyToExport)
     }
 
+    func testBitmapThresholdIsExplicitAndRejectsInvalidDraft() throws {
+        let form = ExportOptionsForm(supportsBitmapPSD: true, supportsBitmapThresholdPSD: true)
+        form.selectFormat(.psd)
+        form.psdColorPopup.selectItem(at: try XCTUnwrap(PsdOutputColor.allCases.firstIndex(of: .bitmap)))
+        fire(form.psdColorPopup)
+        XCTAssertEqual(form.settings.bitmapMethod, .existing)
+        form.bitmapMethodPopup.selectItem(at: try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .threshold)))
+        fire(form.bitmapMethodPopup)
+        XCTAssertEqual(form.settings.bitmapMethod, .threshold)
+        XCTAssertTrue(form.psdExplanation.stringValue.contains("at or below"))
+        form.bitmapThresholdRow.field.stringValue = "128"
+        XCTAssertTrue(form.commitEditing())
+        XCTAssertEqual(form.settings.bitmapThreshold, 128)
+        form.bitmapThresholdRow.field.stringValue = "256"
+        XCTAssertFalse(form.commitEditing())
+        XCTAssertEqual(form.settings.bitmapThreshold, 128)
+        XCTAssertTrue(form.lastError?.contains("0 to 255") == true)
+        form.bitmapMethodPopup.selectItem(at: try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .existing)))
+        fire(form.bitmapMethodPopup)
+        XCTAssertTrue(form.commitEditing(), "a hidden threshold draft does not block strict output")
+    }
+
+    func testBitmapThresholdCannotFallBackOnOlderAdapter() throws {
+        var settings = ExportSettings()
+        settings.format = .psd
+        settings.psdColor = .bitmap
+        settings.psdLayout = .merged
+        settings.bitmapMethod = .threshold
+        let form = ExportOptionsForm(settings: settings, supportsBitmapPSD: true)
+        let index = try XCTUnwrap(ExportSettings.BitmapMethod.allCases.firstIndex(of: .threshold))
+        XCTAssertFalse(try XCTUnwrap(form.bitmapMethodPopup.item(at: index)).isEnabled)
+        XCTAssertFalse(form.commitEditing())
+        XCTAssertTrue(form.lastError?.contains("not available") == true)
+    }
+
     // MARK: Validation gate
 
     func testValidateEnforcesTheTypedQualityRange() {

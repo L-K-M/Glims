@@ -68,6 +68,19 @@ struct ExportSettings: Equatable {
     var pngInterlaced = false
     var pngPreserveTransparentColor = false
 
+    enum BitmapMethod: String, CaseIterable {
+        case existing, threshold
+        var title: String {
+            switch self {
+            case .existing: return "Existing black and white"
+            case .threshold: return "Threshold grayscale"
+            }
+        }
+    }
+    var bitmapMethod = BitmapMethod.existing
+    /// Inclusive 8-bit grayscale cutoff; samples at or below become black.
+    var bitmapThreshold = 127
+
     var psdLayout = PsdLayout.layers
     /// PSD output color: the document's RGB/grayscale pixels, or a CMYK output
     /// conversion that keeps RGB editing unchanged.
@@ -146,7 +159,8 @@ struct ExportSettings: Equatable {
     /// export; other formats keep their stored choice.
     static func validate(_ settings: ExportSettings) -> Bool {
         guard settings.jpegQuality.isFinite && (0...1).contains(settings.jpegQuality)
-                && (0...9).contains(settings.pngCompression) else { return false }
+                && (0...9).contains(settings.pngCompression)
+                && (0...255).contains(settings.bitmapThreshold) else { return false }
         // PsdCmykProfile validates its immutable bytes at construction.
         return true
     }
@@ -366,6 +380,9 @@ final class ExportOptionsForm: NSView {
         target: nil, action: nil)
     let psdLayoutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let psdColorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let bitmapMethodPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let bitmapThresholdRow = ExportNumberRow(label: "Bitmap threshold", range: 0...255,
+        integer: true, rejection: "Threshold must be a whole number from 0 to 255.")
     let psdCmykProfilePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let psdExplanation = NSTextField(wrappingLabelWithString: "")
     let bmpExplanation = NSTextField(wrappingLabelWithString:
@@ -381,6 +398,8 @@ final class ExportOptionsForm: NSView {
     /// others'.
     private var optionRows: [ExportFormat: [NSGridRow]] = [:]
     private var psdCmykProfileRow: NSGridRow?
+    private var bitmapMethodGridRow: NSGridRow?
+    private var bitmapThresholdGridRow: NSGridRow?
     private var psdCmykCatalog = PsdCmykProfileCatalog()
     private var psdCmykLoadGeneration = 0
     private var psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading
@@ -391,6 +410,7 @@ final class ExportOptionsForm: NSView {
     }
     private let context: Context
     private let supportsBitmapPSD: Bool
+    private let supportsBitmapThresholdPSD: Bool
     private var nativeCmyk: Bool {
         if case .nativeCmyk = context { return true }
         return false
@@ -399,9 +419,11 @@ final class ExportOptionsForm: NSView {
     init(settings: ExportSettings = ExportSettings(),
          context: Context = .ordinary,
          supportsBitmapPSD: Bool = false,
+         supportsBitmapThresholdPSD: Bool = false,
          psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
         self.context = context
         self.supportsBitmapPSD = supportsBitmapPSD
+        self.supportsBitmapThresholdPSD = supportsBitmapThresholdPSD
         var initial = settings
         if case .nativeCmyk = context {
             initial.format = .psd
@@ -446,6 +468,14 @@ final class ExportOptionsForm: NSView {
         if let index = PsdOutputColor.allCases.firstIndex(of: .bitmap) {
             psdColorPopup.item(at: index)?.isEnabled = supportsBitmapPSD
         }
+        bitmapMethodPopup.addItems(withTitles: ExportSettings.BitmapMethod.allCases.map(\.title))
+        bitmapMethodPopup.setAccessibilityLabel("Bitmap conversion")
+        bitmapMethodPopup.menu?.autoenablesItems = false
+        if let index = ExportSettings.BitmapMethod.allCases.firstIndex(of: .threshold) {
+            bitmapMethodPopup.item(at: index)?.isEnabled = supportsBitmapThresholdPSD
+        }
+        bitmapMethodPopup.target = self
+        bitmapMethodPopup.action = #selector(bitmapMethodChanged(_:))
         psdColorPopup.setAccessibilityLabel("PSD color")
         psdColorPopup.target = self
         psdColorPopup.action = #selector(psdColorChanged(_:))
@@ -504,6 +534,13 @@ final class ExportOptionsForm: NSView {
         compressionRow.onAccepted = { [weak self] in self?.clearMessage() }
         compressionRow.onRejected = { [weak self] reason in self?.refuse(reason) }
 
+        bitmapThresholdRow.onChange = { [weak self] value in
+            self?.settings.bitmapThreshold = Int(value)
+            self?.clearMessage()
+        }
+        bitmapThresholdRow.onAccepted = { [weak self] in self?.clearMessage() }
+        bitmapThresholdRow.onRejected = { [weak self] reason in self?.refuse(reason) }
+
         messageLabel.setAccessibilityLabel("Export options message")
         messageLabel.lineBreakMode = .byWordWrapping
         messageLabel.maximumNumberOfLines = 3
@@ -527,6 +564,8 @@ final class ExportOptionsForm: NSView {
             [NSTextField(labelWithString: "Content:"), psdLayoutPopup],
             [NSTextField(labelWithString: "Color:"), psdColorPopup],
             [NSTextField(labelWithString: "CMYK profile:"), psdCmykProfilePopup],
+            [NSTextField(labelWithString: "Bitmap method:"), bitmapMethodPopup],
+            [NSTextField(labelWithString: "Threshold:"), bitmapThresholdRow],
             [NSGridCell.emptyContentView, psdExplanation],
         ]
         let bitmapRows: [[NSView]] = [
@@ -542,6 +581,8 @@ final class ExportOptionsForm: NSView {
         let psdStart = 10
         let psdAllRows = (psdStart..<(psdStart + psdRows.count)).map { grid.row(at: $0) }
         psdCmykProfileRow = psdAllRows[2]
+        bitmapMethodGridRow = psdAllRows[3]
+        bitmapThresholdGridRow = psdAllRows[4]
         optionRows = [
             .jpeg: (1...4).map { grid.row(at: $0) },
             .png: (5...7).map { grid.row(at: $0) },
@@ -589,6 +630,8 @@ final class ExportOptionsForm: NSView {
         tiffTransparentBox.state = settings.tiffPreserveTransparentColor ? .on : .off
         psdLayoutPopup.selectItem(at: popupIndex(of: settings.psdLayout, in: ExportSettings.PsdLayout.allCases))
         psdColorPopup.selectItem(at: popupIndex(of: settings.psdColor, in: PsdOutputColor.allCases))
+        bitmapMethodPopup.selectItem(at: popupIndex(of: settings.bitmapMethod, in: ExportSettings.BitmapMethod.allCases))
+        bitmapThresholdRow.show(Double(settings.bitmapThreshold))
         rebuildPsdCmykProfilePopup(entries: currentCatalogEntries())
         syncPsdCmykProfileSelection()
         updatePsdExplanation()
@@ -609,6 +652,9 @@ final class ExportOptionsForm: NSView {
             rows.forEach { $0.isHidden = format != settings.format }
         }
         psdLayoutPopup.isEnabled = !nativeCmyk && settings.psdColor != .bitmap
+        let showBitmap = settings.format == .psd && !nativeCmyk && settings.psdColor == .bitmap
+        bitmapMethodGridRow?.isHidden = !showBitmap
+        bitmapThresholdGridRow?.isHidden = !showBitmap || settings.bitmapMethod != .threshold
         let showCmyk = settings.format == .psd && (nativeCmyk || settings.psdColor == .cmyk)
         psdCmykProfileRow?.isHidden = !showCmyk
         if showCmyk { loadPsdCmykCatalogIfNeeded() }
@@ -625,7 +671,9 @@ final class ExportOptionsForm: NSView {
         case .cmyk:
             psdExplanation.stringValue = "\(settings.psdLayout.explanation) \(PsdOutputColor.cmyk.explanation)"
         case .bitmap:
-            psdExplanation.stringValue = PsdOutputColor.bitmap.explanation
+            psdExplanation.stringValue = settings.bitmapMethod == .threshold
+                ? "Converts opaque grayscale pixels at or below the threshold to black, and the rest to white. Transparency and linked layers are refused. Layers and metadata are omitted. Save XCF to keep editing."
+                : PsdOutputColor.bitmap.explanation
         }
     }
 
@@ -772,6 +820,16 @@ final class ExportOptionsForm: NSView {
         clearMessage()
     }
 
+    @objc private func bitmapMethodChanged(_ sender: NSPopUpButton) {
+        guard !nativeCmyk else { return }
+        let choices = ExportSettings.BitmapMethod.allCases
+        guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
+        settings.bitmapMethod = choices[sender.indexOfSelectedItem]
+        updatePsdExplanation()
+        applyFormatVisibility()
+        clearMessage()
+    }
+
     @objc private func psdColorChanged(_ sender: NSPopUpButton) {
         guard !nativeCmyk else { return }
         let choices = PsdOutputColor.allCases
@@ -866,6 +924,16 @@ final class ExportOptionsForm: NSView {
             guard supportsBitmapPSD, settings.psdLayout == .merged else {
                 refuse("Bitmap PSD export is not available with these settings or this image engine.")
                 return false
+            }
+            if settings.bitmapMethod == .threshold {
+                guard supportsBitmapThresholdPSD else {
+                    refuse("Threshold Bitmap export is not available for this document or image engine.")
+                    return false
+                }
+                guard bitmapThresholdRow.commitField() else {
+                    window?.makeFirstResponder(bitmapThresholdRow.field)
+                    return false
+                }
             }
         }
         if settings.format == .psd, settings.psdColor == .cmyk {
