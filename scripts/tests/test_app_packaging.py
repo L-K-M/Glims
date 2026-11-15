@@ -239,7 +239,7 @@ class AppPackagingTests(unittest.TestCase):
         compiler.write_text("#!/usr/bin/env python3\nimport pathlib, sys\n"
                             "target = pathlib.Path(sys.argv[sys.argv.index('-o') + 1])\n"
                             "target.write_text('#!/bin/sh\\nexit 0\\n')\n"
-                            "target.chmod(0o755)\n")
+                            "target.chmod(0o700)\n")
         compiler.chmod(0o755)
         prepare = self.root / "scripts/prepare-engine-startup.py"
         prepare.write_text("import pathlib, sys\n"
@@ -255,7 +255,9 @@ class AppPackagingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         app = self.root / "dist/Glims.app"
         self.assertEqual((app / "Contents/Frameworks/libglimsengine.dylib").read_text(), "engine")
-        self.assertTrue(os.access(app / "Contents/MacOS/glims-font-cache", os.X_OK))
+        # The build must make the helper usable by other local users, even
+        # when the compiler initially creates an owner-only executable.
+        self.assertEqual((app / "Contents/MacOS/glims-font-cache").stat().st_mode & 0o777, 0o755)
         self.assertEqual((app / "Contents/Resources/Engine-Startup/pluginrc").read_text(), "registry")
         startup = app / "Contents/Resources/Engine-Startup"
         for path in (startup, startup / "localized", startup / "localized/key"):

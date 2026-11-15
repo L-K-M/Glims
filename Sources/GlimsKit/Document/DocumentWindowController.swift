@@ -563,6 +563,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     private func stateDidChange() {
+        canvas.refreshAccessibilityLabel()
         window?.title = Self.title(name: imageDocument.name, zoomPercent: canvas.zoomPercent,
                                    isDirty: imageDocument.hasUnsavedChanges,
                                    mode: imageDocument.colorInfo.mode,
