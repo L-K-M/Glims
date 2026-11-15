@@ -1,5 +1,22 @@
 # Glims plan
 
+## Implementation handoff (2026-11-15)
+
+The editor has a bundled GIMP engine and extensive native editing, file,
+layer, selection, color and Recorder functionality. The current integrated
+work is **not yet evidence of complete Photoshop 4 parity**, universal
+five-second startup, accessibility qualification, or a final installed build.
+See [implementation-handoff.md](implementation-handoff.md) for the exact
+tested candidates, unfinished checks, review gates, dependencies and a
+continuation prompt. The user explicitly excludes notarization.
+
+As of this checkpoint, main is `4a56b5ef`; Duotone export (#354), the Info
+palette (#367) and layered Lab to RGB copy (#368) are awaiting exact-head
+hosted reviews. Composite-open errors (#355), Sponge and tablet Recorder
+capture, and Recorder removal help have further local work and qualifications
+described in the handoff. User-requested stop interrupted the composite
+bundle's editor smoke and the master tablet engine matrix; neither is a pass.
+
 Status as of 2026-11-08: phase 0 finished with a go verdict
 ([`phase0-report.md`](phase0-report.md)); the first implementation of all
 five phase 1 items is complete. Rendering follow-up below restores the
