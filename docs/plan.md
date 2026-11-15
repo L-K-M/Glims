@@ -6293,6 +6293,10 @@ selections and recordings with work in flight are refused. Native palette
 and file workflows pass on all four supported engines, and the full Swift
 suite passes. Bundle qualification and hosted review remain open.
 
+The Remove Step control explains why it is disabled: it reports pending
+recording, replay or image work first, then asks for a current selection.
+Its normal action help returns when the selected step can be removed.
+
 ### Reopen after Revert (candidate)
 
 An ordinary Open no longer brings a discarded window back while its document

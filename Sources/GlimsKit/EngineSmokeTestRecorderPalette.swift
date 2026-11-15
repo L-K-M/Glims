@@ -179,6 +179,8 @@ extension EngineSmokeTest {
         expect(label("Recorder image")?.stringValue == a.name && table.numberOfRows == 0,
                "the initial view identifies A and shows its actual empty recording")
         expect(removeStep?.isEnabled == false, "Remove Step is unavailable before a step is selected")
+        expect(removeStep?.toolTip == "Select a Recorder step to remove.",
+               "the disabled Remove Step control explains that a step must be selected")
         expect(button(.record)?.isEnabled == true && button(.stop)?.isEnabled == false
                 && button(.replay)?.isEnabled == false && button(.cancelReplay)?.isEnabled == false && button(.clear)?.isEnabled == false,
                "initial button gates honestly distinguish Record from unavailable commands")
@@ -325,6 +327,10 @@ extension EngineSmokeTest {
         click(.replay)
         expect(a.recorder.isReplaying && a.pendingWork == 1 && button(.cancelReplay)?.isEnabled == true,
                "accepted replay work remains counted while Cancel Replay is available")
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        palette.reload()
+        expect(removeStep?.isEnabled == false && removeStep?.toolTip == ImageDocument.RecorderInstallError.unsettled.localizedDescription,
+               "Remove Step explains that replay must stop before a step can be removed")
         click(.cancelReplay)
         expect(a.replayStatus == .cancelled(index: 0) && a.pendingWork == 1
                 && label("Recorder status")?.stringValue.contains("already running may finish") == true,
@@ -341,6 +347,8 @@ extension EngineSmokeTest {
         let oldCheckpoint = a.recorderContentCheckpoint()
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         expect(removeStep?.isEnabled == true, "a selected settled step enables its Remove Step control")
+        expect(removeStep?.toolTip == "Remove the selected recorded step.",
+               "the enabled Remove Step control restores its action help")
         current = b
         removeStep?.performClick(nil)
         expect(a.recorder.records.count == 2 && b.recorder.records.isEmpty
