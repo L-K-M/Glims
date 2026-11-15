@@ -230,3 +230,4 @@ GLIMS_FACADE(image_export_bitmap_threshold_psd, api_image_export_bitmap_threshol
 GLIMS_FACADE(image_export_bitmap_diffusion_psd, api_image_export_bitmap_diffusion_psd, IMAGE, ORDINARY)
 GLIMS_FACADE(image_export_duotone_psd, api_image_export_duotone_psd, IMAGE, ORDINARY)
 GLIMS_FACADE(image_open_psd_composite, api_image_open_psd_composite, NONE, GLOBAL)
+GLIMS_FACADE(image_convert_layered_lab_copy, api_image_convert_layered_lab_copy, IMAGE, COMPONENT)

@@ -875,7 +875,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         alert.messageText = destination == .lab ? "Create Lab Copy" : "Create Linear RGB Copy"
         alert.informativeText = destination == .lab
             ? "Creates a separate 32-bit Lab document from the full visible canvas. The original keeps its layers and edits. The canvas must be opaque and use sRGB; replace linked layers with ordinary pixel layers first. Other metadata is not copied."
-            : "Creates a separate, opaque 32-bit linear RGB document from all three Lab channels. The full canvas is copied, regardless of the selection or channel preview. The original remains open; other metadata is not copied."
+            : imageDocument.storage.layout == .layeredLab
+                ? "Creates a separate 32-bit linear RGB document from the visible Lab layers, preserving transparency. The full canvas is copied regardless of the selection. The original keeps its layers and edits; other metadata is not copied."
+                : "Creates a separate, opaque 32-bit linear RGB document from all three Lab channels. The full canvas is copied, regardless of the selection or channel preview. The original remains open; other metadata is not copied."
         alert.addButton(withTitle: "Create Copy")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -2596,6 +2598,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 guard imageDocument.acceptsLabSelections else { return false }
             case #selector(fill(_:)):
                 guard imageDocument.storage.allowsLabLayerColorFill else { return false }
+            case #selector(createConvertedLabCopy(_:)) where imageDocument.storage.layout == .layeredLab:
+                break
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
                  #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),

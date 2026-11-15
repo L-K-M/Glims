@@ -6246,6 +6246,22 @@ editor checks with development trees denied. A focused independent source
 review found no concrete defect; it did not run tests or audit all upstream
 validation internals. Latest-head hosted CI and review remain in progress.
 
+### Layered Lab to linear RGB copy (candidate)
+
+A new size-guarded facade operation stages a separate float linear-RGB RGBA
+copy of the visible layered Lab canvas. It preserves composited transparency,
+ignores the selection, copies resolution, and leaves the source and its
+history unchanged. The existing Image > Create Linear RGB Copy confirmation
+and app-owned copy lifecycle now admit capable layered Lab engines; older
+engines continue to disable the command. Editable layers and metadata remain
+in the original. The RGB copy can use the ordinary Export command.
+
+This candidate is not installed or merged. Its pinned native copy fixture
+checks white/transparency, layer order and opacity against an independent LCMS
+oracle across 256-pixel boundaries, plus source preservation and cancellation.
+Four-engine, real-window, bundle and review qualification remain in progress;
+it does not claim native layered Lab export or complete Photoshop parity.
+
 ### Preserving alternate Duotone colors (candidate)
 
 The PSD loader carries image resource 1066 as transient metadata. For imported

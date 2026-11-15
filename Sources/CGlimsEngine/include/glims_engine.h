@@ -4356,6 +4356,15 @@ typedef struct GlimsEngineAPI {
    * *error is cleared on entry. No automatic fallback to another loader. */
   GlimsStatus (*image_open_psd_composite) (GlimsEngine *engine, const char *path,
                                            GlimsImageID *image, char **error);
+  /* Slot231: create an independent float linear-sRGB RGBA copy of the full
+   * visible layered Lab canvas, preserving transparency. Selection and
+   * hidden layers do not contribute. Resolution is copied; layer structure,
+   * metadata and history are not. Busy, ownership, cancellation and
+   * result/error rules match slot197. Only layered Lab and RGB merged-canvas
+   * FLOAT settings are admitted. */
+  GlimsStatus (*image_convert_layered_lab_copy) (GlimsEngine *engine, GlimsImageID image,
+                                                 const GlimsLabCopySettings *settings,
+                                                 GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

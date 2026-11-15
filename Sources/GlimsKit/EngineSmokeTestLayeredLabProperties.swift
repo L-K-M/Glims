@@ -137,6 +137,50 @@ extension EngineSmokeTest {
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
             check(opened.pendingWork == 0, "engine work finishes after \(step)")
         }
+        do {
+            let savedHandler = opened.labCopyHandler
+            defer { opened.labCopyHandler = savedHandler }
+            var copyResult: Result<Int32, Error>?
+            var copyCalls = 0
+            opened.labCopyHandler = { document, destination in
+                copyCalls += 1
+                document.convertedLabCopy(destination) { copyResult = $0 }
+            }
+            let menu = NSMenuItem(title: "Create Linear RGB Copy…", action: #selector(DocumentWindowController.createConvertedLabCopy(_:)), keyEquivalent: "")
+            check(opened.labCopyRefusal(.lab) == "Layered Lab documents can only be copied to RGB.",
+                  "a layered Lab copy refuses a Lab destination before showing a dialog")
+            check(windowController.validateMenuItem(menu) == session.supportsLayeredLabConvertedCopy,
+                  "layered Lab RGB copy menu follows the engine capability")
+            if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COPY"] == "1" {
+                check(session.supportsLayeredLabConvertedCopy, "test adapter supports layered Lab RGB copy")
+            }
+            if session.supportsLayeredLabConvertedCopy, let window = windowController.window {
+                let history = try session.undoInfo(image)
+                windowController.createConvertedLabCopy(nil)
+                EngineSmokeTestHost.pumpEvents(for: 0.1)
+                if let sheet = window.attachedSheet {
+                    window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1)
+                    check(copyCalls == 0, "cancelling layered Lab RGB copy leaves the source untouched")
+                } else { check(false, "layered Lab RGB copy opens its confirmation") }
+                windowController.createConvertedLabCopy(nil)
+                EngineSmokeTestHost.pumpEvents(for: 0.1)
+                if let sheet = window.attachedSheet {
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    let deadline = Date().addingTimeInterval(15)
+                    while copyResult == nil && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                    drain("layered Lab RGB copy")
+                    if copyResult == nil { check(false, "layered Lab RGB copy finishes within 15 seconds") }
+                    if case .success(let copied)? = copyResult {
+                        defer { try? session.closeImage(copied) }
+                        let info = try session.colorInfo(copied)
+                        check(copyCalls == 1 && copied != image && info.mode == .rgb && info.component == .float,
+                              "confirmed layered Lab copy produces an independent float RGB image")
+                        check(try session.undoInfo(image) == history, "layered Lab copy preserves source history")
+                    } else { check(false, "confirmed layered Lab copy produces an independent float RGB image") }
+                } else { check(false, "layered Lab RGB copy confirmation reopens") }
+            }
+        }
         if opened.storage.allowsLabSelections {
             check(opened.toolIsAvailable(.rectangleSelect) && opened.toolIsAvailable(.ellipseSelect) &&
                   opened.toolIsAvailable(.lasso), "layered Lab selection tools are available")

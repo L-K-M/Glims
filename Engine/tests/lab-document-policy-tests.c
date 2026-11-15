@@ -84,9 +84,14 @@ allowed (GlimsFacadeOperation op)
   switch (op)
     {
     case GLIMS_FACADE_OP_image_info: case GLIMS_FACADE_OP_image_layers:
-    case GLIMS_FACADE_OP_image_color_info: case GLIMS_FACADE_OP_image_render:
+    case GLIMS_FACADE_OP_image_color_info: case GLIMS_FACADE_OP_image_storage_info: case GLIMS_FACADE_OP_image_render:
     case GLIMS_FACADE_OP_image_lab_axes:
     case GLIMS_FACADE_OP_image_fill_lab: case GLIMS_FACADE_OP_channel_command:
+    case GLIMS_FACADE_OP_image_curves_lab: case GLIMS_FACADE_OP_image_levels_lab:
+    case GLIMS_FACADE_OP_image_lab_snapshot_begin: case GLIMS_FACADE_OP_image_lab_snapshot_curves:
+    case GLIMS_FACADE_OP_image_lab_snapshot_apply_curves: case GLIMS_FACADE_OP_image_lab_snapshot_levels:
+    case GLIMS_FACADE_OP_image_lab_snapshot_apply_levels:
+    case GLIMS_FACADE_OP_stroke_begin_lab_with_capture_facts:
     case GLIMS_FACADE_OP_stroke_begin_lab:
     case GLIMS_FACADE_OP_image_select_lab_shape:
     case GLIMS_FACADE_OP_image_select_lab_command:
@@ -113,7 +118,8 @@ matrix (GlimsEngine *engine, GlimsImageID id, gboolean damaged)
       unsigned reached = 0;
       gboolean invoked = TRUE;
       gboolean cleanup = i == GLIMS_FACADE_OP_image_close ||
-                          i == GLIMS_FACADE_OP_image_ink_snapshot_end;
+                          i == GLIMS_FACADE_OP_image_ink_snapshot_end ||
+                          i == GLIMS_FACADE_OP_image_lab_snapshot_end;
       gboolean want = cleanup || (!damaged && allowed (i));
       GlimsStatus status = glims_facade_call_reporting_admission (engine, i,
         (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, id, { 0, 0 } },

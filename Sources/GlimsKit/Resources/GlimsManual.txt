@@ -99,6 +99,12 @@ channel. Save XCF to retain the original layers, profile and precision.
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.
 
+For a Lab image, choose Image > Create Linear RGB Copy… to make a
+separate RGB document, then export that copy. In layered Lab images the
+copy combines visible layers and keeps transparency; the original keeps
+its layers and edits. An older engine may not offer this command for
+layered Lab documents.
+
 # Editing and the Clipboard
 
 Edit > Undo (Command-Z) and Redo (Shift-Command-Z) step through the

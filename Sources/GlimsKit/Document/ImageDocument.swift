@@ -4845,8 +4845,15 @@ final class ImageDocument {
     var labCopyHandler: ((ImageDocument, EngineSession.LabCopyDestination) -> Void)?
 
     func labCopyRefusal(_ destination: EngineSession.LabCopyDestination) -> String? {
-        guard session.supportsLabConvertedCopy else { return "This image engine cannot create converted Lab copies." }
-        guard acceptsEdits, !targetCommandIsPending, !strokeIsActive else {
+        let layered = storage.layout == .layeredLab
+        if layered && destination == .lab {
+            return "Layered Lab documents can only be copied to RGB."
+        }
+        guard layered ? session.supportsLayeredLabConvertedCopy : session.supportsLabConvertedCopy else {
+            return "This image engine cannot create converted Lab copies."
+        }
+        guard (layered ? acceptsImageReads && !recorder.isReplaying : acceptsEdits),
+              !targetCommandIsPending, !strokeIsActive else {
             return "Finish the current edit before creating a converted copy."
         }
         guard quickMaskState?.enabled != true, !floatingState.isActive else {
@@ -4865,7 +4872,9 @@ final class ImageDocument {
 
     func newLabCopy(_ destination: EngineSession.LabCopyDestination) {
         guard let handler = labCopyHandler else { return }
-        guard !refuseWhileEditingUnavailable() else { return }
+        // This read-only exception also admits layered storage; the separate
+        // refusal check still prevents a copy while Recorder is replaying.
+        guard !refuseWhileEditingUnavailable(allowingReplayRead: storage.layout == .layeredLab) else { return }
         if let reason = labCopyRefusal(destination) { onError?(reason); return }
         handler(self, destination)
     }
@@ -4881,10 +4890,11 @@ final class ImageDocument {
         if let reason = labCopyRefusal(destination) {
             return completion(.failure(RecorderReplayError(message: reason)))
         }
+        let layered = storage.layout == .layeredLab
         enqueueExclusive(effect: .readsPixels, label: "Creating a converted copy",
-                         admission: { self.labCopyRefusal(destination) == nil },
+                         admission: { self.labCopyRefusal(destination) == nil && (self.storage.layout == .layeredLab) == layered },
                          rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
-            let result = Result { try session.convertedLabCopy(image: image, destination: destination) }
+            let result = Result { try session.convertedLabCopy(image: image, destination: destination, layered: layered) }
             DispatchQueue.main.async { completion(result) }
         }
     }
