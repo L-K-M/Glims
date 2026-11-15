@@ -434,6 +434,12 @@ GlimsStatus glims_stroke_begin_v2  (GlimsEngine *e, GlimsImageID image, GlimsIte
                                     GlimsResourceID brush, const GlimsBrushSettings *settings,
                                     const GlimsStrokePacketV2 *packet,
                                     GlimsStrokeID *out, char **error);
+GlimsStatus glims_stroke_begin_v2_with_capture_facts (GlimsEngine *e, GlimsImageID image,
+                                    GlimsItemID drawable, GlimsResourceID brush,
+                                    const GlimsBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *packet,
+                                    const char *expected_fingerprint, GlimsStrokeID *out,
+                                    GlimsStrokeCaptureFacts *facts, char **error);
 GlimsStatus glims_stroke_continue_v2 (GlimsEngine *e, GlimsStrokeID id,
                                       const GlimsStrokePacketV2 *packet, char **error);
 GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);
