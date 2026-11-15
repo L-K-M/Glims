@@ -25,6 +25,7 @@ Current capture covers these command families:
 - A newly applied Levels, Curves, Color Balance, Hue/Saturation or
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
+- A newly applied Levels adjustment on a bound layer mask.
 
 - Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
   Levels/Curves Apply and complete Brush gestures, including
@@ -43,10 +44,16 @@ Levels, Curves, Color Balance, Hue/Saturation and Brightness/Contrast record
 the final native settings when Apply is admitted. Preview updates, Cancel and refused Apply
 add no row. An admitted Apply retains its place if recording stops while it
 is pending. A native failure becomes a failure row. Applying any of these
-ordinary layer adjustments to a mask/channel or editing an existing effect also produces an
+ordinary adjustments to a channel, applying adjustments other than Levels to a
+mask, or editing an existing effect also produces an
 explicit unsupported row after a successful commit, so the recording cannot
 silently replay an incomplete sequence. A settings capture failure preserves
 the live edit and marks the recording as failed.
+
+Mask Levels records the mask owner and its editing role. Rebinding requires a
+layer with a mask, and replay checks the current native target before changing
+pixels. A target that changes before Apply cannot be saved as a replayable
+binding. The mask adjustment uses one Undo step.
 
 ## Stroke capture
 
