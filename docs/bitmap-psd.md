@@ -28,9 +28,9 @@ not change the source pixels, history, dirty state or file identity.
 Reference: [Adobe Photoshop File Formats Specification](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/).
 Optimized and address/undefined-sanitized pure C tests check literal bytes,
 odd widths, chunk boundaries and refusals. A 9-by-2 test image was independently
-read with macOS ImageIO, which reproduced all 18 source pixels. A separate 8-by-2 file with one byte per row was also decoded by ImageIO
-with the expected black pixel in each row; the native regression pins its
-unpadded row layout.
+read with macOS ImageIO, which reproduced all 18 source pixels. A separate
+8-by-2 file with one byte per row was also decoded by ImageIO with the expected
+black pixel in each row; the native regression pins its unpadded row layout.
 Public-facade
 checks against all four supported engines reopen and re-export a Bitmap PSD,
 check the binary pixels, and verify failure leaves the destination unchanged.
