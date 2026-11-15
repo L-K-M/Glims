@@ -494,6 +494,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "info-palette" {
+                try exerciseInfoPalette(session, documents: documents)
+                print(failures == 0 ? "PASSED (info palette)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-palette" {
                 try exerciseRecorderPalette(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder palette)" : "FAILED: \(failures) failure(s)")
