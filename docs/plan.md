@@ -4474,9 +4474,9 @@ unconfirmed binding cannot be saved for replay. Channel adjustments and edits
 to an existing effect remain outside this slice.
 
 The saved replay, Undo and stale-role refusal pass real-engine tests on all
-four supported engines. The preview-retarget refusal passes on the pinned
-engine, with the remaining engine checks in progress. The full Swift suite
-passes 1,819 tests. Packaged-app qualification and merge remain open.
+four supported engines. The preview-retarget refusal also passes on each
+engine. The full Swift suite passes 1,819 tests. Packaged-app qualification
+and merge remain open.
 
 
 ### Transform composite pixel preview (2026-11-11 work in progress)
