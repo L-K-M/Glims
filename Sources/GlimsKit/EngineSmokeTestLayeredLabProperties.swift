@@ -186,20 +186,131 @@ extension EngineSmokeTest {
             var recordingErrors: [String] = []
             opened.onError = { recordingErrors.append($0) }
             defer { opened.onError = previousError }
-            try opened.startRecording()
-            check(!windowController.validateMenuItem(fillMenu), "Lab Fill is disabled while recording")
-            windowController.fill(nil)
-            EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Lab Fill refusal during recording")
-            check(!recordingErrors.isEmpty && window.attachedSheet == nil &&
-                  pixel(session, image, x: 1, y: 1) == beforeRecording && opened.recorder.records.isEmpty,
-                  "Lab Fill during recording changes nothing and opens no sheet")
-            try opened.stopRecording()
-            opened.onError = previousError
             func waitForSheet() -> NSWindow? {
                 let deadline = Date().addingTimeInterval(15)
                 while window.attachedSheet == nil && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
                 return window.attachedSheet
             }
+            try opened.startRecording()
+            if session.supportsLabLayerColorFillEmptySelection {
+                check(windowController.validateMenuItem(fillMenu), "guarded Lab Fill is enabled while recording")
+                windowController.fill(nil)
+                if let sheet = waitForSheet() {
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("recorded Lab layer Fill")
+                    try opened.stopRecording()
+                    let deadline = Date().addingTimeInterval(15)
+                    while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                    let recordedPixel = pixel(session, image, x: 1, y: 1)
+                    if let row = opened.recorder.records.first, case .success(.fillLabLayer(let value)) = row.resolution {
+                        check(value.color.red == 1 && value.color.green == 0 && value.color.blue == 0 &&
+                              value.opacity == 1 && recordedPixel != beforeRecording && recordingErrors.isEmpty,
+                              "Recorder captures the accepted Lab Fill color and opacity")
+                    } else { check(false, "Recorder captures the accepted Lab Fill color and opacity") }
+                    let recordingURL = work.appendingPathComponent("layered-lab-fill.glims-recording")
+                    var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+                    opened.saveRecording(to: recordingURL, checkpoint: try opened.recorderSaveCheckpoint()) { saved = $0 }
+                    drain("save layered Lab Fill recording")
+                    guard let saved else { throw NSError(domain: "LayeredLabSmoke", code: 5) }
+                    _ = try saved.get()
+                    let savedFile = try RecorderFileCodec.decode(Data(contentsOf: recordingURL))
+                    if let row = savedFile.records.first, case .success(.fillLabLayer, .layer) = row.outcome {
+                        check(true, "recorded Lab Fill saves with an explicit layer binding")
+                    } else { check(false, "recorded Lab Fill saves with an explicit layer binding") }
+                    opened.undo(); drain("recorded Lab Fill Undo")
+                    check(pixel(session, image, x: 1, y: 1) == beforeRecording,
+                          "Undo restores the image before the recorded Lab Fill")
+                    try opened.startReplay(); drain("live-bound Lab Fill replay")
+                    let replayDeadline = Date().addingTimeInterval(15)
+                    while opened.recorder.isReplaying && Date() < replayDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                    if case .finished = opened.replayStatus {
+                        check(pixel(session, image, x: 1, y: 1) == recordedPixel,
+                              "recorded Lab Fill replays on its original bound layer")
+                    } else { check(false, "recorded Lab Fill replays on its original bound layer") }
+                    opened.undo(); drain("recorded Lab Fill replay Undo")
+                    check(pixel(session, image, x: 1, y: 1) == beforeRecording,
+                          "Undo restores the replayed Lab Fill")
+                    _ = opened.clearRecording()
+                    let beforeCancel = try session.undoInfo(image)
+                    try opened.startRecording()
+                    windowController.fill(nil)
+                    if let cancelled = waitForSheet() {
+                        window.endSheet(cancelled, returnCode: .alertSecondButtonReturn)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("cancel recorded Lab Fill")
+                        try opened.stopRecording()
+                        let settleDeadline = Date().addingTimeInterval(15)
+                        while opened.recorder.pendingCount != 0 && Date() < settleDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                        let afterCancel = try session.undoInfo(image)
+                        check(opened.recorder.pendingCount == 0 && opened.recorder.records.isEmpty && beforeCancel == afterCancel &&
+                              pixel(session, image, x: 1, y: 1) == beforeRecording,
+                              "cancelling the recorded Lab Fill sheet leaves no record or changes")
+                        _ = opened.clearRecording()
+                    } else {
+                        check(false, "recorded Lab Fill sheet opens for cancellation")
+                        try opened.stopRecording(); _ = opened.clearRecording()
+                    }
+                    windowController.fill(nil)
+                    if let sheet = waitForSheet() {
+                        try opened.startRecording()
+                        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("start recording with Lab Fill sheet open")
+                        try opened.stopRecording()
+                        let deadline = Date().addingTimeInterval(15)
+                        while opened.recorder.pendingCount != 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                        if let row = opened.recorder.records.first, case .success(.fillLabLayer(_)) = row.resolution {
+                            check(pixel(session, image, x: 1, y: 1) != beforeRecording,
+                                  "Lab Fill admitted after recording starts is recorded")
+                        } else { check(false, "Lab Fill admitted after recording starts is recorded") }
+                        opened.undo(); drain("Undo Fill after starting recording")
+                        _ = opened.clearRecording()
+                    } else { check(false, "Lab Fill sheet opens before recording starts") }
+                    try opened.startRecording()
+                    windowController.fill(nil)
+                    if let sheet = waitForSheet() {
+                        try opened.stopRecording()
+                        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                        EngineSmokeTestHost.pumpEvents(for: 0.1); drain("stop recording with Lab Fill sheet open")
+                        let settleDeadline = Date().addingTimeInterval(15)
+                        while opened.recorder.pendingCount != 0 && Date() < settleDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                        check(opened.recorder.pendingCount == 0 && opened.recorder.records.isEmpty && pixel(session, image, x: 1, y: 1) != beforeRecording,
+                              "Lab Fill admitted after recording stops is not recorded")
+                        opened.undo(); drain("Undo Fill after stopping recording")
+                        _ = opened.clearRecording()
+                    } else {
+                        check(false, "recorded Lab Fill sheet opens before recording stops")
+                        try opened.stopRecording(); _ = opened.clearRecording()
+                    }
+                    opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
+                    drain("selection before recorded Lab Fill")
+                    let selectedHistory = try session.undoInfo(image)
+                    recordingErrors.removeAll()
+                    try opened.startRecording()
+                    check(!windowController.validateMenuItem(fillMenu), "recorded Lab Fill is disabled with a selection")
+                    windowController.fill(nil)
+                    EngineSmokeTestHost.pumpEvents(for: 0.1); drain("selected recorded Lab Fill refusal")
+                    let unexpectedSheet = window.attachedSheet
+                    if let unexpectedSheet { window.endSheet(unexpectedSheet, returnCode: .alertSecondButtonReturn) }
+                    try opened.stopRecording()
+                    let afterRefusal = try session.undoInfo(image)
+                    check(!recordingErrors.isEmpty && unexpectedSheet == nil && opened.recorder.records.isEmpty &&
+                          selectedHistory == afterRefusal && pixel(session, image, x: 1, y: 1) == beforeRecording,
+                          "recorded Lab Fill refuses an uncaptured selection without changes")
+                    _ = opened.clearRecording(); recordingErrors.removeAll()
+                    opened.undo(); drain("restore selection after recorded Lab Fill refusal")
+                } else {
+                    check(false, "guarded Lab Fill opens while recording")
+                    try opened.stopRecording(); _ = opened.clearRecording()
+                }
+            } else {
+                check(!windowController.validateMenuItem(fillMenu), "older engines disable Lab Fill while recording")
+                windowController.fill(nil)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("Lab Fill refusal during recording")
+                check(!recordingErrors.isEmpty && window.attachedSheet == nil &&
+                      pixel(session, image, x: 1, y: 1) == beforeRecording && opened.recorder.records.isEmpty,
+                      "older engines refuse recorded Lab Fill without changes")
+                try opened.stopRecording(); _ = opened.clearRecording()
+            }
+            opened.onError = previousError
             opened.select(.rectangle(CGRect(x: 1, y: 1, width: 2, height: 2)), options: .init())
             drain("fill selection")
             let insideBefore = pixel(session, image, x: 1, y: 1)
@@ -402,7 +513,8 @@ extension EngineSmokeTest {
                     while opened.recorder.isReplaying && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
                     let afterReplay = pixel(session, image, x: 1, y: 1)
                     if case .finished = opened.replayStatus {
-                        check(afterReplay?.count == 4 && (afterReplay?[2] ?? 0) > 245,
+                        check(afterReplay?.count == 4 && (afterReplay?[0] ?? 255) < 10 &&
+                              (afterReplay?[1] ?? 255) < 10 && (afterReplay?[2] ?? 0) > 245,
                               "installed Lab Fill recording replays its captured color")
                     } else { check(false, "installed Lab Fill recording replays its captured color") }
                     opened.undo(); drain("Lab Fill replay Undo")
