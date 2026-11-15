@@ -338,6 +338,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc private func viewportChanged() {
         canvas.setNeedsRender()
+        // Scrolling can move the image under a pointer without a mouse event.
+        canvas.refreshInfoPointer()
         // Scrolling moves the rulers with the content; the scroll view also
         // relayouts its native ruler slots here.
         invalidateRulers()

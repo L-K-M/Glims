@@ -1138,7 +1138,7 @@ final class EngineCanvasView: NSView {
         clearInfoPointer()
     }
 
-    private func refreshInfoPointer() {
+    func refreshInfoPointer() {
         guard infoPointerInside else { return }
         guard NSApp.isActive, let window, window.isMainWindow else {
             infoPointerInside = false

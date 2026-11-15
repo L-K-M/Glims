@@ -173,6 +173,50 @@ extension EngineSmokeTest {
         palette.retarget(to: document)
         NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document)
         expect(labels(palette.view).contains("X: —    Y: —"), "leaving clears the pointer readout")
+        do {
+            let scrollImage = try session.newImage(width: 256, height: 256)
+            let scrollDocument = try ImageDocument(session: session, image: scrollImage, name: "Info Scroll")
+            documents.items.append(scrollDocument)
+            let scrollOwner = DocumentWindowController(document: scrollDocument)
+            defer {
+                palette.retarget(to: document)
+                if !scrollOwner.closeStarted { scrollOwner.window?.close() }
+                _ = wait { scrollDocument.pendingWork == 0 && (try? session.info(scrollImage)) == nil }
+                documents.items.removeAll { $0 === scrollDocument }
+                window.makeKeyAndOrderFront(nil)
+                window.makeMain()
+            }
+            guard let scrollWindow = scrollOwner.window else { return expect(false, "scroll fixture has a window") }
+            scrollOwner.showWindow(nil)
+            scrollWindow.makeKeyAndOrderFront(nil)
+            scrollWindow.makeMain()
+            palette.retarget(to: scrollDocument)
+            scrollOwner.zoom(to: 800)
+            EngineSmokeTestHost.pumpEvents(for: 0.1)
+            let viewPoint = CGPoint(x: scrollOwner.canvas.visibleRect.midX, y: scrollOwner.canvas.visibleRect.midY)
+            let inWindow = scrollOwner.canvas.convert(viewPoint, to: nil)
+            let screen = scrollWindow.convertPoint(toScreen: inWindow)
+            let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+            CGWarpMouseCursorPosition(CGPoint(x: screen.x, y: primaryTop - screen.y))
+            EngineSmokeTestHost.pumpEvents(for: 0.05)
+            guard let movement = NSEvent.mouseEvent(with: .mouseMoved, location: inWindow, modifierFlags: [],
+                    timestamp: 0, windowNumber: scrollWindow.windowNumber, context: nil, eventNumber: 4,
+                    clickCount: 0, pressure: 0) else { return expect(false, "scroll fixture creates a pointer event") }
+            scrollOwner.canvas.mouseMoved(with: movement)
+            let before = scrollOwner.canvas.imagePoint(at: scrollOwner.canvas.convert(scrollWindow.mouseLocationOutsideOfEventStream, from: nil))
+            let beforeLabel = "X: \(Int(floor(before.x)))    Y: \(Int(floor(before.y)))"
+            expect(wait { labels(palette.view).contains(beforeLabel) }, "scroll fixture publishes the starting pixel")
+            let clip = scrollOwner.scrollView.contentView
+            let previousOrigin = clip.bounds.origin
+            clip.scroll(to: CGPoint(x: previousOrigin.x, y: previousOrigin.y + 48))
+            scrollOwner.scrollView.reflectScrolledClipView(clip)
+            let after = scrollOwner.canvas.imagePoint(at: scrollOwner.canvas.convert(scrollWindow.mouseLocationOutsideOfEventStream, from: nil))
+            let afterLabel = "X: \(Int(floor(after.x)))    Y: \(Int(floor(after.y)))"
+            expect(clip.bounds.origin != previousOrigin && beforeLabel != afterLabel,
+                   "scrolling changes the pixel under the stationary pointer")
+            expect(wait { labels(palette.view).contains(afterLabel) },
+                   "scrolling refreshes the stationary pointer's image coordinates")
+        }
         NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document,
                                         userInfo: ["position": InfoPointerSampling.Position(x: 0, y: 0)])
         host.orderOut(nil)
