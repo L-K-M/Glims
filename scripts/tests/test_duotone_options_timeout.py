@@ -27,7 +27,10 @@ class DuotoneOptionsTimeoutTests(unittest.TestCase):
             (work / "tools").mkdir()
             source = (ROOT / "scripts/test-duotone-options.sh").read_text()
             self.assertEqual(source.count("timeout=60"), 1)
-            (work / "scripts/test-duotone-options.sh").write_text(source.replace("timeout=60", "timeout=0.5"))
+            # The interrupt case needs time to deliver SIGTERM before the
+            # runner's own timeout; it must actually test that signal path.
+            timeout = "10" if interrupt else "0.5"
+            (work / "scripts/test-duotone-options.sh").write_text(source.replace("timeout=60", f"timeout={timeout}"))
             compiler = work / "tools/clang"
             compiler.write_text("#!/usr/bin/env python3\n"
                 "import os, pathlib, subprocess, sys, time\n"
@@ -52,7 +55,11 @@ class DuotoneOptionsTimeoutTests(unittest.TestCase):
                     while not child.exists() and time.monotonic() < deadline:
                         time.sleep(0.01)
                     self.assertTrue(child.exists(), "the compiler did not start its child")
-                    os.killpg(process.pid, signal.SIGTERM)
+                    self.assertIsNone(process.poll(), "runner exited before SIGTERM could be tested")
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        self.fail("runner exited before SIGTERM could be tested")
                     process.communicate(timeout=5)
                 finally:
                     if process.poll() is None:
