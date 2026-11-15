@@ -6333,3 +6333,15 @@ An ordinary Open no longer brings a discarded window back while its document
 is closing after Revert. The existing replacement is selected instead. A
 native-window regression checks the close-drain interval and the source image
 cleanup. The same rule also avoids selecting other closing ordinary documents.
+
+### Guarded capture for V2 tablet strokes (candidate)
+
+Facade slot 232, `stroke_begin_v2_with_capture_facts`, begins a V2-sample
+stroke and atomically captures the brush and supported paint configuration,
+as slot 171 does for V1 samples. It keeps slot 172's packet, timestamp and
+axis rules. An unsupported live capture can still paint without a
+fingerprint; guarded replay refuses before the first dab unless the facts
+match. The Recorder does not use this slot yet, so tablet-axis recording is
+not user-facing. Native capture fixtures (34 checks) and the V2 coordinate
+fixture (152 checks) pass on all four engine sets. Physical tablets are not
+qualified.
