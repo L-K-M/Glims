@@ -199,6 +199,12 @@ enum SemanticImageCommand {
         }
     }
 
+    /// A mask is admitted only through its separately verified target context.
+    func applyMaskLevels(session: EngineSession, image: Int32, drawable: Int32) throws {
+        guard case .applyLevels = self else { throw MissingLayerBinding() }
+        try apply(session: session, image: image, layer: drawable)
+    }
+
     /// The caller freshly confirms this runtime layer against the owning image.
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {

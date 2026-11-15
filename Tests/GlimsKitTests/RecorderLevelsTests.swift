@@ -279,6 +279,28 @@ final class RecorderLevelsTests: XCTestCase {
         XCTAssertFalse(prepared.log.isReplaying)
     }
 
+    func testMaskLevelsUsesItsOwnVersionAndRequiresAnEditingMask() throws {
+        let maskBinding = #"{"kind":"context","context":{"layers":["66666666-6666-6666-6666-666666666666"],"channels":[],"target":{"kind":"mask","owner":"66666666-6666-6666-6666-666666666666"},"masks":[{"owner":"66666666-6666-6666-6666-666666666666","isPresent":true,"enabled":true,"editing":true,"showing":false}],"quickMask":{"enabled":false,"inverted":false,"color":{"space":"srgb","red":1,"green":0,"blue":0,"alpha":0.5}}}}"#
+        let literal = levelsDocument(binding: maskBinding, version: 23)
+        let decoded = try RecorderFileCodec.decode(bytes(literal))
+        guard case .success(.applyLevels(let levels), .context(let context)) = decoded.records[0].outcome else {
+            return XCTFail("The mask Levels command or target was lost")
+        }
+        XCTAssertEqual(levels, fileLevels)
+        XCTAssertEqual(context.target, .mask(owner: symbol))
+        let encoded = try RecorderFileCodec.encode(decoded)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(json["version"] as? Int, 23)
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), decoded)
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(levelsDocument(binding: maskBinding, version: 22))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(levelsDocument(version: 23))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(literal, #""editing":true"#, #""editing":false"#))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(literal, #""isPresent":true"#, #""isPresent":false"#))))
+        let wrongTarget = #"{"kind":"layer","symbol":"66666666-6666-6666-6666-666666666666"}"#
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(literal,
+            #"{"kind":"mask","owner":"66666666-6666-6666-6666-666666666666"}"#, wrongTarget))))
+    }
+
     func testApplyLevelsIsALayerBoundResolveFirstCommand() {
         let command = SemanticImageCommand.applyLevels(engineLevels)
         XCTAssertEqual(command.title, "Levels")
