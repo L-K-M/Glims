@@ -14,20 +14,40 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/glims-duotone-options.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 run_bounded() {
   python3 - "$@" <<'PY'
+import os
+import signal
 import subprocess
 import sys
 print('+ ' + ' '.join(sys.argv[1:]), flush=True)
+process = subprocess.Popen(sys.argv[1:], start_new_session=True)
+def stop_group():
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+def interrupted(signum, frame):
+    stop_group()
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGHUP, interrupted)
 try:
-    result = subprocess.run(sys.argv[1:], timeout=60)
+    result = process.wait(timeout=60)
 except subprocess.TimeoutExpired:
     print('Duotone options check exceeded 60 seconds', file=sys.stderr, flush=True)
+    stop_group()
     raise SystemExit(124)
-raise SystemExit(result.returncode)
+except KeyboardInterrupt:
+    stop_group()
+    raise
+raise SystemExit(result)
 PY
 }
 for mode in "${modes[@]}"; do
   flags=(-O2)
-  if [[ "$mode" == sanitized ]]; then flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer); fi
+  if [[ "$mode" == sanitized ]]; then flags=(-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer); fi
   run_bounded "${compiler[@]}" -std=c11 -Wall -Wextra -Werror -pedantic "${flags[@]}" \
     -I"$ROOT/Engine" "$ROOT/Engine/duotone-options.c" "$ROOT/Engine/tests/duotone-options-tests.c" -o "$WORK/$mode"
   run_bounded "$WORK/$mode" "$ROOT/Engine/tests/fixtures/photoshop-cc2018-duotone.psd"

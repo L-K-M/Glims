@@ -113,16 +113,19 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  CHECK(glims_image_close(engine,id)==GLIMS_STATUS_OK,"gray probe closes owned image");
 
  /* Cover both the 4096-column and 256-row renderer chunk boundaries. */
- image=gimp_create_image(engine->gimp,3280,210,GIMP_RGB,GIMP_PRECISION_U8_NON_LINEAR,FALSE);
+ image=gimp_create_image(engine->gimp,8200,520,GIMP_RGB,GIMP_PRECISION_U8_NON_LINEAR,FALSE);
  CHECK(image!=NULL,"wide native image"); if(!image)return GLIMS_STATUS_OK;
  gimp_image_undo_disable(image);
- layer=gimp_layer_new(image,3280,210,gimp_image_get_layer_format(image,TRUE),"Wide corner",1,GIMP_LAYER_MODE_NORMAL);
+ layer=gimp_layer_new(image,8200,520,gimp_image_get_layer_format(image,TRUE),"Wide corner",1,GIMP_LAYER_MODE_NORMAL);
  CHECK(layer!=NULL,"wide alpha layer"); if(!layer){g_object_unref(image);return GLIMS_STATUS_OK;}
  CHECK(gimp_image_add_layer(image,layer,NULL,0,FALSE),"wide root attaches");
  const guint8 red[4]={255,0,0,255};
  gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(layer)),GEGL_RECTANGLE(3276,205,1,1),0,
                  babl_format("R'G'B'A u8"),red,GEGL_AUTO_ROWSTRIDE);
  gimp_drawable_update(GIMP_DRAWABLE(layer),3276,205,1,1);
+ gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(layer)),GEGL_RECTANGLE(8192,512,1,1),0,
+                 babl_format("R'G'B'A u8"),red,GEGL_AUTO_ROWSTRIDE);
+ gimp_drawable_update(GIMP_DRAWABLE(layer),8192,512,1,1);
  gimp_image_undo_enable(image);gimp_image_clean_all(image);id=0;
  status=glims_adopt_image(engine,image,&id);
  CHECK(status==GLIMS_STATUS_OK&&id,"wide facade adoption");
@@ -143,6 +146,46 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
   gboolean intact=TRUE;for(size_t x=4100*4;x<wide_stride;x++)if(wide[(size_t)y*wide_stride+x]!=0xa5)intact=FALSE;
   CHECK(intact,"wide render preserves row padding");
  }
+ memset(wide,0xa5,wide_size);
+ status=glims_image_render(engine,id,.5,(GlimsRect){0,0,4100,257},wide,wide_stride);
+ CHECK(status==GLIMS_STATUS_OK,"half-scale viewport renders across both chunk boundaries");
+ gboolean seam_checked=FALSE;
+ for(unsigned yi=0;yi<2;yi++)for(unsigned xi=0;xi<2;xi++){
+  guint8 single[4]={0x5a,0x5a,0x5a,0x5a};int x=xs[xi],y=ys[yi];
+  status=glims_image_render(engine,id,.5,(GlimsRect){x,y,1,1},single,4);
+  CHECK(status==GLIMS_STATUS_OK && !memcmp(single,wide+(size_t)y*wide_stride+x*4,4),
+        "half-scale chunk seam matches a single-pixel read");
+  if(x==4096 && y==256){
+   CHECK(single[0]>0 && single[3]>0,"half-scale seam samples the seeded red pixel");seam_checked=TRUE;
+  }
+ }
+ CHECK(seam_checked,"half-scale seeded seam is included in the probes");
+ for(int y=0;y<257;y++){
+  gboolean intact=TRUE;for(size_t x=4100*4;x<wide_stride;x++)if(wide[(size_t)y*wide_stride+x]!=0xa5)intact=FALSE;
+  CHECK(intact,"half-scale viewport preserves row padding");
+ }
+ /* Compare the optimized read with an explicit eager projection validation
+  * after a fresh edit. Both routes use the same sampler and conversion; this
+  * checks that skipping the earlier validation does not leave stale pixels. */
+ const guint8 blue[4]={0,0,255,255};
+ gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(layer)),GEGL_RECTANGLE(8192,512,1,1),0,
+                 babl_format("R'G'B'A u8"),blue,GEGL_AUTO_ROWSTRIDE);
+ gimp_drawable_update(GIMP_DRAWABLE(layer),8192,512,1,1);
+ memset(wide,0xa5,wide_size);
+ status=glims_image_render(engine,id,.5,(GlimsRect){0,0,4100,257},wide,wide_stride);
+ CHECK(status==GLIMS_STATUS_OK,"half-scale optimized render follows a fresh edit");
+ CHECK(wide[(size_t)256*wide_stride+4096*4+2]>0,
+       "half-scale optimized read sees the edited blue seam pixel");
+ guint8 *eager=g_malloc(wide_size);memset(eager,0xa5,wide_size);
+ open=glims_lookup_image(engine,id);GeglBuffer *projection=NULL;
+ status=open ? glims_projection_prepare_read(open,.5,(GlimsRect){0,0,4100,257},&projection) : GLIMS_STATUS_FAILED;
+ CHECK(status==GLIMS_STATUS_OK && projection,"eager validation prepares the same edited projection");
+ if(status==GLIMS_STATUS_OK && projection){
+  status=glims_image_render(engine,id,.5,(GlimsRect){0,0,4100,257},eager,wide_stride);
+  CHECK(status==GLIMS_STATUS_OK && !memcmp(wide,eager,wide_size),
+        "optimized and eagerly validated half-scale reads agree after edit including padding");
+ }
+ g_free(eager);
  g_free(wide);CHECK(glims_image_close(engine,id)==GLIMS_STATUS_OK,"wide probe closes owned image");
  return GLIMS_STATUS_OK;
 }
