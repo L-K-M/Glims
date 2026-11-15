@@ -54,7 +54,7 @@ int main(void)
   if (fwrite("original", 1, 8, f) != 8 || fclose(f)) return 2;
   if (chmod(path, 0640)) return 2;
   static const uint8_t metadata[] = { 1, 2, 3, 4, 5 };
-  GlimsDuotonePsdSpec spec = {9,2,8,metadata,sizeof metadata}; Fixture fixture = {0}; int err = 99;
+  GlimsDuotonePsdSpec spec = {.width=9,.height=2,.depth=8,.metadata=metadata,.metadata_size=sizeof metadata}; Fixture fixture = {0}; int err = 99;
   CHECK(glims_duotone_psd_write_file(&spec, read_pixels, &fixture, NULL, NULL, NULL, &err) == GLIMS_DUOTONE_PSD_FILE_INVALID &&
         err == 0 && fixture.calls == 0 && content_is(path,"original"), "null path refuses before touching pixels or destination");
   fixture = (Fixture){.fail=true};
