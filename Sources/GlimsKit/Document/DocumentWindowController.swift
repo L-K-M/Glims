@@ -178,6 +178,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                    backing: .buffered, defer: false)
         window.minSize = NSSize(width: 360, height: 240)
+        window.acceptsMouseMovedEvents = true
         super.init(window: window)
         window.delegate = self
         window.representedURL = imageDocument.fileState.nativeURL
@@ -577,6 +578,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: InfoPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: RecorderPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them, and
         // the cached guide list arrives with it too (reloadGuides fires

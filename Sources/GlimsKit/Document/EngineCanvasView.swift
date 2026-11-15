@@ -143,6 +143,7 @@ final class EngineCanvasView: NSView {
     /// The current tool's handling of pointer and key events.
     private(set) lazy var tools = CanvasToolController(canvas: self)
     private var hintLifecycleObservers: [NSObjectProtocol] = []
+    private var infoTrackingArea: NSTrackingArea?
 
     deinit {
         for token in hintLifecycleObservers { NotificationCenter.default.removeObserver(token) }
@@ -317,6 +318,7 @@ final class EngineCanvasView: NSView {
     /// Called when the image changed (`rect` in image pixels): the tiles
     /// under it go stale and are re-rendered, still drawn until replaced.
     func imageDidChange(in rect: CGRect? = nil) {
+        clearInfoPointer()
         invalidateTransformPixelPreview()
         let device = rect.map { CGRect(x: $0.minX * deviceScale, y: $0.minY * deviceScale,
                                        width: $0.width * deviceScale, height: $0.height * deviceScale) }
@@ -557,6 +559,7 @@ final class EngineCanvasView: NSView {
         }
         swapDestinationObservers()
         if window == nil {
+            clearInfoPointer()
             tools.cancelFloatingShape()
             tools.cancelPickedMove()
             tools.cancelSpringTools()
@@ -1088,6 +1091,41 @@ final class EngineCanvasView: NSView {
     }
 
     // MARK: Events
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let infoTrackingArea { removeTrackingArea(infoTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        infoTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard window?.isMainWindow == true else { return }
+        let point = imagePoint(for: event)
+        guard point.x.isFinite, point.y.isFinite, point.x >= 0, point.y >= 0,
+              point.x < Double(document.info.width), point.y < Double(document.info.height) else {
+            clearInfoPointer()
+            return
+        }
+        let position = InfoPointerSampling.Position(x: Int(floor(point.x)), y: Int(floor(point.y)))
+        NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document,
+                                        userInfo: ["position": position])
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        clearInfoPointer()
+    }
+
+    private func clearInfoPointer() {
+        NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document)
+    }
 
     /// The pointer's position in image pixels.
     func imagePoint(for event: NSEvent) -> CGPoint {

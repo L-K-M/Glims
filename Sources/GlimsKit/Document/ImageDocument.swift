@@ -529,6 +529,28 @@ final class ImageDocument {
             && !EngineActivity.shared.isBusy
     }
 
+    /// Sample the committed composite without blocking pointer handling. The
+    /// document owns the queued read until it finishes, so close drains it.
+    func sampleInfoColor(x: Int, y: Int,
+                         completion: @escaping @MainActor (Result<EngineSession.SampledColor, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard acceptsImageReads, !EngineActivity.shared.isRenderingTransformPreview,
+              !strokeIsActive, pendingInput == 0, !targetCommandIsPending else {
+            return completion(.failure(DocumentError.busy))
+        }
+        guard x >= 0, y >= 0, x < info.width, y < info.height else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        let layeredLab = storage.layout == .layeredLab
+        enqueue(on: inputQueue) { [session, image] in
+            let result = Result {
+                if layeredLab { return try session.sampleLayeredLabColor(image, x: x, y: y) }
+                return try session.sampleColor(image, x: x, y: y)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     var acceptsEdits: Bool { acceptsImageReads && !storage.readOnly && storage.layout != .layeredLab && !recorder.isReplaying }
     var acceptsLayerProperties: Bool {
         acceptsEdits || (acceptsImageReads && storage.allowsLayerProperties && !recorder.isReplaying &&

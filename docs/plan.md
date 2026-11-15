@@ -6186,3 +6186,15 @@ Canvas accessibility labels include the document name, refresh after a native
 save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Info palette (candidate)
+
+Window ▸ Info shows image-pixel coordinates and the committed composite's
+straight sRGB and alpha under the pointer. Sampling is asynchronous and
+bounded to one in-flight read, with the latest position retained; stale
+results are discarded on movement, document change, hide, or image change.
+The palette does not change the foreground color or image history. A focused
+real-window test covers event dispatch, rotation, alpha and document changes
+on the pinned engine. The other engines, whole-editor integration,
+accessibility and review remain in qualification. Native CMYK/Lab readouts
+and sampling of temporary previews are not yet provided.
