@@ -3,7 +3,7 @@ import Foundation
 
 extension ExportSettings {
     func nativeValue() throws -> GlimsExportSettings {
-        guard Self.validate(self) else {
+        guard Self.validate(self), !(format == .psd && psdColor == .bitmap) else {
             throw EngineSession.EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
                                             message: "The export settings contain an invalid value.")
         }

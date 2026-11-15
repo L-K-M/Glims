@@ -157,6 +157,9 @@ struct ExportSettings: Equatable {
         if format == .psd, psdColor == .cmyk {
             return psdCmykProfile != nil
         }
+        if format == .psd, psdColor == .bitmap {
+            return psdLayout == .merged
+        }
         return true
     }
 }
@@ -387,6 +390,7 @@ final class ExportOptionsForm: NSView {
         case nativeCmyk(profileName: String)
     }
     private let context: Context
+    private let supportsBitmapPSD: Bool
     private var nativeCmyk: Bool {
         if case .nativeCmyk = context { return true }
         return false
@@ -394,8 +398,10 @@ final class ExportOptionsForm: NSView {
 
     init(settings: ExportSettings = ExportSettings(),
          context: Context = .ordinary,
+         supportsBitmapPSD: Bool = false,
          psdCmykCatalogLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader()) {
         self.context = context
+        self.supportsBitmapPSD = supportsBitmapPSD
         var initial = settings
         if case .nativeCmyk = context {
             initial.format = .psd
@@ -436,6 +442,10 @@ final class ExportOptionsForm: NSView {
         psdLayoutPopup.action = #selector(psdLayoutChanged(_:))
 
         psdColorPopup.addItems(withTitles: PsdOutputColor.allCases.map(\.title))
+        psdColorPopup.menu?.autoenablesItems = false
+        if let index = PsdOutputColor.allCases.firstIndex(of: .bitmap) {
+            psdColorPopup.item(at: index)?.isEnabled = supportsBitmapPSD
+        }
         psdColorPopup.setAccessibilityLabel("PSD color")
         psdColorPopup.target = self
         psdColorPopup.action = #selector(psdColorChanged(_:))
@@ -598,6 +608,7 @@ final class ExportOptionsForm: NSView {
         for (format, rows) in optionRows {
             rows.forEach { $0.isHidden = format != settings.format }
         }
+        psdLayoutPopup.isEnabled = !nativeCmyk && settings.psdColor != .bitmap
         let showCmyk = settings.format == .psd && (nativeCmyk || settings.psdColor == .cmyk)
         psdCmykProfileRow?.isHidden = !showCmyk
         if showCmyk { loadPsdCmykCatalogIfNeeded() }
@@ -613,6 +624,8 @@ final class ExportOptionsForm: NSView {
             psdExplanation.stringValue = settings.psdLayout.explanation
         case .cmyk:
             psdExplanation.stringValue = "\(settings.psdLayout.explanation) \(PsdOutputColor.cmyk.explanation)"
+        case .bitmap:
+            psdExplanation.stringValue = PsdOutputColor.bitmap.explanation
         }
     }
 
@@ -764,6 +777,10 @@ final class ExportOptionsForm: NSView {
         let choices = PsdOutputColor.allCases
         guard choices.indices.contains(sender.indexOfSelectedItem) else { return }
         settings.psdColor = choices[sender.indexOfSelectedItem]
+        if settings.psdColor == .bitmap {
+            settings.psdLayout = .merged
+            psdLayoutPopup.selectItem(at: popupIndex(of: .merged, in: ExportSettings.PsdLayout.allCases))
+        }
         updatePsdExplanation()
         clearMessage()
         applyFormatVisibility()
@@ -844,6 +861,12 @@ final class ExportOptionsForm: NSView {
         guard ExportSettings.validate(settings) else {
             refuse("The export settings are invalid.")
             return false
+        }
+        if settings.format == .psd, settings.psdColor == .bitmap {
+            guard supportsBitmapPSD, settings.psdLayout == .merged else {
+                refuse("Bitmap PSD export is not available with these settings or this image engine.")
+                return false
+            }
         }
         if settings.format == .psd, settings.psdColor == .cmyk {
             guard let profile = settings.psdCmykProfile, PsdCmykProfile.isValidICCData(profile.iccData) else {

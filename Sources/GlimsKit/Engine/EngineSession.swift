@@ -1977,7 +1977,22 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_export(engine, image, path, &error), error)
     }
 
+    var supportsBitmapPSD: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_export_bitmap_psd),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_export_bitmap_psd) else { return false }
+        return api.image_export_bitmap_psd != nil
+    }
+
     func export(_ image: Int32, to path: String, settings: ExportSettings) throws {
+        if settings.format == .psd, settings.psdColor == .bitmap {
+            guard settings.isReadyToExport, supportsBitmapPSD, let export = api.image_export_bitmap_psd else {
+                throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                                  message: "Bitmap PSD export is unavailable with these settings or this image engine.")
+            }
+            var error: UnsafeMutablePointer<CChar>?
+            try check(export(engine, image, path, &error), error)
+            return
+        }
         var value = try settings.nativeValue()
         var error: UnsafeMutablePointer<CChar>?
         if try colorInfo(image).mode == .cmyk {
