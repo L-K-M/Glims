@@ -18,6 +18,10 @@ item rather than substituting ordinary Open.
 
 The Photoshop-authored Gradient Fill fixture is visibly opaque through this
 route on development GIMP, and its full rendered 4×4 composite matches an
-independent ImageIO decode within two 8-bit levels. Native checks run on all
-four supported engines. Full editor, real-window, bundle and review
+independent ImageIO decode within two 8-bit levels. An independently written
+one-pixel, flat RGB PSB with raw image data also opens and renders its expected
+pixel on all four supported engines. Its fields follow the
+[Adobe file-format specification](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/);
+this small fixture does not establish fidelity for layered or large PSB files.
+Full editor, real-window, bundle and review
 qualification remain in progress.
