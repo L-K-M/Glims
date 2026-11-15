@@ -3333,8 +3333,9 @@ Selecting the current zoom keeps cached canvas tiles instead of discarding
 and rendering them again. A changed zoom or a previously failed tile still
 clears the cache; in-flight results are invalidated and layout and rendering
 requests remain in place. A real-canvas regression reproduced the discarded
-tiles before the change. Cross-engine verification is in progress. This avoids
-unnecessary repeated-zoom work; it does not reduce fractional sampling cost.
+tiles before the change. Real-canvas tests pass with each of the four supported
+engine versions, and the full Swift suite passes. This avoids unnecessary
+repeated-zoom work; it does not reduce fractional sampling cost.
 
 
 ### Preferences save during engine teardown (2026-11-09)
