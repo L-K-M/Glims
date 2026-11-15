@@ -41,7 +41,7 @@ final class RecorderFileMetadataTests: XCTestCase {
         for outcome in outcomes {
             var log = Log()
             try log.startRecording()
-            XCTAssertFalse(metadata.hasUnsavedChanges(in: log, revision: revision, savedRevision: oldRevision))
+            XCTAssertTrue(metadata.hasUnsavedChanges(in: log, revision: revision, savedRevision: oldRevision))
             let pending = try log.reserve()
             try log.stopRecording()
             XCTAssertTrue(metadata.hasUnsavedChanges(in: log, revision: revision, savedRevision: oldRevision))
@@ -69,6 +69,16 @@ final class RecorderFileMetadataTests: XCTestCase {
         XCTAssertEqual(named.origin, file.origin)
         XCTAssertEqual(named.symbols, [symbol])
         XCTAssertTrue(named.records.isEmpty)
+    }
+
+    func testRemovingFinalStepFromSavedRecordingIsStillAnUnsavedEdit() throws {
+        let file = RecorderFileValue(recordingID: UUID(), name: "Saved", origin: origin, symbols: [],
+            records: [.init(ordinal: 0, outcome: .success(.scale(width: 2, height: 3), .none))])
+        let metadata = RecorderFileMetadata(file: file)
+        let savedRevision = UUID()
+        let emptied = Log()
+        XCTAssertFalse(metadata.hasUnsavedChanges(in: emptied, revision: savedRevision, savedRevision: savedRevision))
+        XCTAssertTrue(metadata.hasUnsavedChanges(in: emptied, revision: UUID(), savedRevision: savedRevision))
     }
 
     func testReplayPresentationKeepsAnExactlySavedRecordingClean() throws {
