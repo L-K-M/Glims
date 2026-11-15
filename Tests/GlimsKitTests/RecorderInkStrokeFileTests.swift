@@ -2,6 +2,11 @@ import XCTest
 @testable import GlimsKit
 
 final class RecorderInkStrokeFileTests: XCTestCase {
+    func testSpongeCannotDecodeAsAnInkStroke() {
+        for tool in ["spongeDesaturate", "spongeSaturate"] {
+            decodeRejects(document(success(strokeCommand(tool: tool))))
+        }
+    }
     private let recordingID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
     private let symbol = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
     private let inkUUID = UUID(uuidString: "01234567-89ab-cdef-0123-456789abcdef")!

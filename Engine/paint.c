@@ -538,12 +538,15 @@ capture_stroke_facts (GlimsEngine               *engine,
   GimpContext *context = GIMP_CONTEXT (options);
   GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
+  gboolean sponge = brush->tool == GLIMS_PAINT_SPONGE_DESATURATE ||
+                     brush->tool == GLIMS_PAINT_SPONGE_SATURATE;
   if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
-       brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
+       brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER &&
+       !(sponge && !ink)) ||
       !recordable_first_point (first) ||
       (ink ? (brush->tool == GLIMS_PAINT_ERASER || !GIMP_IS_CHANNEL (drawable)) :
              (G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
-              !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
+              !gimp_drawable_is_rgb (drawable) || (!sponge && !gimp_drawable_has_alpha (drawable)) ||
               gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL)) ||
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
@@ -625,6 +628,17 @@ capture_stroke_facts (GlimsEngine               *engine,
       const guint8 tool = GLIMS_PAINT_PAINTBRUSH;
       g_checksum_update (hash, (const guchar *) paintbrush_domain, sizeof paintbrush_domain);
       g_checksum_update (hash, &tool, sizeof tool);
+    }
+  /* Sponge has two opposite operations. Bind both to distinct domains so a
+   * recorded gesture cannot be replayed with the other direction, even when
+   * all inherited paint options happen to match. Existing fingerprints stay
+   * byte-for-byte compatible. Sponge is not an ink-channel operation. */
+  if (sponge)
+    {
+      static const gchar sponge_domain[] = "glims-stroke-sponge-v1";
+      const guint8 identity[] = { brush->tool, gimp_drawable_has_alpha (drawable) != FALSE };
+      g_checksum_update (hash, (const guchar *) sponge_domain, sizeof sponge_domain);
+      g_checksum_update (hash, identity, sizeof identity);
     }
   facts->fingerprint = g_strdup (g_checksum_get_string (hash));
 

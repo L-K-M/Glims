@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 17
+# Recorder file format, versions 1 to 20
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `17`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `20`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -17,11 +17,12 @@ The writer chooses the highest version required by a successful record:
 `applyColorBalance` 8, `applyHueSaturation` 9, `applyBrightnessContrast` 10, `editInk` or
 `applyInkLevels` 11, `applyInkCurves` 12, `fillLab`/`applyLabCurves` 13,
 `completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15,
-`completeInkStroke` 16, and `applyLabLevels` 17. A file declaring one of those versions must contain at least one
+`completeInkStroke` 16, `applyLabLevels` 17, `completeLabLayerStroke` 18,
+`fillLabLayer` 19, and a Sponge `completeStroke` 20. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...17 refuse the file.
+version 1. Integers outside 1...20 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -343,13 +344,13 @@ It is refused in a version 1 file. Like every successful record it carries a
 `settings` has required `tool`, `size`, `opacity`, `red`, `green`, `blue`,
 `pressureSize` and `antiErase`, plus optional `hardness`.
 
-- `tool` is exactly one of `pencil`, `eraser`, `paintbrush`: the lowercase
-  Swift enum raw values on the wire.
+- `tool` is `pencil`, `eraser` or `paintbrush`; version 20 also permits
+  `spongeDesaturate` and `spongeSaturate`.
 - `size` is greater than 0 and at most 10,000.
 - `opacity`, `red`, `green` and `blue` are inside 0...1.
 - `hardness`, when present, is inside 0...1.
 - `pressureSize` and `antiErase` are Booleans. `antiErase` may be true only for
-  `eraser`; pencil and paintbrush require false.
+  `eraser`; all other tools require false.
 
 `facts` has `brush` and `fingerprint`. `brush` is the capture-time identity:
 required `name` and `isInternal`, optional `collection`. Names and collections
@@ -510,3 +511,20 @@ and stale owning identities before native execution. No current selection
 fallback is inferred. Version 17 requires a successful Lab Levels command;
 versions 1–16 refuse this new tag and retain their earlier schemas. Mixed older
 commands in a version 17 file still use their original validation.
+
+## Layered Lab gestures (versions 18 and 19)
+
+Version 18 adds `completeLabLayerStroke`, a Brush gesture bound to a logical
+Lab layer, with its owned brush facts and tablet samples. Version 19 adds
+`fillLabLayer`, with its physical color and opacity. Both require a layer
+binding and retain the layer's native identity checks at replay. Each declared
+version requires a successful command from its own family.
+
+## Sponge gestures (version 20)
+
+Version 20 allows `completeStroke` to use the `spongeDesaturate` or
+`spongeSaturate` tool value. It retains the existing complete-stroke settings,
+brush facts, sample trace and layer binding. `antiErase` must be false.
+Versions 1–19 reject these new tool values, and a version 20 file must contain
+at least one successful Sponge stroke. Ink and layered Lab stroke commands
+continue to accept only their own supported brush tools.

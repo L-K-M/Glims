@@ -21,6 +21,7 @@ enum RecorderFileCodec {
     static let labLevelsVersion = 17
     static let labLayerStrokeVersion = 18
     static let labLayerFillVersion = 19
+    static let spongeStrokeVersion = 20
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -97,7 +98,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...labLayerFillVersion)
+        let fileVersion = try integer(root.get("version"), range: version...spongeStrokeVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -132,6 +133,7 @@ enum RecorderFileCodec {
         var hasLabLevels = false
         var hasLabLayerStrokeCommand = false
         var hasLabLayerFillCommand = false
+        var hasSpongeStroke = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -144,6 +146,7 @@ enum RecorderFileCodec {
                 row = try Object(node, required: ["ordinal", "outcome", "command", "binding"])
                 let command = try command(row.get("command"), version: fileVersion, points: &points)
                 if case .completeStroke = command { hasStroke = true }
+                if case .completeStroke(let stroke) = command, stroke.settings.tool.isSponge { hasSpongeStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
                 if case .transformProjectiveLayer = command { hasProjectiveLayerTransform = true }
@@ -212,6 +215,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == labLayerFillVersion, !hasLabLayerFillCommand {
             throw RecorderFileError.invalid("Version 19 requires a successful Lab layer Fill.")
+        }
+        if fileVersion == spongeStrokeVersion, !hasSpongeStroke {
+            throw RecorderFileError.invalid("Version 20 requires a successful Sponge stroke.")
         }
         // Each extended version requires its own successful command, exactly
         // as version 2 always required a complete stroke.
@@ -691,7 +697,11 @@ enum RecorderFileCodec {
             return .labSelection(try labSelectCommand(node))
         case "completeStroke":
             guard version >= strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
-            return .completeStroke(try stroke(node, points: &points))
+            let value = try stroke(node, points: &points)
+            guard !value.settings.tool.isSponge || version >= spongeStrokeVersion else {
+                throw RecorderFileError.invalid("A Sponge stroke needs recording version 20.")
+            }
+            return .completeStroke(value)
         default: throw RecorderFileError.invalid("Unknown semantic command; use a compatible Glims version.")
         }
     }
