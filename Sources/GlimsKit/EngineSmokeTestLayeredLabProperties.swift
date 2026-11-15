@@ -274,6 +274,92 @@ extension EngineSmokeTest {
                       "older engines refuse guarded Lab properties without changes")
             }
         } else { check(false, "guarded Lab property bridge has a logical root") }
+        if let root = opened.selectedLayerIDs.first,
+           let original = try session.layers(image).first(where: { $0.id == root }),
+           let other = opened.layers.first(where: { $0.id != root }) {
+            let symbol = UUID()
+            let description = RecorderTargetDescription(name: "Lab layer", kind: .pixel, ancestors: [], siblingIndex: 0,
+                bounds: .init(x: 0, y: 0, width: Double(opened.info.width), height: Double(opened.info.height)))
+            let value = RecorderFileCommand.LayerProperties(name: nil, visible: nil, opacity: 0.375, mode: nil)
+            let file = RecorderFileValue(recordingID: UUID(), name: "Lab layer properties",
+                origin: .init(imageLabel: "Lab.xcf", initialWidth: Int(opened.info.width), initialHeight: Int(opened.info.height)),
+                symbols: [.init(id: symbol, description: description)],
+                records: [.init(ordinal: 0, outcome: .success(.layerProperties(value), .layer(symbol)))])
+            let prepared = try RecorderFileSemanticBridge.prepare(RecorderFileCodec.decode(RecorderFileCodec.encode(file)))
+            let priorError = opened.onError
+            opened.onError = { _ in }
+            defer { opened.onError = priorError; _ = opened.clearRecording() }
+            let history = try session.undoInfo(image)
+            EngineSmokeTestHost.pumpEvents(for: 0.1); drain("before Lab property recording installation")
+            var installed: Result<Void, Error>?
+            opened.installRecording(prepared, checkpoint: try opened.recorderInstallCheckpoint(),
+                                    choices: [symbol: .layer(root)]) { installed = $0 }
+            drain("Lab property recording installation")
+            guard let installed else { throw NSError(domain: "LayeredLabSmoke", code: 8) }
+            if session.supportsLabLayerPropertyChange {
+                try installed.get()
+                opened.selectLayer(other.id); drain("select another layer before property replay")
+                let otherBefore = try session.layers(image).first(where: { $0.id == other.id })
+                try opened.startReplay(); drain("bound Lab property replay")
+                let deadline = Date().addingTimeInterval(15)
+                while opened.recorder.isReplaying && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                let after = try session.layers(image)
+                let selection = try session.selectedLayers(image)
+                if case .finished = opened.replayStatus {
+                    check(after.first(where: { $0.id == root })?.opacity == 0.375 &&
+                          after.first(where: { $0.id == other.id })?.opacity == otherBefore?.opacity && selection == [other.id],
+                          "loaded Lab property recording edits its bound root while another is selected")
+                } else { check(false, "loaded Lab property recording edits its bound root while another is selected") }
+                opened.undo(); drain("bound Lab property replay Undo")
+                let restored = try session.layers(image).first(where: { $0.id == root })
+                check(restored?.opacity == original.opacity, "Undo restores loaded Lab property replay")
+                opened.selectLayer(root); drain("select recorded property target for deletion")
+                opened.layerCommand(.delete); drain("delete recorded property target")
+                let afterDelete = try session.layers(image)
+                if !afterDelete.contains(where: { $0.id == root }) {
+                    let beforeRefusal = try session.undoInfo(image)
+                    let remaining = afterDelete.first(where: { $0.id == other.id })
+                    try opened.startReplay(); drain("refused deleted Lab property target")
+                    let refusalDeadline = Date().addingTimeInterval(15)
+                    while opened.recorder.isReplaying && Date() < refusalDeadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
+                    let afterRefusal = try session.undoInfo(image)
+                    let current = try session.layers(image).first(where: { $0.id == other.id })
+                    if case .failed(_, let reason) = opened.replayStatus {
+                        check(reason == "The bound Lab layer is no longer available for this property change." &&
+                              beforeRefusal == afterRefusal && current?.opacity == remaining?.opacity &&
+                              current?.isVisible == remaining?.isVisible,
+                              "deleted Lab property target refuses replay without changes")
+                    } else { check(false, "deleted Lab property target refuses replay without changes") }
+                    opened.undo(); drain("restore deleted Lab property target")
+                } else { check(false, "recorded Lab property target can be deleted for refusal test") }
+                opened.selectLayer(root); drain("restore selection after Lab property replay")
+                let mixed = RecorderFileCommand.LayerProperties(name: "Mixed", visible: nil, opacity: 0.375, mode: nil)
+                let incompatible = RecorderFileValue(recordingID: UUID(), name: "Incompatible Lab properties", origin: file.origin,
+                    symbols: file.symbols, records: [.init(ordinal: 0, outcome: .success(.layerProperties(mixed), .layer(symbol)))])
+                let invalidPrepared = try RecorderFileSemanticBridge.prepare(RecorderFileCodec.decode(RecorderFileCodec.encode(incompatible)))
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("before incompatible Lab property installation")
+                let priorRecording = opened.recorderContentCheckpoint()
+                let beforeInvalid = try session.undoInfo(image)
+                var rejected: Result<Void, Error>?
+                opened.installRecording(invalidPrepared, checkpoint: try opened.recorderInstallCheckpoint(),
+                                        choices: [symbol: .layer(root)]) { rejected = $0 }
+                drain("incompatible Lab property installation")
+                let afterInvalid = try session.undoInfo(image)
+                if case .failure(let error)? = rejected {
+                    check((error as? RecorderFileError) == .invalid("A Lab layer property recording must change only its name, visibility or opacity.") &&
+                          beforeInvalid == afterInvalid && opened.recorderContentCheckpoint() == priorRecording,
+                          "incompatible Lab property recording preserves the current recording and image")
+                } else { check(false, "incompatible Lab property recording preserves the current recording and image") }
+            } else {
+                let after = try session.undoInfo(image)
+                let current = try session.layers(image).first(where: { $0.id == root })
+                if case .failure(let error) = installed {
+                    check((error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue) &&
+                          after == history && current?.opacity == original.opacity,
+                          "older engines refuse loaded Lab property recordings without changes")
+                } else { check(false, "older engines refuse loaded Lab property recordings without changes") }
+            }
+        } else { check(false, "loaded Lab property replay has two logical roots") }
         let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
               "Fill menu follows the layered Lab color capability")

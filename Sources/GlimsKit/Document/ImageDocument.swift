@@ -88,6 +88,8 @@ final class ImageDocument {
         /// A logical Lab root and its document-scoped native identity.
         /// Nil exists only until the ordered native capture completes.
         case labLayer(root: Int32, identity: UUID?)
+        /// Property changes target an explicit root without selecting it.
+        case labLayerProperty(root: Int32, identity: UUID?)
         /// An explicit source channel (Channel ▸ To Selection). It may differ
         /// from the active paint target, which is never substituted.
         case channel(Int32)
@@ -6944,6 +6946,13 @@ final class ImageDocument {
         let needsChannels = choices.values.contains { if case .channel = $0 { return true }; return false }
         let needsQuickMask = choices.values.contains { if case .quickMask = $0 { return true }; return false }
         let layerIDs = needsLayers ? Set(try session.layers(image).map(\.id)) : []
+        let hasLayerProperties = file.records.contains {
+            if case .success(.layerProperties, .layer) = $0.outcome { return true }
+            return false
+        }
+        let layeredLab: Bool
+        if needsLayers && hasLayerProperties { layeredLab = try session.imageStorage(image).layout == .layeredLab }
+        else { layeredLab = false }
         let channelIDs: Set<Int32>
         if needsChannels, try session.colorInfo(image).mode == .lab {
             channelIDs = Set(try session.labAxes(image).axes.map(\.id))
@@ -7003,6 +7012,14 @@ final class ImageDocument {
                 case .completeLabLayerStroke, .fillLabLayer:
                     let target = try session.labLayerFillTarget(image, root: id)
                     contexts[row.ordinal] = .labLayer(root: id, identity: target.uuid)
+                case .layerProperties(let properties) where layeredLab:
+                    let change = EngineSession.LayerChange(name: properties.name, isVisible: properties.visible,
+                                                           opacity: properties.opacity, mode: properties.mode?.name)
+                    guard change.isLimitedLayerPropertyChange else {
+                        throw RecorderFileError.invalid("A Lab layer property recording must change only its name, visibility or opacity.")
+                    }
+                    let target = try session.labLayerPropertyTarget(image, root: id)
+                    contexts[row.ordinal] = .labLayerProperty(root: id, identity: target.uuid)
                 default: contexts[row.ordinal] = .layer(id)
                 }
             case .channel(let symbol): contexts[row.ordinal] = .channel(try channel(symbol))
@@ -7171,6 +7188,11 @@ final class ImageDocument {
                           selectedLayerIDs == [root], layers.contains(where: { $0.id == root }) else {
                         throw RecorderReplayError(message: "Select the bound Lab layer before replaying this edit.")
                     }
+                case .labLayerProperty(let root, let identity):
+                    guard root > 0, identity != nil, storage.layout == .layeredLab,
+                          layers.contains(where: { $0.id == root }) else {
+                        throw RecorderReplayError(message: "The bound Lab layer is no longer available for this property change.")
+                    }
                 case .channel(let channel):
                     guard channels.contains(where: { $0.id == channel }) else {
                         throw RecorderReplayError(message: "The recorded source channel is no longer in this image.")
@@ -7260,6 +7282,9 @@ final class ImageDocument {
                     }
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .labLayer(let root, let identity)? = context, let identity {
+                    try step.command.apply(session: session, image: image,
+                        labLayerTarget: .init(root: root, uuid: identity))
+                } else if case .labLayerProperty(let root, let identity)? = context, let identity {
                     try step.command.apply(session: session, image: image,
                         labLayerTarget: .init(root: root, uuid: identity))
                 } else if case .channel(let channel)? = context {
@@ -7442,6 +7467,14 @@ final class ImageDocument {
             }
             return
         }
+        if case .labLayerProperty(let root, let expected) = context {
+            // The native identity entry revalidates the current Lab layout;
+            // the guarded mutation rechecks that identity on its own call.
+            guard let expected, root > 0, try session.labLayerPropertyTarget(image, root: root).uuid == expected else {
+                throw RecorderReplayError(message: "The recorded Lab layer identity changed.")
+            }
+            return
+        }
         if case .layer(let layer) = context {
             guard layer > 0, try session.layers(image).contains(where: { $0.id == layer }) else {
                 throw RecorderReplayError(message: "The recorded layer no longer belongs to this native image.")
@@ -7491,7 +7524,7 @@ final class ImageDocument {
         if let context { recorderTargetContexts[reservation.ordinal] = context }
         var targets: [RecorderRuntimeTarget] = []
         switch context {
-        case .layer(let layer)?, .labLayer(let layer, _)?: targets = [.layer(layer)]
+        case .layer(let layer)?, .labLayer(let layer, _)?, .labLayerProperty(let layer, _)?: targets = [.layer(layer)]
         case .channel(let channel)?, .ink(let channel, _)?: targets = [.channel(channel)]
         case .lab(let axis, _)?: targets = [.channel(axis.id)]
         case .target(let target)?:
@@ -7519,6 +7552,8 @@ final class ImageDocument {
             let confirmed: RecorderContext
             if case .labLayer(let root, nil) = context {
                 confirmed = .labLayer(root: root, identity: try session.labLayerFillTarget(image, root: root).uuid)
+            } else if case .labLayerProperty(let root, nil) = context {
+                confirmed = .labLayerProperty(root: root, identity: try session.labLayerPropertyTarget(image, root: root).uuid)
             } else if case .ink(let channel, nil) = context {
                 confirmed = .ink(channel: channel,
                     identity: try RecorderInkIdentity(session.inkChannelIdentity(image, channel: channel)))
@@ -7651,6 +7686,9 @@ final class ImageDocument {
         case .unavailable(let reason): return .unavailable(reason)
         case .layer(let layer): return .layer(try symbol(.layer(layer)))
         case .labLayer(let root, let identity):
+            guard identity != nil else { throw RecorderReplayError(message: "The original Lab layer identity was unavailable.") }
+            return .layer(try symbol(.layer(root)))
+        case .labLayerProperty(let root, let identity):
             guard identity != nil else { throw RecorderReplayError(message: "The original Lab layer identity was unavailable.") }
             return .layer(try symbol(.layer(root)))
         case .channel(let channel): return .channel(try symbol(.channel(channel)))

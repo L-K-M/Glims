@@ -290,14 +290,16 @@ enum SemanticImageCommand {
     }
 
     /// The document supplies the UUID captured at recording or explicit
-    /// installation. The native begin validates it and the empty selection
-    /// atomically before the first dab.
+    /// installation. Each native operation validates it before editing;
+    /// Brush and Fill also enforce their empty-selection rule.
     func apply(session: EngineSession, image: Int32, labLayerTarget: EngineSession.LabLayerFillTarget) throws {
         switch self {
         case .completeLabLayerStroke(let stroke):
             try stroke.apply(session: session, image: image, target: labLayerTarget)
         case .fillLabLayer(let fill):
             try fill.apply(session: session, image: image, target: labLayerTarget)
+        case .layerProperties(let properties):
+            try session.changeLabLayer(image, target: labLayerTarget, change: properties.change)
         default: throw MissingLayerBinding()
         }
     }

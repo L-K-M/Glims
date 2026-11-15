@@ -176,4 +176,14 @@ final class LabLayerPropertyTransportTests: XCTestCase {
             XCTAssertEqual(state.freed, 1)
         }
     }
+
+    func testRecordedLayerPropertiesUseGuardedLabTarget() throws {
+        try withSession { session, producer in
+            let command = SemanticImageCommand.layerProperties(.init(change))
+            try command.apply(session: session, image: 19, labLayerTarget: target)
+            XCTAssertEqual(producer.guardedCalls, 1)
+            XCTAssertEqual(producer.ordinaryCalls, 0)
+            XCTAssertEqual(producer.settings.map { UUID(uuid: $0.uuid) }, target.uuid)
+        }
+    }
 }
