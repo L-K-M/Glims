@@ -50,6 +50,20 @@ extension EngineSmokeTest {
         check(item.title == "Open Photoshop Composite…" && owner.validateMenuItem(item) == session.supportsPhotoshopCompositeImport,
               "File menu exposes composite import only with the adapter capability")
         guard session.supportsPhotoshopCompositeImport else { return }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_COMPOSITE_IO_ERRORS"] == "1" {
+            var missingResult: Result<DocumentWindowController, Error>?
+            let missing = work.appendingPathComponent("missing-photoshop-file.psd")
+            owner.importPhotoshopComposite(from: missing) { missingResult = $0 }
+            guard wait({ missingResult != nil && !EngineActivity.shared.isBusy }) else {
+                return check(false, "missing composite import finishes")
+            }
+            if case .failure(let error)? = missingResult {
+                check(error.localizedDescription.contains("Could not read the Photoshop file") && owner.documents.isEmpty,
+                      "a missing composite reports a file-read error without opening a document")
+            } else {
+                check(false, "a missing composite reports a file-read error without opening a document")
+            }
+        }
         var cancelled = false, timedOut = false
         let deadline = Date().addingTimeInterval(10)
         let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
