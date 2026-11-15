@@ -4487,9 +4487,9 @@ contain both mask Levels and Curves while older versions reject the new
 Curves binding.
 
 The real-engine save, explicit rebind, Undo and stale-target refusal pass on
-GIMP 3.2.8 and 3.0.8; the remaining engine checks are in progress. The full
-Swift suite passes 1,820 tests. Packaged-app qualification and merge remain
-open.
+all four supported engines. The full Swift suite passes 1,820 tests. The
+isolated signed bundle passes 2,268 native and 3,359 editor checks;
+integration and merge remain open.
 
 
 ### Transform composite pixel preview (2026-11-11 work in progress)
