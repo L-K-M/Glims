@@ -6262,3 +6262,10 @@ changed; the saved file is updated only when explicitly saved. Stale
 selections and recordings with work in flight are refused. Native palette
 and file workflows pass on all four supported engines, and the full Swift
 suite passes. Bundle qualification and hosted review remain open.
+
+### Reopen after Revert (candidate)
+
+An ordinary Open no longer brings a discarded window back while its document
+is closing after Revert. The existing replacement is selected instead. A
+native-window regression checks the close-drain interval and the source image
+cleanup. The same rule also avoids selecting other closing ordinary documents.
