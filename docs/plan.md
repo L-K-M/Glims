@@ -6253,6 +6253,15 @@ save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
 
+### Photoshop import Revert admission (candidate)
+
+Reverting a composite or ink-preserving CMYK import reserves its source until
+the replacement is adopted or the operation fails. A second matching import
+or Revert receives a busy error; closing windows are excluded from duplicate
+lookup so an import after Revert finds the replacement. Focused real-window
+checks cover both routes on four engine versions, including failed-Revert retry
+and source preservation. Full editor, bundle and review checks remain open.
+
 ### Remove a recorded step (candidate)
 
 The Recorder palette can remove a selected step from a stopped recording.
