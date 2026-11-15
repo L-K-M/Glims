@@ -25,6 +25,27 @@ static size_t read_small(const char *path, unsigned char *out, size_t capacity)
   size_t n=fread(out,1,capacity,f); int bad=ferror(f) || !feof(f);
   fclose(f); return bad ? 0 : n;
 }
+static size_t be32(const unsigned char *p)
+{ return ((size_t)p[0]<<24)|((size_t)p[1]<<16)|((size_t)p[2]<<8)|p[3]; }
+static const unsigned char *alternate_resource(const unsigned char *file, size_t size, size_t *length)
+{
+  *length=0;
+  if(size<30 || memcmp(file,"8BPS",4))return NULL;
+  size_t mode=be32(file+26);if(mode>size-30 || size-30-mode<4)return NULL;
+  size_t p=30+mode, resources=be32(file+p);p+=4;if(resources>size-p)return NULL;
+  size_t end=p+resources;const unsigned char *found=NULL;
+  while(p<end){
+    if(end-p<12 || memcmp(file+p,"8BIM",4))return NULL;
+    unsigned id=((unsigned)file[p+4]<<8)|file[p+5];
+    size_t name=(1u+file[p+6]+1u)&~(size_t)1u;
+    if(name>end-p-6 || end-p-6-name<4)return NULL;
+    size_t pos=p+6+name,n=be32(file+pos),body=pos+4;
+    if(n>end-body || ((n&1u) && n==end-body))return NULL;
+    if(id==1066){if(found)return NULL;found=file+body;*length=n;}
+    p=body+n+(n&1u);
+  }
+  return p==end ? found : NULL;
+}
 static int fixture(const char *path)
 {
   /* Synthetic PSD v1 Duotone envelope. Adobe describes this color block as
@@ -69,6 +90,9 @@ int main(int argc,char **argv)
   size_t real_size=read_small(real,real_before,sizeof real_before); if(real_size<30)return 2;
   size_t block_size=((size_t)real_before[26]<<24)|((size_t)real_before[27]<<16)|((size_t)real_before[28]<<8)|real_before[29];
   if(real_before[24]!=0 || real_before[25]!=8 || block_size==0 || block_size>real_size-30)return 2;
+  size_t alternate_size=0;
+  const unsigned char *alternate=alternate_resource(real_before,real_size,&alternate_size);
+  if(!alternate || alternate_size!=794)return 2;
   if(!fixture(psd))return 2;
   unsigned char source_before[256], source_after[256];
   size_t source_size=read_small(psd,source_before,sizeof source_before); if(!source_size)return 2;
@@ -106,9 +130,17 @@ int main(int argc,char **argv)
   CHECK(status==GLIMS_STATUS_OK && photoshop,"open Photoshop-authored Duotone fixture");
   if(error){fprintf(stderr,"Photoshop fixture: %s\n",error);api->free_string(error);error=NULL;}
   if(photoshop) {
+    GlimsImageInfo real_info={0}; GlimsUndoInfo real_undo={0};
+    CHECK(api->image_info(engine,photoshop,&real_info)==GLIMS_STATUS_OK && !real_info.dirty &&
+          api->image_undo_info(engine,photoshop,&real_undo)==GLIMS_STATUS_OK && real_undo.undo_count==0,
+          "alternate-color promotion leaves the imported document clean with no Undo step");
     status=api->image_save(engine,photoshop,real_xcf,&error);
     CHECK(status==GLIMS_STATUS_OK && contains(real_xcf,real_before+30,block_size),
           "XCF preserves Photoshop's exact opaque color-mode block");
+    CHECK(status==GLIMS_STATUS_OK &&
+          contains(real_xcf,(const unsigned char *)"psd-image-resource-8BIM-042a",28) &&
+          contains(real_xcf,alternate,alternate_size),
+          "XCF preserves Photoshop's exact alternate Duotone colors");
     if(error){api->free_string(error);error=NULL;}
     status=api->image_open(engine,real_xcf,&photoshop_reopened,&error);
     CHECK(status==GLIMS_STATUS_OK && photoshop_reopened,"Photoshop fixture's XCF reopens");
@@ -117,6 +149,8 @@ int main(int argc,char **argv)
       status=api->image_save(engine,photoshop_reopened,real_again,&error);
       CHECK(status==GLIMS_STATUS_OK && contains(real_again,real_before+30,block_size),
             "XCF resave preserves Photoshop's exact opaque color-mode block");
+      CHECK(status==GLIMS_STATUS_OK && contains(real_again,alternate,alternate_size),
+            "XCF reopen and resave retains the alternate Duotone colors");
       if(error){api->free_string(error);error=NULL;}
       api->image_close(engine,photoshop_reopened);
     }

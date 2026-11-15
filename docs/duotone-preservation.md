@@ -14,10 +14,19 @@ XCF save, reopen and resave, exact opaque bytes and source-file preservation.
 The synthetic block is a marker, not a Photoshop ink specification. The
 fixture is attributed in the test-fixture README. These preservation checks
 pass on all four supported engines. This change does not interpret ink
-settings, provide a Duotone color preview, create or edit ink curves, or add
-Duotone PSD export. Oversized new metadata refuses. A focused real-window
-test confirms the document Save flow retains the block. Preservation requires
-the updated adapter; full editor qualification, export workflow and review
-remain open.
+settings, provide a Duotone color preview, or create or edit ink curves.
+Oversized new metadata refuses. A focused real-window test confirms the
+document Save flow retains the block. Preservation requires the updated
+adapter; full editor qualification and review remain open.
 
 Reference: [Adobe Photoshop File Formats Specification](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/), Color Mode Data Section.
+
+A follow-up also promotes GIMP's transient image resource 1066 to persistent
+metadata when the imported grayscale image carries Duotone data. Both `8BIM`
+and `MeSa` resource signatures retain their original bytes and flags; empty or
+oversized transient resources refuse rather than disappear on Save. Unrelated
+images and already-persistent tags remain unchanged. The real Photoshop fixture
+now retains its 794-byte alternate-color resource across XCF save, reopen and
+resave without changing the source, grayscale pixels or Undo history. This
+preservation does not yet render the alternate colors or update them after ink
+edits.
