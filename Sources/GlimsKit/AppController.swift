@@ -652,7 +652,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 message: "Wait for the current file operation to finish, then open the Photoshop composite again.")))
         }
         if let existing = documents.first(where: {
-            guard $0.imageDocument.fileState.importStrategy == .photoshopComposite,
+            guard !$0.closeStarted, !$0.imageDocument.isClosing,
+                  $0.imageDocument.fileState.importStrategy == .photoshopComposite,
                   let source = $0.imageDocument.fileState.importedSourceURL else { return false }
             return FileWriteCoordinator.sameFile(source, url)
         }) {
@@ -716,7 +717,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 message: "Wait for the current file operation to finish, then open the CMYK PSD again.")))
         }
         if let existing = documents.first(where: {
-            guard $0.imageDocument.fileState.importStrategy == .nativeCMYKPSD,
+            guard !$0.closeStarted, !$0.imageDocument.isClosing,
+                  $0.imageDocument.fileState.importStrategy == .nativeCMYKPSD,
                   let source = $0.imageDocument.fileState.importedSourceURL else { return false }
             return FileWriteCoordinator.sameFile(source, url)
         }) {
@@ -797,7 +799,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 continue
             }
             if let existing = documents.first(where: {
-                guard $0.imageDocument.fileState.importStrategy != .photoshopComposite else { return false }
+                guard !$0.closeStarted, !$0.imageDocument.isClosing,
+                      $0.imageDocument.fileState.importStrategy != .photoshopComposite else { return false }
                 guard let source = $0.imageDocument.fileState.nativeURL ?? $0.imageDocument.fileState.importedSourceURL else { return false }
                 return FileWriteCoordinator.sameFile(source, url)
             }) {
@@ -1206,6 +1209,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         // The reload runs in the document's own engine session.
         let session = controller.imageDocument.session
         let strategy = controller.imageDocument.fileState.importStrategy ?? .appearance
+        let reservedURL = source.standardizedFileURL
+        switch strategy {
+        case .photoshopComposite:
+            guard !openingPhotoshopCompositeURLs.contains(where: { FileWriteCoordinator.sameFile($0, reservedURL) }) else {
+                return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue),
+                    message: "Wait for the current Photoshop composite operation to finish.")))
+            }
+            openingPhotoshopCompositeURLs.insert(reservedURL)
+        case .nativeCMYKPSD:
+            guard !openingNativeCMYKURLs.contains(where: { FileWriteCoordinator.sameFile($0, reservedURL) }) else {
+                return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_BUSY.rawValue),
+                    message: "Wait for the current CMYK PSD operation to finish.")))
+            }
+            openingNativeCMYKURLs.insert(reservedURL)
+        case .appearance:
+            break
+        }
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Reverting \(source.lastPathComponent)", work: {
             let result = Result {
@@ -1217,6 +1237,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             }
             DispatchQueue.main.async {
                 self.adoptRevertedImage(result, from: source, strategy: strategy, into: controller) { outcome in
+                    switch strategy {
+                    case .photoshopComposite: self.openingPhotoshopCompositeURLs.remove(reservedURL)
+                    case .nativeCMYKPSD: self.openingNativeCMYKURLs.remove(reservedURL)
+                    case .appearance: break
+                    }
                     self.pendingFileOperations -= 1
                     completion(outcome)
                     self.advanceDocumentClosing()
