@@ -92,8 +92,8 @@ transforms, Levels, Curves, Color Balance, Hue/Saturation and
 Brightness/Contrast require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
-Select Alpha and color selection with `sampleMerged:false` require context;
-other non-ink commands require none. Native ink commands require the `ink`
+Select Alpha, color selection with `sampleMerged:false`, and mask Levels
+require context; other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
 `quickMask`. Target kinds are layer/channel/quickMask with `symbol`, or mask with
@@ -551,3 +551,12 @@ successful stroke carrying this color. Older Eraser recordings without the
 field retain their original behavior and file versions. For an opaque target,
 guarded replay binds the color and target's alpha state into the native
 fingerprint, and refuses a mismatch before painting.
+
+## Mask Levels (version 23)
+
+A Levels command can bind a context whose target is an editing layer mask.
+The context identifies the owning layer symbol, the mask flags and the
+selection and Quick Mask state; native mask handles are never stored.
+Version 23 requires at least one successful mask Levels command. Older
+versions reject this binding, and replay confirms the rebound mask and its
+role before applying the settings as one destructive Undo step.
