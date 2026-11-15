@@ -111,7 +111,7 @@ xcrun clang++ -dynamiclib -o "$OUT/libglimsengine.dylib" \
   -Wl,-exported_symbol,_glims_engine_get_api || die "linking the adapter failed"
 
 echo "==> Building the conformance tests and the performance pass"
-for program in engine-tests engine-perf bitmap-psd-engine-tests; do
+for program in engine-tests engine-perf bitmap-psd-engine-tests duotone-preservation-tests; do
   xcrun clang -std=c11 -O2 -Wall -Wextra -Werror -I"$INCLUDE" \
     "$ROOT/Engine/tests/$program.c" -o "$OUT/glims-$program" || die "building $program failed"
 done
@@ -157,6 +157,14 @@ if [[ "$MODE" == test ]]; then
         "$OUT/glims-bitmap-psd-engine-tests" "$OUT/libglimsengine.dylib" "$BITMAP_WORK" || status=$?
   cat "$OUT/bitmap-psd-test.log"
   (( status == 0 )) || die "the Bitmap PSD engine tests failed (status $status)"
+  DUOTONE_WORK="$WORK/duotone"
+  mkdir -p "$DUOTONE_WORK/home" "$DUOTONE_WORK/cache"
+  status=0
+  run_with_timeout 180 "$OUT/duotone-preservation-test.log" \
+    env HOME="$DUOTONE_WORK/home" XDG_CACHE_HOME="$DUOTONE_WORK/cache" \
+        "$OUT/glims-duotone-preservation-tests" "$OUT/libglimsengine.dylib" "$DUOTONE_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
+  cat "$OUT/duotone-preservation-test.log"
+  (( status == 0 )) || die "the Duotone preservation tests failed (status $status)"
   status=0
   run_with_timeout 60 "$OUT/codec-test.log" \
     env HOME="$WORK/home" XDG_CACHE_HOME="$WORK/cache" \
