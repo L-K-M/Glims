@@ -6024,6 +6024,13 @@ The four-engine conformance and public tests cover those refusals, cancellation,
 unaligned input and Undo. This is an engine prerequisite only: Recorder does
 not yet capture or replay layered Lab Fill. Review and CI remain pending.
 
+The Swift transport detects the optional guarded Fill entry by its complete
+API prefix and refuses guarded requests on older engines without invoking the
+ordinary Fill entry. Transport tests include a protected old-prefix boundary,
+request values and native error ownership. Real-window tests cover the new
+engine's selection refusal, empty-selection Fill and Undo, and the old-engine
+fallback. Recorder capture, persistence and replay remain separate work.
+
 ### Photoshop Bitmap PSD export (foundation)
 
 A private bounded serializer can write opaque binary black-and-white pixels

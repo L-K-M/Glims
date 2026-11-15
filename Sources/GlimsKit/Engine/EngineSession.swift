@@ -537,6 +537,13 @@ final class EngineSession: @unchecked Sendable {
         return api.image_lab_layer_identity != nil && api.image_fill_lab_layer_srgb != nil
     }
 
+    var supportsLabLayerColorFillEmptySelection: Bool {
+        guard supportsLabLayerColorFill,
+              let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_fill_lab_layer_srgb_empty_selection),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_fill_lab_layer_srgb_empty_selection) else { return false }
+        return api.image_fill_lab_layer_srgb_empty_selection != nil
+    }
+
     var supportsLabLayerBrush: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.stroke_cancel_lab_layer),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.stroke_cancel_lab_layer) else { return false }
@@ -712,9 +719,14 @@ final class EngineSession: @unchecked Sendable {
         return RGBAColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: rgb.alpha)
     }
 
-    func fillLabLayer(_ image: Int32, target: LabLayerFillTarget, color: RGBAColor, opacity: Double) throws {
-        guard supportsLabLayerColorFill, let slot = api.image_fill_lab_layer_srgb else {
-            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This engine cannot fill a Lab layer.")
+    func fillLabLayer(_ image: Int32, target: LabLayerFillTarget, color: RGBAColor, opacity: Double,
+                      requireEmptySelection: Bool = false) throws {
+        let available = requireEmptySelection ? supportsLabLayerColorFillEmptySelection : supportsLabLayerColorFill
+        let slot = requireEmptySelection ? api.image_fill_lab_layer_srgb_empty_selection : api.image_fill_lab_layer_srgb
+        guard available, let slot else {
+            let message = requireEmptySelection ? "This engine cannot safely record or replay a Lab layer fill."
+                : "This engine cannot fill a Lab layer."
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: message)
         }
         var settings = GlimsLabLayerColorFillSettings()
         settings.struct_size = UInt32(MemoryLayout<GlimsLabLayerColorFillSettings>.size)

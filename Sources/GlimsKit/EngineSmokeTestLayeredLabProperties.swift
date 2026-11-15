@@ -173,6 +173,9 @@ extension EngineSmokeTest {
         if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COLOR_FILL"] == "1" {
             check(opened.storage.allowsLabLayerColorFill, "test adapter advertises layered Lab color Fill")
         }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_GUARDED_FILL"] == "1" {
+            check(session.supportsLabLayerColorFillEmptySelection, "test adapter supports guarded Lab color Fill")
+        }
         if opened.storage.allowsLabLayerColorFill, let window = windowController.window,
            let originalRoot = opened.selectedLayerIDs.first {
             let oldForeground = ToolState.shared.foreground
@@ -201,6 +204,18 @@ extension EngineSmokeTest {
             drain("fill selection")
             let insideBefore = pixel(session, image, x: 1, y: 1)
             let outsideBefore = pixel(session, image, x: 0, y: 0)
+            let guardedTarget = try session.labLayerFillTarget(image, root: originalRoot)
+            let guardedColor = EngineSession.RGBAColor(red: 1, green: 0, blue: 0, alpha: 1)
+            let beforeGuardedRefusal = try session.undoInfo(image)
+            var guardedRefusal: EngineSession.EngineError?
+            do { try session.fillLabLayer(image, target: guardedTarget, color: guardedColor, opacity: 1, requireEmptySelection: true) }
+            catch { guardedRefusal = error as? EngineSession.EngineError }
+            let afterGuardedRefusal = try session.undoInfo(image)
+            let expectedGuardedStatus = session.supportsLabLayerColorFillEmptySelection
+                ? GLIMS_STATUS_INVALID_ARGUMENT : GLIMS_STATUS_UNSUPPORTED
+            check(guardedRefusal?.status == Int32(expectedGuardedStatus.rawValue) &&
+                  beforeGuardedRefusal == afterGuardedRefusal && pixel(session, image, x: 1, y: 1) == insideBefore,
+                  "guarded Lab Fill refuses a selection or older engine without changing pixels or history")
             windowController.fill(nil)
             if let sheet = waitForSheet() {
                 check(true, "captured Lab layer Fill sheet opens")
@@ -324,6 +339,18 @@ extension EngineSmokeTest {
                 undo.undo(); drain("restore pixels after Lab color fill")
                 undo.undo(); drain("restore selection after Lab color fill")
                 check(opened.selectionBounds == nil, "fill fixture restores its empty selection")
+                if session.supportsLabLayerColorFillEmptySelection {
+                    let beforeGuardedFill = pixel(session, image, x: 1, y: 1)
+                    let beforeGuardedHistory = try session.undoInfo(image)
+                    try session.fillLabLayer(image, target: guardedTarget, color: guardedColor, opacity: 1, requireEmptySelection: true)
+                    let afterGuardedHistory = try session.undoInfo(image)
+                    check(pixel(session, image, x: 1, y: 1) != beforeGuardedFill &&
+                          afterGuardedHistory.undoCount == beforeGuardedHistory.undoCount + 1,
+                          "guarded Lab Fill applies on an empty selection as one Undo")
+                    try session.undo(image); drain("guarded Lab Fill Undo")
+                    check(pixel(session, image, x: 1, y: 1) == beforeGuardedFill,
+                          "Undo restores the guarded Lab Fill")
+                }
             } else { check(false, "captured Lab layer Fill sheet opens") }
             let beforeInvalidFill = pixel(session, image, x: 1, y: 1)
             windowController.fill(nil)
