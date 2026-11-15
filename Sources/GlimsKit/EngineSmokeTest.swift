@@ -3484,6 +3484,8 @@ enum EngineSmokeTest {
         wait { saved && document.pendingWork == 0 }
         check(saved && document.fileState.nativeURL == native && !document.hasUnsavedChanges,
               "saving queued input sets the native file and clears unsaved changes")
+        check(controller.canvas.accessibilityLabel() == "drawing.xcf",
+              "saving under a new name updates the canvas accessibility label")
         let reopened = try session.openImage(path: native.path)
         check((pixel(session, reopened, x: 20, y: 20)?[0] ?? 255) < 128,
               "the saved XCF includes the last queued stroke")

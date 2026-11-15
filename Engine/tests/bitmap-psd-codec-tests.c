@@ -75,6 +75,19 @@ main (void)
   CHECK (f.length == sizeof expected && !memcmp (f.bytes, expected, sizeof expected),
          "literal PSD header, black-bit polarity and row padding are exact");
 
+  f = (Fixture) {.width = 8, .height = 2};
+  spec = (GlimsBitmapPsdSpec) {8, 2};
+  const uint8_t expected_8x2[] = {
+    '8','B','P','S', 0,1, 0,0,0,0,0,0, 0,1,
+    0,0,0,2, 0,0,0,8, 0,1, 0,0,
+    0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,
+    0x92, 0x24
+  };
+  CHECK (glims_bitmap_psd_size (&spec, &size) == GLIMS_BITMAP_PSD_OK && size == sizeof expected_8x2 &&
+         glims_bitmap_psd_write (&spec, read_pixels, &f, write_bytes, &f) == GLIMS_BITMAP_PSD_OK &&
+         f.length == sizeof expected_8x2 && !memcmp (f.bytes, expected_8x2, sizeof expected_8x2),
+         "one-byte bitmap rows are contiguous without word padding");
+
   f = (Fixture) {.width = 5001, .height = 2};
   spec = (GlimsBitmapPsdSpec) {5001, 2};
   CHECK (glims_bitmap_psd_write (&spec, read_pixels, &f, write_bytes, &f) == GLIMS_BITMAP_PSD_OK &&
