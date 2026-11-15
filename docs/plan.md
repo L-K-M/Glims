@@ -6266,3 +6266,13 @@ A focused real-window test covers event dispatch, drag, zoom, rotation, alpha,
 document changes and deferred reads on the pinned engine. The other engines, whole-editor integration,
 accessibility and review remain in qualification. Native CMYK/Lab readouts
 and sampling of temporary previews are not yet provided.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.

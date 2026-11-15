@@ -6847,6 +6847,49 @@ final class ImageDocument {
         RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
     }
 
+    /// Remove a stopped recording's selected row and its capture sidecars as
+    /// one main-actor transaction. A stale palette selection cannot identify
+    /// a different row after another edit or a file installation.
+    func removeRecordedStep(at index: Int, checkpoint: RecorderInstallCheckpoint) throws {
+        try requireRecorderReadiness(checkpoint, holding: 0)
+        let count = recorder.records.count
+        var updatedLog = recorder
+        try updatedLog.removeSettledRecord(at: index)
+
+        func removing<Value>(_ values: [Int: Value]) throws -> [Int: Value] {
+            guard values.keys.allSatisfy({ $0 >= 0 && $0 < count }) else {
+                throw RecorderFileError.invalid("The recording's target information is inconsistent.")
+            }
+            var result: [Int: Value] = [:]
+            for (ordinal, value) in values where ordinal != index {
+                result[ordinal > index ? ordinal - 1 : ordinal] = value
+            }
+            return result
+        }
+
+        let contexts = try removing(recorderTargetContexts)
+        let bindings = try removing(recorderBindingDescriptions)
+        let editedFile: RecorderFileValue?
+        if let loaded = recorderLoadedFile {
+            guard loaded.records.count == count else {
+                throw RecorderFileError.invalid("The loaded recording no longer matches its steps.")
+            }
+            editedFile = try loaded.removingRecord(at: index)
+        } else {
+            editedFile = nil
+        }
+
+        recorder = updatedLog
+        recorderTargetContexts = contexts
+        recorderBindingDescriptions = bindings
+        recorderLoadedFile = editedFile
+        recorderRevision = UUID()
+        recorderReplayGeneration = UUID()
+        recorderReplayWaitingGeneration = nil
+        recorderReplayEngineWaitingGeneration = nil
+        notifyRecorderChanged()
+    }
+
     /// Identifies the owning document and current settled, stopped recording.
     func recorderInstallCheckpoint() throws -> RecorderInstallCheckpoint {
         try requireRecorderReadiness(holding: 0)
