@@ -15,7 +15,32 @@ extension EngineSmokeTest {
         let length = input[26..<30].reduce(0) { ($0 << 8) | Int($1) }
         guard length > 0, length <= input.count - 30 else { return check(false, "Duotone settings are bounded") }
         let block = input.subdata(in: 30..<(30 + length))
-        let image = try session.openImage(path: path)
+        let originalImage = try session.openImage(path: path)
+        let originalPixels = try session.copyPixels(originalImage, merged: true).pixels
+        let hasTransparency = originalPixels.enumerated().contains { $0.offset % 4 == 3 && $0.element != 255 }
+        var transparentDocument: ImageDocument?
+        let image: Int32
+        if hasTransparency {
+            // Some engine versions cannot import the fixture's live gradient
+            // and leave it transparent. Preserve that image to verify refusal,
+            // then exercise successful export with an independent flat PSD
+            // carrying the identical Photoshop-authored color-mode block.
+            let source = try ImageDocument(session: session, image: originalImage, name: "Incomplete Duotone fixture")
+            documents.items.append(source)
+            transparentDocument = source
+            let header: [UInt8] = [0x38, 0x42, 0x50, 0x53, 0, 1, 0, 0, 0, 0, 0, 0,
+                                   0, 1, 0, 0, 0, 4, 0, 0, 0, 4, 0, 8, 0, 8]
+            var flat = Data(header)
+            flat.append(input.subdata(in: 26..<(30 + length)))
+            flat.append(Data(repeating: 0, count: 10))
+            flat.append(contentsOf: [0, 17, 34, 51, 68, 85, 102, 119,
+                                     136, 153, 170, 187, 204, 221, 238, 255])
+            let flatURL = work.appendingPathComponent("flat-duotone-fixture.psd")
+            try flat.write(to: flatURL)
+            image = try session.openImage(path: flatURL.path)
+        } else {
+            image = originalImage
+        }
         let document = try ImageDocument(session: session, image: image, name: "Duotone fixture")
         documents.items.append(document)
         let controller = DocumentWindowController(document: document, exportDirectory: work)
@@ -28,6 +53,11 @@ extension EngineSmokeTest {
             var closed = false
             document.closeImageWhenDrained { closed = true }; wait { closed }
             documents.items.removeAll { $0 === document }
+            if let transparentDocument {
+                var sourceClosed = false
+                transparentDocument.closeImageWhenDrained { sourceClosed = true }; wait { sourceClosed }
+                documents.items.removeAll { $0 === transparentDocument }
+            }
         }
         let before = try session.copyPixels(image, merged: true).pixels
         let undo = try session.undoInfo(image).undoCount
@@ -51,13 +81,31 @@ extension EngineSmokeTest {
         let settings = form.settings
         panel.cancel(nil)
         wait { controller.window?.attachedSheet == nil }
+        if let transparentDocument {
+            let sourceUndo = try session.undoInfo(originalImage)
+            let sourceDirty = transparentDocument.hasUnsavedChanges
+            let refusedURL = work.appendingPathComponent("transparent-duotone-refused.psd")
+            var refusalFinished = false
+            var refusal: Error?
+            transparentDocument.export(to: refusedURL, settings: settings) { error in
+                refusal = error; refusalFinished = true
+            }
+            wait(seconds: 90) { refusalFinished }
+            check(try refusalFinished && (refusal?.localizedDescription.contains("opaque") ?? false) &&
+                  !FileManager.default.fileExists(atPath: refusedURL.path) &&
+                  session.copyPixels(originalImage, merged: true).pixels == originalPixels &&
+                  session.undoInfo(originalImage) == sourceUndo && transparentDocument.hasUnsavedChanges == sourceDirty,
+                  "an incomplete transparent Duotone import refuses export without changing the source")
+        }
         let output = work.appendingPathComponent("duotone-export.psd")
         var finished = false
         var failure: Error?
         document.export(to: output, settings: settings) { error in failure = error; finished = true }
         wait(seconds: 90) { finished }
-        check(finished && failure == nil && FileManager.default.fileExists(atPath: output.path),
-              "the document export pipeline writes Duotone PSD")
+        let outputExists = FileManager.default.fileExists(atPath: output.path)
+        let diagnostic = "finished=\(finished), error=\(failure.map { String(describing: $0) } ?? "none"), file=\(outputExists)"
+        check(finished && failure == nil && outputExists,
+              "the document export pipeline writes Duotone PSD (\(diagnostic))")
         guard finished, failure == nil, FileManager.default.fileExists(atPath: output.path) else { return }
         let exported = try Data(contentsOf: output)
         check(exported.count >= 30 + length && exported[23] == 8 && exported[25] == 8 &&

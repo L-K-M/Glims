@@ -29,6 +29,9 @@
 
 #define LAB_COPY_ROW 4096
 
+_Static_assert (GLIMS_LAB_LAYER_RENDER_MAX_WIDTH <= LAB_COPY_ROW,
+                "layered Lab chunks must fit the copy row buffers");
+
 typedef struct {
   GlimsEngine *engine;
   GlimsProgress *progress;
@@ -196,7 +199,10 @@ convert_lab_copy (GlimsEngine *engine, GlimsImageID id,
 
   gboolean to_lab = settings.destination_mode == GLIMS_COLOR_MODE_LAB;
   GlimsPlateStorage source_storage;
-  if (layered && (to_lab || open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB))
+  if (layered && to_lab)
+    return refuse_copy (GLIMS_STATUS_UNSUPPORTED, error,
+                        "Layered Lab documents only support RGB copies.");
+  if (layered && open->component_layout != GLIMS_COMPONENT_LAYOUT_LAYERED_LAB)
     return refuse_copy (GLIMS_STATUS_UNSUPPORTED, error,
                         "Choose a layered Lab document for this RGB copy.");
   if (to_lab)
