@@ -25,6 +25,7 @@ enum RecorderFileCodec {
     static let tabletStrokeVersion = 21
     static let eraserBackgroundVersion = 22
     static let maskLevelsVersion = 23
+    static let maskCurvesVersion = 24
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -101,7 +102,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...maskLevelsVersion)
+        let fileVersion = try integer(root.get("version"), range: version...maskCurvesVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -140,6 +141,7 @@ enum RecorderFileCodec {
         var hasTabletStroke = false
         var hasEraserBackground = false
         var hasMaskLevels = false
+        var hasMaskCurves = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -181,6 +183,12 @@ enum RecorderFileCodec {
                         throw RecorderFileError.invalid("Mask Levels needs recording version 23.")
                     }
                     hasMaskLevels = true
+                }
+                if case .applyCurves = command, case .context = binding {
+                    guard fileVersion >= maskCurvesVersion else {
+                        throw RecorderFileError.invalid("Mask Curves needs recording version 24.")
+                    }
+                    hasMaskCurves = true
                 }
                 try validate(binding, for: command, descriptions: descriptions)
                 if case .ink(let symbol, let identity) = binding {
@@ -239,6 +247,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == maskLevelsVersion, !hasMaskLevels {
             throw RecorderFileError.invalid("Version 23 requires a successful mask Levels command.")
+        }
+        if fileVersion == maskCurvesVersion, !hasMaskCurves {
+            throw RecorderFileError.invalid("Version 24 requires a successful mask Curves command.")
         }
         if fileVersion == spongeStrokeVersion, !hasSpongeStroke {
             throw RecorderFileError.invalid("Version 20 requires a successful Sponge stroke.")
@@ -1085,9 +1096,9 @@ enum RecorderFileCodec {
             return
         case (.selectColor(_, let options), .context) where !options.sampleMerged: break
         case (.selectCommand(.fromAlpha, _), .context): break
-        case (.applyLevels, .context(let context)):
+        case (.applyLevels, .context(let context)), (.applyCurves, .context(let context)):
             guard case .mask = context.target, !context.quickMask.enabled else {
-                throw RecorderFileError.invalid("Mask Levels needs an editing layer mask.")
+                throw RecorderFileError.invalid("A mask adjustment needs an editing layer mask.")
             }
         case (.labSelection, .none): return
         case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.transformImage, .none), (.scale, .none), (.resizeCanvas, .none), (.crop, .none):

@@ -199,9 +199,16 @@ enum SemanticImageCommand {
         }
     }
 
+    var isMaskAdjustment: Bool {
+        switch self {
+        case .applyLevels, .applyCurves: return true
+        default: return false
+        }
+    }
+
     /// A mask is admitted only through its separately verified target context.
-    func applyMaskLevels(session: EngineSession, image: Int32, drawable: Int32) throws {
-        guard case .applyLevels = self else { throw MissingLayerBinding() }
+    func applyMaskAdjustment(session: EngineSession, image: Int32, drawable: Int32) throws {
+        guard isMaskAdjustment else { throw MissingLayerBinding() }
         try apply(session: session, image: image, layer: drawable)
     }
 
