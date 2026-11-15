@@ -199,6 +199,12 @@ if [[ "$MODE" == test ]]; then
       --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 180 || status=$?
   cat "$OUT/duotone-alternate-metadata-test.log"
   (( status == 0 )) || die "the Duotone alternate metadata tests failed (status $status)"
+  status=0
+  run_with_timeout 600 "$OUT/duotone-alternate-export-test.log" \
+    python3 "$ROOT/scripts/test-duotone-alternate-export.py" \
+      --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 180 || status=$?
+  cat "$OUT/duotone-alternate-export-test.log"
+  (( status == 0 )) || die "the Duotone alternate export tests failed (status $status)"
 fi
 
 if [[ "$MODE" == perf ]]; then

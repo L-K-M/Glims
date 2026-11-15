@@ -29,6 +29,21 @@ struct RecorderFileValue: Equatable {
     let origin: Origin
     let symbols: [Symbol]
     let records: [Record]
+
+    /// Return an edited copy without losing the original target descriptions.
+    /// Loaded files can intentionally include unused symbols, which remain part
+    /// of their metadata even when a row is removed.
+    func removingRecord(at index: Int) throws -> RecorderFileValue {
+        guard records.indices.contains(index),
+              records.enumerated().allSatisfy({ $0.offset == $0.element.ordinal }) else {
+            throw RecorderFileError.invalid("That recording step is no longer available.")
+        }
+        var remaining = records
+        remaining.remove(at: index)
+        let renumbered = remaining.enumerated().map { Record(ordinal: $0.offset, outcome: $0.element.outcome) }
+        return RecorderFileValue(recordingID: recordingID, name: name, origin: origin,
+                                 symbols: symbols, records: renumbered)
+    }
 }
 
 enum RecorderFileCommand: Equatable {

@@ -6262,10 +6262,33 @@ real-window Save/Reopen checks pass on all four engines, as do the full editor
 suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development engine reports
 upstream cache-file cleanup warnings despite passing. A focused source review
 found no concrete defect and did not execute tests or inspect upstream GIMP
-ownership internals. Hosted CI remains in progress. This
-retains data for a future color preview; it does not display or recalculate it.
-The standalone pinned bundle passes 2,268 engine, 17 preservation, 20 export,
+ownership internals. Hosted CI remains in progress. This retains data for a
+future color preview; it does not display or recalculate it. The standalone
+pinned bundle passes 2,268 engine, 17 preservation, 20 export, 13 composite
+import and 3,355 editor checks with development trees inaccessible.
+
+### Retaining alternate Duotone colors on PSD export (candidate)
+
+Duotone PSD export now carries a retained resource 1066 body and its 8BIM or
+MeSa signature into the flat output. It refuses conflicting, empty or
+oversized retained resources rather than silently discarding them. The source
+image and Undo history remain unchanged. Resources absent from a source remain
+absent, and other image resources are still not exported.
+
+The previous adapter reproduced loss of the Photoshop fixture's alternate
+colors; all four updated adapters preserve the exact resource across export
+and XCF reopen/export, and still export sources without it. Each passes nine
+direct admission checks for conflicting, empty and oversized resources and
+MeSa serialization. Codec tests pass 25 checks each in optimized and sanitizer
+builds, covering both signatures, odd/even padding, streaming and failure
+paths. Real-window export and Repeat Export pass on all four engines, as do
+the full editor suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development
+engine emits upstream cache cleanup warnings; 3.0 also emitted LibGimp EOF
+warnings in the focused window test. The Swift suite passes 1,799 tests.
+The standalone pinned bundle passes 2,268 engine, 17 preservation, 24 export,
 13 composite-import and 3,355 editor checks with development trees inaccessible.
+Hosted qualification remains in progress. Retaining this data does not enable
+a color preview or establish Photoshop printing fidelity.
 
 ### Canvas accessibility identity (candidate)
 
@@ -6273,3 +6296,29 @@ Canvas accessibility labels include the document name, refresh after a native
 save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Photoshop import Revert admission (candidate)
+
+Reverting a composite or ink-preserving CMYK import reserves its source until
+the replacement is adopted or the operation fails. A second matching import
+or Revert receives a busy error; closing windows are excluded from duplicate
+lookup so an import after Revert finds the replacement. Focused real-window
+checks cover both routes on four engine versions, including failed-Revert retry
+and source preservation. Full editor, bundle and review checks remain open.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.
+
+### Reopen after Revert (candidate)
+
+An ordinary Open no longer brings a discarded window back while its document
+is closing after Revert. The existing replacement is selected instead. A
+native-window regression checks the close-drain interval and the source image
+cleanup. The same rule also avoids selecting other closing ordinary documents.
