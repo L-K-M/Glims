@@ -3327,6 +3327,15 @@ in a rotated view, event routing from the surround, phase boundaries, two
 document capture and engine/stroke/close guards. These synthetic events do
 not certify physical mouse or trackpad hardware.
 
+### Repeating a zoom (candidate)
+
+Selecting the current zoom keeps cached canvas tiles instead of discarding
+and rendering them again. A changed zoom or a previously failed tile still
+clears the cache; in-flight results are invalidated and layout and rendering
+requests remain in place. A real-canvas regression reproduced the discarded
+tiles before the change. Cross-engine verification is in progress. This avoids
+unnecessary repeated-zoom work; it does not reduce fractional sampling cost.
+
 
 ### Preferences save during engine teardown (2026-11-09)
 
