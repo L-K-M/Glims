@@ -4815,6 +4815,9 @@ final class ImageDocument {
 
     func labCopyRefusal(_ destination: EngineSession.LabCopyDestination) -> String? {
         let layered = storage.layout == .layeredLab
+        if layered && destination == .lab {
+            return "Layered Lab documents can only be copied to RGB."
+        }
         guard layered ? session.supportsLayeredLabConvertedCopy : session.supportsLabConvertedCopy else {
             return "This image engine cannot create converted Lab copies."
         }
@@ -4838,6 +4841,8 @@ final class ImageDocument {
 
     func newLabCopy(_ destination: EngineSession.LabCopyDestination) {
         guard let handler = labCopyHandler else { return }
+        // This read-only exception also admits layered storage; the separate
+        // refusal check still prevents a copy while Recorder is replaying.
         guard !refuseWhileEditingUnavailable(allowingReplayRead: storage.layout == .layeredLab) else { return }
         if let reason = labCopyRefusal(destination) { onError?(reason); return }
         handler(self, destination)
@@ -6819,6 +6824,49 @@ final class ImageDocument {
     /// Identifies the current content even when accepted commands are still settling.
     func recorderContentCheckpoint() -> RecorderInstallCheckpoint {
         RecorderInstallCheckpoint(owner: recoveryID, revision: recorderRevision)
+    }
+
+    /// Remove a stopped recording's selected row and its capture sidecars as
+    /// one main-actor transaction. A stale palette selection cannot identify
+    /// a different row after another edit or a file installation.
+    func removeRecordedStep(at index: Int, checkpoint: RecorderInstallCheckpoint) throws {
+        try requireRecorderReadiness(checkpoint, holding: 0)
+        let count = recorder.records.count
+        var updatedLog = recorder
+        try updatedLog.removeSettledRecord(at: index)
+
+        func removing<Value>(_ values: [Int: Value]) throws -> [Int: Value] {
+            guard values.keys.allSatisfy({ $0 >= 0 && $0 < count }) else {
+                throw RecorderFileError.invalid("The recording's target information is inconsistent.")
+            }
+            var result: [Int: Value] = [:]
+            for (ordinal, value) in values where ordinal != index {
+                result[ordinal > index ? ordinal - 1 : ordinal] = value
+            }
+            return result
+        }
+
+        let contexts = try removing(recorderTargetContexts)
+        let bindings = try removing(recorderBindingDescriptions)
+        let editedFile: RecorderFileValue?
+        if let loaded = recorderLoadedFile {
+            guard loaded.records.count == count else {
+                throw RecorderFileError.invalid("The loaded recording no longer matches its steps.")
+            }
+            editedFile = try loaded.removingRecord(at: index)
+        } else {
+            editedFile = nil
+        }
+
+        recorder = updatedLog
+        recorderTargetContexts = contexts
+        recorderBindingDescriptions = bindings
+        recorderLoadedFile = editedFile
+        recorderRevision = UUID()
+        recorderReplayGeneration = UUID()
+        recorderReplayWaitingGeneration = nil
+        recorderReplayEngineWaitingGeneration = nil
+        notifyRecorderChanged()
     }
 
     /// Identifies the owning document and current settled, stopped recording.

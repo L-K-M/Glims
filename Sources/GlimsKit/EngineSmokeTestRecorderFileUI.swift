@@ -25,6 +25,7 @@ extension EngineSmokeTest {
         var unowned: [Int32] = []
         let fileURL = work.appendingPathComponent("Recorder UI file.glimsrecording")
         let inputURL = work.appendingPathComponent("Explicit targets.glimsrecording")
+        let editedURL = work.appendingPathComponent("Recording with removed step.glimsrecording")
         defer {
             for controller in owned {
                 if let window = controller.window, let sheet = window.attachedSheet {
@@ -42,6 +43,7 @@ extension EngineSmokeTest {
             documents.items.removeAll { document in owned.contains { $0.imageDocument === document } }
             try? FileManager.default.removeItem(at: fileURL)
             try? FileManager.default.removeItem(at: inputURL)
+            try? FileManager.default.removeItem(at: editedURL)
             print("     recorder-file-ui checks: \(checks)")
         }
 
@@ -229,6 +231,47 @@ extension EngineSmokeTest {
                "explicit Load installs only A's recording and starts it clean")
         expect(try session.undoInfo(imageA) == baselineA && session.copyPixels(imageA, merged: true).pixels == nativePixelsA,
                "naming, file dialogs, binding and installation do not edit A's pixels or history")
+        if !driveFilePickers {
+            let beforeEdit = try adoc.recorderInstallCheckpoint()
+            try adoc.removeRecordedStep(at: 0, checkpoint: beforeEdit)
+            let expected = try file.removingRecord(at: 0)
+            expect(adoc.recorderLoadedFile == expected && adoc.hasUnsavedRecordingChanges
+                    && adoc.recorderBindingDescriptions[0] == .layer(secondSymbol)
+                    && (try? session.undoInfo(imageA)) == baselineA,
+                   "removing a loaded step retains the second target, source metadata and native history")
+            do {
+                try adoc.removeRecordedStep(at: 0, checkpoint: beforeEdit)
+                expect(false, "stale consent must not remove the newly first step")
+            } catch {
+                expect(adoc.recorderLoadedFile == expected, "stale consent leaves the remaining loaded step intact")
+            }
+            var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+            adoc.saveRecording(to: editedURL, checkpoint: try adoc.recorderSaveCheckpoint()) { saved = $0 }
+            try require(wait { saved != nil && adoc.pendingWork == 0 }, "edited recording did not save")
+            if case .failure(let error)? = saved { throw error }
+            expect(try RecorderFileCodec.decode(Data(contentsOf: editedURL)) == expected
+                    && !adoc.hasUnsavedRecordingChanges && file.records.count == 2,
+                   "saving the edited recording preserves its identity and leaves the source value unchanged")
+            try adoc.startReplay()
+            try require(wait { adoc.replayStatus == .finished(total: 1) && adoc.pendingWork == 0 },
+                        "the remaining loaded step did not replay")
+            let layers = try session.layers(imageA)
+            expect(layers.first(where: { $0.id == later })?.name == "Later unique target"
+                    && layers.first(where: { $0.id == base })?.name == "Changed two",
+                   "the remaining loaded step replays on its original bound target")
+            let savedBytes = try Data(contentsOf: editedURL)
+            try adoc.removeRecordedStep(at: 0, checkpoint: try adoc.recorderInstallCheckpoint())
+            expect(adoc.recorder.records.isEmpty && adoc.hasUnsavedRecordingChanges
+                    && (try? Data(contentsOf: editedURL)) == savedBytes,
+                   "removing the final saved step is still dirty and does not change the saved file")
+            var savedEmpty: Result<ImageDocument.RecorderSaveOutcome, Error>?
+            adoc.saveRecording(to: editedURL, checkpoint: try adoc.recorderSaveCheckpoint()) { savedEmpty = $0 }
+            try require(wait { savedEmpty != nil && adoc.pendingWork == 0 }, "empty edited recording did not save")
+            if case .failure(let error)? = savedEmpty { throw error }
+            let emptyFile = try RecorderFileCodec.decode(Data(contentsOf: editedURL))
+            expect(emptyFile.records.isEmpty && emptyFile.symbols == file.symbols && !adoc.hasUnsavedRecordingChanges,
+                   "saving the empty edit keeps the original target descriptions and clears its dirty state")
+        }
         if driveFilePickers {
             try adoc.startReplay()
             try require(wait { adoc.replayStatus == .finished(total: 2) && adoc.pendingWork == 0 },

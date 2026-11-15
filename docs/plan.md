@@ -6204,6 +6204,15 @@ claim. Encoding choices, color semantics, overprint updates and color preview
 remain required before exposing edits. Optimized and sanitizer tests pass 551
 checks each. See [duotone-options.md](duotone-options.md).
 
+### Duotone alternate-color table (private candidate)
+
+A bounded parser reads the documented version-1 PSD resource 1066 with up to
+four alternate ink colors and 256 encoded Lab samples. It declines other
+layouts without altering output. The Photoshop CC 2018 fixture contains a
+matching resource; optimized and sanitizer tests pass 814 checks each. The
+resource is now retained on import (see the follow-up below), but is not used
+for preview; its validity after changing inks or curves still needs a defined policy. See
+[duotone-preview-table.md](duotone-preview-table.md).
 ### Half-scale sRGB fallback sampling (candidate)
 
 The legacy sRGB fallback uses the sampler's validated projection footprint at
@@ -6253,9 +6262,56 @@ oracle across 256-pixel boundaries, plus source preservation and cancellation.
 Four-engine, real-window, bundle and review qualification remain in progress;
 it does not claim native layered Lab export or complete Photoshop parity.
 
+### Preserving alternate Duotone colors (candidate)
+
+The PSD loader carries image resource 1066 as transient metadata. For imported
+Duotone grayscale images, Glims promotes either supported resource signature
+to persistent metadata alongside the existing opaque color-mode block. The
+bytes and other flags are retained; empty or oversized transient data refuses.
+A real Photoshop fixture loses the alternate-color bytes on the baseline, and
+retains them across XCF save, reopen and resave with this change. Its source,
+grayscale pixels, clean state and Undo history remain unchanged.
+
+All four engines pass conformance plus 17 public and 26 direct metadata checks,
+including both signatures, exact flags and bytes after reopening XCF. Focused
+real-window Save/Reopen checks pass on all four engines, as do the full editor
+suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development engine reports
+upstream cache-file cleanup warnings despite passing. A focused source review
+found no concrete defect and did not execute tests or inspect upstream GIMP
+ownership internals. Hosted CI remains in progress. This
+retains data for a future color preview; it does not display or recalculate it.
+The standalone pinned bundle passes 2,268 engine, 17 preservation, 20 export,
+13 composite-import and 3,355 editor checks with development trees inaccessible.
+
 ### Canvas accessibility identity (candidate)
 
 Canvas accessibility labels include the document name, refresh after a native
 save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Photoshop import Revert admission (candidate)
+
+Reverting a composite or ink-preserving CMYK import reserves its source until
+the replacement is adopted or the operation fails. A second matching import
+or Revert receives a busy error; closing windows are excluded from duplicate
+lookup so an import after Revert finds the replacement. Focused real-window
+checks cover both routes on four engine versions, including failed-Revert retry
+and source preservation. Full editor, bundle and review checks remain open.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.
+
+### Reopen after Revert (candidate)
+
+An ordinary Open no longer brings a discarded window back while its document
+is closing after Revert. The existing replacement is selected instead. A
+native-window regression checks the close-drain interval and the source image
+cleanup. The same rule also avoids selecting other closing ordinary documents.
