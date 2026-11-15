@@ -19,6 +19,8 @@ The native fixtures compare independently seeded ordinary strokes against
 capture and guarded replay, including raw and merged pixels, alpha-bearing
 and opaque targets, both directions, opposite-direction and cross-alpha
 refusals, and Undo/Redo. The existing Pencil/Eraser and Paintbrush capture
-fixtures check the earlier fingerprint behavior. The Swift file and canvas
-integration are separate candidates and are not established by these native
-checks alone.
+fixtures check the earlier fingerprint behavior. Separate real-window tests
+record normal and opaque-background Sponge strokes through the canvas, save
+and reopen the versioned file, and check Undo and guarded replay; older
+adapters without Sponge capture are refused. These checks do not qualify
+physical tablets.
