@@ -234,6 +234,46 @@ extension EngineSmokeTest {
         } else {
             check(!opened.toolIsAvailable(.rectangleSelect), "older engines keep layered Lab selection disabled")
         }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_GUARDED_PROPERTIES"] == "1" {
+            check(session.supportsLabLayerPropertyChange, "test adapter supports guarded Lab layer properties")
+        }
+        if let root = opened.selectedLayerIDs.first,
+           let original = try session.layers(image).first(where: { $0.id == root }) {
+            let before = try session.undoInfo(image)
+            let target: EngineSession.LabLayerFillTarget
+            if session.supportsLabLayerPropertyChange {
+                target = try session.labLayerPropertyTarget(image, root: root)
+                var staleBytes = target.uuid.uuid
+                staleBytes.0 ^= 0x80
+                let stale = EngineSession.LabLayerFillTarget(root: root, uuid: UUID(uuid: staleBytes))
+                var staleError: EngineSession.EngineError?
+                do { try session.changeLabLayer(image, target: stale, change: .init(opacity: 0.375)) }
+                catch { staleError = error as? EngineSession.EngineError }
+                let after = try session.undoInfo(image)
+                let staleLayer = try session.layers(image).first(where: { $0.id == root })
+                check(staleError?.status == Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue) && after == before &&
+                      staleLayer?.opacity == original.opacity,
+                      "guarded Lab property bridge refuses a stale UUID without changes")
+                let nextOpacity = original.opacity == 0.375 ? 0.625 : 0.375
+                try session.changeLabLayer(image, target: target, change: .init(opacity: nextOpacity))
+                let changed = try session.layers(image).first(where: { $0.id == root })
+                check(changed?.opacity == nextOpacity, "guarded Lab property bridge changes the captured layer")
+                try session.undo(image)
+                EngineSmokeTestHost.pumpEvents(for: 0.1); drain("guarded Lab property Undo")
+                let restored = try session.layers(image).first(where: { $0.id == root })
+                check(restored?.opacity == original.opacity, "Undo restores guarded Lab property bridge change")
+            } else {
+                target = .init(root: root, uuid: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!)
+                var refusal: EngineSession.EngineError?
+                do { try session.changeLabLayer(image, target: target, change: .init(opacity: 0.375)) }
+                catch { refusal = error as? EngineSession.EngineError }
+                let after = try session.undoInfo(image)
+                let current = try session.layers(image).first(where: { $0.id == root })
+                check(refusal?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue) && after == before &&
+                      current?.opacity == original.opacity,
+                      "older engines refuse guarded Lab properties without changes")
+            }
+        } else { check(false, "guarded Lab property bridge has a logical root") }
         let fillMenu = NSMenuItem(title: "Fill", action: #selector(DocumentWindowController.fill(_:)), keyEquivalent: "")
         check(windowController.validateMenuItem(fillMenu) == opened.storage.allowsLabLayerColorFill,
               "Fill menu follows the layered Lab color capability")
