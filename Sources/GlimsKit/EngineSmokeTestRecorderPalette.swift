@@ -79,6 +79,9 @@ extension EngineSmokeTest {
         host.title = "Recorder Controls Fixture"
         host.isReleasedWhenClosed = false
         host.contentViewController = palette
+        // Assigning a content controller lets AppKit choose its intrinsic
+        // size. Rigi instead embeds it at the declared palette size.
+        host.setContentSize(RecorderPaletteController.definition.contentSize)
         palette.retarget(to: a)
         host.orderFront(nil)
         host.contentView?.layoutSubtreeIfNeeded()
@@ -111,6 +114,23 @@ extension EngineSmokeTest {
         func button(_ action: RecorderPaletteAction) -> NSButton? {
             views(root, NSButton.self).first { $0.accessibilityLabel() == "Recorder \(action.title)" }
         }
+        let removeStep = views(root, NSButton.self).first {
+            $0.accessibilityLabel() == "Remove selected Recorder step"
+        }
+        func editingButtonsFit() -> Bool {
+            guard let cancel = button(.cancelReplay), let clear = button(.clear), let removeStep else { return false }
+            return [cancel, clear, removeStep].allSatisfy { control in
+                !control.isHidden && !control.bounds.isEmpty &&
+                    root.bounds.insetBy(dx: -1, dy: -1).contains(control.convert(control.bounds, to: root))
+            }
+        }
+        root.layoutSubtreeIfNeeded()
+        expect(editingButtonsFit(), "Recorder editing buttons fit at the default palette size")
+        host.setContentSize(NSSize(width: 310, height: 430))
+        root.layoutSubtreeIfNeeded()
+        expect(editingButtonsFit(), "Recorder editing buttons fit at the minimum palette size")
+        host.setContentSize(RecorderPaletteController.definition.contentSize)
+        root.layoutSubtreeIfNeeded()
         func click(_ action: RecorderPaletteAction) { button(action)?.performClick(nil) }
         func rowTexts() -> [String] {
             (0..<table.numberOfRows).map { row in
@@ -158,6 +178,7 @@ extension EngineSmokeTest {
                "supported selections/image-only coverage, same-image replay and Undo consequences are visible")
         expect(label("Recorder image")?.stringValue == a.name && table.numberOfRows == 0,
                "the initial view identifies A and shows its actual empty recording")
+        expect(removeStep?.isEnabled == false, "Remove Step is unavailable before a step is selected")
         expect(button(.record)?.isEnabled == true && button(.stop)?.isEnabled == false
                 && button(.replay)?.isEnabled == false && button(.cancelReplay)?.isEnabled == false && button(.clear)?.isEnabled == false,
                "initial button gates honestly distinguish Record from unavailable commands")
@@ -315,6 +336,45 @@ extension EngineSmokeTest {
                 && a.replayStatus == .cancelled(index: 0), "the accepted replay step drains once without restarting cancelled later steps")
         expect(try snapshot(imageA).pixels == beforeCancelledReplay.pixels && a.pendingWork == 0,
                "cancellation preserves pixels when the sole accepted command changes selection only")
+
+        let beforeRemoval = try snapshot(imageA)
+        let oldCheckpoint = a.recorderContentCheckpoint()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        expect(removeStep?.isEnabled == true, "a selected settled step enables its Remove Step control")
+        current = b
+        removeStep?.performClick(nil)
+        expect(a.recorder.records.count == 2 && b.recorder.records.isEmpty
+                && label("Recorder image")?.stringValue == b.name
+                && label("Recorder status")?.stringValue.contains("active image changed") == true
+                && removeStep?.isEnabled == false,
+               "a stale Remove Step click retargets without editing either recording")
+        current = a
+        palette.retarget(to: a)
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        expect(removeStep?.isEnabled == true, "returning to A requires selecting its step again")
+        let focusedRemove = removeStep.map { host.makeFirstResponder($0) } ?? false
+        removeStep?.performClick(nil)
+        expect(focusedRemove && host.firstResponder === table,
+               "focus returns to the command table when the removed selection disables its button")
+        expect(rowTexts() == ["1. Recorded: Flip Image Horizontally"]
+                && a.recorderContentCheckpoint() != oldCheckpoint
+                && (try? snapshot(imageA)) == beforeRemoval,
+               "Remove Step changes only the recording and renumbers the surviving row")
+        do {
+            try a.removeRecordedStep(at: 0, checkpoint: oldCheckpoint)
+            expect(false, "a stale selected step must not remove its successor")
+        } catch {
+            expect(rowTexts() == ["1. Recorded: Flip Image Horizontally"],
+                   "a stale selected step cannot remove its successor")
+        }
+        try drain(a)
+        click(.replay)
+        try drain(a)
+        try session.transformImage(reference, .flipHorizontal)
+        let replayedAfterRemoval = try snapshot(imageA)
+        let expectedAfterRemoval = try snapshot(reference)
+        expect(a.replayStatus == .finished(total: 1) && replayedAfterRemoval == expectedAfterRemoval,
+               "the remaining step replays once with normal native behavior")
 
         click(.record)
         let beforeFailure = try snapshot(imageA)

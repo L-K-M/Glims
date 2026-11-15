@@ -6261,3 +6261,13 @@ or Revert receives a busy error; closing windows are excluded from duplicate
 lookup so an import after Revert finds the replacement. Focused real-window
 checks cover both routes on four engine versions, including failed-Revert retry
 and source preservation. Full editor, bundle and review checks remain open.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.
