@@ -304,6 +304,9 @@ GlimsStatus glims_image_import_native_cmyk_psd (GlimsEngine *engine, const char 
 GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
                                           const GlimsLabCopySettings *settings,
                                           GlimsImageID *result, char **error);
+GlimsStatus glims_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImageID image,
+                                                 const GlimsLabCopySettings *settings,
+                                                 GlimsImageID *result, char **error);
 
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
@@ -431,6 +434,12 @@ GlimsStatus glims_stroke_begin_v2  (GlimsEngine *e, GlimsImageID image, GlimsIte
                                     GlimsResourceID brush, const GlimsBrushSettings *settings,
                                     const GlimsStrokePacketV2 *packet,
                                     GlimsStrokeID *out, char **error);
+GlimsStatus glims_stroke_begin_v2_with_capture_facts (GlimsEngine *e, GlimsImageID image,
+                                    GlimsItemID drawable, GlimsResourceID brush,
+                                    const GlimsBrushSettings *settings,
+                                    const GlimsStrokePacketV2 *packet,
+                                    const char *expected_fingerprint, GlimsStrokeID *out,
+                                    GlimsStrokeCaptureFacts *facts, char **error);
 GlimsStatus glims_stroke_continue_v2 (GlimsEngine *e, GlimsStrokeID id,
                                       const GlimsStrokePacketV2 *packet, char **error);
 GlimsStatus glims_stroke_end       (GlimsEngine *e, GlimsStrokeID id);

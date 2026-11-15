@@ -538,12 +538,15 @@ capture_stroke_facts (GlimsEngine               *engine,
   GimpContext *context = GIMP_CONTEXT (options);
   GimpLayerMode paint_mode = gimp_context_get_paint_mode (context);
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
+  gboolean sponge = brush->tool == GLIMS_PAINT_SPONGE_DESATURATE ||
+                     brush->tool == GLIMS_PAINT_SPONGE_SATURATE;
   if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
-       brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER) ||
+       brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER &&
+       !(sponge && !ink)) ||
       !recordable_first_point (first) ||
       (ink ? (brush->tool == GLIMS_PAINT_ERASER || !GIMP_IS_CHANNEL (drawable)) :
              (G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
-              !gimp_drawable_is_rgb (drawable) || !gimp_drawable_has_alpha (drawable) ||
+              !gimp_drawable_is_rgb (drawable) || (!sponge && !gimp_drawable_has_alpha (drawable)) ||
               gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL)) ||
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
@@ -625,6 +628,17 @@ capture_stroke_facts (GlimsEngine               *engine,
       const guint8 tool = GLIMS_PAINT_PAINTBRUSH;
       g_checksum_update (hash, (const guchar *) paintbrush_domain, sizeof paintbrush_domain);
       g_checksum_update (hash, &tool, sizeof tool);
+    }
+  /* Sponge has two opposite operations. Bind both to distinct domains so a
+   * recorded gesture cannot be replayed with the other direction, even when
+   * all inherited paint options happen to match. Existing fingerprints stay
+   * byte-for-byte compatible. Sponge is not an ink-channel operation. */
+  if (sponge)
+    {
+      static const gchar sponge_domain[] = "glims-stroke-sponge-v1";
+      const guint8 identity[] = { brush->tool, gimp_drawable_has_alpha (drawable) != FALSE };
+      g_checksum_update (hash, (const guchar *) sponge_domain, sizeof sponge_domain);
+      g_checksum_update (hash, identity, sizeof identity);
     }
   facts->fingerprint = g_strdup (g_checksum_get_string (hash));
 
@@ -925,16 +939,27 @@ glims_stroke_begin_with_capture_facts (GlimsEngine               *engine,
                               expected_fingerprint, facts, NULL, error);
 }
 
-GlimsStatus
-glims_stroke_begin_v2 (GlimsEngine                *engine,
-                       GlimsImageID                image,
-                       GlimsItemID                 drawable,
-                       GlimsResourceID             brush_id,
-                       const GlimsBrushSettings   *brush,
-                       const GlimsStrokePacketV2  *packet,
-                       GlimsStrokeID              *out,
-                       char                      **error)
+static GlimsStatus
+stroke_begin_v2_common (GlimsEngine                *engine,
+                        GlimsImageID                image,
+                        GlimsItemID                 drawable,
+                        GlimsResourceID             brush_id,
+                        const GlimsBrushSettings   *brush,
+                        const GlimsStrokePacketV2  *packet,
+                        const char                 *expected_fingerprint,
+                        GlimsStrokeID              *out,
+                        GlimsStrokeCaptureFacts    *facts,
+                        char                      **error)
 {
+  if (expected_fingerprint)
+    {
+      if (!brush_id || strnlen (expected_fingerprint, 65) != 64)
+        return GLIMS_STATUS_INVALID_ARGUMENT;
+      for (gsize i = 0; i < 64; i++)
+        if (!g_ascii_isdigit (expected_fingerprint[i]) &&
+            (expected_fingerprint[i] < 'a' || expected_fingerprint[i] > 'f'))
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
   GlimsStrokeSampleV2 *samples = NULL;
   gsize count;
   if (out) *out = 0;
@@ -960,10 +985,31 @@ glims_stroke_begin_v2 (GlimsEngine                *engine,
   GlimsStrokePoint first = {p->x, p->y, p->pressure, p->xtilt, p->ytilt, p->time_ms};
   GimpCoords coords = to_coords_v2 (p);
   status = stroke_begin_common (engine, image, drawable, brush, resource, &first, &coords,
-                                out, NULL, NULL, NULL, error);
+                                out, expected_fingerprint, facts, NULL, error);
   g_object_unref (resource);
   g_free (samples);
   return status;
+}
+
+GlimsStatus
+glims_stroke_begin_v2 (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
+                       GlimsResourceID brush_id, const GlimsBrushSettings *brush,
+                       const GlimsStrokePacketV2 *packet, GlimsStrokeID *out, char **error)
+{
+  return stroke_begin_v2_common (engine, image, drawable, brush_id, brush, packet,
+                                 NULL, out, NULL, error);
+}
+
+GlimsStatus
+glims_stroke_begin_v2_with_capture_facts (GlimsEngine *engine, GlimsImageID image,
+                                          GlimsItemID drawable, GlimsResourceID brush_id,
+                                          const GlimsBrushSettings *brush,
+                                          const GlimsStrokePacketV2 *packet,
+                                          const char *expected_fingerprint, GlimsStrokeID *out,
+                                          GlimsStrokeCaptureFacts *facts, char **error)
+{
+  return stroke_begin_v2_common (engine, image, drawable, brush_id, brush, packet,
+                                 expected_fingerprint, out, facts, error);
 }
 
 static GlimsStatus

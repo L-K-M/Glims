@@ -28,6 +28,7 @@ def check(root=ROOT):
               'free_curves_snapshot', 'free_histogram_snapshot'}
     cleanup = {'image_close', 'stroke_end', 'filter_abort', 'procedure_cancel', 'image_ink_snapshot_end', 'image_lab_snapshot_end', 'stroke_cancel_lab', 'stroke_cancel_ink', 'stroke_cancel_lab_layer'}
     component = {'image_grid', 'image_history', 'image_info', 'stroke_begin_with_brush_resource', 'image_render_to_profile', 'image_select_items', 'image_quick_mask', 'image_history_move', 'select_shape', 'image_guides', 'image_color_info', 'image_duplicate', 'drawable_thumbnail', 'stroke_begin_with_capture_facts', 'image_redo', 'image_selected_items', 'stroke_begin', 'image_selected_layers', 'image_floating_selection', 'image_undo_info', 'image_channels', 'image_components', 'channel_command', 'channel_change', 'image_undo', 'select_command', 'image_render', 'selection_bounds', 'selection_outline', 'image_layers', 'image_save_copy', 'stroke_begin_v2', 'paths', 'image_save'}
+    component.add('stroke_begin_v2_with_capture_facts')
     component.update({'image_export_native_cmyk_psd', 'image_edit_ink', 'image_levels_ink'})
     component.update({'image_ink_snapshot_begin', 'image_ink_snapshot_levels', 'image_ink_snapshot_apply'})
     component.update({'image_curves_ink', 'image_ink_snapshot_curves', 'image_ink_snapshot_apply_curves'})
@@ -41,7 +42,7 @@ def check(root=ROOT):
                       'image_change_lab_layer_properties', 'image_lab_layer_snapshot'})
     component.add('image_fill_lab')
     component.update({'image_levels_lab', 'image_lab_snapshot_levels', 'image_lab_snapshot_apply_levels'})
-    component.add('image_convert_lab_copy')
+    component.update({'image_convert_lab_copy', 'image_convert_layered_lab_copy'})
     component.add('stroke_begin_lab')
     component.update({'stroke_begin_lab_layer', 'stroke_begin_lab_layer_pressure',
                       'stroke_begin_lab_layer_with_capture_facts', 'stroke_begin_lab_layer_empty_selection'})
@@ -90,6 +91,7 @@ def check(root=ROOT):
         source_pairs = {
             'stroke_begin': ('glims_facade_brush_source(brush)', '0'),
             'stroke_begin_v2': ('glims_facade_brush_source(brush)', '0'),
+            'stroke_begin_v2_with_capture_facts': ('glims_facade_brush_source(brush)', '0'),
             'stroke_begin_with_capture_facts': ('glims_facade_brush_source(brush)', '0'),
             'stroke_begin_with_brush_resource': ('glims_facade_brush_source(settings)', '0'),
             'selection_stroke': ('glims_facade_brush_source(settings)', '0'),

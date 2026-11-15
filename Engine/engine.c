@@ -1775,6 +1775,29 @@ stroke_begin_v2_on_engine (GlimsEngine *e, gpointer data)
                                 a->brush, a->packet, &a->stroke, a->error);
 }
 
+typedef struct
+{
+  GlimsImageID image;
+  GlimsItemID drawable;
+  GlimsResourceID brush_resource;
+  const GlimsBrushSettings *brush;
+  const GlimsStrokePacketV2 *packet;
+  const char *expected_fingerprint;
+  GlimsStrokeID stroke;
+  GlimsStrokeCaptureFacts facts;
+  char **error;
+} GlimsStrokeV2CaptureArgs;
+
+static GlimsStatus
+stroke_begin_v2_with_capture_facts_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsStrokeV2CaptureArgs *a = data;
+  return glims_stroke_begin_v2_with_capture_facts (e, a->image, a->drawable,
+                                                   a->brush_resource, a->brush, a->packet,
+                                                   a->expected_fingerprint, &a->stroke,
+                                                   &a->facts, a->error);
+}
+
 static GlimsStatus
 stroke_continue_v2_on_engine (GlimsEngine *e, gpointer data)
 {
@@ -2153,6 +2176,45 @@ api_stroke_begin_with_capture_facts (GlimsEngine *e, GlimsImageID image,
   GlimsStatus status = glims_facade_call (e, GLIMS_FACADE_OP_stroke_begin_with_capture_facts,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (brush), 0 } },
                             stroke_begin_with_capture_facts_on_engine, &a, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      *out = a.stroke;
+      facts->brush_internal = a.facts.brush_internal;
+      facts->brush_name = a.facts.brush_name;
+      facts->brush_collection = a.facts.brush_collection;
+      facts->fingerprint = a.facts.fingerprint;
+    }
+  else
+    {
+      api_free_string (a.facts.brush_name);
+      api_free_string (a.facts.brush_collection);
+      api_free_string (a.facts.fingerprint);
+    }
+  return status;
+}
+
+static GlimsStatus
+api_stroke_begin_v2_with_capture_facts (GlimsEngine *e, GlimsImageID image,
+                                         GlimsItemID drawable, GlimsResourceID brush_resource,
+                                         const GlimsBrushSettings *brush,
+                                         const GlimsStrokePacketV2 *packet,
+                                         const char *expected_fingerprint, GlimsStrokeID *out,
+                                         GlimsStrokeCaptureFacts *facts, char **error)
+{
+  if (out) *out = 0;
+  if (error) *error = NULL;
+  gboolean facts_ready = clear_stroke_capture_facts (facts);
+  if (!out || !brush || !packet || !facts_ready)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  GlimsStrokeV2CaptureArgs a = {
+    .image = image, .drawable = drawable, .brush_resource = brush_resource,
+    .brush = brush, .packet = packet, .expected_fingerprint = expected_fingerprint,
+    .facts = { .struct_size = sizeof (GlimsStrokeCaptureFacts) }, .error = error
+  };
+  GlimsStatus status = glims_facade_call (e, GLIMS_FACADE_OP_stroke_begin_v2_with_capture_facts,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { glims_facade_brush_source (brush), 0 } },
+                            stroke_begin_v2_with_capture_facts_on_engine, &a, error);
   if (status == GLIMS_STATUS_OK)
     {
       *out = a.stroke;
@@ -4927,6 +4989,27 @@ api_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID image,
   return glims_facade_call (engine, GLIMS_FACADE_OP_image_convert_lab_copy,
     (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
     image_convert_lab_copy_on_engine, &a, error);
+}
+
+static GlimsStatus
+image_convert_layered_lab_copy_on_engine (GlimsEngine *engine, gpointer data)
+{
+  LabCopyArgs *a = data;
+  return glims_image_convert_layered_lab_copy (engine, a->image, a->settings, a->result, a->error);
+}
+
+static GlimsStatus
+api_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImageID image,
+                                    const GlimsLabCopySettings *settings,
+                                    GlimsImageID *result, char **error)
+{
+  if (result) *result = 0;
+  if (error) *error = NULL;
+  if (!result) return GLIMS_STATUS_INVALID_ARGUMENT;
+  LabCopyArgs a = { image, settings, result, error };
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_convert_layered_lab_copy,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+    image_convert_layered_lab_copy_on_engine, &a, error);
 }
 
 typedef struct {

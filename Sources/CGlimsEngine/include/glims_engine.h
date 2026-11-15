@@ -4356,6 +4356,32 @@ typedef struct GlimsEngineAPI {
    * *error is cleared on entry. No automatic fallback to another loader. */
   GlimsStatus (*image_open_psd_composite) (GlimsEngine *engine, const char *path,
                                            GlimsImageID *image, char **error);
+  /* Slot231: create an independent float linear-sRGB RGBA copy of the full
+   * visible layered Lab canvas, preserving transparency. Selection and
+   * hidden layers do not contribute. Resolution is copied; layer structure,
+   * metadata and history are not. Busy, ownership, cancellation and
+   * result/error rules match slot197. Only layered Lab and RGB merged-canvas
+   * FLOAT settings are admitted. */
+  GlimsStatus (*image_convert_layered_lab_copy) (GlimsEngine *engine, GlimsImageID image,
+                                                 const GlimsLabCopySettings *settings,
+                                                 GlimsImageID *result, char **error);
+  /* Slot232: begin one V2-sample stroke and atomically capture the actual
+   * brush and supported paint configuration. Packet validation, timestamp,
+   * axes and V2 continuation rules match slot172. Brush identity, optional
+   * expected fingerprint, owned facts and failure clearing match slot171.
+   * An unsupported live capture can paint with a NULL fingerprint; guarded
+   * replay refuses before first paint unless the facts match. Finish with
+   * stroke_end and continue only with stroke_continue_v2. */
+  GlimsStatus (*stroke_begin_v2_with_capture_facts) (GlimsEngine *engine,
+                                                     GlimsImageID image,
+                                                     GlimsItemID drawable,
+                                                     GlimsResourceID brush_resource,
+                                                     const GlimsBrushSettings *brush,
+                                                     const GlimsStrokePacketV2 *packet,
+                                                     const char *expected_fingerprint,
+                                                     GlimsStrokeID *out,
+                                                     GlimsStrokeCaptureFacts *facts,
+                                                     char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

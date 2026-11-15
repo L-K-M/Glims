@@ -6246,6 +6246,22 @@ editor checks with development trees denied. A focused independent source
 review found no concrete defect; it did not run tests or audit all upstream
 validation internals. Latest-head hosted CI and review remain in progress.
 
+### Layered Lab to linear RGB copy (candidate)
+
+A new size-guarded facade operation stages a separate float linear-RGB RGBA
+copy of the visible layered Lab canvas. It preserves composited transparency,
+ignores the selection, copies resolution, and leaves the source and its
+history unchanged. The existing Image > Create Linear RGB Copy confirmation
+and app-owned copy lifecycle now admit capable layered Lab engines; older
+engines continue to disable the command. Editable layers and metadata remain
+in the original. The RGB copy can use the ordinary Export command.
+
+This candidate is not installed or merged. Its pinned native copy fixture
+checks white/transparency, layer order and opacity against an independent LCMS
+oracle across 256-pixel boundaries, plus source preservation and cancellation.
+Four-engine, real-window, bundle and review qualification remain in progress;
+it does not claim native layered Lab export or complete Photoshop parity.
+
 ### Preserving alternate Duotone colors (candidate)
 
 The PSD loader carries image resource 1066 as transient metadata. For imported
@@ -6311,6 +6327,20 @@ save changes it, and post an accessibility notification only when the label
 changes. An unnamed image has a localizable fallback label.
 Real-window, save, VoiceOver and full keyboard-access qualification remain open.
 
+### Info palette (candidate)
+
+Window ▸ Info shows image-pixel coordinates and the committed composite's
+straight sRGB and alpha under the pointer. Sampling is asynchronous and
+bounded to one in-flight read, with the latest position retained; stale
+results are discarded on movement, document change, hide, or image change.
+The readout follows drags and refreshes a stationary pointer after scrolling
+or an image change; a sample delayed by exclusive engine work resumes when it
+becomes available. The palette does not change the foreground color or image
+history. A focused real-window test covers event dispatch, drag, scroll, zoom,
+rotation, alpha, document changes and deferred reads. Whole-editor integration,
+accessibility and review remain in qualification. Native CMYK/Lab readouts
+and sampling of temporary previews are not yet provided.
+
 ### Photoshop import Revert admission (candidate)
 
 Reverting a composite or ink-preserving CMYK import reserves its source until
@@ -6330,9 +6360,25 @@ selections and recordings with work in flight are refused. Native palette
 and file workflows pass on all four supported engines, and the full Swift
 suite passes. Bundle qualification and hosted review remain open.
 
+The Remove Step control explains why it is disabled: it reports pending
+recording, replay or image work first, then asks for a current selection.
+Its normal action help returns when the selected step can be removed.
+
 ### Reopen after Revert (candidate)
 
 An ordinary Open no longer brings a discarded window back while its document
 is closing after Revert. The existing replacement is selected instead. A
 native-window regression checks the close-drain interval and the source image
 cleanup. The same rule also avoids selecting other closing ordinary documents.
+
+### Guarded capture for V2 tablet strokes (candidate)
+
+Facade slot 232, `stroke_begin_v2_with_capture_facts`, begins a V2-sample
+stroke and atomically captures the brush and supported paint configuration,
+as slot 171 does for V1 samples. It keeps slot 172's packet, timestamp and
+axis rules. An unsupported live capture can still paint without a
+fingerprint; guarded replay refuses before the first dab unless the facts
+match. The Recorder does not use this slot yet, so tablet-axis recording is
+not user-facing. Native capture fixtures (34 checks) and the V2 coordinate
+fixture (152 checks) pass on all four engine sets. Physical tablets are not
+qualified.

@@ -19,7 +19,10 @@ final class SpongeToolTests: XCTestCase {
         XCTAssertEqual(captured.tool, .spongeDesaturate)
         XCTAssertEqual(captured.size, 31)
         XCTAssertEqual(captured.opacity, 0.25)
-        XCTAssertNil(RecorderStrokeCommand.Settings(captured), "unsupported Recorder tools must remain explicit")
+        let recorded = RecorderStrokeCommand.Settings(captured)
+        XCTAssertEqual(recorded?.tool, .spongeDesaturate)
+        XCTAssertEqual(recorded?.size, 31)
+        XCTAssertEqual(recorded?.opacity, 0.25)
         XCTAssertEqual(ToolMenuCatalog.tool(forTag: 27), .spongeDesaturate)
         XCTAssertEqual(ToolMenuCatalog.tool(forTag: 28), .spongeSaturate)
     }

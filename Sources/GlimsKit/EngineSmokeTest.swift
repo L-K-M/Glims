@@ -494,6 +494,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "info-palette" {
+                try exerciseInfoPalette(session, documents: documents)
+                print(failures == 0 ? "PASSED (info palette)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-palette" {
                 try exerciseRecorderPalette(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder palette)" : "FAILED: \(failures) failure(s)")
@@ -558,6 +563,16 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "native-guides" {
                 try exerciseGuideCache(session, documents: documents)
                 print(failures == 0 ? "PASSED (native guides)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-sponge-ui" {
+                try exerciseRecorderSpongeUI(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder-sponge-ui)" : "FAILED: \(failures) failures")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-sponge-opaque-ui" {
+                try exerciseRecorderSpongeUI(session, documents: documents)
+                print(failures == 0 ? "PASSED (recorder-sponge-opaque-ui)" : "FAILED: \(failures) failures")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "sponge-tools" {

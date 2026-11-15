@@ -178,6 +178,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                    backing: .buffered, defer: false)
         window.minSize = NSSize(width: 360, height: 240)
+        window.acceptsMouseMovedEvents = true
         super.init(window: window)
         window.delegate = self
         window.representedURL = imageDocument.fileState.nativeURL
@@ -337,6 +338,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc private func viewportChanged() {
         canvas.setNeedsRender()
+        // Scrolling can move the image under a pointer without a mouse event.
+        canvas.refreshInfoPointer()
         // Scrolling moves the rulers with the content; the scroll view also
         // relayouts its native ruler slots here.
         invalidateRulers()
@@ -577,6 +580,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         (PaletteCenter.shared.registeredPalette(for: ChannelsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: InfoPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: RecorderPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them, and
         // the cached guide list arrives with it too (reloadGuides fires
@@ -871,7 +875,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         alert.messageText = destination == .lab ? "Create Lab Copy" : "Create Linear RGB Copy"
         alert.informativeText = destination == .lab
             ? "Creates a separate 32-bit Lab document from the full visible canvas. The original keeps its layers and edits. The canvas must be opaque and use sRGB; replace linked layers with ordinary pixel layers first. Other metadata is not copied."
-            : "Creates a separate, opaque 32-bit linear RGB document from all three Lab channels. The full canvas is copied, regardless of the selection or channel preview. The original remains open; other metadata is not copied."
+            : imageDocument.storage.layout == .layeredLab
+                ? "Creates a separate 32-bit linear RGB document from the visible Lab layers, preserving transparency. The full canvas is copied regardless of the selection. The original keeps its layers and edits; other metadata is not copied."
+                : "Creates a separate, opaque 32-bit linear RGB document from all three Lab channels. The full canvas is copied, regardless of the selection or channel preview. The original remains open; other metadata is not copied."
         alert.addButton(withTitle: "Create Copy")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -2592,6 +2598,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 guard imageDocument.acceptsLabSelections else { return false }
             case #selector(fill(_:)):
                 guard imageDocument.storage.allowsLabLayerColorFill else { return false }
+            case #selector(createConvertedLabCopy(_:)) where imageDocument.storage.layout == .layeredLab:
+                break
             case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
                  #selector(revertDocument(_:)), #selector(imageInformation(_:)),
                  #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),

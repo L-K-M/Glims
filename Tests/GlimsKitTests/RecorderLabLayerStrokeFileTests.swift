@@ -56,6 +56,10 @@ final class RecorderLabLayerStrokeFileTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.encode(file(binding: RecorderBindingDescription.none)))
         XCTAssertThrowsError(try RecorderFileCodec.encode(file(kind: .channel)))
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: #""tool":"paintbrush""#, with: #""tool":"pencil""#).utf8)))
+        for tool in ["spongeDesaturate", "spongeSaturate"] {
+            XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(
+                of: #""tool":"paintbrush""#, with: "\"tool\":\"\(tool)\"").utf8)))
+        }
         XCTAssertThrowsError(try RecorderFileCodec.decode(Data(json.replacingOccurrences(of: String(repeating: "a", count: 64), with: String(repeating: "A", count: 64)).utf8)))
     }
 
