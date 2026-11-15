@@ -4478,6 +4478,19 @@ four supported engines. The preview-retarget refusal also passes on each
 engine. The full Swift suite passes 1,819 tests. Packaged-app qualification
 and merge remain open.
 
+### Recorded Curves on a layer mask (candidate)
+
+Curves can capture the complete native settings against an editing layer
+mask in recording format version 24. It uses the same mask-owner binding,
+fresh target checks and one-step Undo as mask Levels. A saved action can
+contain both mask Levels and Curves while older versions reject the new
+Curves binding.
+
+The real-engine save, explicit rebind, Undo and stale-target refusal pass on
+GIMP 3.2.8 and 3.0.8; the remaining engine checks are in progress. The full
+Swift suite passes 1,820 tests. Packaged-app qualification and merge remain
+open.
+
 
 ### Transform composite pixel preview (2026-11-11 work in progress)
 
