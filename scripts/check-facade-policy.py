@@ -37,7 +37,7 @@ def check(root=ROOT):
     component.add('image_lab_axes')
     component.add('image_storage_info')
     component.update({'image_lab_layer_identity', 'image_fill_lab_layer', 'image_fill_lab_layer_srgb',
-                      'image_sample_layered_lab'})
+                      'image_sample_layered_lab', 'image_fill_lab_layer_srgb_empty_selection'})
     component.add('image_fill_lab')
     component.update({'image_levels_lab', 'image_lab_snapshot_levels', 'image_lab_snapshot_apply_levels'})
     component.add('image_convert_lab_copy')
