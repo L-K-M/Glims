@@ -45,6 +45,8 @@ jobs:
         run: bash scripts/test-cmyk-psd-file.sh
       - name: Check optimized and sanitized Duotone PSD codec
         run: bash scripts/test-duotone-psd-codec.sh
+      - name: Check optimized and sanitized Duotone settings
+        run: bash scripts/test-duotone-options.sh
       - name: Check optimized and sanitized Duotone PSD file transaction
         run: bash scripts/test-duotone-psd-file.sh
       - name: Check optimized and sanitized Bitmap PSD file transaction
@@ -136,6 +138,9 @@ jobs:
       - name: Check private Duotone PSD codec
         timeout-minutes: 5
         run: bash scripts/test-duotone-psd-codec.sh optimized
+      - name: Check private Duotone settings
+        timeout-minutes: 5
+        run: bash scripts/test-duotone-options.sh optimized
       - name: Check Duotone PSD file transaction
         timeout-minutes: 5
         run: bash scripts/test-duotone-psd-file.sh optimized
