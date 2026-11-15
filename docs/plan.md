@@ -637,14 +637,20 @@ In this order (reasons in `phase0-report.md`):
   invisible layers (`6a33e2998e`), and the rest of the list.
 - 2026-11-06: item 4, painting off the main thread, measured
   (`build-adapter.sh --perf GIMP_3_2_8`, 24 MP, 20 layers, Mac16,9). While
-  another thread paints a 500-sample stroke at pointer rate (8 ms apart),
+  another thread paints 500 synchronous samples with an 8 ms pause after each,
   back-to-back 1440 × 900 renders at 100 % take 3.6 ms on average and
   12.5 ms at p95 (1.2 ms idle), within the 60 fps budget, with one
   180 ms outlier. The engine runs one call at a time, so the stroke
-  falls behind instead: its 4 s of input took 6.9 s under that
-  continuous rendering. The canvas renders only damaged tiles at most
-  once a frame, so real use sits between the two; a stroke that lags
-  its pointer under heavy redraws is the cost to watch.
+  took 6.9 s under that continuous rendering, including 4 s of nominal
+  pauses. This does not simulate a pointer queue building up. The canvas
+  renders only damaged tiles at most once a frame; actual input-to-display
+  behavior needs a separate measurement.
+- 2026-11-15: the performance runner now rejects failed engine calls
+  instead of treating them as fast samples, waits for the long stroke to
+  begin before measuring contention, and excludes reporting overhead from
+  the stroke completion timings. Fault-injection and delayed-start checks
+  cover those cases. These measurements do not establish app-level
+  input-to-display latency or overall editor speed.
 - 2026-11-06: item 4, paths. Engine: seven additive facade calls list
   paths, read and replace their Bézier subpaths (each anchor with its two
   handles, GIMP's control, anchor, control), rename, show, select and
@@ -3326,6 +3332,16 @@ four supported engines, including native CGEvent panning, pointer anchoring
 in a rotated view, event routing from the surround, phase boundaries, two
 document capture and engine/stroke/close guards. These synthetic events do
 not certify physical mouse or trackpad hardware.
+
+### Repeating a zoom (candidate)
+
+Selecting the current zoom keeps cached canvas tiles instead of discarding
+and rendering them again. A changed zoom or a previously failed tile still
+clears the cache; in-flight results are invalidated and layout and rendering
+requests remain in place. A real-canvas regression reproduced the discarded
+tiles before the change. Real-canvas tests pass with each of the four supported
+engine versions, and the full Swift suite passes. This avoids unnecessary
+repeated-zoom work; it does not reduce fractional sampling cost.
 
 
 ### Preferences save during engine teardown (2026-11-09)
@@ -6111,3 +6127,10 @@ and all four engines pass native round-trip and refusal tests. Full editor
 compatibility, review and integration remain open. Conversion, dithering,
 metadata and preserved editable Bitmap mode are separate work. See
 [bitmap-psd.md](bitmap-psd.md).
+
+### Canvas accessibility identity (candidate)
+
+Canvas accessibility labels include the document name, refresh after a native
+save changes it, and post an accessibility notification only when the label
+changes. An unnamed image has a localizable fallback label.
+Real-window, save, VoiceOver and full keyboard-access qualification remain open.
