@@ -1,10 +1,12 @@
 # Duotone alternate-color table (private candidate)
 
 Adobe documents PSD image resource 1066 as alternate ink colors followed by
-an encoded Lab lookup table, usually with 256 samples. This bounded parser
+an ordered array of encoded Lab colors, usually with 256 samples. This bounded parser
 accepts version 1, up to four alternate colors and exactly 256 samples. It
 copies the color words and Lab triples without color conversion. Other valid
 resource forms are declined, allowing callers to preserve them opaquely.
+Adobe says Photoshop does not read or use this resource; its description does
+not establish how entries map to image samples.
 
 The Photoshop CC 2018 fixture contains two alternate colors and 256 triples;
 the test locates resource 1066 independently and verifies its color words and

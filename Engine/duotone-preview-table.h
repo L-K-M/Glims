@@ -17,8 +17,8 @@ typedef struct {
 typedef struct {
   unsigned color_count;
   GlimsDuotoneAlternateColor colors[GLIMS_DUOTONE_PREVIEW_MAX_COLORS];
-  /* The source's encoded Lab triples, indexed by the 8-bit gray sample.
-   * No display-space conversion or ink-edit invalidation is performed here. */
+  /* The source's ordered encoded Lab triples. Their mapping to image samples
+   * is not established here; no conversion or ink-edit invalidation is done. */
   uint8_t lab[GLIMS_DUOTONE_PREVIEW_SAMPLES][3];
 } GlimsDuotonePreviewTable;
 

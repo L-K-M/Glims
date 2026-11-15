@@ -234,12 +234,31 @@ final class EngineCanvasView: NSView {
         self.document = document
         lastBackingFactor = Self.fallbackBackingFactor
         super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+        setAccessibilityLabel(Self.accessibilityLabel(for: document.name))
         TabletEraserProximity.shared.start()
         updateFrameSize()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private static func accessibilityLabel(for name: String) -> String {
+        if name.isEmpty {
+            return NSLocalizedString("Untitled", comment: "Accessibility label for an unnamed image")
+        }
+        return name
+    }
+
+    /// Refresh the exposed name only when its bytes change, including changes
+    /// between visually equivalent Unicode spellings after Save As.
+    func refreshAccessibilityLabel() {
+        let label = Self.accessibilityLabel(for: document.name)
+        if let previous = accessibilityLabel(), previous.utf8.elementsEqual(label.utf8) { return }
+        setAccessibilityLabel(label)
+        NSAccessibility.post(element: self, notification: .layoutChanged, userInfo: [.uiElements: [self]])
+    }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
@@ -260,8 +279,12 @@ final class EngineCanvasView: NSView {
     private var lastBackingFactor: Double
 
     func setZoom(percent: Int) {
+        // Repeating the current zoom does not change device-pixel tile
+        // geometry. Keep valid and stale tiles, but preserve the existing
+        // full retry behavior if any tile previously failed.
+        let clearTiles = percent != zoomPercent || !failedTiles.isEmpty
         zoomPercent = percent
-        advanceRenderGeneration(clearingTiles: true)
+        advanceRenderGeneration(clearingTiles: clearTiles)
         updateFrameSize()
         tools.canvasScaleDidChange()
         needsDisplay = true
