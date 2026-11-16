@@ -1720,9 +1720,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let anchor { rows.append([NSTextField(labelWithString: "Anchor:"), anchor]) }
         let grid = NSGridView(views: rows)
         grid.column(at: 0).xPlacement = .trailing
-        if anchor != nil { grid.row(at: 3).yPlacement = .top }
+        if anchor != nil { grid.row(at: grid.numberOfRows - 1).yPlacement = .top }
         width.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        grid.frame = NSRect(x: 0, y: 0, width: 260, height: anchor == nil ? 80 : 156)
+        let extraHeight = anchor.map { max($0.fittingSize.height, 22) + 10 } ?? 0
+        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 80 + extraHeight)
 
         let alert = NSAlert()
         alert.messageText = title

@@ -6044,15 +6044,24 @@ enum EngineSmokeTest {
         settle()
         check(document.info.width == 140 && pixel(session, image, x: 2, y: 2)?.prefix(3) == [0, 0, 255],
               "Canvas Size grows the canvas with the background color")
-        let corner = pixel(session, image, x: 0, y: 0)
+        // A distinct background shows exactly which edges the anchored resize
+        // added; a dropped or mirrored offset would expose blue there instead.
+        let samples = [(0, 0), (70, 95), (139, 189)].map { pixel(session, image, x: $0.0, y: $0.1) }
+        let savedBackground = ToolState.shared.background
+        ToolState.shared.background = NSColor(srgbRed: 0, green: 1, blue: 0, alpha: 1)
         controller.resizeCanvas(width: 160, height: 200, anchor: .bottomRight)
         settle()
-        check(document.info.width == 160 && document.info.height == 200 && corner != nil &&
-                pixel(session, image, x: 20, y: 10) == corner,
-              "Canvas Size anchored at the bottom right keeps the image in that corner")
+        ToolState.shared.background = savedBackground
+        let addedEdges = [(0, 0), (19, 100), (100, 9)].map { pixel(session, image, x: $0.0, y: $0.1)?.prefix(3) }
+        let moved = [(20, 10), (90, 105), (159, 199)].map { pixel(session, image, x: $0.0, y: $0.1) }
+        check(document.info.width == 160 && document.info.height == 200 && samples.allSatisfy { $0 != nil } &&
+                addedEdges.allSatisfy { $0 == [0, 255, 0] } && moved == samples,
+              "Canvas Size anchored at the bottom right adds the left and top edges and keeps every pixel")
         document.undo()
         settle()
-        check(document.info.width == 140 && document.info.height == 190, "undo restores the anchored Canvas Size")
+        check(document.info.width == 140 && document.info.height == 190 &&
+                [(0, 0), (70, 95), (139, 189)].map { pixel(session, image, x: $0.0, y: $0.1) } == samples,
+              "undo restores the anchored Canvas Size and its pixels")
         controller.flipLayerHorizontally(nil)
         settle()
         check(document.undoInfo.nextUndo.isEmpty == false, "Layer ▸ Transform ▸ Flip Horizontal is an undo step (\(document.undoInfo.nextUndo))")
