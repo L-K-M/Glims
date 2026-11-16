@@ -171,6 +171,8 @@ extension RecorderFileCommand {
         case .applyColorBalance(let settings): self = .applyColorBalance(try RecorderColorBalanceValue(settings))
         case .applyHueSaturation(let settings): self = .applyHueSaturation(try RecorderHueSaturationValue(settings))
         case .applyBrightnessContrast(let settings): self = .applyBrightnessContrast(try RecorderBrightnessContrastValue(settings))
+        case .applyGaussianBlur(let settings): self = .applyGaussianBlur(try RecorderGaussianBlurValue(settings))
+        case .applyUnsharpMask(let settings): self = .applyUnsharpMask(try RecorderUnsharpMaskValue(settings))
         case .editInk(let settings):
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink edit has invalid settings.") }
             let operation: RecorderFileCommand.InkEdit.Operation

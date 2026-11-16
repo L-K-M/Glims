@@ -349,12 +349,18 @@ enum RecorderFileCommand: Equatable {
     /// accepted settings. The explicit layer is the record's `layer`
     /// binding; the command carries no native filter/effect identity.
     case applyBrightnessContrast(RecorderBrightnessContrastValue)
+    /// A newly applied Gaussian Blur with its whole accepted settings. The
+    /// explicit layer is the record's `layer` binding.
+    case applyGaussianBlur(RecorderGaussianBlurValue)
+    /// A newly applied Unsharp Mask with its whole accepted settings. The
+    /// explicit layer is the record's `layer` binding.
+    case applyUnsharpMask(RecorderUnsharpMaskValue)
     case completeStroke(RecorderStrokeCommand)
     case completeTabletStroke(RecorderTabletStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true

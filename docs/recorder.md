@@ -26,6 +26,8 @@ Current capture covers these command families:
   Brightness/Contrast adjustment on an explicitly bound layer, with the whole
   accepted settings.
 - A newly applied Levels, Curves or Brightness/Contrast adjustment on a bound layer mask.
+- A newly applied Gaussian Blur or Unsharp Mask on an explicitly bound layer,
+  with the whole accepted settings.
 
 - Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
   Levels/Curves Apply and complete Brush gestures, including
@@ -40,15 +42,16 @@ and file operations remain outside this capture scope. A live recording
 belongs to one open image. To use a saved recording in another image, load
 it in that image and choose its targets.
 
-Levels, Curves, Color Balance, Hue/Saturation and Brightness/Contrast record
-the final native settings when Apply is admitted. Preview updates, Cancel and refused Apply
-add no row. An admitted Apply retains its place if recording stops while it
-is pending. A native failure becomes a failure row. Applying any of these
-ordinary adjustments to a channel, applying adjustments other than Levels,
-Curves or Brightness/Contrast to a mask, or editing an existing effect also produces an
-explicit unsupported row after a successful commit, so the recording cannot
-silently replay an incomplete sequence. A settings capture failure preserves
-the live edit and marks the recording as failed.
+Levels, Curves, Color Balance, Hue/Saturation, Brightness/Contrast, Gaussian
+Blur and Unsharp Mask record the final native settings when Apply is
+admitted. Preview updates, Cancel and refused Apply add no row. An admitted
+Apply retains its place if recording stops while it is pending. A native
+failure becomes a failure row. Applying any of these commands to a channel,
+applying ones other than Levels, Curves or Brightness/Contrast to a mask, or
+editing an existing effect also produces an explicit unsupported row after a
+successful commit, so the recording cannot silently replay an incomplete
+sequence. A settings capture failure preserves the live edit and marks the
+recording as failed. Other filters do not yet add a row of any kind.
 
 Mask Levels, Curves and Brightness/Contrast record the mask owner and its
 editing role. Rebinding requires a layer with a mask, and replay checks the
@@ -95,7 +98,8 @@ Physical Lab Fill/Curves use version 13, Lab Brush version 14 and Lab selections
 version 15. Ink Brush uses 16, Lab Levels 17, layered Lab Brush 18, layered Lab
 Fill 19, Sponge strokes 20, and ordinary tablet strokes 21. Mixed recordings use
 the highest required version. Mask Levels, Curves and Brightness/Contrast require
-versions 23, 24 and 25 respectively. See
+versions 23, 24 and 25 respectively; Gaussian Blur and Unsharp Mask require
+version 26. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting
