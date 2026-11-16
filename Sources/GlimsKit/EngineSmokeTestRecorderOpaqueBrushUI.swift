@@ -20,10 +20,10 @@ extension EngineSmokeTest {
         }
         let state = ToolState.shared
         let oldTool = state.current, oldForeground = state.foreground
-        let oldDesaturate = state.brush(for: .pencil), oldSaturate = state.brush(for: .paintbrush)
+        let oldPencil = state.brush(for: .pencil), oldPaintbrush = state.brush(for: .paintbrush)
         defer {
-            state.update(.pencil) { $0 = oldDesaturate }
-            state.update(.paintbrush) { $0 = oldSaturate }
+            state.update(.pencil) { $0 = oldPencil }
+            state.update(.paintbrush) { $0 = oldPaintbrush }
             state.foreground = oldForeground
             state.select(oldTool)
         }
@@ -37,7 +37,13 @@ extension EngineSmokeTest {
             throw error
         }
         state.foreground = .black
-        let document = try ImageDocument(session: session, image: image, name: "Opaque Brush Recorder")
+        let document: ImageDocument
+        do {
+            document = try ImageDocument(session: session, image: image, name: "Opaque Brush Recorder")
+        } catch {
+            try? session.closeImage(image)
+            throw error
+        }
         documents.items.append(document)
         let owner = DocumentWindowController(document: document)
         owner.showWindow(nil)

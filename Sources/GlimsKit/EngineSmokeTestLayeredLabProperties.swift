@@ -137,7 +137,7 @@ extension EngineSmokeTest {
             while opened.pendingWork > 0 && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
             check(opened.pendingWork == 0, "engine work finishes after \(step)")
         }
-        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COPY"] == "1" || !session.supportsLayeredLabConvertedCopy {
+        do {
             let savedHandler = opened.labCopyHandler
             defer { opened.labCopyHandler = savedHandler }
             var copyResult: Result<Int32, Error>?
@@ -147,6 +147,8 @@ extension EngineSmokeTest {
                 document.convertedLabCopy(destination) { copyResult = $0 }
             }
             let menu = NSMenuItem(title: "Create Linear RGB Copy…", action: #selector(DocumentWindowController.createConvertedLabCopy(_:)), keyEquivalent: "")
+            check(opened.labCopyRefusal(.lab) == "Layered Lab documents can only be copied to RGB.",
+                  "a layered Lab copy refuses a Lab destination before showing a dialog")
             check(windowController.validateMenuItem(menu) == session.supportsLayeredLabConvertedCopy,
                   "layered Lab RGB copy menu follows the engine capability")
             if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_LAYERED_LAB_COPY"] == "1" {
@@ -168,6 +170,7 @@ extension EngineSmokeTest {
                     let deadline = Date().addingTimeInterval(15)
                     while copyResult == nil && Date() < deadline { EngineSmokeTestHost.pumpEvents(for: 0.02) }
                     drain("layered Lab RGB copy")
+                    if copyResult == nil { check(false, "layered Lab RGB copy finishes within 15 seconds") }
                     if case .success(let copied)? = copyResult {
                         defer { try? session.closeImage(copied) }
                         let info = try session.colorInfo(copied)
