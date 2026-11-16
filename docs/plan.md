@@ -4505,9 +4505,11 @@ contain both mask Levels and Curves while older versions reject the new
 Curves binding.
 
 The real-engine save, explicit rebind, Undo and stale-target refusal pass on
-all four supported engines. The full Swift suite passes 1,820 tests. The
-isolated signed bundle passes 2,268 native and 3,359 editor checks;
-integration and merge remain open.
+all four supported engines. After integration with mask Levels and opaque
+Eraser recording, the Curves (27 checks), Levels and projective-integration
+window checks pass on all four engines, the full Swift suite passes 1,829
+tests, and the isolated signed bundle passes 2,268 native and 3,375 editor
+checks. Hosted review and merge remain open.
 
 
 ### Transform composite pixel preview (2026-11-11 work in progress)
