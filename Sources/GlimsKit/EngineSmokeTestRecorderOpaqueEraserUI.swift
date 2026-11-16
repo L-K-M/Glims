@@ -76,7 +76,8 @@ extension EngineSmokeTest {
         func command(_ action: RecorderPaletteAction) throws {
             controls.retarget(to: document)
             guard let item = controls.paletteMenu?.items.first(where: { $0.tag == action.rawValue }),
-                  let selector = item.action else { throw NSError(domain: "RecorderOpaqueEraserUI", code: 2) }
+                  let selector = item.action else { throw NSError(domain: "RecorderOpaqueEraserUI", code: 2,
+                                                                 userInfo: [NSLocalizedDescriptionKey: "Recorder palette item not found"]) }
             try require(controls.validateMenuItem(item) && NSApp.sendAction(selector, to: item.target, from: item),
                         "Recorder palette action was refused")
         }
@@ -156,7 +157,7 @@ extension EngineSmokeTest {
                 state.background = .red
                 try document.startReplay()
                 try require(wait { document.replayStatus == .finished(total: 1) && document.pendingWork == 0 &&
-                                   !EngineActivity.shared.isBusy }, "opaque brush replay did not finish")
+                                   !EngineActivity.shared.isBusy }, "opaque \(tool) replay did not finish")
                 expect(try pixels() == after, "replay of \(tool) restores the captured pixels")
             } else {
                 guard case .failure = document.recorder.records[0].resolution else {

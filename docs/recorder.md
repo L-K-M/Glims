@@ -76,7 +76,8 @@ capture. There is no promise of portable pixels across engine versions.
 The trace stores image coordinates, pressure, signed tilt and millisecond
 timestamps, with the accepted batch boundaries intact. Tablet traces also
 retain optional rotation and tangential pressure. It does not infer velocity
-or direction. For the ordinary RGB stroke path, only pixel layers can be bound; painting a mask/channel or using another paint tool produces an
+or direction. For the ordinary RGB stroke path, only pixel layers can be
+bound; painting a mask/channel or using another paint tool produces an
 explicit unsupported row. Pencil and Paintbrush can record on opaque or
 alpha-bearing RGB layers. Eraser captures its selected background color for
 replay on opaque layers. Pencil, legacy Eraser and Paintbrush mouse strokes
