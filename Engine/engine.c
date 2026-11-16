@@ -1537,6 +1537,9 @@ MARSHAL (image_crop, return glims_image_crop (e, a->image, a->area, a->error);)
 MARSHAL (image_transform, return glims_image_transform (e, a->image, (uint32_t) a->width);)
 MARSHAL (layer_transform, return glims_layer_transform (e, a->image, a->item, (uint32_t) a->width);)
 MARSHAL (image_scale, return glims_image_scale (e, a->image, a->width, a->height, a->error);)
+MARSHAL (image_scale_with_interpolation,
+         return glims_image_scale_with_interpolation (e, a->image, a->width, a->height,
+                                                      (uint32_t) a->n, a->error);)
 MARSHAL (fonts, return glims_fonts (e, a->out);)
 MARSHAL (text_layer_new, return glims_text_layer_new (e, a->image, a->string, a->in,
                                                       (GlimsPoint) { a->number, a->number2 },
@@ -2454,6 +2457,16 @@ api_image_scale (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t heig
   return glims_facade_call (e, GLIMS_FACADE_OP_image_scale,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_scale_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_scale_with_interpolation (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
+                                    uint32_t interpolation, char **error)
+{
+  GlimsArgs a = { .image = image, .width = width, .height = height, .n = interpolation, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_scale_with_interpolation,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_scale_with_interpolation_on_engine, &a, error);
 }
 
 static GlimsStatus

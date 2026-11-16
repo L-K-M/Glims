@@ -4398,6 +4398,13 @@ typedef struct GlimsEngineAPI {
   /* Slot233: supported optional tails of GlimsBrushSettings. A missing slot
    * means no optional brush features. This query has no engine side effects. */
   uint64_t (*brush_settings_features) (void);
+  /* Slot234: image_scale with an explicit GlimsInterpolation. DEFAULT uses
+   * the engine's preference, exactly like image_scale; an unknown value is
+   * GLIMS_STATUS_INVALID_ARGUMENT and leaves the image unchanged. One undo
+   * step, like image_scale. */
+  GlimsStatus (*image_scale_with_interpolation) (GlimsEngine *engine, GlimsImageID image,
+                                                 int32_t width, int32_t height,
+                                                 uint32_t interpolation, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
