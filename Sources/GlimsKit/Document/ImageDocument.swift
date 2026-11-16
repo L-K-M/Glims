@@ -61,7 +61,9 @@ final class ImageDocument {
         enum Coverage {
             /// A new filter on an ordinary layer: semantic capture coverage.
             case layer(Int32)
-            /// An existing-effect edit or a mask/channel/floating drawable:
+            /// A Levels preview bound to the settled mask at session start.
+            case mask(RecorderTargetContext)
+            /// An existing-effect edit or an unsupported drawable:
             /// recorded as an explicit unsupported row, never a layer adjustment.
             case unsupported(String)
         }
@@ -6311,8 +6313,16 @@ final class ImageDocument {
         switch paintTarget {
         case .layer(let layer)? where !floatingState.isActive:
             coverage = .layer(layer)
-        case .mask?:
-            coverage = .unsupported("Recorder does not yet save a filter applied to a layer mask.")
+        case .mask(let layer, let mask)?:
+            if operation == "gimp:levels", !floatingState.isActive,
+               case .target(let target) = captureRecorderPaintTarget(),
+               target.target == .mask(layer: layer, drawable: mask),
+               target.layers == [layer], target.channels.isEmpty, !target.quickMask.enabled,
+               mask == drawable {
+                coverage = .mask(target)
+            } else {
+                coverage = .unsupported("Recorder cannot safely save this filter applied to a layer mask.")
+            }
         case .channel?:
             coverage = .unsupported("Recorder does not yet save a filter applied to a channel.")
         default:
@@ -6386,6 +6396,7 @@ final class ImageDocument {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
+                case .mask(let target)?: context = .target(target)
                 case .unsupported(let reason)?: context = .unavailable(reason)
                 case nil: context = nil
                 }
@@ -6401,9 +6412,14 @@ final class ImageDocument {
             var command: SemanticImageCommand?
             var settingsFailure: Error?
             // The final whole settings are read behind every queued preview
-            // write, only while a supported layer capture is active; a read
+            // write, only while a supported layer or mask capture is active; a read
             // failure never suppresses the live commit below.
-            if commit, case .layer = capture?.context {
+            let readsSettings: Bool
+            switch capture?.context {
+            case .layer?, .target?: readsSettings = true
+            default: readsSettings = false
+            }
+            if commit, readsSettings {
                 do {
                     if record?.operation == "gimp:curves" {
                         command = .applyCurves(try session.curvesSettings(filter))
@@ -7370,7 +7386,7 @@ final class ImageDocument {
                         throw RecorderReplayError(message: "Select the bound Lab channel before replaying this command.")
                     }
                 case .target:
-                    guard captureRecorderContext(for: step.command).map({ Self.recorderContextsMatch($0, context) }) == true else {
+                    guard Self.recorderContextsMatch(captureRecorderPaintTarget(), context) else {
                         throw RecorderReplayError(message: "The recorded layer, channel, mask or Quick Mask target has changed.")
                     }
                 }
@@ -7441,6 +7457,10 @@ final class ImageDocument {
                         }
                     }
                     try step.command.apply(session: session, image: image, layer: layer)
+                } else if case .target(let target)? = context,
+                          case .mask(_, let drawable) = target.target,
+                          case .applyLevels = step.command {
+                    try step.command.applyMaskLevels(session: session, image: image, drawable: drawable)
                 } else if case .labLayer(let root, let identity)? = context, let identity {
                     try step.command.apply(session: session, image: image,
                         labLayerTarget: .init(root: root, uuid: identity))
@@ -7547,6 +7567,10 @@ final class ImageDocument {
             }
             return .channel(channel)
         }
+        return captureRecorderPaintTarget()
+    }
+
+    private func captureRecorderPaintTarget() -> RecorderContext {
         guard pendingTargetPick == nil, pendingLayerSelection == nil, pendingChannelSelection == nil,
               pendingTargetCommands.isEmpty, quickMaskIntent == nil,
               let target = paintTarget, let quickMask = quickMaskState else {

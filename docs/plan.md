@@ -4459,8 +4459,9 @@ layer, with the final native settings for all five channels, the transfer
 curve and both clamp flags. Saved format version 5 retains versions 1
 through 4. Preview updates, Cancel and pre-admission refusals add no row;
 an admitted Apply still settles after Stop. Native failures retain the
-preview for retry. Applying Levels to a mask/channel or editing an existing
-effect remains usable but produces an explicit unsupported recording row.
+preview for retry. At this stage applying Levels to a mask/channel or editing
+an existing effect produced an explicit unsupported recording row; the later
+mask Levels candidate below extends that coverage.
 
 The focused native workflow passes 33 checks on each of GIMP 3.2.8, 3.2.0,
 3.0.8 and master. It verifies queued final settings, selection changes after
@@ -4478,6 +4479,22 @@ The existing Recorder epoch tests cover stale completions after a new
 recording; this native case does not repeat them. Other adjustment families,
 existing-effect identity replay and text recording remain open. These
 checks establish this Levels slice, not complete action/batch coverage.
+
+### Recorded Levels on a layer mask (candidate)
+
+Levels on an editing layer mask can now capture its settings and the mask
+owner's role in recording format version 23. Rebinding needs a layer with a
+mask; replay rechecks the current target and makes one destructive Undo step.
+If the target changes before Apply, the live edit remains usable but the
+unconfirmed binding cannot be saved for replay. Channel adjustments and edits
+to an existing effect remain outside this slice.
+
+The saved replay, Undo and stale-role refusal pass real-engine tests on all
+four supported engines. The preview-retarget refusal also passes on each
+engine. After integration with opaque Eraser recording, the Levels, Curves and
+projective-integration window checks pass on all four engines, the full Swift
+suite passes 1,828 tests, and the isolated signed bundle passes 2,268 native
+and 3,375 editor checks. Hosted review and merge remain open.
 
 
 ### Transform composite pixel preview (2026-11-11 work in progress)

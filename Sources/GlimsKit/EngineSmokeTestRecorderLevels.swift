@@ -18,6 +18,15 @@ extension EngineSmokeTest {
             try wait { doc.pendingWork == 0 && doc.recorder.pendingCount == 0 &&
                 !doc.recorder.isReplaying && !EngineActivity.shared.isBusy }
         }
+        func settleNativeEvents(_ doc: ImageDocument) throws {
+            // Engine callbacks enqueue events on the main queue. Crossing it
+            // after the synchronous setup calls delivers their refreshes
+            // before taking an installation checkpoint.
+            var crossed = false
+            DispatchQueue.main.async { crossed = true }
+            try wait { crossed }
+            try drain(doc)
+        }
         func pixels(_ image: Int32) throws -> Data { try session.copyPixels(image, merged: true).pixels }
         var bytes: [UInt8] = []
         for i in 0..<120 { bytes += [UInt8(i * 13 % 256), UInt8(i * 31 % 256), UInt8(i * 7 % 256), 255] }
@@ -250,14 +259,87 @@ extension EngineSmokeTest {
         filter = try begin(maskDoc)
         maskDoc.setLevels(filter, early) { _ in }; try drain(maskDoc)
         check(try finish(maskDoc, filter, commit: false) && maskDoc.recorder.records.isEmpty,
-              "unsupported mask preview Cancel still records nothing")
+              "mask preview Cancel still records nothing")
         filter = try begin(maskDoc)
         maskDoc.setLevels(filter, early) { _ in }; try drain(maskDoc)
         check(try finish(maskDoc, filter, commit: true), "live Levels on a mask remains usable")
         try maskDoc.stopRecording(); try drain(maskDoc)
-        if case .failure(let reason)? = maskDoc.recorder.records.first?.resolution {
-            check(reason.contains("layer mask"), "an applied mask adjustment records its unsupported role honestly")
-        } else { check(false, "a mask Levels edit must not become a layer-bound action") }
+        guard case .success(.applyLevels(let captured))? = maskDoc.recorder.records.first?.resolution,
+              case .context(let target)? = maskDoc.recorderBindingDescriptions[0],
+              case .mask(let maskSymbol) = target.target else {
+            return check(false, "an applied mask adjustment records its mask role and settings")
+        }
+        check(captured == early, "an applied mask adjustment records its mask role and settings")
+        let maskURL = work.appendingPathComponent("mask-levels.glims-recording")
+        var maskSaved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+        maskDoc.saveRecording(to: maskURL, checkpoint: try maskDoc.recorderSaveCheckpoint()) { maskSaved = $0 }
+        try drain(maskDoc); try require(maskSaved != nil, "Mask Levels save callback missing"); _ = try maskSaved!.get()
+        var maskLoaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
+        maskDoc.prepareRecordingFile(at: maskURL, checkpoint: try maskDoc.recorderInstallCheckpoint()) { maskLoaded = $0 }
+        try drain(maskDoc); try require(maskLoaded != nil, "Mask Levels load callback missing")
+        let maskPrepared = try maskLoaded!.get()
+        let maskJSON = try JSONSerialization.jsonObject(with: Data(contentsOf: maskURL)) as? [String: Any]
+        check(maskJSON?["version"] as? Int == 23, "saved mask Levels declares version 23")
+
+        let (maskDest, maskDestLayer, _) = try fixture("Mask Levels rebound")
+        try settleNativeEvents(maskDest)
+        let initialMaskVersion = maskDest.stateVersion
+        var missingInstall: Result<Void, Error>?
+        maskDest.installRecording(maskPrepared, checkpoint: try maskDest.recorderInstallCheckpoint(),
+                                  choices: [maskSymbol: .layer(maskDestLayer)]) { missingInstall = $0 }
+        try drain(maskDest); try require(missingInstall != nil, "Maskless install callback missing")
+        if case .failure(let error)? = missingInstall,
+           case .missingMask = error as? ImageDocument.RecorderInstallError {
+            check(true, "mask Levels refuses binding to a layer without a mask")
+        } else {
+            check(false, "mask Levels refuses binding to a layer without a mask (\(String(describing: missingInstall)), state \(initialMaskVersion) → \(maskDest.stateVersion))")
+        }
+        _ = try session.addLayerMask(maskDestLayer, image: maskDest.image, source: .white, edit: true)
+        try maskDest.reload()
+        try settleNativeEvents(maskDest)
+        var maskInstalled: Result<Void, Error>?
+        maskDest.installRecording(maskPrepared, checkpoint: try maskDest.recorderInstallCheckpoint(),
+                                  choices: [maskSymbol: .layer(maskDestLayer)]) { maskInstalled = $0 }
+        try drain(maskDest); try require(maskInstalled != nil, "Mask Levels install callback missing"); try maskInstalled!.get()
+        let maskBefore = try pixels(maskDest.image), maskUndo = try session.undoInfo(maskDest.image)
+        try maskDest.startReplay(); try drain(maskDest)
+        check(try (try pixels(maskDest.image)) == pixels(maskDoc.image) &&
+              (try pixels(maskDest.image)) != maskBefore &&
+              session.undoInfo(maskDest.image).undoCount == maskUndo.undoCount + 1 &&
+              session.effects(on: maskDestLayer, image: maskDest.image).isEmpty,
+              "saved mask Levels replays on the rebound mask as one destructive Undo step")
+        maskDest.undo(); try drain(maskDest)
+        check(try pixels(maskDest.image) == maskBefore, "mask Levels Undo restores destination pixels")
+
+        // Leave the document cache unchanged to exercise the fresh native guard.
+        try session.setLayerMask(maskDestLayer, image: maskDest.image, flags: .editing, values: [])
+        let staleBefore = try pixels(maskDest.image), staleUndo = try session.undoInfo(maskDest.image)
+        try maskDest.startReplay(); try drain(maskDest)
+        var maskRefused = false
+        if case .failed(index: 0, reason: _) = maskDest.replayStatus { maskRefused = true }
+        check(try maskRefused && pixels(maskDest.image) == staleBefore &&
+              session.undoInfo(maskDest.image) == staleUndo,
+              "fresh native mask-role changes refuse replay without modifying pixels or history")
+
+        let (maskRetarget, retargetLayer, otherLayer) = try fixture("Mask Levels changed during preview")
+        _ = try session.addLayerMask(retargetLayer, image: maskRetarget.image, source: .white, edit: true)
+        try maskRetarget.reload(); try settleNativeEvents(maskRetarget)
+        try maskRetarget.startRecording()
+        filter = try begin(maskRetarget)
+        maskRetarget.setLevels(filter, early) { _ in }; try drain(maskRetarget)
+        maskRetarget.selectLayer(otherLayer); try drain(maskRetarget)
+        check(try finish(maskRetarget, filter, commit: true), "a mask preview still applies to its original drawable after selection changes")
+        try maskRetarget.stopRecording(); try drain(maskRetarget)
+        if case .unavailable? = maskRetarget.recorderBindingDescriptions[0] {
+            check(true, "a changed mask target cannot become a misleading replay binding")
+        } else { check(false, "a changed mask target cannot become a misleading replay binding") }
+        var unsafeSave: Result<ImageDocument.RecorderSaveOutcome, Error>?
+        maskRetarget.saveRecording(to: work.appendingPathComponent("unbound-mask-levels.glims-recording"),
+            checkpoint: try maskRetarget.recorderSaveCheckpoint()) { unsafeSave = $0 }
+        try drain(maskRetarget)
+        if case .failure? = unsafeSave {
+            check(true, "a recording with an unconfirmed mask target cannot be saved for replay")
+        } else { check(false, "a recording with an unconfirmed mask target cannot be saved for replay") }
 
         let (channelDoc, channelLayer, _) = try fixture("Levels on channel")
         try session.select(.all, image: channelDoc.image)

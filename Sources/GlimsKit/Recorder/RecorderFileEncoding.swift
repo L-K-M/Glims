@@ -63,8 +63,12 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, layerTransformVersion)
             case .success(.transformProjectiveLayer, _):
                 fileVersion = max(fileVersion, projectiveLayerTransformVersion)
-            case .success(.applyLevels, _):
-                fileVersion = max(fileVersion, levelsVersion)
+            case .success(.applyLevels, let binding):
+                if case .context = binding {
+                    fileVersion = max(fileVersion, maskLevelsVersion)
+                } else {
+                    fileVersion = max(fileVersion, levelsVersion)
+                }
             case .success(.applyCurves(let curves), _):
                 let count = curves.value.points.count + curves.red.points.count + curves.green.points.count
                     + curves.blue.points.count + curves.alpha.points.count
