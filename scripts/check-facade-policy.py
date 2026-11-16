@@ -25,7 +25,7 @@ def check(root=ROOT):
         errors.append('Duplicate public facade field')
     direct = {'start', 'stop', 'free_string', 'engine_version', 'free_pixels',
               'free_metadata_strings', 'metadata_languages_free',
-              'free_curves_snapshot', 'free_histogram_snapshot'}
+              'free_curves_snapshot', 'free_histogram_snapshot', 'brush_settings_features'}
     cleanup = {'image_close', 'stroke_end', 'filter_abort', 'procedure_cancel', 'image_ink_snapshot_end', 'image_lab_snapshot_end', 'stroke_cancel_lab', 'stroke_cancel_ink', 'stroke_cancel_lab_layer'}
     component = {'image_grid', 'image_history', 'image_info', 'stroke_begin_with_brush_resource', 'image_render_to_profile', 'image_select_items', 'image_quick_mask', 'image_history_move', 'select_shape', 'image_guides', 'image_color_info', 'image_duplicate', 'drawable_thumbnail', 'stroke_begin_with_capture_facts', 'image_redo', 'image_selected_items', 'stroke_begin', 'image_selected_layers', 'image_floating_selection', 'image_undo_info', 'image_channels', 'image_components', 'channel_command', 'channel_change', 'image_undo', 'select_command', 'image_render', 'selection_bounds', 'selection_outline', 'image_layers', 'image_save_copy', 'stroke_begin_v2', 'paths', 'image_save'}
     component.add('stroke_begin_v2_with_capture_facts')

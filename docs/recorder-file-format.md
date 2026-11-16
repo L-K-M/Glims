@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 20
+# Recorder file format, versions 1 to 22
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `20`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `22`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -18,11 +18,12 @@ The writer chooses the highest version required by a successful record:
 `applyInkLevels` 11, `applyInkCurves` 12, `fillLab`/`applyLabCurves` 13,
 `completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15,
 `completeInkStroke` 16, `applyLabLevels` 17, `completeLabLayerStroke` 18,
-`fillLabLayer` 19, and a Sponge `completeStroke` 20. A file declaring one of those versions must contain at least one
+`fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
+and an Eraser stroke with an explicit background color 22. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...20 refuse the file.
+version 1. Integers outside 1...22 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -539,3 +540,14 @@ separately from numeric zero, and timestamps and accepted batch boundaries are
 retained. It uses the existing V2 sample, gesture and aggregate file limits.
 Versions 1–20 reject this tag; version 21 requires a successful tablet stroke.
 Replay requires the V2 capture capability and a matching brush fingerprint.
+
+## Eraser background (version 22)
+
+An ordinary `completeStroke` or `completeTabletStroke` may include an
+`eraserBackground` object in its settings, with exactly `red`, `green` and
+`blue` finite sRGB components in `0...1`. It is valid only for the Eraser
+and requires version 22. A version 22 file must contain at least one
+successful stroke carrying this color. Older Eraser recordings without the
+field retain their original behavior and file versions. For an opaque target,
+guarded replay binds the color and target's alpha state into the native
+fingerprint, and refuses a mismatch before painting.

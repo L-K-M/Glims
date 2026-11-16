@@ -6405,7 +6405,30 @@ Ordinary RGB Pencil and Paintbrush capture now includes opaque Background
 layers. A new fingerprint domain distinguishes opaque from alpha-bearing
 targets, so guarded replay cannot cross that boundary; existing alpha-bearing
 and ink fingerprints are unchanged. The live opaque Eraser remains deliberately
-uncaptured because its inherited background color is not in the recording.
+uncaptured because its background color is not in the recording.
 The native candidate tests mouse and V2 tablet capture against independently
 painted pixels, guarded cross-alpha refusal and Undo/Redo. Full app, older
 engine and release qualification remain separate.
+
+### Eraser background color (candidate)
+
+The Eraser snapshots the chosen background at the start of a gesture. On a
+layer without alpha, native paint uses that color even if the shared color
+changes before the gesture ends. Layers with alpha continue to erase normally.
+Adapters without the optional color capability refuse the requested Eraser
+gesture explicitly. Opaque Eraser recording remains unsupported because the
+recording format does not yet preserve the color. Four-engine native checks,
+legacy-prefix memory protection and targeted canvas checks cover this candidate;
+full application and release qualification remain separate.
+
+### Opaque Eraser recording (candidate)
+
+Opaque RGB Eraser strokes can capture the explicitly selected background.
+The native fingerprint binds all three components and the target's alpha
+state, so replay rejects a changed color or target before painting. An
+inherited background remains ineligible for capture. Callers must opt in to
+preserving the color, so an older app can paint without receiving incomplete
+recording facts. Recording version 22 stores the color for mouse and tablet
+Eraser strokes; earlier recording
+versions continue to decode. Full editor, bundle and hosted qualification
+remain pending.

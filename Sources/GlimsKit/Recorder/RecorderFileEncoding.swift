@@ -49,11 +49,13 @@ extension RecorderFileCodec {
                 }
             case .success(.completeTabletStroke(let stroke), _):
                 pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
-                fileVersion = max(fileVersion, tabletStrokeVersion)
+                fileVersion = max(fileVersion, stroke.settings.eraserBackground == nil ? tabletStrokeVersion : eraserBackgroundVersion)
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
-                fileVersion = max(fileVersion, stroke.settings.tool.isSponge ? spongeStrokeVersion : strokeVersion)
+                let required = stroke.settings.eraserBackground != nil ? eraserBackgroundVersion :
+                    (stroke.settings.tool.isSponge ? spongeStrokeVersion : strokeVersion)
+                fileVersion = max(fileVersion, required)
             case .success(.channelToSelection, _):
                 // Version 3 covers both extensions; keep the highest.
                 fileVersion = max(fileVersion, channelVersion)
@@ -232,6 +234,9 @@ extension RecorderFileCodec {
             "pressureSize": .bool(brush.pressureSize), "antiErase": .bool(brush.antiErase),
         ]
         if let hardness = brush.hardness { settings["hardness"] = try d(hardness) }
+        if let background = brush.eraserBackground {
+            settings["eraserBackground"] = .object(["red": try d(background.red), "green": try d(background.green), "blue": try d(background.blue)])
+        }
         let identity = stroke.facts.brush
         var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
         if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
@@ -259,6 +264,9 @@ extension RecorderFileCodec {
             "pressureSize": .bool(brush.pressureSize), "antiErase": .bool(brush.antiErase),
         ]
         if let hardness = brush.hardness { settings["hardness"] = try d(hardness) }
+        if let background = brush.eraserBackground {
+            settings["eraserBackground"] = .object(["red": try d(background.red), "green": try d(background.green), "blue": try d(background.blue)])
+        }
         let identity = value.facts.brush
         var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
         if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }

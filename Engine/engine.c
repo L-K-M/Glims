@@ -1439,6 +1439,12 @@ api_engine_version (GlimsEngine *engine)
   return GIMP_VERSION;
 }
 
+static uint64_t
+api_brush_settings_features (void)
+{
+  return GLIMS_BRUSH_FEATURE_ERASER_BACKGROUND;
+}
+
 /* ---- Facade: marshalled calls ------------------------------------------
  * Each facade function packs its arguments, runs the matching glims_*
  * function on the engine thread and returns its status. */
@@ -5177,7 +5183,7 @@ api_stroke_begin_ink_with_capture_facts (GlimsEngine *engine, GlimsImageID image
   memcpy (&target_size, target, sizeof target_size);
   if (target_size < sizeof *target) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&settings_size, settings, sizeof settings_size);
-  if (settings_size < sizeof *settings) return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (settings_size < offsetof (GlimsBrushSettings, has_eraser_background)) return GLIMS_STATUS_INVALID_ARGUMENT;
   memcpy (&packet_size, first, sizeof packet_size);
   if (packet_size < sizeof *first) return GLIMS_STATUS_INVALID_ARGUMENT;
 
@@ -5186,7 +5192,7 @@ api_stroke_begin_ink_with_capture_facts (GlimsEngine *engine, GlimsImageID image
     .facts = { .struct_size = sizeof a.facts }, .error = error
   };
   memcpy (&a.target, target, sizeof a.target);
-  memcpy (&a.settings, settings, sizeof a.settings);
+  memcpy (&a.settings, settings, MIN ((size_t) settings_size, sizeof a.settings));
   memcpy (&a.packet, first, sizeof a.packet);
   /* The borrowed samples remain immutable until this synchronous call returns;
    * the local header exposes only the copied known prefix to native validation. */

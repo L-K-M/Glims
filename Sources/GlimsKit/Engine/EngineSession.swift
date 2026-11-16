@@ -1444,6 +1444,12 @@ final class EngineSession: @unchecked Sendable {
     /// A paint stroke's tool and settings. `nil` numbers keep the engine's
     /// default for that tool.
     struct Brush: Equatable {
+        /// Opaque sRGB background captured when an eraser gesture begins.
+        struct EraserBackground: Equatable {
+            let red: Double
+            let green: Double
+            let blue: Double
+        }
         enum Tool: UInt32, CaseIterable {
             case paintbrush = 0, pencil, airbrush, eraser, smudge, blur, sharpen, dodge, burn, clone, heal, spongeDesaturate, spongeSaturate
         }
@@ -1464,6 +1470,7 @@ final class EngineSession: @unchecked Sendable {
         var size: Double = 12
         var opacity: Double = 1
         var red: Double = 0, green: Double = 0, blue: Double = 0
+        var eraserBackground: EraserBackground?
         var pressureSize = true
         var hardness: Double?
         var rate: Double?
@@ -2408,6 +2415,7 @@ final class EngineSession: @unchecked Sendable {
     /// id — and returns the stroke session `continueStroke`/`endStroke`
     /// take.
     func beginStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
+        try validateEraserBackground(brush)
         var settings = Self.nativeBrush(brush)
         var point = Self.point(first)
         var stroke: Int32 = 0
@@ -2427,6 +2435,7 @@ final class EngineSession: @unchecked Sendable {
     /// Guarded replay must match its recorded facts before any first paint.
     func beginStrokeCapturing(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint,
                               expected: StrokeCaptureFacts? = nil) throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        try validateEraserBackground(brush)
         guard let begin = api.stroke_begin_with_capture_facts else {
             guard expected == nil else {
                 throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
@@ -2436,7 +2445,7 @@ final class EngineSession: @unchecked Sendable {
         }
         let identity = expected?.brush ?? brush.resource
         let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
-        var settings = Self.nativeBrush(brush)
+        var settings = Self.nativeBrush(brush, recordsEraserBackground: true)
         var point = Self.point(first)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
@@ -2477,6 +2486,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     func beginTabletStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokeSampleV2) throws -> Int32 {
+        try validateEraserBackground(brush)
         guard let begin = api.stroke_begin_v2, api.stroke_continue_v2 != nil else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This image engine cannot accept tablet rotation or tangential pressure.")
         }
@@ -2503,6 +2513,7 @@ final class EngineSession: @unchecked Sendable {
     /// Recorded replay requires a matching brush and fingerprint before paint.
     func beginTabletStrokeCapturing(image: Int32, drawable: Int32, brush: Brush, first: StrokeSampleV2,
                                     expected: StrokeCaptureFacts? = nil) throws -> (stroke: Int32, facts: StrokeCaptureFacts?) {
+        try validateEraserBackground(brush)
         guard supportsTabletStrokeCapture, let begin = api.stroke_begin_v2_with_capture_facts else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
                               message: "This image engine cannot capture tablet strokes.")
@@ -2518,7 +2529,7 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
                               message: "The brush could not be found for the captured tablet stroke.")
         }
-        var settings = Self.nativeBrush(brush)
+        var settings = Self.nativeBrush(brush, recordsEraserBackground: true)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
         var stroke: Int32 = 0
@@ -3426,6 +3437,7 @@ final class EngineSession: @unchecked Sendable {
     /// brush handle fail without changing pixels or history; BUSY while
     /// a stroke, a filter session or a plug-in holds the image.
     func strokeSelection(image: Int32, drawable: Int32? = nil, brush: Brush) throws {
+        try validateEraserBackground(brush)
         var settings = Self.nativeBrush(brush)
         var error: UnsafeMutablePointer<CChar>?
         let resource: ResourceID
@@ -6238,7 +6250,17 @@ final class EngineSession: @unchecked Sendable {
 
     /// A Brush's captured settings as the facade's GlimsBrushSettings:
     /// nil option numbers become -1 (the engine's default for that tool).
-    private static func nativeBrush(_ brush: Brush) -> GlimsBrushSettings {
+    private func validateEraserBackground(_ brush: Brush) throws {
+        guard brush.tool == .eraser, brush.eraserBackground != nil else { return }
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.brush_settings_features),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.brush_settings_features),
+              let features = api.brush_settings_features, features() & 1 != 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot use the selected eraser background color.")
+        }
+    }
+
+    private static func nativeBrush(_ brush: Brush, recordsEraserBackground: Bool = false) -> GlimsBrushSettings {
         GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
                            size: brush.size, opacity: brush.opacity,
                            red: brush.red, green: brush.green, blue: brush.blue,
@@ -6248,7 +6270,12 @@ final class EngineSession: @unchecked Sendable {
                            flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
                            tones: brush.tones.rawValue, anti_erase: brush.antiErase,
                            source_drawable: brush.source?.drawable ?? 0,
-                           source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0)
+                           source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0,
+                           has_eraser_background: brush.eraserBackground != nil,
+                           eraser_background_red: brush.eraserBackground?.red ?? 0,
+                           eraser_background_green: brush.eraserBackground?.green ?? 0,
+                           eraser_background_blue: brush.eraserBackground?.blue ?? 0,
+                           record_eraser_background: recordsEraserBackground && brush.tool == .eraser && brush.eraserBackground != nil)
     }
 
     private static func layer(_ row: GlimsLayerInfo) -> Layer {

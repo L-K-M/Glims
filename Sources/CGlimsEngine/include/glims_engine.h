@@ -218,6 +218,8 @@ typedef enum GlimsToneRange {
   GLIMS_TONES_HIGHLIGHTS = 2
 } GlimsToneRange;
 
+#define GLIMS_BRUSH_FEATURE_ERASER_BACKGROUND (UINT64_C (1) << 0)
+
 typedef struct GlimsBrushSettings {
   uint32_t struct_size;     /* sizeof (GlimsBrushSettings) */
   double   size;            /* diameter in image pixels */
@@ -237,6 +239,17 @@ typedef struct GlimsBrushSettings {
   GlimsItemID source_drawable; /* clone and heal: what to copy from (any open image) */
   double      source_x;        /* clone and heal: the source point, in the source's */
   double      source_y;        /* image pixels; the stroke's first point copies it */
+
+  /* Optional opaque sRGB background, for Eraser on drawables without
+   * alpha. Set has_eraser_background only when the engine advertises the
+   * corresponding capability. The complete tail must be present. */
+  bool        has_eraser_background;
+  double      eraser_background_red, eraser_background_green, eraser_background_blue;
+
+  /* Capture callers set this only when they retain the explicit background
+   * in their recording and provide it again for replay. Absent on older
+   * callers, so an opaque Eraser remains live but returns no capture facts. */
+  bool        record_eraser_background;
 } GlimsBrushSettings;
 
 typedef struct GlimsStrokePoint {
@@ -4382,6 +4395,9 @@ typedef struct GlimsEngineAPI {
                                                      GlimsStrokeID *out,
                                                      GlimsStrokeCaptureFacts *facts,
                                                      char **error);
+  /* Slot233: supported optional tails of GlimsBrushSettings. A missing slot
+   * means no optional brush features. This query has no engine side effects. */
+  uint64_t (*brush_settings_features) (void);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

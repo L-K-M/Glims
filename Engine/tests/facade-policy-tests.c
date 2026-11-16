@@ -13,9 +13,9 @@ static GlimsStatus oracle(GlimsEngine*e,gpointer p){State*s=p;GlimsStatus status
 static GlimsStatus callback(GlimsEngine*e,gpointer p){(void)e;(*(unsigned*)p)++;return GLIMS_STATUS_OK;}
 static GlimsStatus inline_call(GlimsEngine*e,gpointer p){State*s=p;s->result=api->image_clear(e,s->image,NULL,NULL);return GLIMS_STATUS_OK;}
 static gboolean direct_op(GlimsFacadeOperation op){
-  return op==GLIMS_FACADE_OP_start||op==GLIMS_FACADE_OP_stop||op==GLIMS_FACADE_OP_free_string||op==GLIMS_FACADE_OP_engine_version||op==GLIMS_FACADE_OP_free_pixels||op==GLIMS_FACADE_OP_free_metadata_strings||op==GLIMS_FACADE_OP_metadata_languages_free||op==GLIMS_FACADE_OP_free_curves_snapshot||op==GLIMS_FACADE_OP_free_histogram_snapshot;
+  return op==GLIMS_FACADE_OP_start||op==GLIMS_FACADE_OP_stop||op==GLIMS_FACADE_OP_free_string||op==GLIMS_FACADE_OP_engine_version||op==GLIMS_FACADE_OP_free_pixels||op==GLIMS_FACADE_OP_free_metadata_strings||op==GLIMS_FACADE_OP_metadata_languages_free||op==GLIMS_FACADE_OP_free_curves_snapshot||op==GLIMS_FACADE_OP_free_histogram_snapshot||op==GLIMS_FACADE_OP_brush_settings_features;
 }
-static gboolean cleanup_op(GlimsFacadeOperation op){return op==GLIMS_FACADE_OP_image_close||op==GLIMS_FACADE_OP_stroke_end||op==GLIMS_FACADE_OP_filter_abort||op==GLIMS_FACADE_OP_procedure_cancel;}
+static gboolean cleanup_op(GlimsFacadeOperation op){return op==GLIMS_FACADE_OP_image_close||op==GLIMS_FACADE_OP_stroke_end||op==GLIMS_FACADE_OP_filter_abort||op==GLIMS_FACADE_OP_procedure_cancel||op==GLIMS_FACADE_OP_image_ink_snapshot_end||op==GLIMS_FACADE_OP_image_lab_snapshot_end||op==GLIMS_FACADE_OP_stroke_cancel_lab||op==GLIMS_FACADE_OP_stroke_cancel_ink||op==GLIMS_FACADE_OP_stroke_cancel_lab_layer;}
 static void matrix(GlimsEngine*engine,GlimsFacadeTargetKind kind,int32_t id){
   for(unsigned i=0;i<GLIMS_FACADE_OPERATION_COUNT;i++){
     if(glims_facade_target_kind(i)!=kind)continue;
