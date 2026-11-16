@@ -69,14 +69,18 @@ extension RecorderFileCodec {
                 } else {
                     fileVersion = max(fileVersion, levelsVersion)
                 }
-            case .success(.applyCurves(let curves), _):
+            case .success(.applyCurves(let curves), let binding):
                 let count = curves.value.points.count + curves.red.points.count + curves.green.points.count
                     + curves.blue.points.count + curves.alpha.points.count
                 guard count <= RecorderFileLimits.points - pointCount else {
                     throw RecorderFileError.invalid("Invalid Curves point count.")
                 }
                 pointCount += count
-                fileVersion = max(fileVersion, curvesVersion)
+                if case .context = binding {
+                    fileVersion = max(fileVersion, maskCurvesVersion)
+                } else {
+                    fileVersion = max(fileVersion, curvesVersion)
+                }
             case .success(.applyColorBalance, _):
                 fileVersion = max(fileVersion, colorBalanceVersion)
             case .success(.applyHueSaturation, _):

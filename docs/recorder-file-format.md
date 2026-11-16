@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 23
+# Recorder file format, versions 1 to 24
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `23`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `24`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -19,12 +19,12 @@ The writer chooses the highest version required by a successful record:
 `completeLabStroke` 14, `labSelectionShape`/`labSelectCommand` 15,
 `completeInkStroke` 16, `applyLabLevels` 17, `completeLabLayerStroke` 18,
 `fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
-an Eraser stroke with an explicit background color 22, and
-Levels on a layer mask 23. A file declaring one of those versions must contain at least one
+an Eraser stroke with an explicit background color 22,
+Levels on a layer mask 23, and Curves on a layer mask 24. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...23 refuse the file.
+version 1. Integers outside 1...24 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -93,7 +93,7 @@ transforms, Levels, Curves, Color Balance, Hue/Saturation and
 Brightness/Contrast require a layer symbol (any layer-kind description);
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
-Select Alpha, color selection with `sampleMerged:false`, and mask Levels
+Select Alpha, color selection with `sampleMerged:false`, and mask Levels or Curves
 require context; other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
@@ -191,8 +191,9 @@ requires a successful Curves command and accepts all earlier command families.
 
 Apply records final settings behind queued preview writes. Cancel adds no
 row. An accepted commit that later fails settles a failure row while retaining
-its capture metadata for retry. Mask/channel targets and existing-effect edits
-produce explicit unsupported rows instead of inventing layer actions. Replay
+its capture metadata for retry. Channel targets and existing-effect edits
+produce explicit unsupported rows instead of inventing layer actions; mask
+Curves uses the version 24 context described below. Replay
 checks current membership, color mode, locks and editing role, then commits
 one new effect with one Undo step. This format preserves exact Curves values;
 it does not change the native XCF format's handling of identity flags.
@@ -561,3 +562,11 @@ selection and Quick Mask state; native mask handles are never stored.
 Version 23 requires at least one successful mask Levels command. Older
 versions reject this binding, and replay confirms the rebound mask and its
 role before applying the settings as one destructive Undo step.
+
+## Mask Curves (version 24)
+
+A Curves command can bind the same editing-mask context as mask Levels.
+Version 24 requires at least one successful mask Curves command and can also
+contain version 23 mask Levels commands. Older versions reject the Curves
+mask binding. Rebinding and replay confirm the mask owner and editing role;
+the complete Curves settings apply as one destructive Undo step.

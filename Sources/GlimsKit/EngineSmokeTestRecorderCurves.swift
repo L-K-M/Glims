@@ -17,6 +17,12 @@ extension EngineSmokeTest {
             try wait { doc.pendingWork == 0 && doc.recorder.pendingCount == 0 &&
                 !doc.recorder.isReplaying && !EngineActivity.shared.isBusy }
         }
+        func settleNativeEvents(_ doc: ImageDocument) throws {
+            var crossed = false
+            DispatchQueue.main.async { crossed = true }
+            try wait { crossed }
+            try drain(doc)
+        }
         func pixels(_ doc: ImageDocument) throws -> Data { try session.copyPixels(doc.image, merged: true).pixels }
         var bytes: [UInt8] = []
         for i in 0..<120 { bytes += [UInt8(i * 13 % 256), UInt8(i * 31 % 256), UInt8(i * 7 % 256), 255] }
@@ -167,5 +173,61 @@ extension EngineSmokeTest {
         if case .success(.applyCurves(let accepted))? = retry.recorder.records.last?.resolution {
             check(accepted == retrySettings && retry.recorder.records.count == 2, "Curves retry retains original capture metadata")
         } else { check(false, "successful Curves retry must preserve capture") }
+
+        let (maskDoc, maskLayer, _) = try fixture("Curves on mask")
+        _ = try session.addLayerMask(maskLayer, image: maskDoc.image, source: .white, edit: true)
+        try maskDoc.reload()
+        try maskDoc.startRecording(); filter = try begin(maskDoc)
+        maskDoc.setCurves(filter, patch: patches[1]) { _ in }; try drain(maskDoc)
+        let maskSettings = try session.curvesSettings(filter)
+        check(try finish(maskDoc, filter, commit: true), "live Curves on a mask remains usable")
+        try maskDoc.stopRecording(); try drain(maskDoc)
+        guard case .success(.applyCurves(let captured))? = maskDoc.recorder.records.first?.resolution,
+              case .context(let target)? = maskDoc.recorderBindingDescriptions[0],
+              case .mask(let maskSymbol) = target.target else {
+            return check(false, "an applied mask Curves adjustment records its mask role and settings")
+        }
+        check(captured == maskSettings, "an applied mask Curves adjustment records its mask role and settings")
+        let maskURL = work.appendingPathComponent("mask-curves.glims-recording")
+        var maskSaved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+        maskDoc.saveRecording(to: maskURL, checkpoint: try maskDoc.recorderSaveCheckpoint()) { maskSaved = $0 }
+        try drain(maskDoc); try require(maskSaved != nil, "Mask Curves save callback missing"); _ = try maskSaved!.get()
+        var maskLoaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
+        maskDoc.prepareRecordingFile(at: maskURL, checkpoint: try maskDoc.recorderInstallCheckpoint()) { maskLoaded = $0 }
+        try drain(maskDoc); try require(maskLoaded != nil, "Mask Curves load callback missing")
+        let maskPrepared = try maskLoaded!.get()
+        let maskJSON = try JSONSerialization.jsonObject(with: Data(contentsOf: maskURL)) as? [String: Any]
+        check(maskJSON?["version"] as? Int == 24, "saved mask Curves declares version 24")
+        let (maskDest, maskDestLayer, _) = try fixture("Mask Curves rebound")
+        try settleNativeEvents(maskDest)
+        var missingInstall: Result<Void, Error>?
+        maskDest.installRecording(maskPrepared, checkpoint: try maskDest.recorderInstallCheckpoint(),
+                                  choices: [maskSymbol: .layer(maskDestLayer)]) { missingInstall = $0 }
+        try drain(maskDest); try require(missingInstall != nil, "Maskless Curves install callback missing")
+        if case .failure(let error)? = missingInstall,
+           case .missingMask = error as? ImageDocument.RecorderInstallError {
+            check(true, "mask Curves refuses binding to a layer without a mask")
+        } else { check(false, "mask Curves refuses binding to a layer without a mask") }
+        _ = try session.addLayerMask(maskDestLayer, image: maskDest.image, source: .white, edit: true)
+        try maskDest.reload(); try settleNativeEvents(maskDest)
+        var maskInstalled: Result<Void, Error>?
+        maskDest.installRecording(maskPrepared, checkpoint: try maskDest.recorderInstallCheckpoint(),
+                                  choices: [maskSymbol: .layer(maskDestLayer)]) { maskInstalled = $0 }
+        try drain(maskDest); try require(maskInstalled != nil, "Mask Curves install callback missing"); try maskInstalled!.get()
+        let beforeMaskReplay = try pixels(maskDest), beforeMaskUndo = try session.undoInfo(maskDest.image)
+        try maskDest.startReplay(); try drain(maskDest)
+        check(try pixels(maskDest) == pixels(maskDoc) && pixels(maskDest) != beforeMaskReplay &&
+              session.undoInfo(maskDest.image).undoCount == beforeMaskUndo.undoCount + 1 &&
+              session.effects(on: maskDestLayer, image: maskDest.image).isEmpty,
+              "saved mask Curves replays on the rebound mask as one destructive Undo step")
+        maskDest.undo(); try drain(maskDest)
+        check(try pixels(maskDest) == beforeMaskReplay, "mask Curves Undo restores destination pixels")
+        try session.setLayerMask(maskDestLayer, image: maskDest.image, flags: .editing, values: [])
+        let stalePixels = try pixels(maskDest), staleHistory = try session.undoInfo(maskDest.image)
+        try maskDest.startReplay(); try drain(maskDest)
+        var maskRefused = false
+        if case .failed(index: 0, reason: _) = maskDest.replayStatus { maskRefused = true }
+        check(try maskRefused && pixels(maskDest) == stalePixels && session.undoInfo(maskDest.image) == staleHistory,
+              "fresh native mask-role changes refuse Curves replay without modifying pixels or history")
     }
 }

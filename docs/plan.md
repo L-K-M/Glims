@@ -4496,6 +4496,21 @@ projective-integration window checks pass on all four engines, the full Swift
 suite passes 1,828 tests, and the isolated signed bundle passes 2,268 native
 and 3,375 editor checks. Hosted review and merge remain open.
 
+### Recorded Curves on a layer mask (candidate)
+
+Curves can capture the complete native settings against an editing layer
+mask in recording format version 24. It uses the same mask-owner binding,
+fresh target checks and one-step Undo as mask Levels. A saved action can
+contain both mask Levels and Curves while older versions reject the new
+Curves binding.
+
+The real-engine save, explicit rebind, Undo and stale-target refusal pass on
+all four supported engines. After integration with mask Levels and opaque
+Eraser recording, the Curves (27 checks), Levels and projective-integration
+window checks pass on all four engines, the full Swift suite passes 1,829
+tests, and the isolated signed bundle passes 2,268 native and 3,375 editor
+checks. Hosted review and merge remain open.
+
 
 ### Transform composite pixel preview (2026-11-11 work in progress)
 
@@ -4575,9 +4590,10 @@ queued preview edits, retaining its begin-time layer if selection changes.
 Each channel stores kind, identity, points and all 256 actual samples,
 including inactive points and noncanonical Smooth tables. Format version 7
 uses owned named tags and shares the existing point/resource budgets; versions
-1 through 6 retain their existing meaning. Cancel records nothing, failed
-commits settle failure and retain retry metadata, and mask/channel targets or
-existing-effect edits remain explicit unsupported rows.
+1 through 6 retain their existing meaning. Cancel records nothing and failed
+commits settle failure and retain retry metadata. At this stage mask/channel
+targets and existing-effect edits produced explicit unsupported rows; the
+later mask Curves candidate above extends that coverage.
 
 Additive facade slot 177 installs an independent whole native Curves value.
 Validation precedes cloning, raw table/identity restoration happens only in

@@ -61,7 +61,7 @@ final class ImageDocument {
         enum Coverage {
             /// A new filter on an ordinary layer: semantic capture coverage.
             case layer(Int32)
-            /// A Levels preview bound to the settled mask at session start.
+            /// A supported adjustment bound to the settled mask at session start.
             case mask(RecorderTargetContext)
             /// An existing-effect edit or an unsupported drawable:
             /// recorded as an explicit unsupported row, never a layer adjustment.
@@ -6314,7 +6314,7 @@ final class ImageDocument {
         case .layer(let layer)? where !floatingState.isActive:
             coverage = .layer(layer)
         case .mask(let layer, let mask)?:
-            if operation == "gimp:levels", !floatingState.isActive,
+            if ["gimp:levels", "gimp:curves"].contains(operation), !floatingState.isActive,
                case .target(let target) = captureRecorderPaintTarget(),
                target.target == .mask(layer: layer, drawable: mask),
                target.layers == [layer], target.channels.isEmpty, !target.quickMask.enabled,
@@ -7459,8 +7459,8 @@ final class ImageDocument {
                     try step.command.apply(session: session, image: image, layer: layer)
                 } else if case .target(let target)? = context,
                           case .mask(_, let drawable) = target.target,
-                          case .applyLevels = step.command {
-                    try step.command.applyMaskLevels(session: session, image: image, drawable: drawable)
+                          step.command.isMaskAdjustment {
+                    try step.command.applyMaskAdjustment(session: session, image: image, drawable: drawable)
                 } else if case .labLayer(let root, let identity)? = context, let identity {
                     try step.command.apply(session: session, image: image,
                         labLayerTarget: .init(root: root, uuid: identity))
