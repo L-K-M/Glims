@@ -6498,3 +6498,11 @@ admitted filter Apply now reserves a row: unsupported operations keep the live
 edit and settle as a failure naming the filter, so replay refuses the
 incomplete recording. Plug-in commands and other unrecorded edits outside the
 filter preview path are unchanged.
+
+### Canvas Size anchor (candidate)
+
+Canvas Size offers Photoshop's 3 × 3 anchor grid as radio buttons with
+spoken position labels. The image keeps its place at the chosen anchor while
+the canvas grows or shrinks; Center remains the default and keeps the earlier
+integer offsets exactly. The offset is the existing native and Recorder
+`resizeCanvas` offset, so no engine or file-format change is needed.

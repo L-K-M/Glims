@@ -6044,6 +6044,15 @@ enum EngineSmokeTest {
         settle()
         check(document.info.width == 140 && pixel(session, image, x: 2, y: 2)?.prefix(3) == [0, 0, 255],
               "Canvas Size grows the canvas with the background color")
+        let corner = pixel(session, image, x: 0, y: 0)
+        controller.resizeCanvas(width: 160, height: 200, anchor: .bottomRight)
+        settle()
+        check(document.info.width == 160 && document.info.height == 200 && corner != nil &&
+                pixel(session, image, x: 20, y: 10) == corner,
+              "Canvas Size anchored at the bottom right keeps the image in that corner")
+        document.undo()
+        settle()
+        check(document.info.width == 140 && document.info.height == 190, "undo restores the anchored Canvas Size")
         controller.flipLayerHorizontally(nil)
         settle()
         check(document.undoInfo.nextUndo.isEmpty == false, "Layer ▸ Transform ▸ Flip Horizontal is an undo step (\(document.undoInfo.nextUndo))")
