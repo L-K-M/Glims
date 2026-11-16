@@ -196,7 +196,7 @@ What the tools do:
   Sponge requires RGB pixels; grayscale, indexed images, masks and channels
   cannot be painted with it. Brush color and gradient color dynamics are ignored;
   Sponge uses the brush mask. Save a preset for either Sponge tool to retain
-  its brush and strength. Recorder can capture mouse Sponge strokes on
+  its brush and strength. Recorder can capture mouse and tablet Sponge strokes on
   ordinary RGB layers, including opaque Background layers.
 
   Gradient drags out a gradient between the foreground and background
@@ -367,11 +367,12 @@ resampling method; newly applied Levels, Curves, Color Balance,
 Hue/Saturation and Brightness/Contrast adjustments with their complete settings;
 and complete Pencil, Eraser, Paintbrush and Sponge strokes on
 ordinary pixel layers. A stroke keeps the settings used when it was
-drawn. Replay checks that the required brush and its supported paint
-dynamics still match the recording; unsupported brushes or dynamics
+drawn, including accepted tablet rotation and tangential pressure. Replay
+checks that the required brush and its supported paint dynamics still match
+the recording; unsupported brushes or dynamics
 cannot be recorded. Sponge replay also checks the direction and whether the
-target layer has alpha. Older engines retain live Sponge painting but cannot
-record it. To Selection from the Quick Mask channel still
+target layer has alpha. Older engines retain live painting but may be unable
+to record Sponge or tablet strokes. To Selection from the Quick Mask channel still
 applies the live edit but records a failed row.
 
 In CMYK and Multichannel images, Recorder captures complete Brush and Pencil

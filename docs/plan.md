@@ -6378,7 +6378,22 @@ stroke and atomically captures the brush and supported paint configuration,
 as slot 171 does for V1 samples. It keeps slot 172's packet, timestamp and
 axis rules. An unsupported live capture can still paint without a
 fingerprint; guarded replay refuses before the first dab unless the facts
-match. The Recorder does not use this slot yet, so tablet-axis recording is
-not user-facing. Native capture fixtures (34 checks) and the V2 coordinate
+match. The Recorder uses it for ordinary tablet stroke recording, below.
+Native capture fixtures (34 checks) and the V2 coordinate
 fixture (152 checks) pass on all four engine sets. Physical tablets are not
 qualified.
+
+### Ordinary tablet stroke recording (candidate)
+
+The appended capture entry point can associate a V2 tablet stroke with the
+actual brush and guarded paint configuration before the first dab. Ordinary
+pixel-layer recordings preserve rotation, tangential pressure, timestamp wrap
+and accepted batch boundaries in recording version 21. Older engines keep
+live painting but refuse incomplete tablet recordings; guarded replay cannot
+fall back to V1 samples. Existing V1, Lab and ink recording formats are
+unchanged. Native fixtures compare capture and replay against independent
+painted pixels, Undo/Redo and explicit Core coordinate delivery on all four
+engine sets. The application transport tests check old table prefixes,
+resource identity, failure cleanup and V2 replay batches. Synthetic document
+qualification and physical tablet checks are separate; do not treat this
+candidate as merged or universally hardware-qualified.

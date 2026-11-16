@@ -528,3 +528,14 @@ brush facts, sample trace and layer binding. `antiErase` must be false.
 Versions 1–19 reject these new tool values, and a version 20 file must contain
 at least one successful Sponge stroke. Ink and layered Lab stroke commands
 continue to accept only their own supported brush tools.
+
+
+## Ordinary tablet gestures (version 21)
+
+Version 21 adds `completeTabletStroke`, with an explicit pixel-layer binding,
+the complete ordinary stroke settings and brush facts, and V2 `first` and
+`batches` samples. Optional rotation and tangential pressure preserve absence
+separately from numeric zero, and timestamps and accepted batch boundaries are
+retained. It uses the existing V2 sample, gesture and aggregate file limits.
+Versions 1–20 reject this tag; version 21 requires a successful tablet stroke.
+Replay requires the V2 capture capability and a matching brush fingerprint.

@@ -347,14 +347,37 @@ extension EngineSmokeTest {
         expect(try pixels(source.image) == afterDrag && afterDrag != before
             && session.undoInfo(source.image).undoCount == undoBefore.undoCount + 1,
                "invalid release adds no samples and preserves the accepted stroke's pixels and single Undo")
-        let unsupported: Bool
-        if a.recorder.records.count == 1, case .failure(let reason) = a.recorder.records[0].resolution {
-            unsupported = reason.contains("rotation") && reason.contains("tangential pressure")
-        } else { unsupported = false }
-        expect(unsupported && a.recorder.pendingCount == 0,
-               "Recorder settles one explicit unsupported row for live V2 optional axes")
-        a.undo(); try drain(a)
-        expect(try pixels(source.image) == before && a.clearRecording(), "accepted V2 Undo restores pixels and the settled unsupported recording can clear")
+        if session.supportsTabletStrokeCapture {
+            guard a.recorder.records.count == 1,
+                  case .success(.completeTabletStroke(let recorded)) = a.recorder.records[0].resolution,
+                  recorded.trace.batches.count == 1, recorded.trace.batches[0].count == 1 else {
+                throw NSError(domain: "TabletV2Fixture", code: 8,
+                              userInfo: [NSLocalizedDescriptionKey: "The accepted V2 gesture did not settle as a complete tablet recording"])
+            }
+            let first = recorded.trace.first, drag = recorded.trace.batches[0][0]
+            expect(a.recorder.pendingCount == 0 && first.rotationTurns == lifecycleRows[0].rotation &&
+                   first.tangentialPressure == lifecycleRows[0].wheel * 2 - 1 &&
+                   drag.rotationTurns == lifecycleRows[3].rotation &&
+                   drag.tangentialPressure == lifecycleRows[3].wheel * 2 - 1,
+                   "Recorder settles one V2 row with the exact delivered optional axes")
+            a.undo(); try drain(a)
+            expect(try pixels(source.image) == before, "Undo restores pixels before the recorded V2 gesture")
+            try a.startReplay()
+            try require(wait { a.replayStatus == .finished(total: 1) && a.pendingWork == 0 &&
+                               !EngineActivity.shared.isBusy }, "V2 canvas replay did not finish")
+            expect(try pixels(source.image) == afterDrag, "recorded canvas V2 gesture replays the exact result")
+            a.undo(); try drain(a)
+            expect(try pixels(source.image) == before && a.clearRecording(), "replayed V2 Undo restores pixels and recording clears")
+        } else {
+            let unsupported: Bool
+            if a.recorder.records.count == 1, case .failure(let reason) = a.recorder.records[0].resolution {
+                unsupported = reason.contains("tablet") && reason.contains("cannot be recorded")
+            } else { unsupported = false }
+            expect(unsupported && a.recorder.pendingCount == 0,
+                   "older engine settles one explicit unsupported V2 recording row")
+            a.undo(); try drain(a)
+            expect(try pixels(source.image) == before && a.clearRecording(), "older-engine V2 Undo restores pixels and recording clears")
+        }
 
         state.select(.pencil); try a.startRecording()
         let mouseEvents = try (0..<3).map { try point($0, device: nil) }

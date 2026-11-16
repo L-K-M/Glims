@@ -216,6 +216,15 @@ final class ImageDocument {
                         trace: result.get(), facts: facts).validated())
                 }
             }
+            if tabletTrace != nil {
+                return Result {
+                    guard let settings, let facts, let result = tabletTrace?.finish() else {
+                        throw RecorderReplayError(message: "This tablet stroke could not be recorded.")
+                    }
+                    return .completeTabletStroke(try RecorderTabletStrokeCommand(settings: settings,
+                        trace: result.get(), facts: facts).validated())
+                }
+            }
             guard let settings, let facts, let result = trace?.finish() else {
                 return .failure(RecorderReplayError(message: "This stroke's brush, paint settings or target cannot be recorded."))
             }
@@ -1366,15 +1375,25 @@ final class ImageDocument {
                 let first = input.isV2 ? nil : try? RecorderStrokeTrace.Point(input.point)
                 self.strokeRecordingDraft = .init(capture: capture, confirmed: confirmed,
                     settings: .init(brush), trace: first.map(RecorderStrokeAccumulator.init(first:)))
+                if case .tablet(let sample) = input, let firstTablet = try? RecorderTabletStrokeTrace.Point(native: sample) {
+                    self.strokeRecordingDraft?.tabletTrace = RecorderTabletStrokeAccumulator(first: firstTablet)
+                }
             }
             do {
                 try self.requirePaintTarget()
                 try self.requireRasterizedPaintTarget(target)
                 self.currentStrokeUsesV2 = input.isV2
                 if case .tablet(let sample) = input {
-                    self.currentStroke = try session.beginTabletStroke(image: image, drawable: drawable, brush: brush, first: sample)
-                    self.strokeRecordingDraft?.refuse(RecorderReplayError(message:
-                        "Recorder does not yet save tablet rotation or tangential pressure."))
+                    if let draft = self.strokeRecordingDraft, case .layer = draft.confirmed.binding,
+                       draft.settings != nil, draft.tabletTrace != nil, session.supportsTabletStrokeCapture {
+                        let result = try session.beginTabletStrokeCapturing(image: image, drawable: drawable, brush: brush, first: sample)
+                        self.currentStroke = result.stroke
+                        self.strokeRecordingDraft?.facts = result.facts
+                    } else {
+                        self.currentStroke = try session.beginTabletStroke(image: image, drawable: drawable, brush: brush, first: sample)
+                        self.strokeRecordingDraft?.refuse(RecorderReplayError(message:
+                            "This tablet stroke's brush, target or image engine cannot be recorded."))
+                    }
                 } else if let draft = self.strokeRecordingDraft, case .layer = draft.confirmed.binding,
                    draft.settings != nil, draft.trace != nil {
                     let result = try session.beginStrokeCapturing(image: image, drawable: drawable, brush: brush, first: input.point)
@@ -1726,7 +1745,7 @@ final class ImageDocument {
                 self.report(error)
                 return
             }
-            if self.currentCapturedStrokeKind != nil, self.strokeRecordingDraft?.facts != nil {
+            if self.strokeRecordingDraft?.tabletTrace != nil, self.strokeRecordingDraft?.facts != nil {
                 do {
                     let samples = try points.map { try RecorderTabletStrokeTrace.Point(native: $0) }
                     self.strokeRecordingDraft?.tabletTrace?.appendAccepted(samples)
@@ -7372,7 +7391,7 @@ final class ImageDocument {
                 }
                 if let context { try Self.requireRecorderContext(context, session: session, image: image) }
                 if case .layer(let layer)? = context {
-                    if case .completeStroke = step.command {
+                    if step.command.isOrdinaryRecordedStroke {
                         try self.requireRasterizedPaintTarget(.layer(layer))
                         let selectedLayers = try session.selectedLayers(image)
                         let editingMask = try selectedLayers.contains {
@@ -7469,7 +7488,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeLabLayerStroke, .fillLabLayer: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer: return true
         default: return false
         }
     }

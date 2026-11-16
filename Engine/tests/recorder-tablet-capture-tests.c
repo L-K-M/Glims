@@ -49,8 +49,10 @@ finish_tablet (GlimsEngine *engine, GlimsStrokeID *stroke)
 }
 
 static void
-capture_case (GlimsEngine *engine, const BrushIdentity *identity)
+capture_case (GlimsEngine *engine, const BrushIdentity *identity, guint32 tool)
 {
+  GlimsBrushSettings brush = pencil; brush.tool = tool;
+  printf ("OBS V2 capture tool=%u\n", tool);
   Scene reference = {0}, captured = {0}, replay = {0};
   Snapshot before, expected, actual;
   GlimsStrokeID stroke = 0; char *error = NULL;
@@ -62,11 +64,11 @@ capture_case (GlimsEngine *engine, const BrushIdentity *identity)
         read_image (engine, &reference, &before) && read_image (engine, &captured, &actual) &&
         same_image (&before, &actual) && read_image (engine, &replay, &actual) && same_image (&before, &actual),
         "independent V2 images start with identical raw and merged pixels and history");
-  NEED (api->stroke_begin_v2 (engine, reference.image, reference.layer, 0, &pencil, &first, &stroke, &error) == GLIMS_STATUS_OK &&
+  NEED (api->stroke_begin_v2 (engine, reference.image, reference.layer, 0, &brush, &first, &stroke, &error) == GLIMS_STATUS_OK &&
         !error && stroke && finish_tablet (engine, &stroke) && read_image (engine, &reference, &expected) &&
         changed_once (&before, &expected), "ordinary V2 reference paints with one Undo across time wrap");
   NEED (api->stroke_begin_v2_with_capture_facts (engine, captured.image, captured.layer, identity->id,
-        &pencil, &first, NULL, &stroke, &facts.facts, &error) == GLIMS_STATUS_OK && !error && stroke &&
+        &brush, &first, NULL, &stroke, &facts.facts, &error) == GLIMS_STATUS_OK && !error && stroke &&
         finish_tablet (engine, &stroke), "V2 live capture completes with optional axes");
   NEED (matches_identity (&facts.facts, identity) && tail_intact (&facts, sizeof facts),
         "V2 capture returns owned brush identity and fingerprint without changing its future tail");
@@ -78,7 +80,7 @@ capture_case (GlimsEngine *engine, const BrushIdentity *identity)
     FactsWithTail denied = fact_box (sizeof denied, TRUE);
     GlimsStrokeID rejected = -7; char *rejected_error = sentinel;
     GlimsStatus status = api->stroke_begin_v2_with_capture_facts (engine, replay.image, replay.layer, identity->id,
-        &pencil, &first, wrong, &rejected, &denied.facts, &rejected_error);
+        &brush, &first, wrong, &rejected, &denied.facts, &rejected_error);
     CHECK (status == GLIMS_STATUS_FAILED && rejected == 0 && rejected_error != sentinel &&
            facts_empty (&denied.facts) && tail_intact (&denied, sizeof denied) &&
            read_image (engine, &replay, &actual) && same_image (&before, &actual),
@@ -87,7 +89,7 @@ capture_case (GlimsEngine *engine, const BrushIdentity *identity)
     free_error (rejected_error); free_facts (&denied.facts);
   }
   NEED (api->stroke_begin_v2_with_capture_facts (engine, replay.image, replay.layer, identity->id,
-        &pencil, &first, facts.facts.fingerprint, &stroke, &again.facts, &error) == GLIMS_STATUS_OK && !error && stroke,
+        &brush, &first, facts.facts.fingerprint, &stroke, &again.facts, &error) == GLIMS_STATUS_OK && !error && stroke,
         "guarded V2 replay begins with the captured brush");
   CHECK (api->stroke_continue (engine, stroke, trace + 1, 1) == GLIMS_STATUS_INVALID_ARGUMENT,
          "V1 continuation is rejected on a V2 captured stroke");
@@ -208,7 +210,12 @@ int main (int argc, char **argv)
   }
   gboolean discovered = glims_engine_call (engine, discover_brushes, brushes) == GLIMS_STATUS_OK;
   CHECK (discovered, "actual brush identities are available");
-  if (discovered) { capture_case (engine, &brushes[0]); invalid_cases (engine, &brushes[0]); }
+  if (discovered) {
+    const guint32 tools[] = { GLIMS_PAINT_PENCIL, GLIMS_PAINT_ERASER, GLIMS_PAINT_PAINTBRUSH,
+                              GLIMS_PAINT_SPONGE_DESATURATE, GLIMS_PAINT_SPONGE_SATURATE };
+    for (gsize i = 0; i < G_N_ELEMENTS (tools); i++) capture_case (engine, &brushes[0], tools[i]);
+    invalid_cases (engine, &brushes[0]);
+  }
   v2_output_cases (engine, FALSE);
   api->stop (engine);
   v2_output_cases (NULL, TRUE);

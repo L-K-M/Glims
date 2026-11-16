@@ -92,6 +92,14 @@ enum SemanticImageCommand {
     case completeLabLayerStroke(RecorderLabLayerStrokeCommand)
     case fillLabLayer(RecorderLabLayerFillValue)
     case completeStroke(RecorderStrokeCommand)
+    case completeTabletStroke(RecorderTabletStrokeCommand)
+
+    var isOrdinaryRecordedStroke: Bool {
+        switch self {
+        case .completeStroke, .completeTabletStroke: return true
+        default: return false
+        }
+    }
 
     var isLayerAdjustment: Bool {
         switch self {
@@ -103,7 +111,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .resizeCanvas, .crop, .completeStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -161,6 +169,7 @@ enum SemanticImageCommand {
         case .completeLabLayerStroke(let stroke): return stroke.title
         case .fillLabLayer: return "Lab Layer Fill"
         case .completeStroke(let stroke): return stroke.title
+        case .completeTabletStroke(let stroke): return stroke.title
         }
     }
 
@@ -183,7 +192,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeLabLayerStroke, .fillLabLayer:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
@@ -261,6 +270,9 @@ enum SemanticImageCommand {
                 throw error
             }
         case .completeStroke(let stroke):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try stroke.apply(session: session, image: image, layer: layer)
+        case .completeTabletStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)
         default:

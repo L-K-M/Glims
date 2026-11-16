@@ -191,6 +191,7 @@ enum RecorderFileSemanticBridge {
             guard settings.isValid else { throw RecorderFileError.invalid("A recorded ink Curves adjustment has invalid settings.") }
             return .applyInkCurves(settings)
         case .completeStroke(let value): return .completeStroke(value)
+        case .completeTabletStroke(let value): return .completeTabletStroke(try value.validated())
         }
     }
 }

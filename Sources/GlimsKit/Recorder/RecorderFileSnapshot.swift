@@ -33,6 +33,8 @@ extension RecorderFileCodec {
                     pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 case .completeInkStroke(let stroke):
                     pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
+                case .completeTabletStroke(let stroke):
+                    pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 case .completeStroke(let stroke):
                     let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                     pointCount += count
@@ -200,6 +202,7 @@ extension RecorderFileCommand {
             self = .applyInkCurves(.init(samples: settings.samples))
         case .completeInkStroke(let value): self = .completeInkStroke(try value.validated())
         case .completeStroke(let value): self = .completeStroke(value)
+        case .completeTabletStroke(let value): self = .completeTabletStroke(try value.validated())
         case .completeLabStroke(let value): self = .completeLabStroke(try value.validated())
         case .completeLabLayerStroke(let value): self = .completeLabLayerStroke(try value.validated())
         case .fillLabLayer(let value): self = .fillLabLayer(try value.validated())

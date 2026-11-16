@@ -9,11 +9,12 @@ refuses guarded replay before the first dab. Ink channels, masks, groups and
 other unsupported stroke configurations continue to refuse capture; an ordinary
 live stroke can still complete when no Recorder facts are available.
 
-The capture uses the existing V1 stroke samples and undo behavior. Replay uses
+Mouse capture uses the existing V1 stroke samples; tablet capture uses V2
+samples, including optional rotation and tangential pressure. Replay uses
 the destination image's current selection and pixels, just like other ordinary
 recorded strokes. It does not promise identical output on different engines or
-with a different starting image. Tablet rotation and tangential pressure remain
-outside this ordinary stroke recording path.
+with a different starting image. Older engines can still paint live tablet
+strokes but report an unsupported recording rather than losing those axes.
 
 The native fixtures compare independently seeded ordinary strokes against
 capture and guarded replay, including raw and merged pixels, alpha-bearing
