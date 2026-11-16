@@ -4491,8 +4491,10 @@ to an existing effect remain outside this slice.
 
 The saved replay, Undo and stale-role refusal pass real-engine tests on all
 four supported engines. The preview-retarget refusal also passes on each
-engine. The full Swift suite passes 1,819 tests. The isolated signed bundle
-passes 2,268 native and 3,359 editor checks; integration and merge remain open.
+engine. After integration with opaque Eraser recording, the Levels, Curves and
+projective-integration window checks pass on all four engines, the full Swift
+suite passes 1,828 tests, and the isolated signed bundle passes 2,268 native
+and 3,375 editor checks. Hosted review and merge remain open.
 
 
 ### Transform composite pixel preview (2026-11-11 work in progress)
