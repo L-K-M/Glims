@@ -304,6 +304,8 @@ enum RecorderFileCommand: Equatable {
     case channelToSelection(Operation)
     case transformImage(Transform)
     case scale(width: Int, height: Int)
+    /// Image Size with an explicitly chosen resampling method.
+    case scaleWithInterpolation(width: Int, height: Int, interpolation: LayerInterpolation)
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
     case crop(Rect)
     case layerProperties(LayerProperties)
@@ -363,7 +365,7 @@ enum RecorderFileCommand: Equatable {
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
         }
     }
 }
@@ -439,5 +441,28 @@ enum RecorderFileLimits {
             count += batch.count
         }
         return count
+    }
+}
+
+extension RecorderFileCommand.LayerInterpolation {
+    /// The owned file name of a facade interpolation.
+    init(_ value: EngineSession.Interpolation) {
+        switch value {
+        case .none: self = .none
+        case .linear: self = .linear
+        case .cubic: self = .cubic
+        case .noHalo: self = .noHalo
+        case .loHalo: self = .loHalo
+        }
+    }
+
+    var engine: EngineSession.Interpolation {
+        switch self {
+        case .none: return .none
+        case .linear: return .linear
+        case .cubic: return .cubic
+        case .noHalo: return .noHalo
+        case .loHalo: return .loHalo
+        }
     }
 }

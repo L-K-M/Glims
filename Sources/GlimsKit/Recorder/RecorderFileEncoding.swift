@@ -91,6 +91,8 @@ extension RecorderFileCodec {
                 } else {
                     fileVersion = max(fileVersion, brightnessContrastVersion)
                 }
+            case .success(.scaleWithInterpolation, _):
+                fileVersion = max(fileVersion, scaleInterpolationVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -329,6 +331,9 @@ extension RecorderFileCodec {
             return .object(["tag": .string("channelToSelection"), "operation": .string(operation.rawValue)])
         case .transformImage(let transform): return .object(["tag": .string("transformImage"), "transform": .string(transform.rawValue)])
         case .scale(let width, let height): return .object(["tag": .string("scale"), "width": j(width), "height": j(height)])
+        case .scaleWithInterpolation(let width, let height, let interpolation):
+            return .object(["tag": .string("scaleWithInterpolation"), "width": j(width), "height": j(height),
+                            "interpolation": .string(interpolation.rawValue)])
         case .resizeCanvas(let width, let height, let offset, let color):
             return .object(["tag": .string("resizeCanvas"), "width": j(width), "height": j(height), "offset": try pointJSON(offset), "fill": try colorJSON(color)])
         case .crop(let rect): return .object(["tag": .string("crop"), "rect": try rectJSON(rect)])
