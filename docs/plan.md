@@ -4491,8 +4491,10 @@ to an existing effect remain outside this slice.
 
 The saved replay, Undo and stale-role refusal pass real-engine tests on all
 four supported engines. The preview-retarget refusal also passes on each
-engine. The full Swift suite passes 1,819 tests. The isolated signed bundle
-passes 2,268 native and 3,359 editor checks; integration and merge remain open.
+engine. After integration with opaque Eraser recording, the Levels, Curves and
+projective-integration window checks pass on all four engines, the full Swift
+suite passes 1,828 tests, and the isolated signed bundle passes 2,268 native
+and 3,375 editor checks. Hosted review and merge remain open.
 
 ### Recorded Curves on a layer mask (candidate)
 
@@ -6233,6 +6235,15 @@ claim. Encoding choices, color semantics, overprint updates and color preview
 remain required before exposing edits. Optimized and sanitizer tests pass 551
 checks each. See [duotone-options.md](duotone-options.md).
 
+### Duotone alternate-color table (private candidate)
+
+A bounded parser reads the documented version-1 PSD resource 1066 with up to
+four alternate ink colors and 256 encoded Lab samples. It declines other
+layouts without altering output. The Photoshop CC 2018 fixture contains a
+matching resource; optimized and sanitizer tests pass 814 checks each. The
+resource is now retained on import (see the follow-up below), but is not used
+for preview; its validity after changing inks or curves still needs a defined policy. See
+[duotone-preview-table.md](duotone-preview-table.md).
 ### Half-scale sRGB fallback sampling (candidate)
 
 The legacy sRGB fallback uses the sampler's validated projection footprint at
@@ -6282,6 +6293,127 @@ oracle across 256-pixel boundaries, plus source preservation and cancellation.
 Four-engine, real-window, bundle and review qualification remain in progress;
 it does not claim native layered Lab export or complete Photoshop parity.
 
+### Preserving alternate Duotone colors (candidate)
+
+The PSD loader carries image resource 1066 as transient metadata. For imported
+Duotone grayscale images, Glims promotes either supported resource signature
+to persistent metadata alongside the existing opaque color-mode block. The
+bytes and other flags are retained; empty or oversized transient data refuses.
+A real Photoshop fixture loses the alternate-color bytes on the baseline, and
+retains them across XCF save, reopen and resave with this change. Its source,
+grayscale pixels, clean state and Undo history remain unchanged.
+
+All four engines pass conformance plus 17 public and 26 direct metadata checks,
+including both signatures, exact flags and bytes after reopening XCF. Focused
+real-window Save/Reopen checks pass on all four engines, as do the full editor
+suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development engine reports
+upstream cache-file cleanup warnings despite passing. A focused source review
+found no concrete defect and did not execute tests or inspect upstream GIMP
+ownership internals. Hosted CI remains in progress. This retains data for a
+future color preview; it does not display or recalculate it. The standalone
+pinned bundle passes 2,268 engine, 17 preservation, 20 export, 13 composite
+import and 3,355 editor checks with development trees inaccessible.
+
+### Retaining alternate Duotone colors on PSD export (candidate)
+
+Duotone PSD export now carries a retained resource 1066 body and its 8BIM or
+MeSa signature into the flat output. It refuses conflicting, empty or
+oversized retained resources rather than silently discarding them. The source
+image and Undo history remain unchanged. Resources absent from a source remain
+absent, and other image resources are still not exported.
+
+The previous adapter reproduced loss of the Photoshop fixture's alternate
+colors; all four updated adapters preserve the exact resource across export
+and XCF reopen/export, and still export sources without it. Each passes nine
+direct admission checks for conflicting, empty and oversized resources and
+MeSa serialization. Codec tests pass 25 checks each in optimized and sanitizer
+builds, covering both signatures, odd/even padding, streaming and failure
+paths. Real-window export and Repeat Export pass on all four engines, as do
+the full editor suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development
+engine emits upstream cache cleanup warnings; 3.0 also emitted LibGimp EOF
+warnings in the focused window test. The Swift suite passes 1,799 tests.
+The standalone pinned bundle passes 2,268 engine, 17 preservation, 24 export,
+13 composite-import and 3,355 editor checks with development trees inaccessible.
+Hosted qualification remains in progress. Retaining this data does not enable
+a color preview or establish Photoshop printing fidelity.
+
+### Photoshop composite file errors (candidate)
+
+Opening a Photoshop composite now reports the operating system's reason when
+the file cannot be opened, inspected or read. Invalid signatures and nonregular
+files still receive the format refusal; named pipes remain nonblocking. A
+missing-file regression reproduced the former misleading format message, and
+the FIFO check has a watchdog. All four engines pass the native and focused
+window regressions, plus full editor suites of 3,355 / 3,329 / 3,355 / 3,355
+checks. The Swift suite passes 1,799 tests. The standalone pinned bundle passes
+2,268 engine, 17 preservation, 24 Duotone export, 14 composite-import and
+3,355 editor checks with development trees inaccessible. The development
+engine reports upstream cache cleanup warnings. Hosted qualification remains
+in progress.
+
+### Canvas accessibility identity (candidate)
+
+Canvas accessibility labels include the document name, refresh after a native
+save changes it, and post an accessibility notification only when the label
+changes. An unnamed image has a localizable fallback label.
+Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Info palette (candidate)
+
+Window ▸ Info shows image-pixel coordinates and the committed composite's
+straight sRGB and alpha under the pointer. Sampling is asynchronous and
+bounded to one in-flight read, with the latest position retained; stale
+results are discarded on movement, document change, hide, or image change.
+The readout follows drags and refreshes a stationary pointer after scrolling
+or an image change; a sample delayed by exclusive engine work resumes when it
+becomes available. The palette does not change the foreground color or image
+history. A focused real-window test covers event dispatch, drag, scroll, zoom,
+rotation, alpha, document changes and deferred reads. Whole-editor integration,
+accessibility and review remain in qualification. Native CMYK/Lab readouts
+and sampling of temporary previews are not yet provided.
+
+### Photoshop import Revert admission (candidate)
+
+Reverting a composite or ink-preserving CMYK import reserves its source until
+the replacement is adopted or the operation fails. A second matching import
+or Revert receives a busy error; closing windows are excluded from duplicate
+lookup so an import after Revert finds the replacement. Focused real-window
+checks cover both routes on four engine versions, including failed-Revert retry
+and source preservation. Full editor, bundle and review checks remain open.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.
+
+The Remove Step control explains why it is disabled: it reports pending
+recording, replay or image work first, then asks for a current selection.
+Its normal action help returns when the selected step can be removed.
+
+### Reopen after Revert (candidate)
+
+An ordinary Open no longer brings a discarded window back while its document
+is closing after Revert. The existing replacement is selected instead. A
+native-window regression checks the close-drain interval and the source image
+cleanup. The same rule also avoids selecting other closing ordinary documents.
+
+### Guarded capture for V2 tablet strokes (candidate)
+
+Facade slot 232, `stroke_begin_v2_with_capture_facts`, begins a V2-sample
+stroke and atomically captures the brush and supported paint configuration,
+as slot 171 does for V1 samples. It keeps slot 172's packet, timestamp and
+axis rules. An unsupported live capture can still paint without a
+fingerprint; guarded replay refuses before the first dab unless the facts
+match. The Recorder uses it for ordinary tablet stroke recording, below.
+Native capture fixtures (34 checks) and the V2 coordinate
+fixture (152 checks) pass on all four engine sets. Physical tablets are not
+qualified.
+
 ### Ordinary tablet stroke recording (candidate)
 
 The appended capture entry point can associate a V2 tablet stroke with the
@@ -6303,8 +6435,8 @@ candidate as merged or universally hardware-qualified.
 Ordinary RGB Pencil and Paintbrush capture now includes opaque Background
 layers. A new fingerprint domain distinguishes opaque from alpha-bearing
 targets, so guarded replay cannot cross that boundary; existing alpha-bearing
-and ink fingerprints are unchanged. The live opaque Eraser remains deliberately
-uncaptured because its background color is not in the recording.
+and ink fingerprints are unchanged. Opaque Eraser capture needs the background
+color and is described under Opaque Eraser recording, below.
 The native candidate tests mouse and V2 tablet capture against independently
 painted pixels, guarded cross-alpha refusal and Undo/Redo. Full app, older
 engine and release qualification remain separate.
@@ -6315,8 +6447,8 @@ The Eraser snapshots the chosen background at the start of a gesture. On a
 layer without alpha, native paint uses that color even if the shared color
 changes before the gesture ends. Layers with alpha continue to erase normally.
 Adapters without the optional color capability refuse the requested Eraser
-gesture explicitly. Opaque Eraser recording remains unsupported because the
-recording format does not yet preserve the color. Four-engine native checks,
+gesture explicitly. Opaque Eraser recording, below, adds that color
+to the recording format. Four-engine native checks,
 legacy-prefix memory protection and targeted canvas checks cover this candidate;
 full application and release qualification remain separate.
 
@@ -6331,23 +6463,3 @@ recording facts. Recording version 22 stores the color for mouse and tablet
 Eraser strokes; earlier recording
 versions continue to decode. Full editor, bundle and hosted qualification
 remain pending.
-
-### Photoshop Bitmap PSD foundation (earlier)
-
-The earlier foundation produced the following result before the
-candidate export integration described above:
-
-A private bounded serializer can write opaque binary black-and-white pixels
-as a flat, one-bit Photoshop Bitmap PSD. Its literal bytes, odd-width rows,
-chunking and failure paths pass optimized and sanitized tests; macOS ImageIO
-independently decoded a small fixture. It now has atomic file publication, but is not wired to an engine operation or
-user interface yet. Color conversion, alpha, metadata,
-non-binary input and preserved editable document mode remain separate work.
-See [bitmap-psd.md](bitmap-psd.md).
-
-### Canvas accessibility identity (candidate)
-
-Canvas accessibility labels include the document name, refresh after a native
-save changes it, and post an accessibility notification only when the label
-changes. An unnamed image has a localizable fallback label.
-Real-window, save, VoiceOver and full keyboard-access qualification remain open.

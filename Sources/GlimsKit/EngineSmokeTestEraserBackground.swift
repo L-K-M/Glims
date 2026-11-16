@@ -21,15 +21,21 @@ extension EngineSmokeTest {
             state.update(.eraser) { $0 = previousEraser }
             state.foreground = previousForeground; state.background = previousBackground; state.select(previousTool)
         }
-        let image = try session.newImage(width: 40, height: 24)
         let reference = try session.newImage(width: 40, height: 24)
         defer { try? session.closeImage(reference) }
+        let image = try session.newImage(width: 40, height: 24)
         let fill = NSColor(srgbRed: 0.65, green: 0.4, blue: 0.4, alpha: 1)
-        try session.fill(image: image, at: .zero, mode: .selection, color: fill)
-        try session.fill(image: reference, at: .zero, mode: .selection, color: fill)
-        let referenceLayer = try session.layers(reference)[0].id
-        let before = try session.copyPixels(image, merged: true).pixels
-        let document = try ImageDocument(session: session, image: image, name: "Eraser background")
+        let referenceLayer: Int32, before: Data, document: ImageDocument
+        do {
+            try session.fill(image: image, at: .zero, mode: .selection, color: fill)
+            try session.fill(image: reference, at: .zero, mode: .selection, color: fill)
+            referenceLayer = try session.layers(reference)[0].id
+            before = try session.copyPixels(image, merged: true).pixels
+            document = try ImageDocument(session: session, image: image, name: "Eraser background")
+        } catch {
+            try? session.closeImage(image)
+            throw error
+        }
         documents.items.append(document)
         let owner = DocumentWindowController(document: document)
         owner.showWindow(nil); owner.window?.makeKeyAndOrderFront(nil); owner.zoom(to: 600)

@@ -14,6 +14,10 @@ typedef struct {
   uint32_t width, height, depth;
   const uint8_t *metadata;
   size_t metadata_size;
+  /* Optional opaque resource 1066 body. Signature is 8BIM or MeSa. */
+  const uint8_t *alternate;
+  size_t alternate_size;
+  bool alternate_mesa;
 } GlimsDuotonePsdSpec;
 typedef enum {
   GLIMS_DUOTONE_PSD_OK,
@@ -31,8 +35,9 @@ typedef bool (*GlimsDuotonePsdWrite) (void *context, const uint8_t *bytes, size_
 /* Clears *size on failure. PSD v1 dimensions are <=30000 and complete output
  * is kept below 2 GiB. Metadata is opaque, nonempty and at most 16 MiB. */
 GlimsDuotonePsdStatus glims_duotone_psd_size (const GlimsDuotonePsdSpec *spec, uint64_t *size);
-/* Writes one grayscale channel, Duotone mode, no layers/resources, raw image
- * data and the exact uninterpreted metadata block. The spec and metadata must
+/* Writes one grayscale channel, Duotone mode, no layers, raw image data and
+ * exact uninterpreted metadata and optional alternate-color resource bodies.
+ * The spec and its referenced data must
  * remain immutable until return. A partial stream must never be published. */
 GlimsDuotonePsdStatus glims_duotone_psd_write (const GlimsDuotonePsdSpec *spec,
                                                GlimsDuotonePsdRead read, void *read_context,

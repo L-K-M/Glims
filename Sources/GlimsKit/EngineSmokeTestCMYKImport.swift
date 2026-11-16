@@ -17,6 +17,7 @@ private enum CMYKImportSmokeProxy {
     private static var busyRemaining = 0
     private static var failAdoption = false
     private static var observer: (@MainActor (Int) -> Void)?
+    private static var importGate: DispatchSemaphore?
 
     private static func locked<T>(_ body: () -> T) -> T {
         lock.lock(); defer { lock.unlock() }; return body()
@@ -34,7 +35,10 @@ private enum CMYKImportSmokeProxy {
             let owned = UnsafeMutablePointer<GlimsEngineAPI>.allocate(capacity: 1)
             owned.initialize(to: api)
             owned.pointee.image_import_native_cmyk_psd = { engine, path, output, error in
-                let state = CMYKImportSmokeProxy.locked { (CMYKImportSmokeProxy.original!, CMYKImportSmokeProxy.cancelImport) }
+                let state = CMYKImportSmokeProxy.locked {
+                    (CMYKImportSmokeProxy.original!, CMYKImportSmokeProxy.cancelImport, CMYKImportSmokeProxy.importGate)
+                }
+                _ = state.2?.wait(timeout: .now() + 20)
                 let status: GlimsStatus
                 if state.1 { output?.pointee = 0; error?.pointee = nil; status = GLIMS_STATUS_CANCELLED }
                 else { status = state.0.image_import_native_cmyk_psd!(engine, path, output, error) }
@@ -92,6 +96,7 @@ private enum CMYKImportSmokeProxy {
     }
     static var openCalls: Int { locked { opens } }
     static var allResults: [Int32] { locked { results } }
+    static func setImportGate(_ gate: DispatchSemaphore?) { locked { importGate = gate } }
     static func stopFaults() { locked { busyRemaining = 0; failAdoption = false; cancelImport = false; observer = nil } }
 }
 
@@ -198,7 +203,22 @@ extension EngineSmokeTest {
             guard let button = buttons(window.attachedSheet?.contentView).first(where: { $0.title == "Revert" }) else {
                 throw NSError(domain: "CMYKImportSmoke", code: 6)
             }
+            let preservingSource = controller.imageDocument.fileState.importStrategy == .nativeCMYKPSD
+                ? controller.imageDocument.fileState.importedSourceURL : nil
+            let importGate = preservingSource.map { _ in DispatchSemaphore(value: 0) }
+            CMYKImportSmokeProxy.setImportGate(importGate)
+            defer { CMYKImportSmokeProxy.setImportGate(nil); importGate?.signal() }
             button.performClick(nil)
+            if let preservingSource {
+                try wait({ controller.revertIsPending }, "preserving Revert reaches its in-flight state")
+                var duringRevert: Result<DocumentWindowController, Error>?
+                owner.importNativeCMYKPSD(from: preservingSource) { duringRevert = $0 }
+                if case .failure(let error as EngineSession.EngineError)? = duringRevert {
+                    expect(error.isBusy, "preserving import of the same source during Revert reports busy")
+                } else { expect(false, "preserving import of the same source during Revert reports busy") }
+                CMYKImportSmokeProxy.setImportGate(nil)
+                importGate?.signal()
+            }
             try wait({ !owner.documents.contains(where: { $0 === controller }) && gone(controller.imageDocument.image)
                        && !EngineActivity.shared.isBusy }, "Actual Revert replaces and closes its old document")
             retain(owner)

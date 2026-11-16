@@ -323,7 +323,7 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (ink edits)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
-            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "legacy-revert-load" {
+            if ["legacy-revert-load", "ordinary-revert-open"].contains(ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] ?? "") {
                 try exerciseRevert(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (legacy Revert load)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
@@ -492,6 +492,11 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "close-all-documents" {
                 try exerciseCloseAll(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Close All)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "info-palette" {
+                try exerciseInfoPalette(session, documents: documents)
+                print(failures == 0 ? "PASSED (info palette)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-palette" {
@@ -3704,7 +3709,9 @@ enum EngineSmokeTest {
     /// list, so this drives a real AppController.
     private static func exerciseRevert(_ session: EngineSession, work: URL,
                                        documents: DocumentList) throws {
-        let app = AppController()
+        let checkReopen = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "ordinary-revert-open"
+        let app = checkReopen ? AppController(session: session) : AppController()
+        if checkReopen { NSApp.activate(ignoringOtherApps: true); spin(0.2) }
         let directory = work.appendingPathComponent("revert")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let native = directory.appendingPathComponent("keep.xcf")
@@ -3746,6 +3753,26 @@ enum EngineSmokeTest {
                                          name: native.lastPathComponent, openedFrom: native)
         track(document)
         guard let controller = app.documents.last else { throw NoWindow() }
+        if checkReopen {
+            guard let load = controller.revertHandler else { throw NoWindow() }
+            controller.revertHandler = { source, completion in
+                load(source) { result in
+                    if case .success(let replacement) = result {
+                        NSApp.activate(ignoringOtherApps: true)
+                        replacement.window?.makeKeyAndOrderFront(nil)
+                        check(replacement.window?.isVisible == true, "replacement window is visible before reopening")
+                        check(controller.closeStarted, "discarded window has started closing")
+                        check(app.documents.contains(where: { $0 === controller }),
+                              "discarded controller is still draining")
+                        check(controller.window?.isVisible == false, "discarded window is hidden before reopening")
+                        app.application(NSApp, open: [native])
+                        check(controller.window?.isVisible == false && replacement.window?.isVisible == true,
+                              "opening a reverted file does not reopen the discarded window")
+                    }
+                    completion(result)
+                }
+            }
+        }
         controller.zoom(to: 150)
         let window = try XCTUnwrapWindow(controller)
         let frame = window.frame

@@ -37,7 +37,13 @@ extension EngineSmokeTest {
         }
         state.foreground = .black
         state.background = NSColor(srgbRed: 0.1, green: 0.4, blue: 0.7, alpha: 1)
-        let document = try ImageDocument(session: session, image: image, name: "Opaque Brush Recorder")
+        let document: ImageDocument
+        do {
+            document = try ImageDocument(session: session, image: image, name: "Opaque Eraser Recorder")
+        } catch {
+            try? session.closeImage(image)
+            throw error
+        }
         documents.items.append(document)
         let owner = DocumentWindowController(document: document)
         owner.showWindow(nil)
@@ -115,7 +121,9 @@ extension EngineSmokeTest {
             try drain(document)
             try command(.stop)
             let after = try pixels()
-            expect(before != after, "live \(tool) stroke changes the canvas")
+            expect(supported ? before != after : before == after,
+                   supported ? "live \(tool) stroke changes the canvas"
+                             : "older engine refuses the selected \(tool) background without painting")
             try require(document.recorder.records.count == 1, "stroke did not settle into one row")
             if supported {
                 if tablet {
@@ -156,8 +164,6 @@ extension EngineSmokeTest {
                                   userInfo: [NSLocalizedDescriptionKey: "Older engine must report unsupported opaque capture"])
                 }
                 expect(document.recorder.replayRefusal != nil, "older engine refuses incomplete opaque Eraser recording")
-                document.undo(); try drain(document)
-                expect(try pixels() == before, "older-engine live stroke still undoes")
             }
         }
     }
