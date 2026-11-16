@@ -126,10 +126,21 @@ glims_image_export_duotone_psd (GlimsEngine *engine, GlimsImageID id,
   const void *metadata = tag ? gimp_parasite_get_data (tag, &metadata_size) : NULL;
   if (!metadata || !metadata_size || metadata_size > GLIMS_DUOTONE_PSD_MAX_METADATA)
     { if (error) *error = strdup ("This document has no usable retained Duotone settings."); return GLIMS_STATUS_UNSUPPORTED; }
+  const GimpParasite *alternate = gimp_image_parasite_find (open->image, "psd-image-resource-8BIM-042a");
+  const GimpParasite *mesa = gimp_image_parasite_find (open->image, "psd-image-resource-MeSa-042a");
+  if (alternate && mesa)
+    { if (error) *error = strdup ("This document has conflicting Duotone alternate-color resources."); return GLIMS_STATUS_UNSUPPORTED; }
+  guint32 alternate_size = 0;
+  const void *alternate_data = (alternate || mesa) ? gimp_parasite_get_data (alternate ? alternate : mesa, &alternate_size) : NULL;
+  if ((alternate || mesa) && (!alternate_data || !alternate_size || alternate_size > GLIMS_DUOTONE_PSD_MAX_METADATA))
+    { if (error) *error = strdup ("This document has unusable Duotone alternate-color data."); return GLIMS_STATUS_UNSUPPORTED; }
+  g_autoptr(GBytes) alternate_bytes = alternate_data ? g_bytes_new (alternate_data, alternate_size) : NULL;
   GBytes *bytes = g_bytes_new (metadata, metadata_size);
-  GlimsDuotonePsdSpec spec = { (uint32_t) gimp_image_get_width (open->image),
-    (uint32_t) gimp_image_get_height (open->image), 8u,
-    g_bytes_get_data (bytes, NULL), metadata_size };
+  GlimsDuotonePsdSpec spec = { .width = (uint32_t) gimp_image_get_width (open->image),
+    .height = (uint32_t) gimp_image_get_height (open->image), .depth = 8u,
+    .metadata = g_bytes_get_data (bytes, NULL), .metadata_size = metadata_size,
+    .alternate = alternate_bytes ? g_bytes_get_data (alternate_bytes, NULL) : NULL,
+    .alternate_size = alternate_size, .alternate_mesa = mesa != NULL };
   uint64_t size;
   if (glims_duotone_psd_size (&spec, &size) != GLIMS_DUOTONE_PSD_OK)
     { g_bytes_unref (bytes); if (error) *error = strdup ("Duotone PSD dimensions or output size are unsupported."); return GLIMS_STATUS_UNSUPPORTED; }

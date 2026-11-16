@@ -21,7 +21,7 @@ static bool write_bytes(void *context,const uint8_t *bytes,size_t size)
 int main(void)
 {
   const uint8_t metadata[]={1,2,3}; uint8_t output[128]={0};
-  GlimsDuotonePsdSpec spec={2,2,8,metadata,sizeof metadata};uint64_t size=99;
+  GlimsDuotonePsdSpec spec={.width=2,.height=2,.depth=8,.metadata=metadata,.metadata_size=sizeof metadata};uint64_t size=99;
   const uint8_t expected8[]={
     '8','B','P','S',0,1,0,0,0,0,0,0,0,1,0,0,0,2,0,0,0,2,0,8,0,8,
     0,0,0,3,1,2,3,0,0,0,0,0,0,0,0,0,0, 0,64,128,192
@@ -30,6 +30,36 @@ int main(void)
   CHECK(glims_duotone_psd_size(&spec,&size)==GLIMS_DUOTONE_PSD_OK && size==sizeof expected8,"exact 8-bit size");
   CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_OK &&
         f.used==sizeof expected8 && !memcmp(output,expected8,sizeof expected8),"literal Duotone header, metadata and 8-bit pixels");
+  const uint8_t alternate[]={0x91,0x82,0x73};
+  const uint8_t expected_resource[]={
+    '8','B','P','S',0,1,0,0,0,0,0,0,0,1,0,0,0,2,0,0,0,2,0,8,0,8,
+    0,0,0,3,1,2,3, 0,0,0,16,'8','B','I','M',4,42,0,0,0,0,0,3,
+    0x91,0x82,0x73,0, 0,0,0,0,0,0, 0,64,128,192
+  };
+  spec.alternate=alternate;spec.alternate_size=sizeof alternate;spec.alternate_mesa=false;
+  f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=8};
+  CHECK(glims_duotone_psd_size(&spec,&size)==GLIMS_DUOTONE_PSD_OK && size==sizeof expected_resource &&
+        glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_OK &&
+        f.used==sizeof expected_resource && !memcmp(output,expected_resource,sizeof expected_resource),
+        "odd-sized alternate resource is serialized exactly with PSD padding");
+  spec.alternate_mesa=true;f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=8};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_OK &&
+        !memcmp(output+37,"MeSa",4),"alternate resource retains MeSa signature");
+  spec.alternate_size=2;f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=8};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_OK &&
+        f.used==sizeof expected_resource-2 && output[36]==14 && output[48]==2 &&
+        output[49]==0x91 && output[50]==0x82 && output[51]==0,
+        "even-sized resource has no padding");
+  f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=8,.fail_write=5};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED && f.reads==0,
+        "resource body write failure never reads pixels");
+  GlimsDuotonePsdSpec invalid_resource=spec;invalid_resource.alternate=NULL;
+  CHECK(glims_duotone_psd_size(&invalid_resource,&size)==GLIMS_DUOTONE_PSD_INVALID,
+        "nonempty resource requires bytes");
+  invalid_resource=spec;invalid_resource.alternate_size=GLIMS_DUOTONE_PSD_MAX_METADATA+1u;
+  CHECK(glims_duotone_psd_size(&invalid_resource,&size)==GLIMS_DUOTONE_PSD_INVALID,
+        "oversized alternate resource refuses");
+  spec.alternate=NULL;spec.alternate_size=0;spec.alternate_mesa=false;
   const uint8_t expected16[]={
     '8','B','P','S',0,1,0,0,0,0,0,0,0,1,0,0,0,2,0,0,0,2,0,16,0,8,
     0,0,0,3,1,2,3,0,0,0,0,0,0,0,0,0,0, 0,255,1,254,2,253,3,252
@@ -50,7 +80,7 @@ int main(void)
   CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED && f.reads==0,"header failure never reads source");
   f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=16,.fail_read=1};
   CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_READ_FAILED,"source failure is reported");
-  f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=16,.fail_write=4};
+  f=(Fixture){.bytes=output,.capacity=sizeof output,.depth=16,.fail_write=5};
   CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED,"pixel write failure is reported");
   CHECK(glims_duotone_psd_write(&spec,NULL,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_INVALID &&
         glims_duotone_psd_write(&spec,read_samples,&f,NULL,&f)==GLIMS_DUOTONE_PSD_INVALID,"missing callbacks refuse");
@@ -58,7 +88,7 @@ int main(void)
   uint8_t *large_meta=malloc(large_meta_size);
   if(!large_meta)return 2;
   for(size_t i=0;i<large_meta_size;i++)large_meta[i]=(uint8_t)(i*17u);
-  spec=(GlimsDuotonePsdSpec){5001,1,8,large_meta,large_meta_size};
+  spec=(GlimsDuotonePsdSpec){.width=5001,.height=1,.depth=8,.metadata=large_meta,.metadata_size=large_meta_size};
   if(glims_duotone_psd_size(&spec,&size)!=GLIMS_DUOTONE_PSD_OK)return 2;
   uint8_t *wide=malloc((size_t)size);if(!wide)return 2;
   f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8};
@@ -69,8 +99,20 @@ int main(void)
   f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8,.fail_write=3};
   CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED && f.reads==0,
         "late metadata write failure never reads pixels");
+  free(wide);
+  spec.alternate=large_meta;spec.alternate_size=large_meta_size;
+  if(glims_duotone_psd_size(&spec,&size)!=GLIMS_DUOTONE_PSD_OK)return 2;
+  wide=malloc((size_t)size);if(!wide)return 2;
+  f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_OK &&
+        f.used==size && f.max_write==GLIMS_DUOTONE_PSD_METADATA_CHUNK &&
+        !memcmp(wide+30+large_meta_size+4+12,large_meta,large_meta_size),
+        "large alternate resources stream in bounded exact chunks");
+  f=(Fixture){.bytes=wide,.capacity=(size_t)size,.depth=8,.fail_write=7};
+  CHECK(glims_duotone_psd_write(&spec,read_samples,&f,write_bytes,&f)==GLIMS_DUOTONE_PSD_WRITE_FAILED && f.reads==0,
+        "late alternate resource write failure never reads pixels");
   free(wide);free(large_meta);
-  spec=(GlimsDuotonePsdSpec){30000,30000,16,metadata,sizeof metadata};
+  spec=(GlimsDuotonePsdSpec){.width=30000,.height=30000,.depth=16,.metadata=metadata,.metadata_size=sizeof metadata};
   CHECK(glims_duotone_psd_size(&spec,&size)==GLIMS_DUOTONE_PSD_OK && size==UINT64_C(1800000043),"maximum dimensions size without overflow");
   printf("%u checks, %u failures\n",checks,failures);return failures?1:0;
 }

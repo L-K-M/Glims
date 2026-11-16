@@ -33,7 +33,9 @@ struct RecorderFileMetadata: Equatable {
 
     func hasUnsavedChanges<Command>(in log: RecorderLog<Command>, revision: UUID, savedRevision: UUID?) -> Bool {
         guard revision != savedRevision else { return false }
-        return hasExplicitName || log.pendingCount > 0 || !log.records.isEmpty
+        // A saved recording can be edited down to zero rows. Its changed
+        // revision still needs saving even though the draft now looks empty.
+        return savedRevision != nil || hasExplicitName || log.pendingCount > 0 || !log.records.isEmpty
     }
 
     /// A loaded file may include unused descriptions. Keep its complete

@@ -724,7 +724,10 @@ static GlimsStatus capture_layer_copy_result(GlimsEngine *engine,gpointer data) 
   GList *layers=gimp_image_get_layer_list(open->image);
   if(g_list_length(layers)!=1){g_list_free(layers);return GLIMS_STATUS_FAILED;}
   GimpDrawable *d=layers->data;const Babl *format=gimp_drawable_get_format(d);
-  if(!babl_format_has_alpha(format)){g_list_free(layers);return GLIMS_STATUS_FAILED;}
+  if(!babl_format_has_alpha(format)||babl_format_get_n_components(format)!=4||
+     babl_format_get_bytes_per_pixel(format)!=4*sizeof(float)){g_list_free(layers);return GLIMS_STATUS_FAILED;}
+  for(int component=0;component<4;component++)
+    if(babl_format_get_type(format,component)!=babl_type("float")){g_list_free(layers);return GLIMS_STATUS_FAILED;}
   gegl_buffer_get(gimp_drawable_get_buffer(d),GEGL_RECTANGLE(0,0,LW,LH),1,
                   babl_format_with_space("RGBA float",format),scene->samples,GEGL_AUTO_ROWSTRIDE,GEGL_ABYSS_NONE);
   gimp_image_get_resolution(open->image,&scene->xres,&scene->yres);g_list_free(layers);
@@ -794,7 +797,8 @@ static void layered_lab_copy_case(GlimsEngine *engine,Oracle *oracle,Control *co
   }
   request.destination_mode=GLIMS_COLOR_MODE_LAB;result->id=123;
   status=api->image_convert_layered_lab_copy(engine,source->id,&request,&result->id,&error);
-  CHECK(status==GLIMS_STATUS_UNSUPPORTED&&result->id==0,"layered slot refuses unsupported destination without publishing a handle");clear_error(&error);
+  CHECK(status==GLIMS_STATUS_UNSUPPORTED&&result->id==0&&error&&strstr(error,"only support RGB"),
+        "layered slot explains its unsupported destination without publishing a handle");clear_error(&error);
   result->id=123;status=api->image_convert_layered_lab_copy(engine,source->id,NULL,&result->id,&error);
   CHECK(status==GLIMS_STATUS_INVALID_ARGUMENT&&result->id==0,"layered slot rejects missing settings and clears the result");clear_error(&error);
   request=settings(TRUE);request.struct_size=sizeof request-1;result->id=123;

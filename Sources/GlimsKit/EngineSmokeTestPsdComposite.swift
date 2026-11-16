@@ -50,6 +50,20 @@ extension EngineSmokeTest {
         check(item.title == "Open Photoshop Composite…" && owner.validateMenuItem(item) == session.supportsPhotoshopCompositeImport,
               "File menu exposes composite import only with the adapter capability")
         guard session.supportsPhotoshopCompositeImport else { return }
+        if ProcessInfo.processInfo.environment["GLIMS_REQUIRE_COMPOSITE_IO_ERRORS"] == "1" {
+            var missingResult: Result<DocumentWindowController, Error>?
+            let missing = work.appendingPathComponent("missing-photoshop-file.psd")
+            owner.importPhotoshopComposite(from: missing) { missingResult = $0 }
+            guard wait({ missingResult != nil && !EngineActivity.shared.isBusy }) else {
+                return check(false, "missing composite import finishes")
+            }
+            if case .failure(let error)? = missingResult {
+                check(error.localizedDescription.contains("Could not read the Photoshop file") && owner.documents.isEmpty,
+                      "a missing composite reports a file-read error without opening a document")
+            } else {
+                check(false, "a missing composite reports a file-read error without opening a document")
+            }
+        }
         var cancelled = false, timedOut = false
         let deadline = Date().addingTimeInterval(10)
         let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
@@ -92,6 +106,16 @@ extension EngineSmokeTest {
               "opening the same composite again focuses the existing document")
         var reverted: Result<DocumentWindowController, Error>?
         owner.revert(controller, to: source) { reverted = $0 }
+        var duringRevert: Result<DocumentWindowController, Error>?
+        owner.importPhotoshopComposite(from: source) { duringRevert = $0 }
+        if case .failure(let error as EngineSession.EngineError)? = duringRevert {
+            check(error.isBusy, "opening the same composite during Revert reports busy")
+        } else { check(false, "opening the same composite during Revert reports busy") }
+        var duplicateRevert: Result<DocumentWindowController, Error>?
+        owner.revert(controller, to: source) { duplicateRevert = $0 }
+        if case .failure(let error as EngineSession.EngineError)? = duplicateRevert {
+            check(error.isBusy, "a second composite Revert cannot steal the first reservation")
+        } else { check(false, "a second composite Revert cannot steal the first reservation") }
         guard wait({ reverted != nil && !EngineActivity.shared.isBusy }), let replacement = try reverted?.get() else {
             return check(false, "composite Revert finishes")
         }
@@ -100,6 +124,27 @@ extension EngineSmokeTest {
         check(replacement.imageDocument.fileState.importStrategy == .photoshopComposite &&
               revertedPixels == pixels,
               "Revert uses the composite loader and restores its pixels")
+        var afterRevert: Result<DocumentWindowController, Error>?
+        owner.importPhotoshopComposite(from: source) { afterRevert = $0 }
+        check(wait({ afterRevert != nil }) && (try? afterRevert?.get()) === replacement,
+              "opening the same composite after Revert focuses its replacement")
+        check(wait({ !owner.documents.contains(where: { $0 === controller }) && owner.documents.count == 2 }),
+              "the replaced composite window drains and leaves the document list")
+        let missing = work.appendingPathComponent("missing-revert-composite.psd")
+        var failedRevert: Result<DocumentWindowController, Error>?
+        owner.revert(replacement, to: missing) { failedRevert = $0 }
+        var whileMissingRevert: Result<DocumentWindowController, Error>?
+        owner.importPhotoshopComposite(from: missing) { whileMissingRevert = $0 }
+        if case .failure(let error as EngineSession.EngineError)? = whileMissingRevert {
+            check(error.isBusy, "a failing composite Revert still reserves its source")
+        } else { check(false, "a failing composite Revert still reserves its source") }
+        check(wait({ failedRevert != nil && !EngineActivity.shared.isBusy }), "a failed composite Revert finishes")
+        var retry: Result<DocumentWindowController, Error>?
+        owner.importPhotoshopComposite(from: missing) { retry = $0 }
+        check(wait({ retry != nil && !EngineActivity.shared.isBusy }), "a composite import can retry after failed Revert")
+        if case .failure(let error as EngineSession.EngineError)? = retry {
+            check(!error.isBusy, "failed Revert releases its source reservation")
+        } else { check(false, "failed Revert releases its source reservation") }
         check(try Data(contentsOf: source) == original, "composite import and Revert do not modify the source PSD")
     }
 }
