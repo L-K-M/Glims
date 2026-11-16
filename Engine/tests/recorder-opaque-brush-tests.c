@@ -183,6 +183,9 @@ opaque_v2_case (GlimsEngine *engine, const BrushIdentity *identity, guint32 tool
         &first, facts.facts.fingerprint, &stroke, &again.facts, &error) == GLIMS_STATUS_OK &&
         api->stroke_continue_v2 (engine, stroke, &next, &error) == GLIMS_STATUS_OK &&
         api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "V2 guarded opaque replay stroke completes"); stroke = 0;
+  CHECK (matches_identity (&again.facts, identity) && facts.facts.fingerprint && again.facts.fingerprint &&
+         !strcmp (facts.facts.fingerprint, again.facts.fingerprint),
+         "V2 guarded opaque replay returns the same fingerprint and identity");
   NEED (read_opaque (engine, &replay, &actual) && same_image (&expected, &actual),
         "V2 guarded opaque replay matches pixels and history");
   CHECK (api->image_undo (engine, replay.image) == GLIMS_STATUS_OK && read_opaque (engine, &replay, &actual) &&
