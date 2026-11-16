@@ -6404,8 +6404,8 @@ candidate as merged or universally hardware-qualified.
 Ordinary RGB Pencil and Paintbrush capture now includes opaque Background
 layers. A new fingerprint domain distinguishes opaque from alpha-bearing
 targets, so guarded replay cannot cross that boundary; existing alpha-bearing
-and ink fingerprints are unchanged. The live opaque Eraser remains deliberately
-uncaptured because its background color is not in the recording.
+and ink fingerprints are unchanged. Opaque Eraser capture needs the background
+color and is described under Opaque Eraser recording, below.
 The native candidate tests mouse and V2 tablet capture against independently
 painted pixels, guarded cross-alpha refusal and Undo/Redo. Full app, older
 engine and release qualification remain separate.
@@ -6416,8 +6416,8 @@ The Eraser snapshots the chosen background at the start of a gesture. On a
 layer without alpha, native paint uses that color even if the shared color
 changes before the gesture ends. Layers with alpha continue to erase normally.
 Adapters without the optional color capability refuse the requested Eraser
-gesture explicitly. Opaque Eraser recording remains unsupported because the
-recording format does not yet preserve the color. Four-engine native checks,
+gesture explicitly. Opaque Eraser recording, below, adds that color
+to the recording format. Four-engine native checks,
 legacy-prefix memory protection and targeted canvas checks cover this candidate;
 full application and release qualification remain separate.
 
