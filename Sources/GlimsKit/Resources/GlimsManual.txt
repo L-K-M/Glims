@@ -370,7 +370,8 @@ ordinary pixel layers. A stroke keeps the settings used when it was
 drawn, including accepted tablet rotation and tangential pressure. Replay
 checks that the required brush and its supported paint dynamics still match
 the recording; unsupported brushes or dynamics
-cannot be recorded. Sponge replay also checks the direction and whether the
+cannot be recorded. Eraser on an opaque layer remains available for painting
+but cannot yet be recorded. Sponge replay also checks the direction and whether the
 target layer has alpha. Older engines retain live painting but may be unable
 to record Sponge or tablet strokes. To Selection from the Quick Mask channel still
 applies the live edit but records a failed row.
