@@ -201,7 +201,7 @@ enum SemanticImageCommand {
 
     var isMaskAdjustment: Bool {
         switch self {
-        case .applyLevels, .applyCurves: return true
+        case .applyLevels, .applyCurves, .applyBrightnessContrast: return true
         default: return false
         }
     }

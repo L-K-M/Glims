@@ -85,8 +85,12 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, colorBalanceVersion)
             case .success(.applyHueSaturation, _):
                 fileVersion = max(fileVersion, hueSaturationVersion)
-            case .success(.applyBrightnessContrast, _):
-                fileVersion = max(fileVersion, brightnessContrastVersion)
+            case .success(.applyBrightnessContrast, let binding):
+                if case .context = binding {
+                    fileVersion = max(fileVersion, maskBrightnessContrastVersion)
+                } else {
+                    fileVersion = max(fileVersion, brightnessContrastVersion)
+                }
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
                 fileVersion = max(fileVersion, inkVersion)
                 if case .ink(let symbol, let identity) = binding {

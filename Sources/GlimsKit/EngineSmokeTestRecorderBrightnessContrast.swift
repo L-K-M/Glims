@@ -22,6 +22,12 @@ extension EngineSmokeTest {
             try wait { doc.pendingWork == 0 && doc.recorder.pendingCount == 0 &&
                 !doc.recorder.isReplaying && !EngineActivity.shared.isBusy }
         }
+        func settleNativeEvents(_ doc: ImageDocument) throws {
+            var crossed = false
+            DispatchQueue.main.async { crossed = true }
+            try wait { crossed }
+            try drain(doc)
+        }
         func pixels(_ image: Int32) throws -> Data { try session.copyPixels(image, merged: true).pixels }
         var bytes: [UInt8] = []
         for i in 0..<120 { bytes += [UInt8(i * 13 % 256), UInt8(i * 31 % 256), UInt8(i * 7 % 256), 255] }
@@ -244,18 +250,63 @@ extension EngineSmokeTest {
         let (maskDoc, maskLayer, _) = try fixture("Brightness/Contrast on mask")
         _ = try session.addLayerMask(maskLayer, image: maskDoc.image, source: .white, edit: true)
         try maskDoc.reload()
+        let maskSettings = EngineSession.BrightnessContrastSettings(brightness: -0.35, contrast: 0)
         try maskDoc.startRecording()
         filter = try begin(maskDoc)
-        maskDoc.setBrightnessContrast(filter, early) { _ in }; try drain(maskDoc)
+        maskDoc.setBrightnessContrast(filter, maskSettings) { _ in }; try drain(maskDoc)
         check(try finish(maskDoc, filter, commit: false) && maskDoc.recorder.records.isEmpty,
-              "unsupported mask preview Cancel still records nothing")
+              "mask Brightness/Contrast preview Cancel records nothing")
         filter = try begin(maskDoc)
-        maskDoc.setBrightnessContrast(filter, early) { _ in }; try drain(maskDoc)
+        maskDoc.setBrightnessContrast(filter, maskSettings) { _ in }; try drain(maskDoc)
         check(try finish(maskDoc, filter, commit: true), "live Brightness/Contrast on a mask remains usable")
         try maskDoc.stopRecording(); try drain(maskDoc)
-        if case .failure(let reason)? = maskDoc.recorder.records.first?.resolution {
-            check(reason.contains("layer mask"), "an applied mask adjustment records its unsupported role honestly")
-        } else { check(false, "a mask Brightness/Contrast edit must not become a layer-bound action") }
+        guard case .success(.applyBrightnessContrast(let captured))? = maskDoc.recorder.records.first?.resolution,
+              case .context(let target)? = maskDoc.recorderBindingDescriptions[0],
+              case .mask(let maskSymbol) = target.target else {
+            return check(false, "mask Brightness/Contrast records its mask role and settings")
+        }
+        check(captured == maskSettings, "mask Brightness/Contrast records its mask role and settings")
+        let maskURL = work.appendingPathComponent("mask-brightness-contrast.glims-recording")
+        var maskSaved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+        maskDoc.saveRecording(to: maskURL, checkpoint: try maskDoc.recorderSaveCheckpoint()) { maskSaved = $0 }
+        try drain(maskDoc); try require(maskSaved != nil, "Mask Brightness/Contrast save callback missing"); _ = try maskSaved!.get()
+        var maskLoaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
+        maskDoc.prepareRecordingFile(at: maskURL, checkpoint: try maskDoc.recorderInstallCheckpoint()) { maskLoaded = $0 }
+        try drain(maskDoc); try require(maskLoaded != nil, "Mask Brightness/Contrast load callback missing")
+        let maskPrepared = try maskLoaded!.get()
+        let maskJSON = try JSONSerialization.jsonObject(with: Data(contentsOf: maskURL)) as? [String: Any]
+        check(maskJSON?["version"] as? Int == 25, "saved mask Brightness/Contrast declares version 25")
+        let (maskDest, maskDestLayer, _) = try fixture("Mask Brightness/Contrast rebound")
+        try settleNativeEvents(maskDest)
+        var missingInstall: Result<Void, Error>?
+        maskDest.installRecording(maskPrepared, checkpoint: try maskDest.recorderInstallCheckpoint(),
+                                  choices: [maskSymbol: .layer(maskDestLayer)]) { missingInstall = $0 }
+        try drain(maskDest); try require(missingInstall != nil, "Maskless install callback missing")
+        if case .failure(let error)? = missingInstall,
+           case .missingMask = error as? ImageDocument.RecorderInstallError {
+            check(true, "mask Brightness/Contrast refuses a layer without a mask")
+        } else { check(false, "mask Brightness/Contrast refuses a layer without a mask") }
+        _ = try session.addLayerMask(maskDestLayer, image: maskDest.image, source: .white, edit: true)
+        try maskDest.reload(); try settleNativeEvents(maskDest)
+        var maskInstalled: Result<Void, Error>?
+        maskDest.installRecording(maskPrepared, checkpoint: try maskDest.recorderInstallCheckpoint(),
+                                  choices: [maskSymbol: .layer(maskDestLayer)]) { maskInstalled = $0 }
+        try drain(maskDest); try require(maskInstalled != nil, "Mask install callback missing"); try maskInstalled!.get()
+        let beforeMaskReplay = try pixels(maskDest.image), beforeMaskUndo = try session.undoInfo(maskDest.image)
+        try maskDest.startReplay(); try drain(maskDest)
+        check(try pixels(maskDest.image) == pixels(maskDoc.image) && pixels(maskDest.image) != beforeMaskReplay &&
+              session.undoInfo(maskDest.image).undoCount == beforeMaskUndo.undoCount + 1 &&
+              session.effects(on: maskDestLayer, image: maskDest.image).isEmpty,
+              "saved mask Brightness/Contrast replays on the rebound mask as one destructive Undo step")
+        maskDest.undo(); try drain(maskDest)
+        check(try pixels(maskDest.image) == beforeMaskReplay, "mask Brightness/Contrast Undo restores destination pixels")
+        try session.setLayerMask(maskDestLayer, image: maskDest.image, flags: .editing, values: [])
+        let stalePixels = try pixels(maskDest.image), staleHistory = try session.undoInfo(maskDest.image)
+        try maskDest.startReplay(); try drain(maskDest)
+        var maskRefused = false
+        if case .failed(index: 0, reason: _) = maskDest.replayStatus { maskRefused = true }
+        check(try maskRefused && pixels(maskDest.image) == stalePixels && session.undoInfo(maskDest.image) == staleHistory,
+              "fresh native mask-role changes refuse Brightness/Contrast replay without modifying pixels or history")
 
         let (channelDoc, channelLayer, _) = try fixture("Brightness/Contrast on channel")
         try session.select(.all, image: channelDoc.image)
