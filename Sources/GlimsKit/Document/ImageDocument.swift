@@ -6379,6 +6379,11 @@ final class ImageDocument {
         }
     }
 
+    /// The filter operations whose new Apply Recorder can replay.
+    private static let recordedFilterOperations: Set<String> = [
+        "gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation", "gimp:brightness-contrast",
+        EngineSession.gaussianBlurOperation, EngineSession.unsharpMaskOperation]
+
     /// Aborting a preview is cleanup, so clipboard/save edit gates must
     /// never suppress it; it also runs while the image closes, so a
     /// session begun behind pending input still unwinds before destroy.
@@ -6390,16 +6395,19 @@ final class ImageDocument {
             guard !isClosing else { return completion(false) }
             if refuseWhileEditingUnavailable(forPreviewWork: true) { return completion(false) }
             record = filterPreviewRecords[filter]
-            // An admitted Apply of a supported session reserves its Recorder row
-            // now; preview writes, Cancel and refused admissions never do.
-            if ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation", "gimp:brightness-contrast",
-                EngineSession.gaussianBlurOperation, EngineSession.unsharpMaskOperation].contains(record?.operation ?? ""),
-               recorder.isRecording {
+            // Every admitted Apply while recording reserves its Recorder row
+            // now; preview writes, Cancel and refused admissions never do. A
+            // filter Recorder cannot replay becomes an explicit unsupported
+            // row, so a recording never silently omits an applied step.
+            if recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
+                case .unsupported(let reason)?: context = .unavailable(reason)
+                case _ where !Self.recordedFilterOperations.contains(record?.operation ?? ""):
+                    let title = record?.operation.flatMap { NativeFilterCatalog.shared.operation(named: $0)?.title }
+                    context = .unavailable("Recorder does not yet save \(title ?? "this filter").")
                 case .layer(let layer)?: context = .layer(layer)
                 case .mask(let target)?: context = .target(target)
-                case .unsupported(let reason)?: context = .unavailable(reason)
                 case nil: context = nil
                 }
                 do { capture = try reserveRecording(context: context) }
@@ -6456,7 +6464,7 @@ final class ImageDocument {
                     result = .failure(commitError)
                 } else if let settingsFailure {
                     result = .failure(settingsFailure)
-                } else if case .unsupported(let reason)? = record?.coverage {
+                } else if case .unavailable(let reason)? = capture?.context {
                     result = .failure(RecorderReplayError(message: reason))
                 } else if let command {
                     result = .success(command)
