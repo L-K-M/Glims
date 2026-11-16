@@ -27,6 +27,7 @@ enum RecorderFileCodec {
     static let maskLevelsVersion = 23
     static let maskCurvesVersion = 24
     static let maskBrightnessContrastVersion = 25
+    static let blurFilterVersion = 26
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -103,7 +104,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...maskBrightnessContrastVersion)
+        let fileVersion = try integer(root.get("version"), range: version...blurFilterVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -144,6 +145,7 @@ enum RecorderFileCodec {
         var hasMaskLevels = false
         var hasMaskCurves = false
         var hasMaskBrightnessContrast = false
+        var hasBlurFilter = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -168,6 +170,8 @@ enum RecorderFileCodec {
                 if case .applyColorBalance = command { hasColorBalance = true }
                 if case .applyHueSaturation = command { hasHueSaturation = true }
                 if case .applyBrightnessContrast = command { hasBrightnessContrast = true }
+                if case .applyGaussianBlur = command { hasBlurFilter = true }
+                if case .applyUnsharpMask = command { hasBlurFilter = true }
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
                 if case .applyInkCurves = command { hasInkCurves = true }
@@ -261,6 +265,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == maskBrightnessContrastVersion, !hasMaskBrightnessContrast {
             throw RecorderFileError.invalid("Version 25 requires a successful mask Brightness/Contrast command.")
+        }
+        if fileVersion == blurFilterVersion, !hasBlurFilter {
+            throw RecorderFileError.invalid("Version 26 requires a successful Gaussian Blur or Unsharp Mask command.")
         }
         if fileVersion == spongeStrokeVersion, !hasSpongeStroke {
             throw RecorderFileError.invalid("Version 20 requires a successful Sponge stroke.")
@@ -731,6 +738,14 @@ enum RecorderFileCodec {
             guard version >= brightnessContrastVersion else { throw RecorderFileError.invalid("A Brightness/Contrast command needs recording version 10.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyBrightnessContrast(try brightnessContrast(value.get("settings")))
+        case "applyGaussianBlur":
+            guard version >= blurFilterVersion else { throw RecorderFileError.invalid("A Gaussian Blur command needs recording version 26.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyGaussianBlur(try gaussianBlur(value.get("settings")))
+        case "applyUnsharpMask":
+            guard version >= blurFilterVersion else { throw RecorderFileError.invalid("An Unsharp Mask command needs recording version 26.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyUnsharpMask(try unsharpMask(value.get("settings")))
         case "editInk":
             guard version >= inkVersion else { throw RecorderFileError.invalid("An ink edit needs recording version 11.") }
             let value = try Object(node, required: ["tag", "operation", "intensity", "opacity"])
@@ -917,6 +932,25 @@ enum RecorderFileCodec {
             contrast: number(value.get("contrast"))).validated()
     }
 
+    /// Whole Gaussian Blur values: both sizes and the owned kernel, edge and
+    /// clipping choices.
+    private static func gaussianBlur(_ node: RecorderJSON) throws -> RecorderGaussianBlurValue {
+        let value = try Object(node, required: ["deviationX", "deviationY", "kernel", "abyss", "clipsToInput"])
+        guard let kernel = RecorderGaussianBlurValue.Kernel(rawValue: try string(value.get("kernel"))),
+              let abyss = RecorderGaussianBlurValue.Abyss(rawValue: try string(value.get("abyss"))) else {
+            throw RecorderFileError.invalid("Unknown Gaussian Blur choice.")
+        }
+        return try RecorderGaussianBlurValue(deviationX: number(value.get("deviationX")),
+            deviationY: number(value.get("deviationY")), kernel: kernel, abyss: abyss,
+            clipsToInput: bool(value.get("clipsToInput"))).validated()
+    }
+
+    private static func unsharpMask(_ node: RecorderJSON) throws -> RecorderUnsharpMaskValue {
+        let value = try Object(node, required: ["radius", "amount", "threshold"])
+        return try RecorderUnsharpMaskValue(radius: number(value.get("radius")), amount: number(value.get("amount")),
+            threshold: number(value.get("threshold"))).validated()
+    }
+
     private static func descriptionKind(_ node: RecorderJSON) throws -> RecorderTargetDescription.Kind {
         switch try string(node) {
         case "pixel": return .pixel
@@ -1053,6 +1087,12 @@ enum RecorderFileCodec {
             return
         case (.applyBrightnessContrast, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A Brightness/Contrast adjustment needs a layer description.") }
+            return
+        case (.applyGaussianBlur, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Gaussian Blur needs a layer description.") }
+            return
+        case (.applyUnsharpMask, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("An Unsharp Mask needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }

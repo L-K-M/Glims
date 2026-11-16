@@ -6476,3 +6476,16 @@ explicit unsupported behavior. Saved and rebound replay, missing-mask refusal,
 Undo and changed-role refusal pass the real-editor checks on all four supported
 engines. The full Swift suite and isolated app bundle checks pass. Hosted review
 and integration of the prerequisite branches remain pending.
+
+### Recorder Gaussian Blur and Unsharp Mask (candidate)
+
+A newly applied Gaussian Blur (from its panel or the generic filter form) or
+Unsharp Mask records its explicitly bound layer and whole settings: both
+sizes, kernel, edge policy and clipping for Gaussian Blur; radius, amount and
+threshold for Unsharp Mask. The settings are read through the generic property
+facade with a closed per-operation schema, so no adapter change is needed.
+Version 26 files store owned choice names, never native enum ordinals. Replay
+begins a fresh preview on the rebound layer and commits one effect and one
+Undo step; the existing layer-adjustment admission refuses locked pixels,
+editing masks, channels and Quick Mask. Mask and channel targets record an
+explicit unsupported row. Other filters still add no Recorder row.

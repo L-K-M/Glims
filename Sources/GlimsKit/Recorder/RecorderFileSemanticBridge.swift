@@ -153,6 +153,8 @@ enum RecorderFileSemanticBridge {
         case .applyColorBalance(let value): return .applyColorBalance(try value.settings())
         case .applyHueSaturation(let value): return .applyHueSaturation(try value.settings())
         case .applyBrightnessContrast(let value): return .applyBrightnessContrast(try value.settings())
+        case .applyGaussianBlur(let value): return .applyGaussianBlur(try value.settings())
+        case .applyUnsharpMask(let value): return .applyUnsharpMask(try value.settings())
         case .editInk(let value):
             let operation: EngineSession.InkEditOperation
             switch value.operation {

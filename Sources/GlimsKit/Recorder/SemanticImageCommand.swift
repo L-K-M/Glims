@@ -73,6 +73,12 @@ enum SemanticImageCommand {
     /// accepted native settings. The explicit layer lives in the document's
     /// runtime binding, never in this command; there is no active-layer fallback.
     case applyBrightnessContrast(EngineSession.BrightnessContrastSettings)
+    /// A newly applied Gaussian Blur with its whole accepted native
+    /// settings. The explicit layer lives in the document's runtime binding.
+    case applyGaussianBlur(EngineSession.GaussianBlurSettings)
+    /// A newly applied Unsharp Mask with its whole accepted native settings.
+    /// The explicit layer lives in the document's runtime binding.
+    case applyUnsharpMask(EngineSession.UnsharpMaskSettings)
     /// A committed ink-channel edit with its whole accepted native settings.
     /// The explicit channel binding stays outside the command.
     case editInk(EngineSession.InkEdit)
@@ -103,7 +109,8 @@ enum SemanticImageCommand {
 
     var isLayerAdjustment: Bool {
         switch self {
-        case .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast: return true
+        case .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast,
+             .applyGaussianBlur, .applyUnsharpMask: return true
         default: return false
         }
     }
@@ -111,7 +118,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
+        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -158,6 +165,8 @@ enum SemanticImageCommand {
         case .applyColorBalance: return "Color Balance"
         case .applyHueSaturation: return "Hue/Saturation"
         case .applyBrightnessContrast: return "Brightness/Contrast"
+        case .applyGaussianBlur: return "Gaussian Blur"
+        case .applyUnsharpMask: return "Unsharp Mask"
         case .editInk(let settings): return settings.operation.title
         case .applyInkLevels: return "Ink Levels"
         case .applyInkCurves: return "Ink Curves"
@@ -192,7 +201,7 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
@@ -277,6 +286,26 @@ enum SemanticImageCommand {
             let filter = try session.beginFilter(image: image, drawable: layer, operation: "gimp:brightness-contrast")
             do {
                 try session.setBrightnessContrastSettings(filter, to: settings)
+                try session.commitFilter(filter)
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        case .applyGaussianBlur(let settings):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            let filter = try session.beginFilter(image: image, drawable: layer, operation: EngineSession.gaussianBlurOperation)
+            do {
+                try session.setGaussianBlurSettings(filter, to: settings)
+                try session.commitFilter(filter)
+            } catch {
+                try? session.abortFilter(filter)
+                throw error
+            }
+        case .applyUnsharpMask(let settings):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            let filter = try session.beginFilter(image: image, drawable: layer, operation: EngineSession.unsharpMaskOperation)
+            do {
+                try session.setUnsharpMaskSettings(filter, to: settings)
                 try session.commitFilter(filter)
             } catch {
                 try? session.abortFilter(filter)

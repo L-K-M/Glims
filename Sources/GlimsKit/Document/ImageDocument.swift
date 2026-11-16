@@ -6392,7 +6392,9 @@ final class ImageDocument {
             record = filterPreviewRecords[filter]
             // An admitted Apply of a supported session reserves its Recorder row
             // now; preview writes, Cancel and refused admissions never do.
-            if ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation", "gimp:brightness-contrast"].contains(record?.operation ?? ""), recorder.isRecording {
+            if ["gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation", "gimp:brightness-contrast",
+                EngineSession.gaussianBlurOperation, EngineSession.unsharpMaskOperation].contains(record?.operation ?? ""),
+               recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
                 case .layer(let layer)?: context = .layer(layer)
@@ -6429,6 +6431,10 @@ final class ImageDocument {
                         command = .applyHueSaturation(try session.hueSaturationSettings(filter))
                     } else if record?.operation == "gimp:brightness-contrast" {
                         command = .applyBrightnessContrast(try session.brightnessContrastSettings(filter))
+                    } else if record?.operation == EngineSession.gaussianBlurOperation {
+                        command = .applyGaussianBlur(try session.gaussianBlurSettings(filter))
+                    } else if record?.operation == EngineSession.unsharpMaskOperation {
+                        command = .applyUnsharpMask(try session.unsharpMaskSettings(filter))
                     } else {
                         command = .applyLevels(try session.levelsSettings(filter))
                     }
@@ -7508,7 +7514,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer: return true
         default: return false
         }
     }

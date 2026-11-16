@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 25
+# Recorder file format, versions 1 to 26
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `25`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `26`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -20,11 +20,12 @@ The writer chooses the highest version required by a successful record:
 `completeInkStroke` 16, `applyLabLevels` 17, `completeLabLayerStroke` 18,
 `fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
 an Eraser stroke with an explicit background color 22, mask Levels 23,
-mask Curves 24, and mask Brightness/Contrast 25. A file declaring one of those versions must contain at least one
+mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
+`applyUnsharpMask` 26. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...25 refuse the file.
+version 1. Integers outside 1...26 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -580,3 +581,22 @@ Levels and Curves. Version 25 requires at least one successful mask
 Brightness/Contrast command and can also contain the earlier mask adjustments.
 Older versions reject this binding. Rebinding and replay confirm the mask owner
 and editing role; the complete settings apply as one destructive Undo step.
+
+## Gaussian Blur and Unsharp Mask (version 26)
+
+`applyGaussianBlur` and `applyUnsharpMask` are a newly applied filter on the
+explicitly bound layer, exactly as accepted by the live preview's Apply. The
+settings are read from the open native preview immediately before commit.
+
+- `applyGaussianBlur` `settings` has exactly `deviationX` and `deviationY`
+  (finite, 0...1500 pixels), `kernel` (`auto`, `fir` or `iir`), `abyss`
+  (`none`, `clamp`, `black` or `white`) and the boolean `clipsToInput`.
+- `applyUnsharpMask` `settings` has exactly `radius` (0...1500), `amount`
+  (0...300) and `threshold` (0...1), all finite.
+
+These names are owned by the format; native enum ordinals are never stored.
+The record's `layer` binding names the target layer symbol. Mask, channel and
+context bindings are refused. Version 26 requires at least one successful
+command of either kind and can contain every earlier command. Replay begins a
+fresh preview on the rebound layer, writes every recorded setting, and commits
+it as one effect and one Undo step; a refused write aborts the preview.

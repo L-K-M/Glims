@@ -91,6 +91,8 @@ extension RecorderFileCodec {
                 } else {
                     fileVersion = max(fileVersion, brightnessContrastVersion)
                 }
+            case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
+                fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
                 fileVersion = max(fileVersion, inkVersion)
                 if case .ink(let symbol, let identity) = binding {
@@ -393,6 +395,17 @@ extension RecorderFileCodec {
             let value = try value.validated()
             return .object(["tag": .string("applyBrightnessContrast"), "settings": .object([
                 "brightness": try d(value.brightness), "contrast": try d(value.contrast)])])
+        case .applyGaussianBlur(let value):
+            let value = try value.validated()
+            return .object(["tag": .string("applyGaussianBlur"), "settings": .object([
+                "deviationX": try d(value.deviationX), "deviationY": try d(value.deviationY),
+                "kernel": .string(value.kernel.rawValue), "abyss": .string(value.abyss.rawValue),
+                "clipsToInput": .bool(value.clipsToInput)])])
+        case .applyUnsharpMask(let value):
+            let value = try value.validated()
+            return .object(["tag": .string("applyUnsharpMask"), "settings": .object([
+                "radius": try d(value.radius), "amount": try d(value.amount),
+                "threshold": try d(value.threshold)])])
         case .editInk(let edit):
             guard edit.isValid else { throw RecorderFileError.invalid("Invalid ink edit values.") }
             return .object(["tag": .string("editInk"), "operation": .string(edit.operation.rawValue),
