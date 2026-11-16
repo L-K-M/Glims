@@ -379,7 +379,9 @@ including when the target layer is opaque. Sponge replay also checks the directi
 and whether the target layer has alpha. Older engines may be unable to use the
 selected Eraser background or record opaque Eraser, Sponge or tablet strokes.
 To Selection from the Quick Mask channel still
-applies the live edit but records a failed row.
+applies the live edit but records a failed row. Other filters, and changes
+to an existing filter effect, also apply live but record a failed row, so
+Replay refuses the incomplete recording.
 
 In CMYK and Multichannel images, Recorder captures complete Brush and Pencil
 gestures on the selected ink channel. Save and Load retain the accepted color,

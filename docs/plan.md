@@ -6488,4 +6488,13 @@ Version 26 files store owned choice names, never native enum ordinals. Replay
 begins a fresh preview on the rebound layer and commits one effect and one
 Undo step; the existing layer-adjustment admission refuses locked pixels,
 editing masks, channels and Quick Mask. Mask and channel targets record an
-explicit unsupported row. Other filters still add no Recorder row.
+explicit unsupported row.
+
+### Explicit rows for unrecorded filters (candidate)
+
+Applying any other filter while recording, or editing an existing effect of any
+kind, used to add no Recorder row, so a replay silently skipped the step. Every
+admitted filter Apply now reserves a row: unsupported operations keep the live
+edit and settle as a failure naming the filter, so replay refuses the
+incomplete recording. Plug-in commands and other unrecorded edits outside the
+filter preview path are unchanged.

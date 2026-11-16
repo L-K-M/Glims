@@ -202,5 +202,39 @@ extension EngineSmokeTest {
             check(reason.contains("channel") && channelDoc.recorder.records.count == 1,
                   "a channel Unsharp Mask records an explicit unsupported row")
         } else { check(false, "a channel Unsharp Mask must not become a layer-bound action") }
+
+        // A filter Recorder cannot replay, and an edit of an existing effect,
+        // still apply live but add an explicit unsupported row, so replay
+        // refuses the incomplete sequence instead of silently skipping it.
+        NativeFilterCatalog.shared.install(try session.filterOperations())
+        let (otherDoc, otherLayer, _) = try fixture("Unrecorded filter")
+        let otherOriginal = try pixels(otherDoc.image)
+        try otherDoc.startRecording()
+        filter = try begin(otherDoc, "gegl:pixelize")
+        try set(otherDoc, filter, [("size-x", .integer(4)), ("size-y", .integer(4))])
+        check(try finish(otherDoc, filter, commit: true), "an unrecorded filter still applies while recording")
+        let pixelized = try pixels(otherDoc.image)
+        var result: Result<ImageDocument.FilterPreviewStart, Error>?
+        let effect = try session.effects(on: otherLayer, image: otherDoc.image)[0]
+        otherDoc.beginEffectPreview(effect: effect.id, on: otherLayer, properties: []) { result = $0 }
+        try drain(otherDoc); try require(result != nil, "existing effect begin callback missing")
+        filter = try result!.get().filter
+        try set(otherDoc, filter, [("size-x", .integer(2))])
+        check(try finish(otherDoc, filter, commit: true), "an existing filter effect edit still applies while recording")
+        let edited = try pixels(otherDoc.image)
+        try otherDoc.stopRecording(); try drain(otherDoc)
+        let rows = otherDoc.recorder.records.map(\.resolution)
+        if rows.count == 2, case .failure(let first) = rows[0], case .failure(let second) = rows[1] {
+            check(first.contains("Pixelize") && second.contains("existing effect"),
+                  "unrecorded filters and effect edits record explicit unsupported rows")
+        } else { check(false, "unrecorded filters and effect edits record explicit unsupported rows") }
+        check(otherOriginal != pixelized && pixelized != edited,
+              "the unrecorded filter and effect edit both changed the live image")
+        let otherUndo = try session.undoInfo(otherDoc.image)
+        var incomplete = false
+        do { try otherDoc.startReplay() } catch { incomplete = true }
+        try drain(otherDoc)
+        check(try incomplete && (try pixels(otherDoc.image)) == edited && session.undoInfo(otherDoc.image) == otherUndo,
+              "replay refuses a recording with unsupported rows without changing pixels or history")
     }
 }

@@ -51,7 +51,9 @@ applying ones other than Levels, Curves or Brightness/Contrast to a mask, or
 editing an existing effect also produces an explicit unsupported row after a
 successful commit, so the recording cannot silently replay an incomplete
 sequence. A settings capture failure preserves the live edit and marks the
-recording as failed. Other filters do not yet add a row of any kind.
+recording as failed. Applying any other filter, or editing an existing effect
+of any kind, keeps the live edit and adds an explicit unsupported row naming
+the filter, so replay refuses the incomplete recording.
 
 Mask Levels, Curves and Brightness/Contrast record the mask owner and its
 editing role. Rebinding requires a layer with a mask, and replay checks the
