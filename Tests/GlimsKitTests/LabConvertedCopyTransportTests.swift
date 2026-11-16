@@ -164,6 +164,7 @@ final class LabConvertedCopyTransportTests: XCTestCase {
             XCTAssertFalse(session.supportsLayeredLabConvertedCopy)
             self.assertStatus(GLIMS_STATUS_UNSUPPORTED) { try session.convertedLabCopy(image: 27, destination: .linearRGB, layered: true) }
             XCTAssertEqual(producer.calls, 0)
+            XCTAssertEqual(producer.layeredCalls, 0)
         }
     }
 

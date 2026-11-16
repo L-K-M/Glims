@@ -524,15 +524,29 @@ image_open (GlimsEngine *engine, const char *path, GlimsImageID *out,
       /* Nonblocking admission prevents a named pipe from freezing the engine
        * thread before GIMP gets a chance to reject it. */
       int fd = g_open (path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
-      gboolean regular = fd >= 0 && fstat (fd, &info) == 0 && S_ISREG (info.st_mode);
+      int io_error = fd < 0 ? errno : 0;
+      gboolean regular = FALSE;
+      if (fd >= 0)
+        {
+          if (fstat (fd, &info) < 0) io_error = errno;
+          else regular = S_ISREG (info.st_mode);
+        }
       while (regular && got < sizeof header)
         {
           ssize_t n = read (fd, header + got, sizeof header - got);
           if (n < 0 && errno == EINTR) continue;
+          if (n < 0) io_error = errno;
           if (n <= 0) break;
           got += (size_t) n;
         }
       if (fd >= 0) close (fd);
+      if (io_error)
+        {
+          g_clear_object (&source_info); g_object_unref (file);
+          g_set_error (&gerror, G_FILE_ERROR, g_file_error_from_errno (io_error),
+                       "Could not read the Photoshop file: %s", g_strerror (io_error));
+          return glims_fail (error, gerror, "The Photoshop file could not be read.");
+        }
       gboolean valid = regular && got == sizeof header && !memcmp (header, "8BPS", 4) &&
                        header[4] == 0 && (header[5] == 1 || header[5] == 2);
       if (!valid)

@@ -637,14 +637,20 @@ In this order (reasons in `phase0-report.md`):
   invisible layers (`6a33e2998e`), and the rest of the list.
 - 2026-11-06: item 4, painting off the main thread, measured
   (`build-adapter.sh --perf GIMP_3_2_8`, 24 MP, 20 layers, Mac16,9). While
-  another thread paints a 500-sample stroke at pointer rate (8 ms apart),
+  another thread paints 500 synchronous samples with an 8 ms pause after each,
   back-to-back 1440 × 900 renders at 100 % take 3.6 ms on average and
   12.5 ms at p95 (1.2 ms idle), within the 60 fps budget, with one
   180 ms outlier. The engine runs one call at a time, so the stroke
-  falls behind instead: its 4 s of input took 6.9 s under that
-  continuous rendering. The canvas renders only damaged tiles at most
-  once a frame, so real use sits between the two; a stroke that lags
-  its pointer under heavy redraws is the cost to watch.
+  took 6.9 s under that continuous rendering, including 4 s of nominal
+  pauses. This does not simulate a pointer queue building up. The canvas
+  renders only damaged tiles at most once a frame; actual input-to-display
+  behavior needs a separate measurement.
+- 2026-11-15: the performance runner now rejects failed engine calls
+  instead of treating them as fast samples, waits for the long stroke to
+  begin before measuring contention, and excludes reporting overhead from
+  the stroke completion timings. Fault-injection and delayed-start checks
+  cover those cases. These measurements do not establish app-level
+  input-to-display latency or overall editor speed.
 - 2026-11-06: item 4, paths. Engine: seven additive facade calls list
   paths, read and replace their Bézier subpaths (each anchor with its two
   handles, GIMP's control, anchor, control), rename, show, select and
@@ -3326,6 +3332,16 @@ four supported engines, including native CGEvent panning, pointer anchoring
 in a rotated view, event routing from the surround, phase boundaries, two
 document capture and engine/stroke/close guards. These synthetic events do
 not certify physical mouse or trackpad hardware.
+
+### Repeating a zoom (candidate)
+
+Selecting the current zoom keeps cached canvas tiles instead of discarding
+and rendering them again. A changed zoom or a previously failed tile still
+clears the cache; in-flight results are invalidated and layout and rendering
+requests remain in place. A real-canvas regression reproduced the discarded
+tiles before the change. Real-canvas tests pass with each of the four supported
+engine versions, and the full Swift suite passes. This avoids unnecessary
+repeated-zoom work; it does not reduce fractional sampling cost.
 
 
 ### Preferences save during engine teardown (2026-11-09)
@@ -6176,6 +6192,27 @@ the development engine's complete composite matches ImageIO within two 8-bit
 levels. Real-window, bundle, full editor and review qualification remain open.
 See [psd-composite-import.md](psd-composite-import.md).
 
+### Duotone settings structure (private candidate)
+
+A bounded codec reads the documented 524-byte Photoshop `.ADO` settings
+structure and makes byte-preserving ink name, color and curve changes. It
+rejects malformed active fields and leaves unrelated fields intact. The
+Photoshop CC 2018 PSD fixture's 524-byte block matches the documented layout
+for its plate count, names and curves. Adobe does not document PSD Duotone
+color-mode data, so this is not yet an image editor or an interoperability
+claim. Encoding choices, color semantics, overprint updates and color preview
+remain required before exposing edits. Optimized and sanitizer tests pass 551
+checks each. See [duotone-options.md](duotone-options.md).
+
+### Duotone alternate-color table (private candidate)
+
+A bounded parser reads the documented version-1 PSD resource 1066 with up to
+four alternate ink colors and 256 encoded Lab samples. It declines other
+layouts without altering output. The Photoshop CC 2018 fixture contains a
+matching resource; optimized and sanitizer tests pass 814 checks each. The
+resource is now retained on import (see the follow-up below), but is not used
+for preview; its validity after changing inks or curves still needs a defined policy. See
+[duotone-preview-table.md](duotone-preview-table.md).
 ### Half-scale sRGB fallback sampling (candidate)
 
 The legacy sRGB fallback uses the sampler's validated projection footprint at
@@ -6192,7 +6229,13 @@ cached reads were about 15 ms in both. These native timings are not an app
 interaction guarantee. Two pairs had different pixel hashes at multiple scales,
 including unchanged 100% reads. Saved outputs differed by at most seven bytes
 per sampled image and one value per byte; the same variation occurred between
-baseline runs and between candidate runs. Its cause remains unverified.
+baseline runs and between candidate runs. The initial cause was unclear.
+In a follow-up, two recorded babl conversion caches reproduced the two
+different baseline outputs. With the same cache and conversion paths, the
+baseline and candidate matched across 48 frames at four scales, including
+cold, pan, edit and Undo reads. This explains the observed fixture variation
+but does not establish general pixel equivalence. Those runs shared the Mac
+with other work, so a quiet timing comparison remains outstanding.
 
 All four engines pass their conformance, display-sampling, legacy-alpha and
 component-editor checks; the extended legacy fixture passes 620 checks per
@@ -6218,6 +6261,127 @@ checks white/transparency, layer order and opacity against an independent LCMS
 oracle across 256-pixel boundaries, plus source preservation and cancellation.
 Four-engine, real-window, bundle and review qualification remain in progress;
 it does not claim native layered Lab export or complete Photoshop parity.
+
+### Preserving alternate Duotone colors (candidate)
+
+The PSD loader carries image resource 1066 as transient metadata. For imported
+Duotone grayscale images, Glims promotes either supported resource signature
+to persistent metadata alongside the existing opaque color-mode block. The
+bytes and other flags are retained; empty or oversized transient data refuses.
+A real Photoshop fixture loses the alternate-color bytes on the baseline, and
+retains them across XCF save, reopen and resave with this change. Its source,
+grayscale pixels, clean state and Undo history remain unchanged.
+
+All four engines pass conformance plus 17 public and 26 direct metadata checks,
+including both signatures, exact flags and bytes after reopening XCF. Focused
+real-window Save/Reopen checks pass on all four engines, as do the full editor
+suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development engine reports
+upstream cache-file cleanup warnings despite passing. A focused source review
+found no concrete defect and did not execute tests or inspect upstream GIMP
+ownership internals. Hosted CI remains in progress. This retains data for a
+future color preview; it does not display or recalculate it. The standalone
+pinned bundle passes 2,268 engine, 17 preservation, 20 export, 13 composite
+import and 3,355 editor checks with development trees inaccessible.
+
+### Retaining alternate Duotone colors on PSD export (candidate)
+
+Duotone PSD export now carries a retained resource 1066 body and its 8BIM or
+MeSa signature into the flat output. It refuses conflicting, empty or
+oversized retained resources rather than silently discarding them. The source
+image and Undo history remain unchanged. Resources absent from a source remain
+absent, and other image resources are still not exported.
+
+The previous adapter reproduced loss of the Photoshop fixture's alternate
+colors; all four updated adapters preserve the exact resource across export
+and XCF reopen/export, and still export sources without it. Each passes nine
+direct admission checks for conflicting, empty and oversized resources and
+MeSa serialization. Codec tests pass 25 checks each in optimized and sanitizer
+builds, covering both signatures, odd/even padding, streaming and failure
+paths. Real-window export and Repeat Export pass on all four engines, as do
+the full editor suites (3,355 / 3,329 / 3,355 / 3,355 checks). The development
+engine emits upstream cache cleanup warnings; 3.0 also emitted LibGimp EOF
+warnings in the focused window test. The Swift suite passes 1,799 tests.
+The standalone pinned bundle passes 2,268 engine, 17 preservation, 24 export,
+13 composite-import and 3,355 editor checks with development trees inaccessible.
+Hosted qualification remains in progress. Retaining this data does not enable
+a color preview or establish Photoshop printing fidelity.
+
+### Photoshop composite file errors (candidate)
+
+Opening a Photoshop composite now reports the operating system's reason when
+the file cannot be opened, inspected or read. Invalid signatures and nonregular
+files still receive the format refusal; named pipes remain nonblocking. A
+missing-file regression reproduced the former misleading format message, and
+the FIFO check has a watchdog. All four engines pass the native and focused
+window regressions, plus full editor suites of 3,355 / 3,329 / 3,355 / 3,355
+checks. The Swift suite passes 1,799 tests. The standalone pinned bundle passes
+2,268 engine, 17 preservation, 24 Duotone export, 14 composite-import and
+3,355 editor checks with development trees inaccessible. The development
+engine reports upstream cache cleanup warnings. Hosted qualification remains
+in progress.
+
+### Canvas accessibility identity (candidate)
+
+Canvas accessibility labels include the document name, refresh after a native
+save changes it, and post an accessibility notification only when the label
+changes. An unnamed image has a localizable fallback label.
+Real-window, save, VoiceOver and full keyboard-access qualification remain open.
+
+### Info palette (candidate)
+
+Window ▸ Info shows image-pixel coordinates and the committed composite's
+straight sRGB and alpha under the pointer. Sampling is asynchronous and
+bounded to one in-flight read, with the latest position retained; stale
+results are discarded on movement, document change, hide, or image change.
+The readout follows drags and refreshes a stationary pointer after scrolling
+or an image change; a sample delayed by exclusive engine work resumes when it
+becomes available. The palette does not change the foreground color or image
+history. A focused real-window test covers event dispatch, drag, scroll, zoom,
+rotation, alpha, document changes and deferred reads. Whole-editor integration,
+accessibility and review remain in qualification. Native CMYK/Lab readouts
+and sampling of temporary previews are not yet provided.
+
+### Photoshop import Revert admission (candidate)
+
+Reverting a composite or ink-preserving CMYK import reserves its source until
+the replacement is adopted or the operation fails. A second matching import
+or Revert receives a busy error; closing windows are excluded from duplicate
+lookup so an import after Revert finds the replacement. Focused real-window
+checks cover both routes on four engine versions, including failed-Revert retry
+and source preservation. Full editor, bundle and review checks remain open.
+
+### Remove a recorded step (candidate)
+
+The Recorder palette can remove a selected step from a stopped recording.
+Remaining steps retain their target bindings, including after saving and
+reopening a recording. Removing the final saved step marks the recording as
+changed; the saved file is updated only when explicitly saved. Stale
+selections and recordings with work in flight are refused. Native palette
+and file workflows pass on all four supported engines, and the full Swift
+suite passes. Bundle qualification and hosted review remain open.
+
+The Remove Step control explains why it is disabled: it reports pending
+recording, replay or image work first, then asks for a current selection.
+Its normal action help returns when the selected step can be removed.
+
+### Reopen after Revert (candidate)
+
+An ordinary Open no longer brings a discarded window back while its document
+is closing after Revert. The existing replacement is selected instead. A
+native-window regression checks the close-drain interval and the source image
+cleanup. The same rule also avoids selecting other closing ordinary documents.
+
+### Guarded capture for V2 tablet strokes (candidate)
+
+Facade slot 232, `stroke_begin_v2_with_capture_facts`, begins a V2-sample
+stroke and atomically captures the brush and supported paint configuration,
+as slot 171 does for V1 samples. It keeps slot 172's packet, timestamp and
+axis rules. An unsupported live capture can still paint without a
+fingerprint; guarded replay refuses before the first dab unless the facts
+match. The Recorder uses it for ordinary tablet stroke recording, below.
+Native capture fixtures (34 checks) and the V2 coordinate
+fixture (152 checks) pass on all four engine sets. Physical tablets are not
+qualified.
 
 ### Ordinary tablet stroke recording (candidate)
 

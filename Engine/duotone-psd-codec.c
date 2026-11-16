@@ -14,9 +14,11 @@ glims_duotone_psd_size (const GlimsDuotonePsdSpec *spec, uint64_t *size)
   *size = 0;
   if (!spec || !spec->width || !spec->height || spec->width > GLIMS_DUOTONE_PSD_MAX_DIMENSION ||
       spec->height > GLIMS_DUOTONE_PSD_MAX_DIMENSION || (spec->depth != 8 && spec->depth != 16) ||
-      !spec->metadata || !spec->metadata_size || spec->metadata_size > GLIMS_DUOTONE_PSD_MAX_METADATA)
+      !spec->metadata || !spec->metadata_size || spec->metadata_size > GLIMS_DUOTONE_PSD_MAX_METADATA ||
+      (!!spec->alternate != !!spec->alternate_size) || spec->alternate_size > GLIMS_DUOTONE_PSD_MAX_METADATA)
     return GLIMS_DUOTONE_PSD_INVALID;
   uint64_t total = 40u + (uint64_t) spec->metadata_size +
+                   (spec->alternate_size ? 12u + (uint64_t) spec->alternate_size + (spec->alternate_size & 1u) : 0u) +
                    (uint64_t) spec->width * spec->height * (spec->depth / 8u);
   if (total >= UINT64_C(2147483648)) return GLIMS_DUOTONE_PSD_INVALID;
   *size = total;
@@ -45,7 +47,27 @@ glims_duotone_psd_write (const GlimsDuotonePsdSpec *spec,
       if (!write (write_context,spec->metadata+offset,count)) return GLIMS_DUOTONE_PSD_WRITE_FAILED;
       offset+=count;
     }
-  const uint8_t footer[10]={0}; /* resource and layer lengths, raw compression */
+  uint8_t resource_length[4] = {0};
+  if (spec->alternate_size)
+    be32 (resource_length, (uint32_t)(12u + spec->alternate_size + (spec->alternate_size & 1u)));
+  if (!write (write_context,resource_length,sizeof resource_length)) return GLIMS_DUOTONE_PSD_WRITE_FAILED;
+  if (spec->alternate_size)
+    {
+      uint8_t resource_header[12] = {'8','B','I','M',4,42,0,0,0,0,0,0};
+      if (spec->alternate_mesa) { resource_header[0]='M'; resource_header[1]='e'; resource_header[2]='S'; resource_header[3]='a'; }
+      be32 (resource_header+8,(uint32_t)spec->alternate_size);
+      if (!write (write_context,resource_header,sizeof resource_header)) return GLIMS_DUOTONE_PSD_WRITE_FAILED;
+      for (size_t offset=0; offset<spec->alternate_size; )
+        {
+          size_t count=spec->alternate_size-offset;
+          if (count>GLIMS_DUOTONE_PSD_METADATA_CHUNK) count=GLIMS_DUOTONE_PSD_METADATA_CHUNK;
+          if (!write (write_context,spec->alternate+offset,count)) return GLIMS_DUOTONE_PSD_WRITE_FAILED;
+          offset+=count;
+        }
+      if (spec->alternate_size & 1u)
+        { const uint8_t pad=0; if (!write (write_context,&pad,1)) return GLIMS_DUOTONE_PSD_WRITE_FAILED; }
+    }
+  const uint8_t footer[6]={0}; /* layer length and raw compression */
   if (!write (write_context,footer,sizeof footer)) return GLIMS_DUOTONE_PSD_WRITE_FAILED;
   uint8_t samples[GLIMS_DUOTONE_PSD_CHUNK_PIXELS*2u];
   for (uint32_t y=0;y<spec->height;y++)

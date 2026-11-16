@@ -82,6 +82,30 @@ final class RecorderFileCodecTests: XCTestCase {
         XCTAssertEqual(value.records[9].outcome, .cancelled(""))
     }
 
+    func testRemovingLoadedRowPreservesOtherCommandsAndSourceMetadata() throws {
+        let original = try RecorderFileCodec.decode(bytes(allFamilies))
+        let edited = try original.removingRecord(at: 7)
+        XCTAssertEqual(edited.recordingID, original.recordingID)
+        XCTAssertEqual(edited.name, original.name)
+        XCTAssertEqual(edited.origin, original.origin)
+        XCTAssertEqual(edited.symbols, original.symbols)
+        XCTAssertEqual(edited.records.map(\.ordinal), Array(0..<9))
+        XCTAssertEqual(edited.records[7].outcome, .failure("Engine refused\nunchanged"))
+        XCTAssertEqual(edited.records[8].outcome, .cancelled(""))
+        XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(edited)), edited)
+        XCTAssertEqual(original.records.count, 10)
+        XCTAssertThrowsError(try original.removingRecord(at: -1))
+        XCTAssertThrowsError(try original.removingRecord(at: 10))
+    }
+
+    func testRemovingEarlierLoadedRowKeepsTheLaterTargetBinding() throws {
+        let original = try RecorderFileCodec.decode(bytes(allFamilies))
+        let edited = try original.removingRecord(at: 0)
+        XCTAssertEqual(edited.records[6].outcome, original.records[7].outcome)
+        XCTAssertEqual(edited.records[6].ordinal, 6)
+        XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(edited)), edited)
+    }
+
     func testEncoderHasIndependentCanonicalBytes() throws {
         let value = RecorderFileValue(recordingID: recordingID, name: "Named", origin: origin, symbols: [],
             records: [.init(ordinal: 0, outcome: .success(.scale(width: 1, height: 1), .none))])

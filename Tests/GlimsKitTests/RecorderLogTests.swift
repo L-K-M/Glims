@@ -43,6 +43,74 @@ final class RecorderLogTests: XCTestCase {
         }
     }
 
+    func testRemovingSettledRowKeepsOrderAndReplaysRemainingCommands() throws {
+        var log = try recorded(["first", "second", "third"])
+        try log.removeSettledRecord(at: 1)
+        XCTAssertEqual(log.records.map(\.ordinal), [0, 1])
+        XCTAssertEqual(successes(log), ["first", "third"])
+        try log.beginReplay()
+        let first = try log.nextReplayStep()
+        XCTAssertEqual(first.command.name, "first")
+        try log.acknowledgeReplay(first.token, outcome: .success)
+        let second = try log.nextReplayStep()
+        XCTAssertEqual(second.command.name, "third")
+        try log.acknowledgeReplay(second.token, outcome: .success)
+        XCTAssertEqual(log.replayStatus, .finished(total: 2))
+    }
+
+    func testRemovingFailureCanMakeRecordingReplayable() throws {
+        var log = Log()
+        try log.startRecording()
+        let first = try log.reserve()
+        let failed = try log.reserve()
+        try log.resolve(first, with: .success(Command("kept")))
+        try log.resolve(failed, with: .failure("not recorded"))
+        try log.stopRecording()
+        XCTAssertEqual(log.replayRefusal, .unsuccessfulRecording)
+        try log.removeSettledRecord(at: 1)
+        XCTAssertNil(log.replayRefusal)
+        XCTAssertEqual(successes(log), ["kept"])
+    }
+
+    func testRemovingRowRefusesWhileRecordingPendingOrReplaying() throws {
+        var log = try recorded(["kept"])
+        XCTAssertThrowsError(try log.removeSettledRecord(at: -1)) { XCTAssertEqual($0 as? Log.RowEditError, .invalidIndex) }
+        XCTAssertThrowsError(try log.removeSettledRecord(at: 1)) { XCTAssertEqual($0 as? Log.RowEditError, .invalidIndex) }
+        XCTAssertEqual(successes(log), ["kept"])
+        try log.beginReplay()
+        XCTAssertThrowsError(try log.removeSettledRecord(at: 0)) { XCTAssertEqual($0 as? Log.RowEditError, .replaying) }
+        XCTAssertEqual(try log.nextReplayStep().command.name, "kept")
+
+        var pending = Log()
+        try pending.startRecording()
+        let first = try pending.reserve()
+        try pending.resolve(first, with: .success(Command("kept")))
+        let later = try pending.reserve()
+        XCTAssertThrowsError(try pending.removeSettledRecord(at: 0)) { XCTAssertEqual($0 as? Log.RowEditError, .recording) }
+        try pending.stopRecording()
+        XCTAssertThrowsError(try pending.removeSettledRecord(at: 0)) { XCTAssertEqual($0 as? Log.RowEditError, .pendingReservations) }
+        try pending.resolve(later, with: .success(Command("late")))
+        XCTAssertEqual(successes(pending), ["kept", "late"])
+    }
+
+    func testRemovingRowInvalidatesOldReservationsAndReplayStatus() throws {
+        var log = Log()
+        try log.startRecording()
+        let old = try log.reserve()
+        try log.resolve(old, with: .success(Command("remove")))
+        let kept = try log.reserve()
+        try log.resolve(kept, with: .success(Command("keep")))
+        try log.stopRecording()
+        try log.beginReplay()
+        let first = try log.nextReplayStep()
+        try log.cancelReplay()
+        try log.removeSettledRecord(at: 0)
+        XCTAssertEqual(log.replayStatus, .idle)
+        assertRefusal(.staleReservation) { try log.resolve(old, with: .success(Command("late"))) }
+        assertRefusal(.notReplaying) { try log.acknowledgeReplay(first.token, outcome: .success) }
+        XCTAssertEqual(successes(log), ["keep"])
+    }
+
     func testOutOfOrderCompletionsPublishInAcceptanceOrder() throws {
         var log = Log()
         try log.startRecording()
