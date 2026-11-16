@@ -57,6 +57,39 @@ final class RecorderTabletStrokeFileTests: XCTestCase {
         }
     }
 
+    func testEraserBackgroundUsesStrictVersion22AndSurvivesTabletRoundTrip() throws {
+        let value = mapCommand(fixture(tool: "eraser", version: 22)) { command in
+            var settings = command["settings"] as! [String: Any]
+            settings["eraserBackground"] = ["red": 0.1, "green": 0.4, "blue": 0.7]
+            command["settings"] = settings
+        }
+        let file = try decode(value)
+        guard case .success(.completeTabletStroke(let stroke), .layer) = file.records.first?.outcome else {
+            return XCTFail("missing tablet Eraser")
+        }
+        XCTAssertEqual(stroke.settings.brush.eraserBackground, .init(red: 0.1, green: 0.4, blue: 0.7))
+        let bytes = try RecorderFileCodec.encode(file)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        XCTAssertEqual(json["version"] as? Int, 22)
+        XCTAssertEqual(try RecorderFileCodec.decode(bytes), file)
+        XCTAssertEqual(try RecorderFileSemanticBridge.prepare(file).file, file)
+
+        var oldVersion = value; oldVersion["version"] = 21
+        XCTAssertThrowsError(try decode(oldVersion))
+        XCTAssertThrowsError(try decode(fixture(tool: "eraser", version: 22)))
+        XCTAssertThrowsError(try decode(mapCommand(value) { command in
+            var settings = command["settings"] as! [String: Any]; settings["tool"] = "pencil"; command["settings"] = settings
+        }))
+        XCTAssertThrowsError(try decode(mapCommand(value) { command in
+            var settings = command["settings"] as! [String: Any]
+            settings["eraserBackground"] = ["red": 1.1, "green": 0.4, "blue": 0.7]; command["settings"] = settings
+        }))
+        XCTAssertThrowsError(try decode(mapCommand(value) { command in
+            var settings = command["settings"] as! [String: Any]
+            settings["eraserBackground"] = ["red": 0.1, "green": 0.4, "blue": 0.7, "alpha": 1]; command["settings"] = settings
+        }))
+    }
+
     func testVersionAndIdentityAndSampleValidationAreStrict() throws {
         for version in [1, 2, 16, 20] { XCTAssertThrowsError(try decode(fixture(version: version))) }
         XCTAssertThrowsError(try decode(mapCommand(fixture()) { $0["tag"] = "completeStroke" }))

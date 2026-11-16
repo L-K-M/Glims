@@ -23,6 +23,7 @@ enum RecorderFileCodec {
     static let labLayerFillVersion = 19
     static let spongeStrokeVersion = 20
     static let tabletStrokeVersion = 21
+    static let eraserBackgroundVersion = 22
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -99,7 +100,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...tabletStrokeVersion)
+        let fileVersion = try integer(root.get("version"), range: version...eraserBackgroundVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -136,6 +137,7 @@ enum RecorderFileCodec {
         var hasLabLayerFillCommand = false
         var hasSpongeStroke = false
         var hasTabletStroke = false
+        var hasEraserBackground = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -149,6 +151,8 @@ enum RecorderFileCodec {
                 let command = try command(row.get("command"), version: fileVersion, points: &points)
                 if case .completeStroke = command { hasStroke = true }
                 if case .completeTabletStroke = command { hasTabletStroke = true }
+                if case .completeTabletStroke(let stroke) = command, stroke.settings.eraserBackground != nil { hasEraserBackground = true }
+                if case .completeStroke(let stroke) = command, stroke.settings.eraserBackground != nil { hasEraserBackground = true }
                 if case .completeStroke(let stroke) = command, stroke.settings.tool.isSponge { hasSpongeStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
@@ -221,6 +225,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == tabletStrokeVersion, !hasTabletStroke {
             throw RecorderFileError.invalid("Version 21 requires a successful tablet stroke.")
+        }
+        if fileVersion == eraserBackgroundVersion, !hasEraserBackground {
+            throw RecorderFileError.invalid("Version 22 requires an Eraser stroke with a background color.")
         }
         if fileVersion == spongeStrokeVersion, !hasSpongeStroke {
             throw RecorderFileError.invalid("Version 20 requires a successful Sponge stroke.")
@@ -305,16 +312,26 @@ enum RecorderFileCodec {
         }
     }
 
-    private static func stroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderStrokeCommand {
+    private static func eraserBackground(_ node: RecorderJSON?, version: Int) throws -> EngineSession.Brush.EraserBackground? {
+        guard let node else { return nil }
+        guard version >= eraserBackgroundVersion else {
+            throw RecorderFileError.invalid("An Eraser background needs recording version 22.")
+        }
+        let color = try Object(node, required: ["red", "green", "blue"])
+        return try .init(red: number(color.get("red")), green: number(color.get("green")), blue: number(color.get("blue")))
+    }
+
+    private static func stroke(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderStrokeCommand {
         let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
         let settings = try Object(value.get("settings"),
-            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness"])
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness", "eraserBackground"])
         guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))),
               let brush = try RecorderStrokeCommand.Settings(tool: tool, size: number(settings.get("size")),
                   opacity: number(settings.get("opacity")), red: number(settings.get("red")),
                   green: number(settings.get("green")), blue: number(settings.get("blue")),
                   hardness: settings.optional("hardness").map { try number($0) },
-                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase"))) else {
+                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase")),
+                  eraserBackground: eraserBackground(settings.optional("eraserBackground"), version: version)) else {
             throw RecorderFileError.invalid("Invalid recorded brush settings.")
         }
         let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
@@ -501,10 +518,10 @@ enum RecorderFileCodec {
     }
 
 
-    private static func tabletStroke(_ node: RecorderJSON, points: inout Int) throws -> RecorderTabletStrokeCommand {
+    private static func tabletStroke(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderTabletStrokeCommand {
         let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
         let settings = try Object(value.get("settings"),
-            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness"])
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness", "eraserBackground"])
         guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))) else {
             throw RecorderFileError.invalid("Invalid recorded tablet brush tool.")
         }
@@ -512,7 +529,8 @@ enum RecorderFileCodec {
                   opacity: number(settings.get("opacity")), red: number(settings.get("red")),
                   green: number(settings.get("green")), blue: number(settings.get("blue")),
                   hardness: settings.optional("hardness").map { try number($0) },
-                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase"))) else {
+                  pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase")),
+                  eraserBackground: eraserBackground(settings.optional("eraserBackground"), version: version)) else {
             throw RecorderFileError.invalid("Invalid recorded tablet brush settings.")
         }
         let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
@@ -756,10 +774,10 @@ enum RecorderFileCodec {
             return .labSelection(try labSelectCommand(node))
         case "completeTabletStroke":
             guard version >= tabletStrokeVersion else { throw RecorderFileError.invalid("A tablet stroke needs recording version 21.") }
-            return .completeTabletStroke(try tabletStroke(node, points: &points))
+            return .completeTabletStroke(try tabletStroke(node, version: version, points: &points))
         case "completeStroke":
             guard version >= strokeVersion else { throw RecorderFileError.invalid("A complete stroke needs recording version 2.") }
-            let value = try stroke(node, points: &points)
+            let value = try stroke(node, version: version, points: &points)
             guard !value.settings.tool.isSponge || version >= spongeStrokeVersion else {
                 throw RecorderFileError.invalid("A Sponge stroke needs recording version 20.")
             }

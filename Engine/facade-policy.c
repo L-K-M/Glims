@@ -340,7 +340,7 @@ glims_facade_call_reporting_admission (GlimsEngine *engine, GlimsFacadeOperation
 GlimsItemID
 glims_facade_brush_source (const GlimsBrushSettings *settings)
 {
-  if (!settings || settings->struct_size < sizeof *settings ||
+  if (!settings || settings->struct_size < offsetof (GlimsBrushSettings, has_eraser_background) ||
       (settings->tool != GLIMS_PAINT_CLONE && settings->tool != GLIMS_PAINT_HEAL)) return 0;
   return settings->source_drawable;
 }
