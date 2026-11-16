@@ -6248,8 +6248,8 @@ final class EngineSession: @unchecked Sendable {
                          xtilt: point.xTilt, ytilt: point.yTilt, time_ms: point.timeMilliseconds)
     }
 
-    /// A Brush's captured settings as the facade's GlimsBrushSettings:
-    /// nil option numbers become -1 (the engine's default for that tool).
+    /// Refuses an Eraser background on adapters that do not advertise
+    /// GLIMS_BRUSH_FEATURE_ERASER_BACKGROUND (bit 0 of brush_settings_features).
     private func validateEraserBackground(_ brush: Brush) throws {
         guard brush.tool == .eraser, brush.eraserBackground != nil else { return }
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.brush_settings_features),
@@ -6260,6 +6260,8 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// A Brush's captured settings as the facade's GlimsBrushSettings:
+    /// nil option numbers become -1 (the engine's default for that tool).
     private static func nativeBrush(_ brush: Brush, recordsEraserBackground: Bool = false) -> GlimsBrushSettings {
         GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
                            size: brush.size, opacity: brush.opacity,

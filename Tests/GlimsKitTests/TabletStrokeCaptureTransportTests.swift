@@ -157,7 +157,8 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
         try withExtendedLifetime(producer) {
             if guarded {
                 let page = Int(getpagesize()), count = Int(api.struct_size)
-                XCTAssertLessThan(count, page)
+                // The guard page sits right after the table, so it must fit in one page.
+                guard count < page else { throw POSIXError(.EOVERFLOW) }
                 let memory = mmap(nil, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)!
                 guard memory != MAP_FAILED else { throw POSIXError(.ENOMEM) }
                 defer { munmap(memory, page * 2) }
@@ -331,6 +332,7 @@ final class TabletStrokeCaptureTransportTests: XCTestCase {
                 XCTAssertEqual(p.calls, ["resolve", "tablet_capture_begin", "continue:73", "end:73"])
                 XCTAssertEqual(p.beginExpectedFingerprint, fingerprint)
                 XCTAssertEqual(p.beginPacket.first?.rotation_turns, 0.25)
+                XCTAssertEqual(p.beginPacket.first?.tangential_pressure, -0.5)
                 XCTAssertEqual(p.continuedPackets.first?.first?.rotation_turns, 0.75)
                 XCTAssertEqual(p.continuedPackets.first?.first?.tangential_pressure, 0.5)
             }

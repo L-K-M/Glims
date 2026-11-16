@@ -52,7 +52,6 @@ static void
 capture_case (GlimsEngine *engine, const BrushIdentity *identity, guint32 tool)
 {
   GlimsBrushSettings brush = pencil; brush.tool = tool;
-  printf ("OBS V2 capture tool=%u\n", tool);
   Scene reference = {0}, captured = {0}, replay = {0};
   Snapshot before, expected, actual;
   GlimsStrokeID stroke = 0; char *error = NULL;
