@@ -409,23 +409,64 @@ glims_image_new (GlimsEngine   *engine,
                  GlimsImageID  *out,
                  char         **error)
 {
-  GimpImage *image;
-  GimpLayer *layer;
+  return glims_image_new_filled (engine, width, height, GLIMS_NEW_IMAGE_WHITE, NULL, out, error);
+}
+
+/* File > New's Contents, as in Photoshop: a white or colored opaque
+ * "Background", or a transparent "Layer 1" with an alpha channel. */
+GlimsStatus
+glims_image_new_filled (GlimsEngine      *engine,
+                        int32_t           width,
+                        int32_t           height,
+                        uint32_t          contents,
+                        const GlimsColor *color,
+                        GlimsImageID     *out,
+                        char            **error)
+{
+  GimpImage    *image;
+  GimpLayer    *layer;
+  GimpContext  *context;
+  gboolean      transparent = contents == GLIMS_NEW_IMAGE_TRANSPARENT;
+  GimpFillType  fill        = GIMP_FILL_WHITE;
 
   if (! out || width < 1 || height < 1 ||
       width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (contents != GLIMS_NEW_IMAGE_WHITE && contents != GLIMS_NEW_IMAGE_COLOR && ! transparent)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (contents == GLIMS_NEW_IMAGE_COLOR &&
+      (! color || ! isfinite (color->red) || ! isfinite (color->green) || ! isfinite (color->blue)))
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
   image = gimp_create_image (engine->gimp, width, height, GIMP_RGB,
                              GIMP_PRECISION_U8_NON_LINEAR, FALSE);
 
-  /* A new image starts with a white background and an empty history. */
+  /* A new image starts with an empty history. A private context carries
+   * the fill color, so the user's background color is never touched. */
+  context = gimp_context_new (engine->gimp, "Glims new image", gimp_get_user_context (engine->gimp));
+  if (contents == GLIMS_NEW_IMAGE_COLOR)
+    {
+      GeglColor *background = gegl_color_new (NULL);
+
+      gegl_color_set_rgba_with_space (background, CLAMP (color->red, 0.0, 1.0), CLAMP (color->green, 0.0, 1.0),
+                                      CLAMP (color->blue, 0.0, 1.0), 1.0, NULL);
+      gimp_context_set_background (context, background);
+      g_object_unref (background);
+      fill = GIMP_FILL_BACKGROUND;
+    }
+  else if (transparent)
+    {
+      fill = GIMP_FILL_TRANSPARENT;
+    }
+
   gimp_image_undo_disable (image);
   layer = gimp_layer_new (image, width, height,
-                          gimp_image_get_layer_format (image, FALSE),
-                          "Background", GIMP_OPACITY_OPAQUE, GIMP_LAYER_MODE_NORMAL);
+                          gimp_image_get_layer_format (image, transparent),
+                          transparent ? "Layer 1" : "Background",
+                          GIMP_OPACITY_OPAQUE, GIMP_LAYER_MODE_NORMAL);
   gimp_image_add_layer (image, layer, NULL, 0, FALSE);
-  gimp_drawable_fill (GIMP_DRAWABLE (layer), gimp_get_user_context (engine->gimp), GIMP_FILL_WHITE);
+  gimp_drawable_fill (GIMP_DRAWABLE (layer), context, fill);
+  g_object_unref (context);
   gimp_image_undo_enable (image);
   gimp_image_clean_all (image);
 

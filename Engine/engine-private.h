@@ -310,6 +310,8 @@ GlimsStatus glims_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImag
 
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
+GlimsStatus glims_image_new_filled (GlimsEngine *e, int32_t w, int32_t h, uint32_t contents,
+                                    const GlimsColor *color, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open       (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
 GlimsStatus glims_image_open_psd_composite (GlimsEngine *e, const char *path, GlimsImageID *out, char **error);
 /* Scoped compatibility guard for native 3.2.0 vector loading. */

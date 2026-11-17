@@ -141,4 +141,25 @@ final class NewImageSettingsTests: XCTestCase {
         XCTAssertNil(NewImageSettings.Kind.kind(at: -1, supportsLab: true))
         XCTAssertNil(NewImageSettings.Kind.kind(at: 99, supportsLab: false))
     }
+
+    func testContentsDefaultToWhiteAndApplyOnlyToRGB() throws {
+        XCTAssertEqual(NewImageSettings(width: "10", height: "10")?.contents, .white)
+        XCTAssertEqual(NewImageSettings(width: "10", height: "10", contents: .transparent)?.contents, .transparent)
+        XCTAssertEqual(NewImageSettings(width: "10", height: "10", kind: .multichannel,
+                                        contents: .transparent)?.contents, .white)
+        XCTAssertEqual(NewImageSettings(width: "10", height: "10", kind: .lab,
+                                        contents: .backgroundColor)?.contents, .white)
+        XCTAssertEqual(NewImageSettings.Contents.allCases.map(\.title), ["White", "Background Color", "Transparent"])
+    }
+
+    func testEngineContentsCaptureTheBackgroundColor() throws {
+        let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        let white = try XCTUnwrap(NewImageSettings(width: "10", height: "10"))
+        XCTAssertEqual(try white.engineContents(background: red), .white)
+        let clear = try XCTUnwrap(NewImageSettings(width: "10", height: "10", contents: .transparent))
+        XCTAssertEqual(try clear.engineContents(background: red), .transparent)
+        let colored = try XCTUnwrap(NewImageSettings(width: "10", height: "10", contents: .backgroundColor))
+        XCTAssertEqual(try colored.engineContents(background: red),
+                       .color(try RecorderColor(red: 1, green: 0, blue: 0, alpha: 1)))
+    }
 }

@@ -6617,3 +6617,17 @@ selection route; that route was not exercised with this tool. With a floating se
 commits through the floating-shape route only while the float is
 unchanged since the first click; unlike Lasso, a click on the float
 never moves it. Option-drag freehand segments are not implemented.
+
+### New Image contents (candidate)
+
+File ▸ New offers Photoshop's Contents choice for RGB images: White,
+Background Color or Transparent. Additive facade slot 240,
+`image_new_filled`, makes the same 8-bit RGB image as `image_new` but
+fills its one layer white, with a given sRGB color (alpha ignored, so the
+layer stays opaque) through a private context, or with transparency on a
+layer with an alpha channel named "Layer 1", as Photoshop names it. The
+image has an empty history and is clean. `image_new` now forwards to it
+with White. The panel captures the tool background color at Create.
+Multichannel, CMYK and Lab keep their own creation paths and show no
+Contents row, nor does an older adapter without the slot. The Recorder
+does not record New.

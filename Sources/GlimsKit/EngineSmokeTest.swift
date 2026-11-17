@@ -827,6 +827,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Polygon Lasso)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "new-image-contents" {
+                try exerciseNewImageContents(session, documents: documents)
+                print(failures == 0 ? "PASSED (New Image contents)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-drag" {
                 try exerciseSelectionDrag(session, documents: documents)
                 print(failures == 0 ? "PASSED (selection drag)" : "FAILED: \(failures) failure(s)")
@@ -1196,6 +1201,7 @@ enum EngineSmokeTest {
             try exerciseHueSaturation(session, work: work, documents: documents)
             try exerciseSelectionDrag(session, documents: documents)
             try exercisePolygonLasso(session, documents: documents)
+            try exerciseNewImageContents(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)

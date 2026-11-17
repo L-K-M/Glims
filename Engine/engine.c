@@ -4290,6 +4290,28 @@ static GlimsStatus api_selection_similar (GlimsEngine *e, GlimsImageID image,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             selection_similar_on_engine, &a, error);
 }
+typedef struct {
+  int32_t width, height;
+  uint32_t contents;
+  const GlimsColor *color;
+  GlimsImageID *image;
+  char **error;
+} GlimsImageNewFilledArgs;
+static GlimsStatus image_new_filled_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsImageNewFilledArgs *a = data;
+  return glims_image_new_filled (e, a->width, a->height, a->contents, a->color, a->image, a->error);
+}
+static GlimsStatus api_image_new_filled (GlimsEngine *e, int32_t width, int32_t height, uint32_t contents,
+                                         const GlimsColor *color, GlimsImageID *image, char **error)
+{
+  GlimsImageNewFilledArgs a = { width, height, contents, color, image, error };
+  if (error) *error = NULL;
+  if (image) *image = 0;
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_new_filled,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
+                            image_new_filled_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {
