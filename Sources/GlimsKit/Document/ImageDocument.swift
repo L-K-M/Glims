@@ -3411,6 +3411,25 @@ final class ImageDocument {
         }
     }
 
+    /// Visible layers at the top level of the stack, the ones Layer ▸
+    /// Merge Visible combines (a visible group counts as one).
+    var visibleTopLevelLayerCount: Int {
+        layers.filter { $0.depth == 0 && $0.isVisible }.count
+    }
+
+    /// Layer ▸ Merge Visible: like Merge Down and Flatten Image it replaces
+    /// the paint target, so it waits behind queued target changes and its
+    /// merged result becomes the selected layer natively.
+    func mergeVisible() {
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
+        endPendingUserEdits()
+        enqueueTargetCommand { session, image in
+            _ = try session.mergeVisible(image)
+        }
+    }
+
     /// Layer ▸ Rasterize Layer… after its confirmation sheet approved:
     /// turns the genuine text, link or vector layer `layer` pixel-behaving
     /// while its structured source is retained, as one undo step. The id

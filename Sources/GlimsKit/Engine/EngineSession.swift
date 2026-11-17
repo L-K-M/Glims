@@ -5026,6 +5026,28 @@ final class EngineSession: @unchecked Sendable {
         try check(scale(engine, image, Int32(width), Int32(height), interpolation.rawValue, &error), error)
     }
 
+    /// Whether this adapter offers Layer > Merge Visible (facade slot 235).
+    var supportsMergeVisible: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_merge_visible) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_merge_visible)
+            && api.image_merge_visible != nil
+    }
+
+    /// Merges every visible top-level layer into one, keeping hidden
+    /// layers, as one undo step. Returns the merged layer, which the
+    /// engine selects. Refuses on adapters without the capability.
+    @discardableResult
+    func mergeVisible(_ image: Int32) throws -> Int32? {
+        guard supportsMergeVisible, let merge = api.image_merge_visible else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot merge visible layers.")
+        }
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(merge(engine, image, &result, &error), error)
+        return result == 0 ? nil : result
+    }
+
     /// Resolves the caller's color once, at execution, and returns the exact
     /// owned value used by the native call for semantic recording.
     @discardableResult

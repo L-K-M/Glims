@@ -553,6 +553,27 @@ test_editing (void)
          "raising it one step");
   CHECK (api->layer_command (engine, image, copy, GLIMS_LAYER_DELETE, NULL, NULL) == GLIMS_STATUS_OK && layer_count (image) == 2,
          "deleting it");
+
+  /* Merge Visible (slot 235). The layer is still hidden here, so its
+   * copy is too and only the background is visible. */
+  CHECK (api->layer_command (engine, image, layer, GLIMS_LAYER_DUPLICATE, &copy, NULL) == GLIMS_STATUS_OK &&
+         layer_count (image) == 3, "duplicating the hidden layer for Merge Visible");
+  merged = 42;
+  CHECK (api->image_merge_visible (engine, image, &merged, &error) == GLIMS_STATUS_FAILED && error && merged == 0 &&
+         layer_count (image) == 3, "Merge Visible refuses a single visible layer");
+  api->free_string (error);
+  error = NULL;
+  change.properties = GLIMS_LAYER_VISIBLE;
+  change.visible    = true;
+  api->layer_change (engine, image, layer, &change, NULL);
+  CHECK (api->image_merge_visible (engine, image, &merged, NULL) == GLIMS_STATUS_OK && merged > 0 &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && n == 2 &&
+         rows[0].id == copy && ! rows[0].visible && rows[1].id == merged && rows[1].visible && rows[1].selected,
+         "Merge Visible merges the visible layers, keeps the hidden copy and selects the result");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 3,
+         "one undo restores the merged layers");
+  CHECK (api->layer_command (engine, image, copy, GLIMS_LAYER_DELETE, NULL, NULL) == GLIMS_STATUS_OK && layer_count (image) == 2,
+         "deleting the hidden copy");
   change.properties = GLIMS_LAYER_VISIBLE;
   change.visible    = true;
   api->layer_change (engine, image, layer, &change, NULL);

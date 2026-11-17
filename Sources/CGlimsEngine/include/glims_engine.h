@@ -4405,6 +4405,14 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_scale_with_interpolation) (GlimsEngine *engine, GlimsImageID image,
                                                  int32_t width, int32_t height,
                                                  uint32_t interpolation, char **error);
+  /* Slot235: Layer > Merge Visible. Merges every visible top-level layer
+   * (visible groups whole) into one layer, keeping hidden layers, as one
+   * undo step; the merged layer becomes selected and `result` (may be
+   * NULL) receives it. Fewer than two visible layers fails before any
+   * change; a non-ordinary component layout is UNSUPPORTED; strokes,
+   * filter dialogs and plug-ins report BUSY. */
+  GlimsStatus (*image_merge_visible) (GlimsEngine *engine, GlimsImageID image,
+                                      GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

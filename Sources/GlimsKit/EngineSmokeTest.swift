@@ -6015,6 +6015,8 @@ enum EngineSmokeTest {
         settle()
         check((pixel(session, image, x: 10, y: 5)?[0] ?? 255) < 60, "the gradient tool draws on the selected background")
 
+        exerciseMergeVisible(document, controller: controller, session: session, image: image)
+
         controller.mergeDown(nil)
         settle()
         controller.flattenImage(nil)
@@ -11965,4 +11967,59 @@ enum EngineSmokeTest {
 final class DocumentList {
     var items: [ImageDocument] = []
     var progressEvents: [EngineSession.Progress?] = []
+}
+
+extension EngineSmokeTest {
+    /// Layer ▸ Merge Visible: a hidden layer survives, the visible ones become
+    /// one layer without changing the composite, and one Undo restores them.
+    /// Adapters without slot 235 keep the command disabled.
+    @MainActor
+    static func exerciseMergeVisible(_ document: ImageDocument, controller: DocumentWindowController,
+                                     session: EngineSession, image: Int32) {
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+        }
+        let item = NSMenuItem(title: "Merge Visible",
+                              action: #selector(DocumentWindowController.mergeVisible(_:)), keyEquivalent: "")
+        guard session.supportsMergeVisible else {
+            check(!controller.validateMenuItem(item), "an older adapter keeps Merge Visible disabled")
+            return
+        }
+
+        let existing = Set(document.layers.map(\.id))
+        document.layerCommand(.new)
+        settle()
+        guard let hidden = document.layers.first(where: { !existing.contains($0.id) })?.id else {
+            return check(false, "New Layer adds a layer for Merge Visible")
+        }
+        document.changeLayer(hidden, EngineSession.LayerChange(isVisible: false))
+        settle()
+        let before = document.layers.count
+        let visible = document.visibleTopLevelLayerCount
+        let composite = pixel(session, image, x: 10, y: 5)
+        check(visible >= 2 && controller.validateMenuItem(item),
+              "Merge Visible is enabled with \(visible) visible top-level layers")
+
+        controller.mergeVisible(nil)
+        settle()
+        check(document.layers.count == before - visible + 1 && document.visibleTopLevelLayerCount == 1
+                && document.layers.contains { $0.id == hidden && !$0.isVisible }
+                && document.layers.first(where: \.isVisible)?.isSelected == true,
+              "Merge Visible merges the \(visible) visible layers into one selected layer and keeps the hidden one (\(document.layers.count) of \(before))")
+        check(composite != nil && pixel(session, image, x: 10, y: 5) == composite,
+              "Merge Visible keeps the composite (\(String(describing: composite)))")
+        check(!controller.validateMenuItem(item), "Merge Visible disables with one visible layer")
+
+        document.undo()
+        settle()
+        check(document.layers.count == before && document.visibleTopLevelLayerCount == visible,
+              "one Undo restores the layers Merge Visible combined")
+        document.undo()
+        document.undo()
+        settle()
+        check(document.layers.count == existing.count, "Undo removes the hidden helper layer")
+    }
 }

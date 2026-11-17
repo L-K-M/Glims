@@ -6516,3 +6516,15 @@ owned `GlimsInterpolation`; `image_scale` now delegates to it with DEFAULT. An
 older adapter keeps the previous sheet and refuses an explicit method. A chosen
 method records as `scaleWithInterpolation` in version 27 files; a default scale
 keeps its version 1 command.
+
+### Merge Visible (candidate)
+
+Layer ▸ Merge Visible merges every visible top-level layer (a visible group
+whole) into one selected layer as one undo step and keeps hidden layers, as
+GIMP's Merge Visible Layers does with Expand as Necessary. Additive facade
+slot 235, `image_merge_visible`, refuses fewer than two visible layers before
+any change and non-ordinary component layouts. The menu item is disabled on
+older adapters, in layered Lab and flat component documents, while a floating
+selection is active, and with fewer than two visible top-level layers. It has
+no shortcut because Shift-Command-E is Export. Like Merge Down, it is outside
+the Recorder's capture scope.
