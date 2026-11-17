@@ -2830,6 +2830,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             menuItem.toolTip = nil
             return !editingBlocked && !previewBusy
+        case #selector(layerViaCopy(_:)), #selector(layerViaCut(_:)):
+            // Cached readiness, as Float: a selection, one selected
+            // layer (not a mask or channel), no floating selection, the
+            // mode's lock and source gates, and a capable adapter.
+            let mode: EngineSession.FloatMode = menuItem.action == #selector(layerViaCut(_:)) ? .move : .copy
+            let readiness = imageDocument.layerViaReadiness(mode)
+            menuItem.toolTip = readiness.reason
+            return readiness.allowed && !editingBlocked && !previewBusy
         case #selector(floatSelectedPixels(_:)), #selector(floatACopy(_:)):
             // Cached readiness only — selection present, no active
             // floating selection, one selected layer, not busy/closing/

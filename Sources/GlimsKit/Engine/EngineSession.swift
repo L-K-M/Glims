@@ -5048,6 +5048,30 @@ final class EngineSession: @unchecked Sendable {
         return result == 0 ? nil : result
     }
 
+    /// Whether the adapter has Layer via Copy / Layer via Cut (slot 236).
+    var supportsSelectionToNewLayer: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.selection_to_new_layer) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.selection_to_new_layer)
+            && api.selection_to_new_layer != nil
+    }
+
+    /// Layer via Copy (`.copy`) / Layer via Cut (`.move`): the selected
+    /// pixels of the layer `target` become a new layer directly above it,
+    /// as one undo step, and the selection is cleared. Returns the new
+    /// layer. Admission is `floatSelection`'s, plus FAILED for a mask or
+    /// channel target. Refuses on adapters without the capability.
+    @discardableResult
+    func selectionToNewLayer(_ image: Int32, target: Int32, mode: FloatMode) throws -> Int32 {
+        guard supportsSelectionToNewLayer, let toLayer = api.selection_to_new_layer else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot make a layer from the selection.")
+        }
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(toLayer(engine, image, target, mode.rawValue, &result, &error), error)
+        return result
+    }
+
     /// Resolves the caller's color once, at execution, and returns the exact
     /// owned value used by the native call for semantic recording.
     @discardableResult

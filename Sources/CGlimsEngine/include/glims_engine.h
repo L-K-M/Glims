@@ -4413,6 +4413,20 @@ typedef struct GlimsEngineAPI {
    * filter dialogs and plug-ins report BUSY. */
   GlimsStatus (*image_merge_visible) (GlimsEngine *engine, GlimsImageID image,
                                       GlimsItemID *result, char **error);
+
+  /* Slot 236. Layer > New > Layer via Copy (GLIMS_FLOAT_COPY) and Layer
+   * via Cut (GLIMS_FLOAT_MOVE): the selected pixels of the layer
+   * `target` (0: the image's one selected drawable) become a new
+   * ordinary layer directly above it, named after the command, and the
+   * selection is cleared. It is selection_float followed by the
+   * TO_LAYER floating_command, as exactly one undo step: one Undo
+   * removes the new layer and restores the target's pixels (Cut) and
+   * the selection. `result` (may be NULL) receives the new layer's id.
+   * Admission is selection_float's, with the same statuses, plus FAILED
+   * when `target` is a layer mask or a channel. Every refusal happens
+   * before any native call and changes nothing. */
+  GlimsStatus (*selection_to_new_layer) (GlimsEngine *engine, GlimsImageID image, GlimsItemID target,
+                                         uint32_t mode, GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

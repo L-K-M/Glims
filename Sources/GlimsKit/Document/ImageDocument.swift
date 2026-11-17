@@ -5447,6 +5447,59 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    nonisolated static func layerViaTitle(_ mode: EngineSession.FloatMode) -> String {
+        mode == .move ? "Layer via Cut" : "Layer via Copy"
+    }
+
+    /// Whether Layer ▸ Layer via Copy (`.copy`) / Layer via Cut (`.move`)
+    /// may run, from cached state only: the float's readiness for `mode`
+    /// on an ordinary image, plus a layer target (a mask or channel
+    /// target is refused, as the engine refuses it).
+    func layerViaReadiness(_ mode: EngineSession.FloatMode) -> FloatingControlsLogic.FloatTarget {
+        let title = Self.layerViaTitle(mode)
+        guard session.supportsSelectionToNewLayer else {
+            return .init(drawable: nil, reason: "This image engine cannot make a layer from the selection.")
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return .init(drawable: nil, reason: "\(title) is available for ordinary layered images only.")
+        }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: title) {
+            return .init(drawable: nil, reason: reason)
+        }
+        let readiness = FloatingControlsLogic.floatTarget(activeDrawable, mode: mode,
+                                                          hasSelection: selectionBounds != nil, state: floatingState,
+                                                          layers: layers, maskStates: maskStates, channels: channels,
+                                                          sources: layerSources, locks: layerLocks, acceptsEdits: acceptsEdits,
+                                                          pendingTarget: !pendingTargetCommands.isEmpty)
+        guard let drawable = readiness.drawable else { return readiness }
+        guard layers.contains(where: { $0.id == drawable }) else {
+            return .init(drawable: nil, reason: "\(title) works on a layer; stop editing the mask or channel first.")
+        }
+        return readiness
+    }
+
+    /// Layer ▸ Layer via Copy / Layer via Cut: the selected pixels of the
+    /// explicit layer `target` become a new layer directly above it, as
+    /// one serial target command and one undo step. Like the float, the
+    /// document, target and mode are captured at command time, pending
+    /// edits and an active stroke drain first, and the engine revalidates
+    /// every gate.
+    func layerViaSelection(mode: EngineSession.FloatMode, target: Int32,
+                           completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        guard !refuseWhileEditingUnavailable() else { return completion(.failure(DocumentError.busy)) }
+        guard !refuseWhileTargetPending() else { return completion(.failure(DocumentError.busy)) }
+        let readiness = layerViaReadiness(mode)
+        guard let drawable = readiness.drawable, drawable == target else {
+            return completion(.failure(FloatingError.refused(readiness.reason ?? DocumentError.busy.localizedDescription)))
+        }
+        endPendingUserEdits()
+        if strokeIsActive { endStroke() }
+        enqueueTargetCommand({ session, image in
+            _ = try session.selectionToNewLayer(image, target: drawable, mode: mode)
+        }, completion: completion)
+    }
+
     // MARK: Files
 
     /// Whether closing now could lose work: edits the engine counted, an

@@ -12833,6 +12833,123 @@ test_floating_selection (const char *work)
   api->image_close (engine, other);
 }
 
+/* Layer via Copy / Layer via Cut (selection_to_new_layer, slot 236):
+ * the float plus floating_sel_to_layer as one undo step, the new layer
+ * directly above its source with the command's name, the selection
+ * cleared, the composite unchanged, the cut hole in the source, one
+ * Undo restoring everything, and refusals (empty selection, mask
+ * target, invalid mode) that change nothing. */
+static void
+test_selection_to_new_layer (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer, made = 0, mask = 0;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsLayerChange   change = { .struct_size = sizeof change };
+  GlimsFloatingState state = { .struct_size = sizeof state };
+  GlimsLayerInfo     rows[4];
+  GlimsRect          bounds;
+  bool               empty = false;
+  int32_t            before, w = 0, h = 0, n = 0, i;
+  uint8_t           *shot = NULL, *now = NULL;
+  char              *error = NULL;
+  const int32_t      W = 32, H = 32;
+  uint8_t            known[32 * 32 * 4];
+
+  for (i = 0; i < W * H; i++)
+    {
+      known[i * 4]     = (uint8_t) ((i % W) * 8);
+      known[i * 4 + 1] = (uint8_t) ((i / W) * 8);
+      known[i * 4 + 2] = 64;
+      known[i * 4 + 3] = 255;
+    }
+  CHECK (api->image_from_pixels (engine, W, H, known, sizeof known, &image, NULL) == GLIMS_STATUS_OK && image != 0,
+         "the Layer via fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  api->layer_select (engine, image, layer);
+  shot = render_all (image, &w, &h);
+
+  /* Refusals change nothing. */
+  CHECK (api->selection_to_new_layer (engine, 9999, layer, GLIMS_FLOAT_COPY, &made, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->selection_to_new_layer (engine, image, layer, 99, &made, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "Layer via: unknown image NOT_FOUND, unknown mode INVALID_ARGUMENT");
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (image);
+  made = 42;
+  CHECK (api->selection_to_new_layer (engine, image, layer, GLIMS_FLOAT_COPY, &made, &error) == GLIMS_STATUS_FAILED &&
+         error && made == 0 && undo_depth (image) == before && layer_count (image) == 1,
+         "Layer via Copy refuses an empty selection with no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* Copy. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 12, 12 } }, 2, &sel);
+  before = undo_depth (image);
+  CHECK (api->selection_to_new_layer (engine, image, 0, GLIMS_FLOAT_COPY, &made, &error) == GLIMS_STATUS_OK && made != 0 &&
+         undo_depth (image) == before + 1,
+         "Layer via Copy is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && n == 2 && rows[0].id == made &&
+         rows[1].id == layer && strncmp (rows[0].name, "Layer via Copy", 14) == 0 && rows[0].visible &&
+         rows[0].kind == GLIMS_LAYER_PIXEL && rect_equals (rows[0].bounds, 4, 4, 8, 8),
+         "the copy is an 8x8 pixel layer named Layer via Copy directly above its source (%s)", n > 0 ? rows[0].name : "");
+  CHECK (api->image_floating_selection (engine, image, &state) == GLIMS_STATUS_OK && ! state.active &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "Layer via Copy leaves no floating selection and clears the selection");
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0, "Layer via Copy keeps the composite");
+  free (now);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && layer_count (image) == 1 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 4, 4, 8, 8),
+         "one Undo removes the copy and restores the selection");
+
+  /* Cut: the source gets a transparent hole the new layer covers. */
+  before = undo_depth (image);
+  CHECK (api->selection_to_new_layer (engine, image, layer, GLIMS_FLOAT_MOVE, &made, &error) == GLIMS_STATUS_OK && made != 0 &&
+         undo_depth (image) == before + 1 &&
+         api->image_layers (engine, image, rows, 4, &n) == GLIMS_STATUS_OK && n == 2 && rows[0].id == made &&
+         strncmp (rows[0].name, "Layer via Cut", 13) == 0,
+         "Layer via Cut makes a layer named Layer via Cut above its source%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0, "Layer via Cut keeps the composite");
+  free (now);
+  change.properties = GLIMS_LAYER_VISIBLE;
+  change.visible    = false;
+  api->layer_change (engine, image, made, &change, NULL);
+  now = render_all (image, &w, &h);
+  CHECK (now && pixel_at (now, w, 5, 5)[3] == 0 && pixel_at (now, w, 20, 20)[3] == 255,
+         "Layer via Cut leaves a transparent hole in the source");
+  free (now);
+  /* Undo the visibility change (if it pushed a step), then the cut. */
+  while (undo_depth (image) > before + 1)
+    api->image_undo (engine, image);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before && layer_count (image) == 1,
+         "one Undo removes the cut layer");
+  now = render_all (image, &w, &h);
+  CHECK (now && shot && memcmp (now, shot, (size_t) w * h * 4) == 0, "and restores the source pixels");
+  free (now);
+
+  /* A layer mask is not a Layer via target. */
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, NULL) == GLIMS_STATUS_OK && mask != 0,
+         "the source gets a mask");
+  before = undo_depth (image);
+  made = 42;
+  CHECK (api->selection_to_new_layer (engine, image, mask, GLIMS_FLOAT_COPY, &made, &error) == GLIMS_STATUS_FAILED &&
+         error && made == 0 && undo_depth (image) == before && layer_count (image) == 1 &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty,
+         "Layer via Copy refuses a mask target and changes nothing (%s)", error ? error : "");
+  api->free_string (error);
+
+  free (shot);
+  api->image_close (engine, image);
+}
+
 /* Float Selected Pixels (selection_float): the native gimp_selection_float
  * path with its full preflight — validation refusals with no
  * floating-selection side effects, the known-RGBA move/copy oracles, the
@@ -14387,6 +14504,7 @@ main (int argc, char **argv)
   test_selection_stroke ();
   test_floating_selection (argv[2]);
   test_selection_float ();
+  test_selection_to_new_layer ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

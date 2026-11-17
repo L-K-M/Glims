@@ -41,4 +41,35 @@ extension DocumentWindowController {
             }
         }
     }
+
+    /// Layer ▸ Layer via Copy: the selected pixels become a new layer
+    /// above their layer; the layer keeps its pixels.
+    @objc func layerViaCopy(_ sender: Any?) { layerViaSelection(.copy) }
+
+    /// Layer ▸ Layer via Cut: the selected pixels move to a new layer
+    /// above their layer, leaving a transparent hole.
+    @objc func layerViaCut(_ sender: Any?) { layerViaSelection(.move) }
+
+    /// Shared Layer ▸ Layer via … command, captured like Float.
+    func layerViaSelection(_ mode: EngineSession.FloatMode) {
+        guard !PlugInCommands.isRunning, !imageDocument.isClosing else { return }
+        canvas.tools.finishTextEditing()
+        if imageDocument.strokeIsActive { imageDocument.endStroke() }
+        let title = ImageDocument.layerViaTitle(mode)
+        let readiness = imageDocument.layerViaReadiness(mode)
+        guard let target = readiness.drawable else {
+            statusBar.message = readiness.reason ?? "Select an area of a layer first."
+            NSSound.beep()
+            return
+        }
+        imageDocument.layerViaSelection(mode: mode, target: target) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.statusBar.message = "\(title): the selection is now a new layer"
+            case .failure(let error):
+                self.statusBar.message = error.localizedDescription
+            }
+        }
+    }
 }

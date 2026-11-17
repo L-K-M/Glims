@@ -6016,6 +6016,7 @@ enum EngineSmokeTest {
         check((pixel(session, image, x: 10, y: 5)?[0] ?? 255) < 60, "the gradient tool draws on the selected background")
 
         exerciseMergeVisible(document, controller: controller, session: session, image: image)
+        exerciseLayerVia(document, controller: controller, session: session, image: image)
 
         controller.mergeDown(nil)
         settle()
@@ -12021,5 +12022,64 @@ extension EngineSmokeTest {
         document.undo()
         settle()
         check(document.layers.count == existing.count, "Undo removes the hidden helper layer")
+    }
+}
+
+extension EngineSmokeTest {
+    /// Layer ▸ Layer via Copy / Layer via Cut through the menu commands:
+    /// enabled only with a selection on a layer, one new layer above the
+    /// source named after the command, the selection cleared, the
+    /// composite unchanged, and one Undo each.
+    @MainActor
+    static func exerciseLayerVia(_ document: ImageDocument, controller: DocumentWindowController,
+                                 session: EngineSession, image: Int32) {
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+        }
+        let copyItem = NSMenuItem(title: "Layer via Copy",
+                                  action: #selector(DocumentWindowController.layerViaCopy(_:)), keyEquivalent: "")
+        let cutItem = NSMenuItem(title: "Layer via Cut",
+                                 action: #selector(DocumentWindowController.layerViaCut(_:)), keyEquivalent: "")
+        guard session.supportsSelectionToNewLayer else {
+            check(!controller.validateMenuItem(copyItem) && !controller.validateMenuItem(cutItem),
+                  "an older adapter keeps Layer via Copy and Layer via Cut disabled")
+            return
+        }
+        guard let source = document.layers.last?.id else { return check(false, "Layer via has a source layer") }
+        document.selectLayer(source)
+        document.select(.none)
+        settle()
+        check(!controller.validateMenuItem(copyItem) && !controller.validateMenuItem(cutItem),
+              "Layer via Copy and Layer via Cut are disabled without a selection")
+
+        let existing = Set(document.layers.map(\.id))
+        let composite = pixel(session, image, x: 10, y: 5)
+        for (item, mode) in [(copyItem, EngineSession.FloatMode.copy), (cutItem, .move)] {
+            let title = ImageDocument.layerViaTitle(mode)
+            document.select(.rectangle(CGRect(x: 0, y: 0, width: 40, height: 20)), options: EngineSession.SelectOptions())
+            settle()
+            check(document.selectionBounds != nil && controller.validateMenuItem(item), "\(title) is enabled with a selection")
+            if mode == .copy { controller.layerViaCopy(nil) } else { controller.layerViaCut(nil) }
+            settle()
+            let added = document.layers.filter { !existing.contains($0.id) }
+            let sourceIndex = document.layers.firstIndex { $0.id == source }
+            let addedIndex = added.first.flatMap { new in document.layers.firstIndex { $0.id == new.id } }
+            check(added.count == 1 && added[0].name.hasPrefix(title) && added[0].isVisible
+                    && addedIndex != nil && sourceIndex != nil && addedIndex! + 1 == sourceIndex!,
+                  "\(title) adds one layer named \(added.first?.name ?? "-") directly above its source")
+            check(document.selectionBounds == nil, "\(title) clears the selection")
+            check(composite != nil && pixel(session, image, x: 10, y: 5) == composite,
+                  "\(title) keeps the composite (\(String(describing: composite)))")
+            document.undo()
+            settle()
+            check(Set(document.layers.map(\.id)) == existing && document.selectionBounds != nil
+                    && pixel(session, image, x: 10, y: 5) == composite,
+                  "one Undo removes the \(title) layer and restores the selection")
+        }
+        document.select(.none)
+        settle()
     }
 }

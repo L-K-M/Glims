@@ -235,3 +235,4 @@ GLIMS_FACADE(stroke_begin_v2_with_capture_facts, api_stroke_begin_v2_with_captur
 GLIMS_FACADE(brush_settings_features, api_brush_settings_features, NONE, DIRECT)
 GLIMS_FACADE(image_scale_with_interpolation, api_image_scale_with_interpolation, IMAGE, ORDINARY)
 GLIMS_FACADE(image_merge_visible, api_image_merge_visible, IMAGE, ORDINARY)
+GLIMS_FACADE(selection_to_new_layer, api_selection_to_new_layer, IMAGE, ORDINARY)

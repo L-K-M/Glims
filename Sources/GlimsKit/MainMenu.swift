@@ -179,6 +179,10 @@ enum MainMenu {
             item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
             item("New Adjustment Layer…", #selector(DocumentWindowController.newAdjustmentLayer(_:))),
             item("Duplicate Layer", #selector(DocumentWindowController.duplicateLayer(_:)), "j"),
+            // Photoshop's Layer via Copy is Cmd-J, which Duplicate Layer
+            // already has here; Layer via Cut keeps Photoshop's Shift-Cmd-J.
+            item("Layer via Copy", #selector(DocumentWindowController.layerViaCopy(_:))),
+            item("Layer via Cut", #selector(DocumentWindowController.layerViaCut(_:)), "J"),
             item("Delete Layer", #selector(DocumentWindowController.deleteLayer(_:))),
             .separator(),
             mask,

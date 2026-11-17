@@ -734,6 +734,10 @@ GlimsStatus glims_floating_command (GlimsEngine *e, GlimsImageID image, GlimsIte
  * `mode` is a GlimsFloatMode. */
 GlimsStatus glims_selection_float (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
                                    uint32_t mode, GlimsItemID *result, char **error);
+/* Layer via Copy (COPY) / Layer via Cut (MOVE): the float plus
+ * floating_sel_to_layer as one undo step; `mode` is a GlimsFloatMode. */
+GlimsStatus glims_selection_to_new_layer (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                                          uint32_t mode, GlimsItemID *result, char **error);
 /* layer-structure.c */
 GlimsStatus glims_layer_state      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     GlimsLayerState *state);
