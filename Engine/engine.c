@@ -4255,6 +4255,23 @@ static GlimsStatus api_drawable_histogram (GlimsEngine *e, GlimsImageID image, G
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             drawable_histogram_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  uint32_t radius;
+  char **error;
+} GlimsSelectionSmoothArgs;
+static GlimsStatus selection_smooth_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsSelectionSmoothArgs *a = data;
+  return glims_selection_smooth (e, a->image, a->radius, a->error);
+}
+static GlimsStatus api_selection_smooth (GlimsEngine *e, GlimsImageID image, uint32_t radius, char **error)
+{
+  GlimsSelectionSmoothArgs a = { .image = image, .radius = radius, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_smooth,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            selection_smooth_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

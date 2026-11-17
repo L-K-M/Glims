@@ -248,7 +248,11 @@ Shift.
 Select > All (Command-A), Deselect (Command-D) and Inverse
 (Shift-Command-I) manage the selection. Feather… softens its edges;
 Grow…, Shrink… and Border… reshape it; Remove Antialiasing hardens the
-edges again. From Layer Transparency selects the visible area of the
+edges again. Smooth… takes a sample radius of 1 to 100 pixels and keeps
+each pixel selected only when most of the square around it is selected,
+which removes stray specks and rounds sharp corners. The canvas edge
+counts as continuing the selection, so a selection that reaches the edge
+stays there. Smooth is one undo step but is not recorded. From Layer Transparency selects the visible area of the
 active layer, and From Path selects along the active path.
 
 When you start a selection drag or click with the Magic Wand, hold a

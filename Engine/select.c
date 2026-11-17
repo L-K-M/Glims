@@ -31,6 +31,8 @@
 #include "core/gimpstrokeoptions.h"
 #include "core/gimpviewable.h"
 
+#include "gegl/gimp-gegl-apply-operation.h"
+
 #include "libgimpmath/gimpmath.h"
 
 #include "gimp-intl.h"
@@ -390,6 +392,59 @@ glims_select_command (GlimsEngine  *engine,
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
 
+  forget_mask_state (mask);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+/* Select > Modify > Smooth: Photoshop's Smooth keeps a pixel selected
+ * when most of the square of `radius` pixels around it is selected and
+ * drops it otherwise, which is a median of the mask. GEGL's median blur
+ * computes it on a copy of the mask (edges clamp, so a selection that
+ * reaches the canvas edge stays there); the copy then replaces the
+ * selection as one undo step. */
+GlimsStatus
+glims_selection_smooth (GlimsEngine  *engine,
+                        GlimsImageID  id,
+                        uint32_t      radius,
+                        char        **error)
+{
+  GlimsStatus  status;
+  GimpImage   *image;
+  GimpChannel *mask;
+  GeglBuffer  *source;
+  GeglBuffer  *smoothed;
+  GeglNode    *node;
+
+  if (radius < 1 || radius > GLIMS_SELECTION_SMOOTH_MAX_RADIUS)
+    {
+      glims_fail (error, NULL, "The smoothing radius must be 1 to 100 pixels.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  image = writable_image (engine, id, &status);
+  if (! image)
+    return status;
+
+  mask = gimp_image_get_mask (image);
+  if (gimp_channel_is_empty (mask))
+    return glims_fail (error, NULL, "There is no selection to smooth.");
+
+  source   = gimp_drawable_get_buffer (GIMP_DRAWABLE (mask));
+  smoothed = gegl_buffer_new (gegl_buffer_get_extent (source), gegl_buffer_get_format (source));
+  node     = gegl_node_new_child (NULL,
+                                  "operation",    "gegl:median-blur",
+                                  "neighborhood", 0, /* GEGL_MEDIAN_BLUR_NEIGHBORHOOD_SQUARE */
+                                  "radius",       (gint) radius,
+                                  NULL);
+  gimp_gegl_apply_operation (source, NULL, NULL, node, smoothed, NULL, FALSE);
+  g_object_unref (node);
+
+  forget_mask_state (mask);
+  gimp_channel_select_buffer (mask, C_("undo-type", "Smooth Selection"), smoothed, 0, 0,
+                              GIMP_CHANNEL_OP_REPLACE, FALSE, 0.0, 0.0);
+  g_object_unref (smoothed);
   forget_mask_state (mask);
   gimp_image_flush (image);
 

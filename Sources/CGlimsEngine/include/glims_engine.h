@@ -321,6 +321,9 @@ typedef enum GlimsSelectCommand {
   GLIMS_SELECT_FROM_ALPHA = 9   /* the active layer's opacity */
 } GlimsSelectCommand;
 
+/* Select > Modify > Smooth accepts radii 1 ... 100, as Photoshop does. */
+#define GLIMS_SELECTION_SMOOTH_MAX_RADIUS 100
+
 typedef struct GlimsSelectOptions {
   uint32_t struct_size;    /* sizeof (GlimsSelectOptions) */
   uint32_t operation;      /* GlimsSelectOperation */
@@ -4439,6 +4442,17 @@ typedef struct GlimsEngineAPI {
    * its history or its dirty state, and pixel locks do not apply. */
   GlimsStatus (*drawable_histogram) (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
                                      GlimsHistogramSnapshot *out, char **error);
+  /* Slot 238: Select > Modify > Smooth. Replaces the selection with the
+   * median of the mask over the square of `radius` pixels on each side
+   * of every pixel, so a pixel stays selected when most of its square is
+   * selected, as in Photoshop. The canvas edge clamps: a selection that
+   * reaches it stays there. One undo step, "Smooth Selection".
+   * `radius` outside 1 ... GLIMS_SELECTION_SMOOTH_MAX_RADIUS is
+   * INVALID_ARGUMENT, an empty selection is FAILED with a message, an
+   * unknown image is NOT_FOUND and a busy engine is BUSY; every refusal
+   * changes nothing. Component (CMYK, Lab) documents are refused. */
+  GlimsStatus (*selection_smooth) (GlimsEngine *engine, GlimsImageID image, uint32_t radius,
+                                   char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

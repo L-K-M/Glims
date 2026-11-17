@@ -1778,6 +1778,44 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func shrinkSelection(_ sender: Any?) { askRadius("Shrink Selection", .shrink, default: 1) }
     @objc func borderSelection(_ sender: Any?) { askRadius("Border Selection", .border, default: 5) }
 
+    /// Select ▸ Smooth…: asks for Photoshop's sample radius (1 ... 100
+    /// whole pixels), then smooths the selection as one undo step.
+    @objc func smoothSelection(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil else { return }
+        if let reason = imageDocument.smoothSelectionRefusal {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        let maximum = EngineSession.selectionSmoothMaxRadius
+        let alert = NSAlert()
+        alert.messageText = "Smooth Selection"
+        alert.informativeText = "Sample radius in pixels (1 to \(maximum)):"
+        let field = NSTextField(string: "2")
+        field.frame = NSRect(x: 0, y: 0, width: 80, height: 22)
+        field.setAccessibilityLabel("Sample Radius")
+        alert.accessoryView = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            guard let radius = Self.smoothRadius(field.stringValue) else {
+                self.statusBar.message = "Enter a whole number of pixels from 1 to \(maximum)."
+                NSSound.beep()
+                return
+            }
+            self.imageDocument.smoothSelection(radius: radius)
+        }
+    }
+
+    /// A Smooth radius typed into the sheet: a whole number 1 ... 100.
+    nonisolated static func smoothRadius(_ text: String) -> Int? {
+        guard let value = Int(text.trimmingCharacters(in: .whitespaces)),
+              (1...EngineSession.selectionSmoothMaxRadius).contains(value) else { return nil }
+        return value
+    }
+
     /// A small sheet asking for a radius in pixels.
     private func askRadius(_ title: String, _ command: EngineSession.SelectCommand, default value: Double) {
         guard let window else { return }
@@ -3010,6 +3048,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let fixed = ColorForms.precisionIsFixed(mode: imageDocument.colorInfo.mode)
             menuItem.toolTip = fixed ? "Indexed images keep 8-bit non-linear precision." : nil
             return !fixed && !editingBlocked && !previewBusy
+        case #selector(smoothSelection(_:)):
+            let refusal = imageDocument.smoothSelectionRefusal
+            menuItem.toolTip = refusal
+            return refusal == nil && window?.attachedSheet == nil
         case #selector(showHistogram(_:)):
             let refusal = imageDocument.histogramRefusal
             menuItem.toolTip = refusal

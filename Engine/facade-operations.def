@@ -237,3 +237,4 @@ GLIMS_FACADE(image_scale_with_interpolation, api_image_scale_with_interpolation,
 GLIMS_FACADE(image_merge_visible, api_image_merge_visible, IMAGE, ORDINARY)
 GLIMS_FACADE(selection_to_new_layer, api_selection_to_new_layer, IMAGE, ORDINARY)
 GLIMS_FACADE(drawable_histogram, api_drawable_histogram, IMAGE, ORDINARY)
+GLIMS_FACADE(selection_smooth, api_selection_smooth, IMAGE, ORDINARY)
