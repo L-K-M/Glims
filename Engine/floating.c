@@ -27,6 +27,7 @@
 #include "core/gimp-edit.h"
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-floating-selection.h"
@@ -250,47 +251,27 @@ glims_image_paste_into (GlimsEngine  *engine,
  * would silently anchor an already-existing floating selection inside
  * the undo group, so that case is refused here before any native call.
  * The returned layer is owned by the image; it is never unref'd. */
-GlimsStatus
-glims_selection_float (GlimsEngine  *engine,
-                       GlimsImageID  id,
-                       GlimsItemID   target_id,
-                       uint32_t      mode,
-                       GlimsItemID  *result,
-                       char        **error)
+/* The admission shared by Select > Float and Layer > Layer via Copy/Cut:
+ * every gate the core would otherwise fail inside its undo group (or
+ * silently anchor through) is checked here before any native call, so a
+ * refusal changes nothing and pushes no undo. On success `*out` is the
+ * float source; `cut` adds the content and alpha lock checks. */
+static GlimsStatus
+float_admission (GlimsOpenImage *open,
+                 GlimsItemID     target_id,
+                 gboolean        cut,
+                 GimpDrawable  **out,
+                 char          **error)
 {
-  GlimsOpenImage *open = glims_lookup_image (engine, id);
-  GimpImage      *image;
-  GimpDrawable   *target;
-  GimpChannel    *mask;
-  GimpContext    *context;
-  GimpLayer      *fs;
-  GList          *drawables;
-  GList          *selected;
-  GError         *gerror = NULL;
-  GlimsStatus     status;
-  uint32_t        locks = GLIMS_LOCK_PIXELS;
-  gboolean        cut;
-  gint            x, y, w, h;
+  GimpImage    *image = open->image;
+  GimpDrawable *target;
+  GimpChannel  *mask;
+  GList        *selected;
+  GlimsStatus   status;
+  uint32_t      locks = GLIMS_LOCK_PIXELS;
+  gint          x, y, w, h;
 
-  if (result) *result = 0;
-  if (! open)
-    return GLIMS_STATUS_NOT_FOUND;
-  status = glims_edit_ready (engine, open, error);
-  if (status != GLIMS_STATUS_OK)
-    return status;
-  image = open->image;
-
-  switch (mode)
-    {
-    case GLIMS_FLOAT_MOVE:
-      cut = TRUE;
-      break;
-    case GLIMS_FLOAT_COPY:
-      cut = FALSE;
-      break;
-    default:
-      return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
+  *out = NULL;
 
   /* Mandatory: an existing floating selection must be resolved first —
    * floating_sel_attach would silently anchor it inside the "Float
@@ -380,18 +361,80 @@ glims_selection_float (GlimsEngine  *engine,
   if (! gimp_item_mask_intersect (GIMP_ITEM (target), &x, &y, &w, &h) || w < 1 || h < 1)
     return glims_fail (error, NULL, "The selection does not overlap the float target.");
 
-  /* A private per-call context inheriting the user's settings; the
-   * shared user context is never mutated. Offsets 0: the floating layer
-   * lands exactly on the extracted region, and layer_move moves it once
-   * the selection is cleared. */
+  *out = target;
+  return GLIMS_STATUS_OK;
+}
+
+/* The native float of an admitted `target`: gimp_selection_float with a
+ * private per-call context inheriting the user's settings (the shared
+ * user context is never mutated) and offsets 0, so the floating layer
+ * lands exactly on the extracted region. Returns the image-owned
+ * floating layer, or NULL with `error` set. */
+static GimpLayer *
+float_native (GlimsEngine  *engine,
+              GimpImage    *image,
+              GimpDrawable *target,
+              gboolean      cut,
+              char        **error)
+{
+  GimpContext *context;
+  GimpLayer   *fs;
+  GList       *drawables;
+  GError      *gerror = NULL;
+
   context = gimp_context_new (engine->gimp, "Glims Float Selection", gimp_get_user_context (engine->gimp));
   drawables = g_list_prepend (NULL, target);
-  fs = gimp_selection_float (GIMP_SELECTION (mask), drawables, context, cut, 0, 0, &gerror);
+  fs = gimp_selection_float (GIMP_SELECTION (gimp_image_get_mask (image)), drawables, context, cut, 0, 0, &gerror);
   g_list_free (drawables);
   g_object_unref (context);
 
   if (! fs)
-    return glims_fail (error, gerror, "The selection could not be floated.");
+    glims_fail (error, gerror, "The selection could not be floated.");
+  return fs;
+}
+
+GlimsStatus
+glims_selection_float (GlimsEngine  *engine,
+                       GlimsImageID  id,
+                       GlimsItemID   target_id,
+                       uint32_t      mode,
+                       GlimsItemID  *result,
+                       char        **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage      *image;
+  GimpDrawable   *target;
+  GimpLayer      *fs;
+  GlimsStatus     status;
+  gboolean        cut;
+
+  if (result) *result = 0;
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  image = open->image;
+
+  switch (mode)
+    {
+    case GLIMS_FLOAT_MOVE:
+      cut = TRUE;
+      break;
+    case GLIMS_FLOAT_COPY:
+      cut = FALSE;
+      break;
+    default:
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  status = float_admission (open, target_id, cut, &target, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  fs = float_native (engine, image, target, cut, error);
+  if (! fs)
+    return GLIMS_STATUS_FAILED;
 
   /* The returned floating layer belongs to the image; no unref. */
   if (result)
@@ -495,6 +538,101 @@ glims_floating_command (GlimsEngine  *engine,
     default:
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+
+  gimp_image_flush (image);
+  return GLIMS_STATUS_OK;
+}
+
+/* Layer > New > Layer via Copy / Layer via Cut: the selected pixels of a
+ * layer become a new ordinary layer directly above it, as one undo step.
+ * It is GIMP's own Select > Float followed by Layer > To New Layer
+ * (app/actions/select-commands.c select_float; layers-commands.c
+ * layers_new_cmd_callback, which calls floating_sel_to_layer while a
+ * floating selection exists), wrapped in one
+ * LAYER_ADD undo group so a single Undo removes the new layer and
+ * restores the target (CUT) and the selection. floating_sel_attach puts
+ * the floated layer directly above its target layer, inside the same
+ * parent group, which is where Photoshop puts the new layer. Admission
+ * is the float's, plus: the target must be a layer (floating_sel_to_layer
+ * refuses mask and channel attachments). All of it runs before the undo
+ * group opens, because gimp_image_undo_group_start pushes even a group
+ * that stays empty. */
+GlimsStatus
+glims_selection_to_new_layer (GlimsEngine  *engine,
+                              GlimsImageID  id,
+                              GlimsItemID   target_id,
+                              uint32_t      mode,
+                              GlimsItemID  *result,
+                              char        **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage      *image;
+  GimpDrawable   *target;
+  GimpLayer      *fs;
+  GError         *gerror = NULL;
+  GlimsStatus     status;
+  gboolean        cut;
+  const gchar    *name;
+
+  if (result) *result = 0;
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  image = open->image;
+
+  switch (mode)
+    {
+    case GLIMS_FLOAT_MOVE:
+      cut = TRUE;
+      name = "Layer via Cut";
+      break;
+    case GLIMS_FLOAT_COPY:
+      cut = FALSE;
+      name = "Layer via Copy";
+      break;
+    default:
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  status = float_admission (open, target_id, cut, &target, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  if (! GIMP_IS_LAYER (target))
+    return glims_fail (error, NULL,
+                       "Layer via Copy and Layer via Cut work on a layer; select a layer instead of a mask or channel.");
+
+  gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_LAYER_ADD, name);
+
+  fs = float_native (engine, image, target, cut, error);
+  if (fs && ! floating_sel_to_layer (fs, &gerror))
+    {
+      /* Unreachable for a layer target; the partial group is undone so
+       * a failure leaves the image as it was. */
+      gimp_image_undo_group_end (image);
+      gimp_image_undo (image);
+      gimp_image_flush (image);
+      return glims_fail (error, gerror, "The floated pixels could not become a layer.");
+    }
+  if (! fs)
+    {
+      gimp_image_undo_group_end (image);
+      gimp_image_undo (image);
+      gimp_image_flush (image);
+      return GLIMS_STATUS_FAILED;
+    }
+
+  /* The core names a float "Floated Layer"; the new layer takes the
+   * command's name instead (the tree makes it unique). A rename failure
+   * keeps the core name and is not an error. */
+  gimp_item_rename (GIMP_ITEM (fs), name, NULL);
+
+  gimp_image_undo_group_end (image);
+
+  /* The new layer belongs to the image; no unref. */
+  if (result)
+    *result = gimp_item_get_id (GIMP_ITEM (fs));
 
   gimp_image_flush (image);
   return GLIMS_STATUS_OK;

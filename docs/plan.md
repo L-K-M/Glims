@@ -6528,3 +6528,16 @@ older adapters, in layered Lab and flat component documents, while a floating
 selection is active, and with fewer than two visible top-level layers. It has
 no shortcut because Shift-Command-E is Export. Like Merge Down, it is outside
 the Recorder's capture scope.
+
+### Layer via Copy and Layer via Cut (candidate)
+
+Layer ▸ Layer via Copy and Layer via Cut turn the selected pixels of the
+selected layer into a new layer directly above it, named after the command,
+and clear the selection, as one undo step. Cut leaves a transparent hole in
+the source. Additive facade slot 236, `selection_to_new_layer`, runs GIMP's
+own Float followed by To New Layer inside one undo group, with Float's
+admission (selection, locks, groups, editable text/link/vector layers) plus a
+layer target: masks and channels are refused before any change. Layer via
+Cut has Photoshop's Shift-Command-J; Layer via Copy has no shortcut because
+Command-J is Duplicate Layer. Older adapters keep both items disabled. Like
+the other layer commands, they are outside the Recorder's capture scope.

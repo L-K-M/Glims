@@ -87,7 +87,7 @@ The 3.2 features below come from the release notes (https://www.gimp.org/release
 | File | New… N, Open… O, Open Recent, Open as Layers…, Place (link layer)…, Close W, Close All, Save S, Save As… Shift-S, Save a Copy…, Revert, Export… Shift-E, Export/Overwrite "name.png" E, Print… P |
 | Edit | Undo Z, Redo Shift-Z, Cut, Copy, Copy Merged Shift-C, Paste V, Paste in Place Shift-V, Paste Into, Paste as New Image, Clear, Fill…, Stroke Selection…, New Brush/Pattern from Selection |
 | Image | Mode, Precision, Color Profile (Assign/Convert/Soft-Proof), Adjust ▸ (GIMP's Colors menu: Levels, Curves, Hue-Saturation, Color Balance, Threshold, Invert…), Image Size…, Canvas Size…, Crop to Selection, Rotate/Flip, Guides, Metadata |
-| Layer | New ▸ (Layer, Group, Adjustment, Text, Vector), Duplicate, Delete, Mask ▸, Filters on Layer ▸, Rasterize / Revert Rasterize, Arrange ▸, Merge Down, Merge Visible, Flatten, Fit to Canvas, Trim, Lock ▸ (Pixels, Position, Transparency) |
+| Layer | New ▸ (Layer, Group, Adjustment, Text, Vector), Duplicate, Layer via Copy, Layer via Cut, Delete, Mask ▸, Filters on Layer ▸, Rasterize / Revert Rasterize, Arrange ▸, Merge Down, Merge Visible, Flatten, Fit to Canvas, Trim, Lock ▸ (Pixels, Position, Transparency) |
 | Select | All A, Deselect D, Inverse Shift-I, Float, By Color, Grow/Shrink/Feather/Border, Save to Channel, Load from Channel, Quick Mask |
 | Filter | Last Filter, Recently Used, then dynamic categories (Blur, Enhance, Distort, Light & Shadow, Noise, Edge, Generic, Artistic, Map, Render, Web, Script-Fu, Python) |
 | View | Zoom In/Out, Fit (Cmd-0), Actual Pixels (Cmd-1), Rotate View, Rulers, Guides, Grid, Snap, Layer Boundary, Selection Edges, Canvas Surround Color, Display Proof |
