@@ -5500,6 +5500,35 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    // MARK: Smooth Selection
+
+    /// Select ▸ Modify ▸ Smooth…: why it is unavailable now, or nil.
+    var smoothSelectionRefusal: String? {
+        guard session.supportsSelectionSmooth else { return "This image engine cannot smooth the selection." }
+        guard colorInfo.mode != .lab,
+              storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Smooth is available for ordinary layered images only."
+        }
+        guard selectionBounds != nil else { return "Make a selection to smooth first." }
+        guard !isClosing, acceptsEdits else { return "Wait for the current operation to finish." }
+        return nil
+    }
+
+    /// Smooths the selection with `radius` (1 ... 100) as one queued
+    /// command and one undo step; pending edits end first. Not recorded.
+    func smoothSelection(radius: Int, completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        if let reason = smoothSelectionRefusal {
+            onError?(reason)
+            completion?(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: reason)))
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        enqueueTargetCommand({ session, image in
+            try session.smoothSelection(image, radius: radius)
+        }, completion: completion)
+    }
+
     // MARK: Histogram
 
     /// Image ▸ Histogram…: why it is unavailable now, or nil. The engine

@@ -6018,6 +6018,7 @@ enum EngineSmokeTest {
         exerciseMergeVisible(document, controller: controller, session: session, image: image)
         exerciseLayerVia(document, controller: controller, session: session, image: image)
         exerciseHistogram(document, controller: controller, session: session, image: image)
+        exerciseSmoothSelection(document, controller: controller, session: session, image: image)
 
         controller.mergeDown(nil)
         settle()
@@ -12144,6 +12145,67 @@ extension EngineSmokeTest {
             controller.window?.endSheet(attached, returnCode: .alertFirstButtonReturn)
             spin()
         }
+        document.select(.none)
+        settle()
+    }
+
+    static func exerciseSmoothSelection(_ document: ImageDocument, controller: DocumentWindowController,
+                                        session: EngineSession, image: Int32) {
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+        }
+        let item = NSMenuItem(title: "Smooth…", action: #selector(DocumentWindowController.smoothSelection(_:)),
+                              keyEquivalent: "")
+        guard session.supportsSelectionSmooth else {
+            check(!controller.validateMenuItem(item) && document.smoothSelectionRefusal != nil,
+                  "an older adapter keeps Smooth disabled")
+            return
+        }
+        guard let source = document.layers.last?.id else { return check(false, "Smooth has a source layer") }
+        document.selectLayer(source)
+        document.select(.none)
+        settle()
+        check(!controller.validateMenuItem(item), "Smooth is disabled without a selection")
+        // A 40x20 rectangle in the canvas corner plus a one-pixel speck.
+        document.select(.rectangle(CGRect(x: 0, y: 0, width: 40, height: 20)), options: EngineSession.SelectOptions())
+        var add = EngineSession.SelectOptions()
+        add.operation = .add
+        document.select(.rectangle(CGRect(x: 60, y: 10, width: 1, height: 1)), options: add)
+        settle()
+        check(controller.validateMenuItem(item) && document.selectionBounds == CGRect(x: 0, y: 0, width: 61, height: 20),
+              "Smooth is enabled for the rectangle and speck (\(String(describing: document.selectionBounds)))")
+        let undoBefore = (try? session.undoInfo(image).undoCount) ?? -1
+        var outcome: Result<Void, Error>?
+        document.smoothSelection(radius: 2) { outcome = $0 }
+        let deadline = Date().addingTimeInterval(10)
+        while outcome == nil && Date() < deadline { spin() }
+        settle()
+        if case .failure(let error)? = outcome { check(false, "Smooth runs (\(error))") }
+        check((try? session.undoInfo(image).undoCount) == undoBefore + 1
+                && document.selectionBounds == CGRect(x: 0, y: 0, width: 40, height: 20),
+              "Smooth radius 2 drops the speck as one undo step (\(String(describing: document.selectionBounds)))")
+        // The canvas edges clamp, so only the rectangle's inner corner
+        // loses its three pixels: 800 - 3.
+        var read: Result<EngineSession.InputHistogram, Error>?
+        document.readHistogram { read = $0 }
+        let readBy = Date().addingTimeInterval(10)
+        while read == nil && Date() < readBy { spin() }
+        if case .success(let histogram)? = read {
+            let pixels = histogram[.value].map { HistogramStatistics(bins: $0).pixels }
+            check(pixels == 797, "Smooth rounds only the inner corner (\(String(describing: pixels)) pixels)")
+        } else {
+            check(false, "the smoothed selection's histogram reads (\(String(describing: read)))")
+        }
+        document.undo()
+        settle()
+        check(document.selectionBounds == CGRect(x: 0, y: 0, width: 61, height: 20),
+              "Undo restores the unsmoothed selection (\(String(describing: document.selectionBounds)))")
+        check(DocumentWindowController.smoothRadius("0") == nil && DocumentWindowController.smoothRadius("101") == nil
+                && DocumentWindowController.smoothRadius("1.5") == nil && DocumentWindowController.smoothRadius(" 16 ") == 16,
+              "the Smooth sheet accepts whole radii 1 to 100 only")
         document.select(.none)
         settle()
     }

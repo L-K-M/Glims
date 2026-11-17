@@ -5077,6 +5077,32 @@ final class EngineSession: @unchecked Sendable {
         return result
     }
 
+    /// Whether the adapter has Select ▸ Modify ▸ Smooth (slot 238).
+    var supportsSelectionSmooth: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.selection_smooth) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.selection_smooth)
+            && api.selection_smooth != nil
+    }
+
+    /// The largest Smooth radius the engine accepts, in pixels.
+    static let selectionSmoothMaxRadius = Int(GLIMS_SELECTION_SMOOTH_MAX_RADIUS)
+
+    /// Select ▸ Modify ▸ Smooth: the selection becomes the median of the
+    /// mask over the square of `radius` pixels around each pixel, as one
+    /// undo step. Refuses on adapters without the capability.
+    func smoothSelection(_ image: Int32, radius: Int) throws {
+        guard supportsSelectionSmooth, let smooth = api.selection_smooth else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot smooth the selection.")
+        }
+        guard (1...Self.selectionSmoothMaxRadius).contains(radius) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The smoothing radius must be 1 to \(Self.selectionSmoothMaxRadius) pixels.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(smooth(engine, image, UInt32(radius), &error), error)
+    }
+
     var supportsDrawableHistogram: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.drawable_histogram) else { return false }
         return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.drawable_histogram)

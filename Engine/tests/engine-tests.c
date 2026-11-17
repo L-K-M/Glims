@@ -12919,6 +12919,93 @@ test_drawable_histogram (void)
   api->image_close (engine, image);
 }
 
+/* The selection's weighted pixel count, read through the histogram. */
+static double
+selected_pixels (GlimsImageID image, GlimsItemID layer)
+{
+  GlimsHistogramSnapshot h = { .struct_size = sizeof h };
+  double                 total = -1.0;
+
+  if (api->drawable_histogram (engine, image, layer, &h, NULL) == GLIMS_STATUS_OK)
+    total = h.bin_count && h.value ? histogram_sum (h.value, h.bin_count) : 0.0;
+  api->free_histogram_snapshot (&h);
+  return total;
+}
+
+static void
+test_selection_smooth (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsRect          bounds;
+  bool               empty = true;
+  int32_t            before;
+  char              *error = NULL;
+  uint8_t            known[32 * 32 * 4];
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, selection_smooth) + sizeof api->selection_smooth ||
+      ! api->selection_smooth)
+    {
+      CHECK (false, "the adapter exports slot 238 selection_smooth");
+      return;
+    }
+  memset (known, 255, sizeof known);
+  CHECK (api->image_from_pixels (engine, 32, 32, known, sizeof known, &image, NULL) == GLIMS_STATUS_OK && image != 0,
+         "the Smooth fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  api->layer_select (engine, image, layer);
+
+  /* Refusals change nothing. */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (image);
+  CHECK (api->selection_smooth (engine, 9999, 2, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->selection_smooth (engine, image, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->selection_smooth (engine, image, GLIMS_SELECTION_SMOOTH_MAX_RADIUS + 1, NULL) ==
+           GLIMS_STATUS_INVALID_ARGUMENT,
+         "Smooth: unknown image NOT_FOUND, radius 0 or above the maximum INVALID_ARGUMENT");
+  CHECK (api->selection_smooth (engine, image, 2, &error) == GLIMS_STATUS_FAILED && error &&
+         undo_depth (image) == before,
+         "Smooth refuses an empty selection with no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* A 16x16 square plus a one-pixel speck. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 20, 20 } }, 2, &sel);
+  sel.operation = GLIMS_SELECT_ADD;
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 28, 28 }, { 29, 29 } }, 2, &sel);
+  sel.operation = GLIMS_SELECT_REPLACE;
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 4, 4, 25, 25) && selected_pixels (image, layer) == 257,
+         "the Smooth source is the square and the speck (%.1f pixels)", selected_pixels (image, layer));
+  before = undo_depth (image);
+  CHECK (api->selection_smooth (engine, image, 2, &error) == GLIMS_STATUS_OK && undo_depth (image) == before + 1,
+         "Smooth radius 2 is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  /* In a 5x5 square a corner pixel sees 9 selected pixels and its two
+   * neighbors along the edges 12, fewer than half of 25: each corner
+   * loses three pixels and the speck goes. */
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 4, 4, 16, 16) && selected_pixels (image, layer) == 256 - 12,
+         "Smooth drops the speck and rounds the square's corners (%.1f pixels)", selected_pixels (image, layer));
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 4, 4, 25, 25) && selected_pixels (image, layer) == 257,
+         "one Undo restores the unsmoothed selection");
+
+  /* The canvas edge clamps: Select All stays whole. */
+  api->select_command (engine, image, GLIMS_SELECT_ALL, 0, NULL);
+  CHECK (api->selection_smooth (engine, image, 5, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 0, 0, 32, 32) && selected_pixels (image, layer) == 32 * 32,
+         "smoothing Select All keeps every pixel (%.1f)", selected_pixels (image, layer));
+
+  api->image_close (engine, image);
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -14586,6 +14673,7 @@ main (int argc, char **argv)
   test_selection_float ();
   test_selection_to_new_layer ();
   test_drawable_histogram ();
+  test_selection_smooth ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

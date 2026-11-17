@@ -6556,3 +6556,16 @@ use GIMP's mean, standard deviation and median formulas rescaled to 0–255
 levels; Pixels is the weighted total. Like GIMP, the histogram describes one
 drawable, not the merged composite; several selected layers, Lab and
 component layouts, and older adapters keep the item disabled.
+
+### Select Smooth (candidate)
+
+Select ▸ Smooth… is Photoshop's Select ▸ Modify ▸ Smooth: a sample radius
+of 1 to 100 whole pixels, after which a pixel stays selected only when
+most of the square of that radius around it is selected. Additive facade
+slot 238, `selection_smooth`, runs GEGL's `gegl:median-blur` (square
+neighborhood, clamped edges) on a copy of the selection mask and puts the
+result back with `gimp_channel_select_buffer` (REPLACE) as one "Smooth
+Selection" undo step. Clamping keeps a selection that reaches the canvas
+edge in place there. An empty selection, a radius outside 1–100, Lab and
+component layouts, and older adapters are refused before any change. The
+Recorder does not record Smooth.
