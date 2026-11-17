@@ -201,6 +201,25 @@ final class CanvasToolController {
             fromCenter: selectionDragFlags.contains(.option))
     }
     private var lassoPoints: [CGPoint] = []
+
+    /// The Polygon Lasso's open polygon. Unlike a drag it outlives the
+    /// press: corners accumulate across clicks until a double-click, a
+    /// click on the first corner or Return closes it, and Escape, a tool
+    /// change or another tool's press drops it without a native call.
+    private struct OpenPolygon {
+        var corners: [CGPoint]
+        /// Captured at the first click, like a drag's press modifiers.
+        let operation: EngineSession.SelectOperation
+        /// The floating selection seen at the first click; the polygon
+        /// commits through it only while it is unchanged.
+        let floating: EngineSession.FloatingState?
+    }
+    private var openPolygon: OpenPolygon?
+    /// Where the rubber-band edge from the last corner ends (image pixels).
+    private var polygonPointer: CGPoint?
+    /// The open polygon's corners, for the Tool Options hint and tests.
+    var openPolygonCorners: [CGPoint]? { openPolygon?.corners }
+
     /// The gradient gesture's captured values (identity, settings, colors),
     /// taken once at the press so later UI/tool/color changes cannot
     /// redirect the queued work; only the endpoints track the drag.
@@ -289,7 +308,8 @@ final class CanvasToolController {
             }
         }
         let phase: ToolHintPolicy.Phase
-        if acceptedTool != nil { phase = .dragging }
+        if tool == .polygonLasso, let polygon = openPolygon { phase = .polygonOpen(corners: polygon.corners.count) }
+        else if acceptedTool != nil { phase = .dragging }
         else if tool == .text, textEditor != nil { phase = .textEditing }
         else if tool == .crop, let crop = pendingCrop { phase = .cropReady(width: Int(crop.width), height: Int(crop.height)) }
         else if tool == .transform, transformSession?.isIdentity == false { phase = .transformReady }
@@ -370,6 +390,7 @@ final class CanvasToolController {
             if ToolState.shared.current != .text, self.textEditor != nil {
                 self.finishTextEditing()
             }
+            if ToolState.shared.current != .polygonLasso { self.cancelPolygon() }
             // A tool change cancels this window's in-progress guide drag
             // (ghost cleared, no native guide action) and any Move snap
             // or floating move (preview cleared, the release then commits
@@ -429,13 +450,14 @@ final class CanvasToolController {
             return
         }
         let labSelectionTool = document.storage.layout == .layeredLab && document.acceptsLabSelections &&
-            [.rectangleSelect, .ellipseSelect, .lasso].contains(tool)
+            [.rectangleSelect, .ellipseSelect, .lasso, .polygonLasso].contains(tool)
         let labLayerBrushTool = document.storage.layout == .layeredLab && tool == .paintbrush &&
             document.toolIsAvailable(tool)
         guard document.acceptsEdits || labSelectionTool || labLayerBrushTool || [.hand, .zoom, .eyedropper].contains(tool) else {
             onStatus?("Finish the current operation before editing the image.")
             return
         }
+        if tool != .polygonLasso, tool != .hand, tool != .zoom { cancelPolygon() }
         dragTool = tool
         springLetters.pointerBegan(using: tool, selectionRevision: ToolState.shared.selectionRevision)
         if tool != .transform, transformSession != nil {
@@ -495,6 +517,8 @@ final class CanvasToolController {
             if document.floatingState.isActive {
                 beginFloatingShape(tool, at: point, event: event)
             }
+        case .polygonLasso:
+            placePolygonCorner(at: point, event: event)
         case .magicWand, .selectByColor:
             var options = ToolState.shared.selectOptions
             options.operation = Self.operation(for: event.modifierFlags)
@@ -621,6 +645,8 @@ final class CanvasToolController {
             if Self.recordLassoPoint(point, in: &lassoPoints) {
                 canvas.needsDisplay = true
             }
+        case .polygonLasso:
+            trackPolygonPointer(point, flags: event.modifierFlags)
         case .transform:
             guard var drag = transformDrag else { return }
             transformDragCurrent = point
@@ -1209,6 +1235,109 @@ final class CanvasToolController {
         return true
     }
 
+    // MARK: Polygon Lasso
+
+    /// A Polygon Lasso press: the first click opens a polygon with the
+    /// press modifiers' operation; later clicks add corners (Shift keeps
+    /// the edge at a multiple of 45 degrees). A double-click or a click on
+    /// the first corner closes it, as in Photoshop.
+    private func placePolygonCorner(at point: CGPoint, event: NSEvent) {
+        guard point.x.isFinite, point.y.isFinite else {
+            onStatus?("That pointer sample is invalid.")
+            return
+        }
+        guard var polygon = openPolygon, let last = polygon.corners.last else {
+            // A double-click's second press after the first closed the
+            // polygon (on the first corner) must not open another one.
+            guard event.clickCount < 2 else { return }
+            openPolygon = OpenPolygon(corners: [point], operation: Self.operation(for: event.modifierFlags),
+                                      floating: document.floatingState.isActive ? document.floatingState : nil)
+            polygonPointer = point
+            canvas.needsDisplay = true
+            return
+        }
+        // The pair's first click already placed the corner under it.
+        if event.clickCount >= 2 { return closePolygon() }
+        let corner = event.modifierFlags.contains(.shift) ? PolygonLassoGeometry.constrained(point, from: last) : point
+        if PolygonLassoGeometry.closes(polygon.corners, at: corner, scale: canvas.scale) { return closePolygon() }
+        guard corner != last else { return }
+        polygon.corners.append(corner)
+        openPolygon = polygon
+        polygonPointer = corner
+        canvas.needsDisplay = true
+    }
+
+    /// Moves the rubber-band edge's free end; the canvas forwards hover
+    /// as well as drags while a polygon is open.
+    func trackPolygonPointer(_ point: CGPoint, flags: NSEvent.ModifierFlags) {
+        guard let last = openPolygon?.corners.last, point.x.isFinite, point.y.isFinite else { return }
+        polygonPointer = flags.contains(.shift) ? PolygonLassoGeometry.constrained(point, from: last) : point
+        canvas.needsDisplay = true
+    }
+
+    /// Commits the open polygon as one selection command. Fewer than three
+    /// corners, or a floating selection that appeared, went away or
+    /// changed since the first click, commits nothing.
+    private func closePolygon() {
+        guard let polygon = openPolygon else { return }
+        cancelPolygon()
+        guard polygon.corners.count >= 3 else {
+            onStatus?("A polygon needs at least three corners.")
+            return
+        }
+        var options = ToolState.shared.selectOptions
+        options.operation = polygon.operation
+        if let expected = polygon.floating {
+            guard document.floatingState == expected else {
+                onStatus?("The floating selection changed, so the polygon was not applied.")
+                return
+            }
+            document.selectFloatingShape(.polygon(polygon.corners), options: options, expected: expected)
+            return
+        }
+        guard !document.floatingState.isActive else {
+            onStatus?("The floating selection changed, so the polygon was not applied.")
+            return
+        }
+        document.select(.polygon(polygon.corners), options: options)
+    }
+
+    private func removeLastPolygonCorner() {
+        guard var polygon = openPolygon else { return }
+        guard polygon.corners.count > 1 else {
+            cancelPolygon()
+            onStatus?("Selection cancelled.")
+            return
+        }
+        polygon.corners.removeLast()
+        openPolygon = polygon
+        canvas.needsDisplay = true
+    }
+
+    /// Drops the open polygon without a native call.
+    func cancelPolygon() {
+        guard openPolygon != nil else { return }
+        openPolygon = nil
+        polygonPointer = nil
+        canvas.needsDisplay = true
+        hintChanged(.context)
+    }
+
+    /// The placed edges, the rubber-band edge to the pointer, and a square
+    /// on the first corner once a click there would close the polygon.
+    private func drawOpenPolygon(_ polygon: OpenPolygon, scale: Double) {
+        guard let first = polygon.corners.first else { return }
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: first.x * scale, y: first.y * scale))
+        for corner in polygon.corners.dropFirst() { path.line(to: NSPoint(x: corner.x * scale, y: corner.y * scale)) }
+        if let pointer = polygonPointer { path.line(to: NSPoint(x: pointer.x * scale, y: pointer.y * scale)) }
+        EngineCanvasView.strokeMarchingAnts(path, phase: 0)
+        guard polygon.corners.count >= 3 else { return }
+        let reach = PolygonLassoGeometry.closeReach
+        EngineCanvasView.strokeMarchingAnts(NSBezierPath(rect: NSRect(x: first.x * scale - reach / 2, y: first.y * scale - reach / 2,
+                                                                    width: reach, height: reach)), phase: 0)
+    }
+
     /// A rect usable as the captured move geometry.
     private static func isUsableRect(_ rect: CGRect) -> Bool {
         rect.origin.x.isFinite && rect.origin.y.isFinite
@@ -1278,6 +1407,8 @@ final class CanvasToolController {
 
     private static let returnKeys: Set<Int> = [36, 76]      // Return, keypad Enter
     private static let escapeKey = 53
+    private static let deleteKey = 51
+    private static let forwardDeleteKey = 117
     private static let tabKey = 48
     /// Temporary-tool modifiers, tool shortcuts, Space for the hand, digits,
     /// brackets and arrows. Returns false for keys it does not handle.
@@ -1292,6 +1423,23 @@ final class CanvasToolController {
         // Field editors and the on-canvas text overlay own ordinary typing,
         // including Space, digits and the color/Quick Mask letters.
         if textEditor != nil || canvas.window?.firstResponder is NSTextView { return false }
+
+        if openPolygon != nil, event.modifierFlags.intersection([.command, .control]).isEmpty {
+            switch keyCode {
+            case Self.escapeKey:
+                cancelPolygon()
+                onStatus?("Selection cancelled.")
+                return true
+            case _ where Self.returnKeys.contains(keyCode):
+                closePolygon()
+                return true
+            case Self.deleteKey, Self.forwardDeleteKey:
+                removeLastPolygonCorner()
+                return true
+            default:
+                break
+            }
+        }
 
         if keyCode == Self.escapeKey,
            floatingShape != nil || dragTool == .rectangleSelect || dragTool == .ellipseSelect || dragTool == .lasso {
@@ -1543,6 +1691,10 @@ final class CanvasToolController {
     /// The rubber band or lasso path of a selection being drawn, in view
     /// coordinates (the canvas is flipped).
     func drawOverlay(scale: Double) {
+        if let polygon = openPolygon {
+            drawOpenPolygon(polygon, scale: scale)
+            return
+        }
         if dragTool != nil, let preview = floatingShape?.preview {
             let bounds = preview.rect
             let outline = NSBezierPath(rect: NSRect(x: bounds.minX * scale, y: bounds.minY * scale,

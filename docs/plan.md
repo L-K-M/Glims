@@ -6599,3 +6599,21 @@ uses the existing filter preview session and commits as one undo step
 like every other filter. The static "Other" submenu takes the catalog's
 and plug-ins' "Other" entries below the two dedicated items. The
 Recorder does not record them, and Last Filter does not repeat them.
+
+### Polygon Lasso (candidate)
+
+Photoshop 4 added a Polygon Lasso beside the freehand Lasso; it now
+shares the L tool group (tag 29 in View ▸ Tools). Each click places a
+corner and a rubber-band edge follows the pointer. A double-click, a
+click within 6 view points of the first corner (three corners or more)
+or Return closes the polygon; Delete removes the last corner; Escape, a
+tool change or another tool's press drops it. The first click's
+modifiers choose the operation as a drag's press does; Shift on later
+clicks keeps the edge at a multiple of 45 degrees. No facade change: the
+closed polygon commits through the existing polygon selection command,
+so it is one undo step and records like a Lasso selection. It is offered
+in Lab documents wherever Lasso is and commits through the same Lab
+selection route; that route was not exercised with this tool. With a floating selection the polygon
+commits through the floating-shape route only while the float is
+unchanged since the first click; unlike Lasso, a click on the float
+never moves it. Option-drag freehand segments are not implemented.

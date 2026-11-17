@@ -70,6 +70,7 @@ enum ToolMenuCatalog {
         case .zoom: return 26
         case .spongeDesaturate: return 27
         case .spongeSaturate: return 28
+        case .polygonLasso: return 29
         }
     }
 
@@ -104,6 +105,7 @@ enum ToolMenuCatalog {
         case 26: return .zoom
         case 27: return .spongeDesaturate
         case 28: return .spongeSaturate
+        case 29: return .polygonLasso
         default: return nil
         }
     }
