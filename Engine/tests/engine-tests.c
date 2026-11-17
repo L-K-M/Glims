@@ -12839,6 +12839,86 @@ test_floating_selection (const char *work)
  * cleared, the composite unchanged, the cut hole in the source, one
  * Undo restoring everything, and refusals (empty selection, mask
  * target, invalid mode) that change nothing. */
+/* Slot 237: Image > Histogram reads one drawable, selection-weighted, and
+ * never touches history. */
+static double
+histogram_sum (const double *bins, uint32_t count)
+{
+  double total = 0.0;
+  for (uint32_t i = 0; bins && i < count; i++) total += bins[i];
+  return total;
+}
+
+static void
+test_drawable_histogram (void)
+{
+  GlimsImageID           image = 0;
+  GlimsItemID            layer;
+  GlimsSelectOptions     sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsHistogramSnapshot h = { .struct_size = sizeof h };
+  GlimsHistogramSnapshot shorter = { .struct_size = sizeof h - 1 };
+  int32_t                before, i;
+  char                  *error = NULL;
+  const int32_t          W = 32, H = 32;
+  uint8_t                known[32 * 32 * 4];
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, drawable_histogram) + sizeof api->drawable_histogram ||
+      ! api->drawable_histogram)
+    {
+      CHECK (false, "the adapter exports slot 237 drawable_histogram");
+      return;
+    }
+  for (i = 0; i < W * H; i++)
+    {
+      known[i * 4]     = (uint8_t) ((i % W) * 8);
+      known[i * 4 + 1] = (uint8_t) ((i / W) * 8);
+      known[i * 4 + 2] = 64;
+      known[i * 4 + 3] = 255;
+    }
+  CHECK (api->image_from_pixels (engine, W, H, known, sizeof known, &image, NULL) == GLIMS_STATUS_OK && image != 0,
+         "the histogram fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  api->layer_select (engine, image, layer);
+  before = undo_depth (image);
+
+  CHECK (api->drawable_histogram (engine, 9999, 0, &h, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->drawable_histogram (engine, image, 0x7FFFFF00, &h, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->drawable_histogram (engine, image, 0, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->drawable_histogram (engine, image, 0, &shorter, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "histogram: unknown image or drawable NOT_FOUND, missing or short output INVALID_ARGUMENT");
+
+  CHECK (api->drawable_histogram (engine, image, 0, &h, &error) == GLIMS_STATUS_OK,
+         "histogram of the selected layer%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (h.bin_count == 256 && h.trc != GLIMS_COLOR_TRC_UNKNOWN &&
+         h.channels == (GLIMS_HISTOGRAM_VALUE | GLIMS_HISTOGRAM_RED | GLIMS_HISTOGRAM_GREEN |
+                        GLIMS_HISTOGRAM_BLUE | GLIMS_HISTOGRAM_ALPHA | GLIMS_HISTOGRAM_LUMINANCE) &&
+         h.value && h.red && h.green && h.blue && h.alpha && h.luminance,
+         "an 8-bit RGBA layer has 256 bins and every RGBA channel (bins %u, channels %u)", h.bin_count, h.channels);
+  if (h.bin_count == 256 && h.red && h.blue && h.alpha)
+    CHECK (histogram_sum (h.red, 256) == W * H && h.red[0] == 32 && h.red[8] == 32 && h.red[248] == 32 &&
+           h.red[1] == 0 && h.blue[64] == W * H && h.alpha[255] == W * H,
+           "whole-layer bins count each pixel once (red[0] %.1f, red[8] %.1f, blue[64] %.1f)",
+           h.red[0], h.red[8], h.blue[64]);
+  api->free_histogram_snapshot (&h);
+  CHECK (h.bin_count == 0 && h.channels == 0 && ! h.red, "freeing the histogram clears it");
+
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 4, 4 }, { 12, 12 } }, 2, &sel);
+  before = undo_depth (image);
+  CHECK (api->drawable_histogram (engine, image, layer, &h, NULL) == GLIMS_STATUS_OK && h.bin_count == 256 &&
+         h.red && histogram_sum (h.red, 256) == 64 && h.red[32] == 8 && h.red[0] == 0 &&
+         h.green && h.green[88] == 8,
+         "a selection weights the histogram to its 8x8 pixels (red total %.1f)",
+         h.red ? histogram_sum (h.red, 256) : -1.0);
+  api->free_histogram_snapshot (&h);
+  CHECK (undo_depth (image) == before, "reading the histogram adds no undo step");
+
+  api->image_close (engine, image);
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -14505,6 +14585,7 @@ main (int argc, char **argv)
   test_floating_selection (argv[2]);
   test_selection_float ();
   test_selection_to_new_layer ();
+  test_drawable_histogram ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

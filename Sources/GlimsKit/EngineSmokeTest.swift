@@ -6017,6 +6017,7 @@ enum EngineSmokeTest {
 
         exerciseMergeVisible(document, controller: controller, session: session, image: image)
         exerciseLayerVia(document, controller: controller, session: session, image: image)
+        exerciseHistogram(document, controller: controller, session: session, image: image)
 
         controller.mergeDown(nil)
         settle()
@@ -12078,6 +12079,70 @@ extension EngineSmokeTest {
             check(Set(document.layers.map(\.id)) == existing && document.selectionBounds != nil
                     && pixel(session, image, x: 10, y: 5) == composite,
                   "one Undo removes the \(title) layer and restores the selection")
+        }
+        document.select(.none)
+        settle()
+    }
+}
+
+extension EngineSmokeTest {
+    /// Image ▸ Histogram…: enabled for a layer, selection-weighted, read-only,
+    /// and presented as a sheet; an older adapter keeps it disabled.
+    static func exerciseHistogram(_ document: ImageDocument, controller: DocumentWindowController,
+                                  session: EngineSession, image: Int32) {
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+        }
+        let item = NSMenuItem(title: "Histogram…", action: #selector(DocumentWindowController.showHistogram(_:)),
+                              keyEquivalent: "")
+        guard session.supportsDrawableHistogram else {
+            check(!controller.validateMenuItem(item) && document.histogramRefusal != nil,
+                  "an older adapter keeps Histogram disabled")
+            return
+        }
+        guard let source = document.layers.last?.id else { return check(false, "Histogram has a source layer") }
+        document.selectLayer(source)
+        document.select(.rectangle(CGRect(x: 0, y: 0, width: 40, height: 20)), options: EngineSession.SelectOptions())
+        settle()
+        check(controller.validateMenuItem(item), "Histogram is enabled for a selected layer (\(document.histogramRefusal ?? "-"))")
+        check(document.histogramSubject.hasSuffix(", within the selection"),
+              "the Histogram caption names the selection (\(document.histogramSubject))")
+        let undoBefore = try? session.undoInfo(image).undoCount
+        let layersBefore = document.layers
+        var result: Result<EngineSession.InputHistogram, Error>?
+        document.readHistogram { result = $0 }
+        let deadline = Date().addingTimeInterval(10)
+        while result == nil && Date() < deadline { spin() }
+        guard case .success(let histogram)? = result else {
+            return check(false, "the histogram reads (\(String(describing: result)))")
+        }
+        let alpha = histogram[.alpha].map { HistogramStatistics(bins: $0).pixels }
+        let value = histogram[.value].map { HistogramStatistics(bins: $0).pixels }
+        check(histogram.binCount > 0 && value != nil && abs((value ?? 0) - 800) < 0.5,
+              "the histogram counts the 40x20 selection of an opaque layer (\(String(describing: value)), alpha \(String(describing: alpha)))")
+        check((try? session.undoInfo(image).undoCount) == undoBefore && document.layers == layersBefore
+                && document.selectionBounds != nil,
+              "reading the histogram adds no undo step and keeps layers and selection")
+
+        let sheet = HistogramSheetController(histogram: histogram, subject: document.histogramSubject)
+        check(sheet.readout("pixels") == HistogramStatistics.formatCount(800) && sheet.readout("level") == "—",
+              "the Histogram sheet shows 800 pixels and no level until pointed (\(sheet.readout("pixels") ?? "-"))")
+        if let bins = histogram[sheet.selectedChannel], let last = bins.indices.last {
+            sheet.showProbe(last)
+            check(sheet.readout("percentile") == "100.0", "pointing at the last level reports the 100th percentile")
+        }
+
+        controller.showHistogram(nil)
+        let shown = Date().addingTimeInterval(10)
+        while controller.window?.attachedSheet == nil && Date() < shown { spin() }
+        check(controller.window?.attachedSheet != nil && !controller.validateMenuItem(item),
+              "Image > Histogram opens a sheet and stays disabled while it is up")
+        if let attached = controller.window?.attachedSheet {
+            controller.window?.endSheet(attached, returnCode: .alertFirstButtonReturn)
+            spin()
         }
         document.select(.none)
         settle()

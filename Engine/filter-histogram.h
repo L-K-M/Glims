@@ -12,4 +12,9 @@ GlimsStatus glims_filter_input_histogram_native (GlimsEngine *engine, GlimsFilte
                                                  uint32_t *out_trc, char **error);
 GlimsStatus glims_filter_input_histogram (GlimsEngine *engine, GlimsFilterID filter,
                                          GlimsHistogramSnapshot *out, char **error);
+/* Engine thread only. Image > Histogram for one drawable; `drawable` 0 is
+ * the single selected drawable. */
+GlimsStatus glims_drawable_histogram (GlimsEngine *engine, GlimsImageID image,
+                                     GlimsItemID drawable,
+                                     GlimsHistogramSnapshot *out, char **error);
 #endif

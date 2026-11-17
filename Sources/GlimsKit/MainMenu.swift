@@ -131,6 +131,7 @@ enum MainMenu {
             item("Configure Grid…", #selector(DocumentWindowController.configureGrid(_:))),
             item("Metadata…", #selector(DocumentWindowController.showMetadata(_:))),
             item("Image Information…", #selector(DocumentWindowController.imageInformation(_:))),
+            item("Histogram…", #selector(DocumentWindowController.showHistogram(_:))),
         ])
         let newLayer = item("New Layer", #selector(DocumentWindowController.newLayer(_:)), "n")
         newLayer.keyEquivalentModifierMask = [.command, .shift]

@@ -16,7 +16,38 @@ final class InputHistogramView: NSView {
         didSet { contentDidChange() }
     }
 
+    /// Image ▸ Histogram's pointer readout: the bin under the pointer, or
+    /// nil when it leaves the plot. Unset (and untracked) in Levels/Curves.
+    var onHoverBin: ((Int?) -> Void)? {
+        didSet { updateTrackingAreas() }
+    }
+    private var hoverArea: NSTrackingArea?
+
     override var intrinsicContentSize: NSSize { NSSize(width: 480, height: 130) }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        hoverArea = nil
+        guard onHoverBin != nil else { return }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseMoved(with event: NSEvent) {
+        reportHover(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseExited(with event: NSEvent) { onHoverBin?(nil) }
+
+    /// The bin a pointer at `point` (view coordinates) reports.
+    func reportHover(at point: NSPoint) {
+        guard let onHoverBin else { return }
+        let rect = bounds.insetBy(dx: 12, dy: 12)
+        guard rect.contains(point) || (point.y >= rect.minY && point.y <= rect.maxY && point.x == rect.maxX),
+              let count = availableBins?.count else { return onHoverBin(nil) }
+        onHoverBin(HistogramStatistics.bin(atX: point.x, minX: rect.minX, width: rect.width, binCount: count))
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

@@ -1637,6 +1637,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         ColorForms.presentInformation(for: imageDocument, on: window)
     }
 
+    /// Image ▸ Histogram…: a read-only sheet of the active layer, mask or
+    /// channel's histogram, weighted by the selection.
+    @objc func showHistogram(_ sender: Any?) {
+        guard let window else { return }
+        if let reason = imageDocument.histogramRefusal {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        HistogramSheet.present(for: imageDocument, on: window)
+    }
+
     /// Image ▸ Color Profile ▸ Assign…: the shared profile form in its
     /// assign kind, seeded from the cached color state.
     @objc func assignColorProfile(_ sender: Any?) {
@@ -2998,6 +3010,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let fixed = ColorForms.precisionIsFixed(mode: imageDocument.colorInfo.mode)
             menuItem.toolTip = fixed ? "Indexed images keep 8-bit non-linear precision." : nil
             return !fixed && !editingBlocked && !previewBusy
+        case #selector(showHistogram(_:)):
+            let refusal = imageDocument.histogramRefusal
+            menuItem.toolTip = refusal
+            return refusal == nil && window?.attachedSheet == nil
         case #selector(imageInformation(_:)):
             // Read-only and cheap: the sheet shows the cached state,
             // so it works wherever another sheet does not already.

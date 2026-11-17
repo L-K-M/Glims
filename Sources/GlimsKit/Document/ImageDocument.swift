@@ -5500,6 +5500,59 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    // MARK: Histogram
+
+    /// Image ▸ Histogram…: why it is unavailable now, or nil. The engine
+    /// reads the active layer, mask or channel, as GIMP's Histogram
+    /// dockable does.
+    var histogramRefusal: String? {
+        guard session.supportsDrawableHistogram else { return "This image engine cannot show a histogram." }
+        guard colorInfo.mode != .lab,
+              storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Histogram is available for ordinary layered images only."
+        }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Histogram") {
+            return reason
+        }
+        guard activeDrawable != nil else { return "Select a layer, mask or channel to show its histogram." }
+        guard !isClosing, acceptsImageReads else { return "Wait for the current operation to finish." }
+        return nil
+    }
+
+    /// What the histogram describes, for the sheet's caption.
+    var histogramSubject: String {
+        guard let drawable = activeDrawable else { return "" }
+        let base: String
+        if let channel = channels.first(where: { $0.id == drawable }) {
+            base = "Channel \u{201C}\(channel.name)\u{201D}"
+        } else if let layer = layers.first(where: { $0.id == drawable }) {
+            base = "Layer \u{201C}\(layer.name)\u{201D}"
+        } else if let owner = maskStates.first(where: { $0.value.mask == drawable })?.key,
+                  let layer = layers.first(where: { $0.id == owner }) {
+            base = "Mask of \u{201C}\(layer.name)\u{201D}"
+        } else {
+            base = "The active drawable"
+        }
+        return selectionBounds == nil ? base : base + ", within the selection"
+    }
+
+    /// Reads the active drawable's histogram on the engine queue. Pending
+    /// user edits end first so the histogram reflects them. Read-only: no
+    /// history step and no dirty change.
+    func readHistogram(completion: @escaping @MainActor (Result<EngineSession.InputHistogram, Error>) -> Void) {
+        guard !isClosing else { return completion(.failure(DocumentError.closed)) }
+        if let reason = histogramRefusal {
+            return completion(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: reason)))
+        }
+        endPendingUserEdits()
+        guard let drawable = activeDrawable else { return completion(.failure(DocumentError.noLayer)) }
+        enqueueExclusive(effect: .readsPixels, label: "Reading the histogram",
+                         rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let result = Result { try session.drawableHistogram(image, drawable: drawable) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     // MARK: Files
 
     /// Whether closing now could lose work: edits the engine counted, an
