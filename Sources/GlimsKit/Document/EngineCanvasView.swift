@@ -1108,6 +1108,7 @@ final class EngineCanvasView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         publishInfoPointer(at: convert(event.locationInWindow, from: nil))
+        tools.trackPolygonPointer(imagePoint(for: event), flags: event.modifierFlags)
     }
 
     private func publishInfoPointer(at viewPoint: CGPoint) {

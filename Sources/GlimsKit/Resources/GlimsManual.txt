@@ -152,7 +152,7 @@ grouped tools. The letter of each group:
   V    Move, Transform
   C    Crop
   M    Rectangle Select, Ellipse Select
-  L    Lasso
+  L    Lasso, Polygon Lasso
   W    Magic Wand, Select by Color
   I    Eyedropper
   T    Text
@@ -182,7 +182,11 @@ What the tools do:
   Layer > Rasterize Layer command before a destructive transform.
 
   Rectangle Select and Ellipse Select drag out a selection; Lasso
-  draws one freehand. Magic Wand selects the similar colors around a
+  draws one freehand. Polygon Lasso places a corner at each click;
+  double-click, click the first corner or press Return to close it.
+  Shift on the first click adds, Option subtracts; Shift on later clicks
+  keeps the edge at a multiple of 45 degrees. Delete removes the last
+  corner and Escape drops the polygon. Magic Wand selects the similar colors around a
   click; Select by Color takes every similar pixel in the image.
   Eyedropper sets the foreground color from the pixel you click.
 
@@ -566,7 +570,7 @@ Keys on the canvas (the canvas must have focus):
     W    Wand / Select by Color  R    Smudge / Blur / Sharpen
     G    Gradient / Paint Bucket O    Dodge / Burn / Sponge
     C    Crop                    E    Eraser
-    L    Lasso                   I    Eyedropper
+    L    Lasso / Polygon Lasso   I    Eyedropper
     T    Text                    P    Path
     H    Hand                    Z    Zoom
 

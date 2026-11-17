@@ -6,6 +6,8 @@ enum ToolHintPolicy {
     enum Phase: Equatable {
         case idle, dragging, textEditing, transformReady
         case cropReady(width: Int, height: Int)
+        /// A Polygon Lasso polygon with this many corners waits for more.
+        case polygonOpen(corners: Int)
     }
     enum Refresh: Equatable { case context, afterAction, stateChange }
 
@@ -62,6 +64,13 @@ enum ToolHintPolicy {
         case .lasso:
             return phase == .dragging ? "Trace the selection; release to finish. Escape cancels."
                 : selection("freehand area", flags: flags)
+        case .polygonLasso:
+            if case .polygonOpen(let corners) = phase {
+                let next = corners >= 3 ? "Double-click, click the first corner or press Return to close"
+                    : "Click to add corners"
+                return "\(next). Shift keeps 45-degree edges; Delete removes a corner; Escape cancels."
+            }
+            return selection("straight-edged area", flags: flags)
         case .magicWand:
             return phase == .dragging ? "Release, then click to select connected colors." : selection("connected colors", flags: flags)
         case .selectByColor:

@@ -5,7 +5,7 @@ import AppKit
 /// one cell, a single-letter shortcut per group (Shift-letter cycles).
 enum ToolID: String, CaseIterable {
     case move, transform, crop
-    case rectangleSelect, ellipseSelect, lasso
+    case rectangleSelect, ellipseSelect, lasso, polygonLasso
     case magicWand, selectByColor
     case eyedropper, text, path
     case paintbrush, pencil, airbrush
@@ -20,11 +20,11 @@ enum ToolID: String, CaseIterable {
     /// from shortcuts and disabled in the palette before an interaction starts.
     func isAvailable(in mode: EngineSession.ColorMode?) -> Bool {
         if mode == .lab {
-            return [.paintbrush, .rectangleSelect, .ellipseSelect, .lasso, .hand, .zoom].contains(self)
+            return [.paintbrush, .rectangleSelect, .ellipseSelect, .lasso, .polygonLasso, .hand, .zoom].contains(self)
         }
         guard mode?.usesInkChannels == true else { return true }
         switch self {
-        case .paintbrush, .pencil, .airbrush, .rectangleSelect, .ellipseSelect, .lasso, .hand, .zoom:
+        case .paintbrush, .pencil, .airbrush, .rectangleSelect, .ellipseSelect, .lasso, .polygonLasso, .hand, .zoom:
             return true
         default: return false
         }
@@ -40,6 +40,7 @@ enum ToolID: String, CaseIterable {
         case .rectangleSelect: return "Rectangle Select"
         case .ellipseSelect: return "Ellipse Select"
         case .lasso: return "Lasso"
+        case .polygonLasso: return "Polygon Lasso"
         case .magicWand: return "Magic Wand"
         case .selectByColor: return "Select by Color"
         case .eyedropper: return "Eyedropper"
@@ -70,7 +71,7 @@ enum ToolID: String, CaseIterable {
         case .crop: return "C"
         case .gradient, .bucketFill: return "G"
         case .rectangleSelect, .ellipseSelect: return "M"
-        case .lasso: return "L"
+        case .lasso, .polygonLasso: return "L"
         case .magicWand, .selectByColor: return "W"
         case .eyedropper: return "I"
         case .text: return "T"
@@ -96,6 +97,7 @@ enum ToolID: String, CaseIterable {
         case .rectangleSelect: return ["rectangle.dashed"]
         case .ellipseSelect: return ["circle.dashed"]
         case .lasso: return ["lasso"]
+        case .polygonLasso: return ["pentagon", "skew", "lasso"]
         case .magicWand: return ["wand.and.stars"]
         case .selectByColor: return ["paintpalette", "drop.triangle"]
         case .eyedropper: return ["eyedropper"]
@@ -162,13 +164,13 @@ enum ToolID: String, CaseIterable {
     }
 
     var isSelectionTool: Bool {
-        [.rectangleSelect, .ellipseSelect, .lasso, .magicWand, .selectByColor].contains(self)
+        [.rectangleSelect, .ellipseSelect, .lasso, .polygonLasso, .magicWand, .selectByColor].contains(self)
     }
 
     /// The palette's cells, row by row; a cell with several tools is a group.
     static let paletteSlots: [[ToolID]] = [
         [.rectangleSelect, .ellipseSelect], [.move, .transform],
-        [.lasso], [.crop],
+        [.lasso, .polygonLasso], [.crop],
         [.magicWand, .selectByColor], [.eyedropper],
         [.paintbrush, .pencil, .airbrush], [.eraser],
         [.clone, .heal], [.smudge, .blur, .sharpen],

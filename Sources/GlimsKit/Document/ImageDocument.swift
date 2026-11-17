@@ -315,14 +315,14 @@ final class ImageDocument {
             return [.hand, .zoom].contains(tool) || (tool == .paintbrush && storage.allowsLabLayerBrush && session.supportsLabLayerBrush) ||
                 (tool == .eyedropper && session.supportsLayeredLabSampling) ||
                 (storage.allowsLabSelections && session.supportsLabSelections &&
-                [.rectangleSelect, .ellipseSelect, .lasso].contains(tool))
+                [.rectangleSelect, .ellipseSelect, .lasso, .polygonLasso].contains(tool))
         }
         if storage.readOnly { return [.hand, .zoom].contains(tool) }
         guard tool.isAvailable(in: colorInfo.mode) else { return false }
         guard colorInfo.mode == .lab else { return true }
         switch tool {
         case .paintbrush: return session.supportsLabBrush
-        case .rectangleSelect, .ellipseSelect, .lasso: return session.supportsLabSelections
+        case .rectangleSelect, .ellipseSelect, .lasso, .polygonLasso: return session.supportsLabSelections
         default: return true
         }
     }

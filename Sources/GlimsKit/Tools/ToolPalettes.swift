@@ -1075,6 +1075,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         if tool == .rectangleSelect || tool == .ellipseSelect {
             stack.addArrangedSubview(hint("While dragging, Shift keeps equal sides and Option draws from the center. Escape cancels."))
         }
+        if tool == .polygonLasso {
+            stack.addArrangedSubview(hint("Click to place corners. Double-click, click the first corner or press Return to close. "
+                + "Shift keeps 45-degree edges; Delete removes the last corner; Escape cancels."))
+        }
         if tool == .magicWand || tool == .selectByColor {
             stack.addArrangedSubview(slider("Threshold", 0...255, options.threshold * 255, unit: "") { value in
                 ToolState.shared.selectOptions.threshold = value / 255

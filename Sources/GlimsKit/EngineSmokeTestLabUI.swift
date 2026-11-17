@@ -326,7 +326,7 @@ extension EngineSmokeTest {
                 var allowed: Set<ToolID> = [.hand, .zoom]
                 if session.supportsLabBrush { allowed.insert(.paintbrush) }
                 if session.supportsLabSelections {
-                    allowed.formUnion([.rectangleSelect, .ellipseSelect, .lasso])
+                    allowed.formUnion([.rectangleSelect, .ellipseSelect, .lasso, .polygonLasso])
                 }
                 expect(enabled() == Set(allowed.map(\.rawValue)), "Lab tool grid enables exactly the qualified Brush, selection and viewing routes")
                 tools.retarget(to: rgb)

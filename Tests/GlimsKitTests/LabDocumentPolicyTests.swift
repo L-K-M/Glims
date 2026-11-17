@@ -10,7 +10,7 @@ final class LabDocumentPolicyTests: XCTestCase {
         XCTAssertFalse(EngineSession.ColorMode.lab.usesInkChannels)
         XCTAssertTrue(EngineSession.ColorMode.lab.usesNativeChannels)
         XCTAssertEqual(ToolID.allCases.filter { $0.isAvailable(in: .lab) },
-                       [.rectangleSelect, .ellipseSelect, .lasso, .paintbrush, .hand, .zoom])
+                       [.rectangleSelect, .ellipseSelect, .lasso, .polygonLasso, .paintbrush, .hand, .zoom])
         XCTAssertTrue(ToolID.paintbrush.isAvailable(in: .cmyk))
         XCTAssertTrue(ToolID.text.isAvailable(in: .rgb))
     }

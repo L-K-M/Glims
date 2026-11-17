@@ -11,6 +11,7 @@ final class ToolHintPolicyTests: XCTestCase {
             .rectangleSelect: "Select rectangle. Shift adds; Option subtracts; Shift-Option intersects.",
             .ellipseSelect: "Select ellipse. Shift adds; Option subtracts; Shift-Option intersects.",
             .lasso: "Select freehand area. Shift adds; Option subtracts; Shift-Option intersects.",
+            .polygonLasso: "Select straight-edged area. Shift adds; Option subtracts; Shift-Option intersects.",
             .magicWand: "Select connected colors. Shift adds; Option subtracts; Shift-Option intersects.",
             .selectByColor: "Select matching colors. Shift adds; Option subtracts; Shift-Option intersects.",
             .eyedropper: "Click or drag to sample the foreground color.",
