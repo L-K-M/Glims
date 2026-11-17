@@ -1709,6 +1709,30 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func rotateImage180(_ sender: Any?) { imageDocument.transformImage(.rotate180) }
     @objc func flipImageHorizontally(_ sender: Any?) { imageDocument.transformImage(.flipHorizontal) }
     @objc func flipImageVertically(_ sender: Any?) { imageDocument.transformImage(.flipVertical) }
+
+    /// Image ▸ Rotate ▸ Arbitrary…: Photoshop's angle and direction sheet.
+    /// The canvas grows to fit; the background's new corners take the
+    /// background color.
+    @objc func rotateImageArbitrary(_ sender: Any?) {
+        guard let window else { return }
+        endPendingEdits()
+        let form = ArbitraryRotationForm()
+        let alert = NSAlert()
+        alert.messageText = "Rotate Canvas"
+        alert.informativeText = "Enter an angle up to 359.99°."
+        alert.accessoryView = form.view
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = form.angle
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            guard let degrees = form.clockwiseDegrees else {
+                self.imageDocument.onError?("Enter a nonzero angle between -359.99° and 359.99°.")
+                return
+            }
+            self.imageDocument.rotateCanvas(degrees: degrees, fill: ToolState.shared.background)
+        }
+    }
     @objc func setTransformModeFromMenu(_ sender: Any?) {
         guard let item = sender as? NSMenuItem,
               item.action == #selector(setTransformModeFromMenu(_:)),
@@ -2859,6 +2883,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let mode = LayerTransformSession.Mode.from(menuTag: menuItem.tag) else { return false }
             menuItem.state = ToolState.shared.current == .transform && canvas.tools.transformPreview?.mode == mode ? .on : .off
             return canvas.tools.transformModeSelectionAllowed
+        case #selector(rotateImageArbitrary(_:)):
+            return !editingBlocked && !previewBusy && imageDocument.canRotateArbitrary
+                && !imageDocument.floatingState.isActive
         case #selector(mergeVisible(_:)):
             // The whole stack, not a layer: a multi-selection does not
             // matter, two visible top-level layers do.

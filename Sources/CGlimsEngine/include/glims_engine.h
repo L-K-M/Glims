@@ -4498,6 +4498,19 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_duplicate_merged) (GlimsEngine *engine, GlimsImageID image,
                                          const char *name, GlimsImageID *result,
                                          char **error);
+  /* Slot 242: Image > Rotate Canvas > Arbitrary. Rotates every layer,
+   * mask, channel, path and the selection by `degrees` clockwise around
+   * the canvas center with the engine's interpolation preference, and
+   * grows the canvas to hold the rotated image. Layers without an alpha
+   * channel (a background) fill the uncovered corners with `fill` and
+   * stay without alpha; other layers leave them transparent. One undo
+   * step. `degrees` must be finite, nonzero and within -359.99..359.99,
+   * and `fill` non-NULL, else INVALID_ARGUMENT; a component layout is
+   * UNSUPPORTED; a floating selection, strokes, previews and plug-ins
+   * refuse. Every refusal leaves the image unchanged. */
+  GlimsStatus (*image_rotate_arbitrary) (GlimsEngine *engine, GlimsImageID image,
+                                         double degrees, const GlimsColor *fill,
+                                         char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -724,6 +724,8 @@ GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t 
                                     char **error);
 GlimsStatus glims_image_scale_with_interpolation (GlimsEngine *e, GlimsImageID image, int32_t width,
                                                   int32_t height, uint32_t interpolation, char **error);
+GlimsStatus glims_image_rotate_arbitrary (GlimsEngine *e, GlimsImageID image, double degrees,
+                                          const GlimsColor *fill, char **error);
 GlimsStatus glims_image_resize_canvas (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
                                        int32_t offset_x, int32_t offset_y, const GlimsColor *fill,
                                        char **error);

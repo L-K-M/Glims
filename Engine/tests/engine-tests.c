@@ -13278,6 +13278,102 @@ test_image_duplicate_merged (void)
   api->image_close (engine, image);
 }
 
+/* Slot 242: Rotate Canvas > Arbitrary. A white background (no alpha)
+ * under a layer that is red on its left half: 90 degrees clockwise puts
+ * the red half on top and swaps the size; 30 degrees grows the canvas,
+ * fills the background's new corners with the fill color and leaves
+ * the upper layer's corners transparent; each is one undo step. */
+static void
+test_image_rotate_arbitrary (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        red = 0;
+  GlimsImageInfo     info;
+  GlimsLayerChange   change = { .struct_size = sizeof change };
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsFillSettings  fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 1, 0, 0, 1 }, .opacity = 1, .threshold = 0.1, .antialias = true };
+  const GlimsColor   blue = { 0, 0, 1, 1 };
+  uint8_t            top[4], bottom[4], corner[4], center[4], hidden_corner[4], hidden_center[4];
+  int32_t            depth;
+  char              *error = NULL;
+  bool               ok;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_rotate_arbitrary) + sizeof api->image_rotate_arbitrary ||
+      ! api->image_rotate_arbitrary)
+    {
+      CHECK (false, "the adapter exports slot 242 image_rotate_arbitrary");
+      return;
+    }
+
+  ok = api->image_new_filled (engine, 40, 20, GLIMS_NEW_IMAGE_WHITE, NULL, &image, NULL) == GLIMS_STATUS_OK &&
+       api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &red, NULL) == GLIMS_STATUS_OK &&
+       api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 20, 20 } }, 2, &sel) == GLIMS_STATUS_OK &&
+       api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK &&
+       api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK;
+  CHECK (ok, "a 40x20 white background under a layer red on its left half");
+  if (! ok)
+    {
+      api->image_close (engine, image);
+      return;
+    }
+
+  depth = undo_depth (image);
+  CHECK (api->image_rotate_arbitrary (engine, image, 90, &blue, &error) == GLIMS_STATUS_OK && ! error,
+         "image_rotate_arbitrary rotates by 90 degrees (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  render_pixel (image, 10, 5, top);
+  render_pixel (image, 10, 34, bottom);
+  CHECK (api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width >= 20 && info.width <= 22 && info.height >= 40 && info.height <= 42 &&
+         undo_depth (image) == depth + 1,
+         "90 degrees swaps the size as one undo step (%dx%d)", info.width, info.height);
+  CHECK (top[0] > 200 && top[1] < 50 && top[2] < 50 && bottom[0] > 200 && bottom[1] > 200 && bottom[2] > 200,
+         "positive angles turn clockwise: the left half is now on top (%d,%d,%d; %d,%d,%d)",
+         top[0], top[1], top[2], bottom[0], bottom[1], bottom[2]);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 40 && info.height == 20 &&
+         undo_depth (image) == depth,
+         "undo restores the 40x20 canvas");
+
+  CHECK (api->image_rotate_arbitrary (engine, image, -30, &blue, &error) == GLIMS_STATUS_OK && ! error,
+         "image_rotate_arbitrary rotates by -30 degrees (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  ok = api->image_info (engine, image, &info) == GLIMS_STATUS_OK;
+  /* 40x20 turned by 30 degrees needs about 44.6 x 37.3 pixels. */
+  CHECK (ok && info.width >= 44 && info.width <= 47 && info.height >= 37 && info.height <= 40 &&
+         undo_depth (image) == depth + 1,
+         "30 degrees grows the canvas to hold the image (%dx%d)", info.width, info.height);
+  render_pixel (image, 0, 0, corner);
+  render_pixel (image, info.width / 2, info.height / 2, center);
+  change.properties = GLIMS_LAYER_VISIBLE;
+  change.visible    = false;
+  ok = api->layer_change (engine, image, red, &change, NULL) == GLIMS_STATUS_OK;
+  render_pixel (image, 0, 0, hidden_corner);
+  render_pixel (image, info.width / 2 + 8, info.height / 2, hidden_center);
+  CHECK (ok && hidden_corner[0] == 0 && hidden_corner[1] == 0 && hidden_corner[2] == 255 && hidden_corner[3] == 255 &&
+         hidden_center[0] == 255 && hidden_center[1] == 255 && hidden_center[2] == 255 && hidden_center[3] == 255,
+         "the background fills its new corners with the fill color and stays opaque (%d,%d,%d,%d; %d,%d,%d,%d)",
+         hidden_corner[0], hidden_corner[1], hidden_corner[2], hidden_corner[3],
+         hidden_center[0], hidden_center[1], hidden_center[2], hidden_center[3]);
+  CHECK (memcmp (corner, hidden_corner, 4) == 0,
+         "the upper layer leaves its new corners transparent (%d,%d,%d,%d)", corner[0], corner[1], corner[2], corner[3]);
+  CHECK (center[3] == 255, "the rotated image stays opaque in the middle");
+
+  depth = undo_depth (image);
+  CHECK (api->image_rotate_arbitrary (engine, image, 0, &blue, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_rotate_arbitrary (engine, image, 360, &blue, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_rotate_arbitrary (engine, image, -400, &blue, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_rotate_arbitrary (engine, image, NAN, &blue, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_rotate_arbitrary (engine, image, 45, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_rotate_arbitrary (engine, 4242, 45, &blue, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         undo_depth (image) == depth,
+         "image_rotate_arbitrary refuses 0, 360, -400, NaN, no fill and an unknown image without an undo step");
+  api->image_close (engine, image);
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -14949,6 +15045,7 @@ main (int argc, char **argv)
   test_selection_similar ();
   test_image_new_filled ();
   test_image_duplicate_merged ();
+  test_image_rotate_arbitrary ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

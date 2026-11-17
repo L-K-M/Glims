@@ -4333,6 +4333,26 @@ static GlimsStatus api_image_duplicate_merged (GlimsEngine *e, GlimsImageID imag
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_duplicate_merged_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  double degrees;
+  const GlimsColor *fill;
+  char **error;
+} GlimsImageRotateArbitraryArgs;
+static GlimsStatus image_rotate_arbitrary_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsImageRotateArbitraryArgs *a = data;
+  return glims_image_rotate_arbitrary (e, a->image, a->degrees, a->fill, a->error);
+}
+static GlimsStatus api_image_rotate_arbitrary (GlimsEngine *e, GlimsImageID image, double degrees,
+                                               const GlimsColor *fill, char **error)
+{
+  GlimsImageRotateArbitraryArgs a = { image, degrees, fill, error };
+  if (error) *error = NULL;
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_rotate_arbitrary,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_rotate_arbitrary_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

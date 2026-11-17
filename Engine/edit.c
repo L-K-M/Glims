@@ -40,6 +40,7 @@
 #include "core/gimpimage-resize.h"
 #include "core/gimpimage-rotate.h"
 #include "core/gimpimage-scale.h"
+#include "core/gimpimage-transform.h"
 #include "core/gimpimage-merge.h"
 #include "core/gimpimage-undo.h"
 #include "core/gimpitem.h"
@@ -1903,6 +1904,74 @@ glims_image_resize_canvas (GlimsEngine      *engine,
   context = command_context (engine->gimp, NULL, fill);
   gimp_image_resize_with_layers (image, context, GIMP_FILL_BACKGROUND, width, height,
                                  offset_x, offset_y, GIMP_ITEM_SET_IMAGE_SIZED, FALSE, NULL);
+  g_object_unref (context);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
+#define GLIMS_ROTATE_ARBITRARY_LIMIT 359.99
+
+GlimsStatus
+glims_image_rotate_arbitrary (GlimsEngine      *engine,
+                              GlimsImageID      id,
+                              double            degrees,
+                              const GlimsColor *fill,
+                              char            **error)
+{
+  GlimsStatus     status;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage      *image;
+  GimpContext    *context;
+  GimpMatrix3     matrix;
+  GList          *layers;
+  GList          *opaque = NULL;
+  GList          *iter;
+
+  if (! open) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (! fill || ! isfinite (degrees) || degrees == 0.0 ||
+      fabs (degrees) > GLIMS_ROTATE_ARBITRARY_LIMIT)
+    {
+      glims_fail (error, NULL, "Enter an angle between -359.99 and 359.99 degrees, other than 0.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_ORDINARY)
+    {
+      glims_fail (error, NULL, "Arbitrary rotation is available for ordinary layered images only.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  image = open->image;
+  if (gimp_image_get_floating_selection (image))
+    return glims_fail (error, NULL, "Anchor or cancel the floating selection before rotating the canvas.");
+
+  /* Layers without alpha (a background) come back from the transform with
+   * alpha added and transparent corners; flattening them onto `fill`
+   * afterwards gives them the background color, as classic editors do. */
+  layers = gimp_image_get_layer_list (image);
+  for (iter = layers; iter; iter = iter->next)
+    if (! GIMP_IS_GROUP_LAYER (iter->data) &&
+        ! gimp_drawable_has_alpha (GIMP_DRAWABLE (iter->data)))
+      opaque = g_list_prepend (opaque, iter->data);
+  g_list_free (layers);
+
+  gimp_matrix3_identity (&matrix);
+  gimp_transform_matrix_rotate_center (&matrix,
+                                       gimp_image_get_width (image) / 2.0,
+                                       gimp_image_get_height (image) / 2.0,
+                                       gimp_deg_to_rad (degrees));
+
+  context = command_context (engine->gimp, NULL, fill);
+  gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_IMAGE_TRANSFORM, "Rotate Canvas");
+  gimp_image_transform (image, context, &matrix, GIMP_TRANSFORM_FORWARD,
+                        engine->gimp->config->interpolation_type,
+                        GIMP_TRANSFORM_RESIZE_ADJUST, NULL);
+  for (iter = opaque; iter; iter = iter->next)
+    gimp_layer_remove_alpha (iter->data, context);
+  gimp_image_undo_group_end (image);
+  g_list_free (opaque);
   g_object_unref (context);
   gimp_image_flush (image);
 

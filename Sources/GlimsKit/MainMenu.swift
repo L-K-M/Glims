@@ -111,6 +111,7 @@ enum MainMenu {
                 item("90° Clockwise", #selector(DocumentWindowController.rotateImage90(_:))),
                 item("90° Counter-Clockwise", #selector(DocumentWindowController.rotateImage270(_:))),
                 item("180°", #selector(DocumentWindowController.rotateImage180(_:))),
+                item("Arbitrary…", #selector(DocumentWindowController.rotateImageArbitrary(_:))),
                 .separator(),
                 item("Flip Horizontal", #selector(DocumentWindowController.flipImageHorizontally(_:))),
                 item("Flip Vertical", #selector(DocumentWindowController.flipImageVertically(_:))),

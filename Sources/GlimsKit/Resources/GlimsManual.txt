@@ -356,6 +356,12 @@ transparency included; hidden layers are left out. It is offered for
 layered RGB, grayscale and indexed images and is dimmed when the image
 has one layer. The copy starts with an empty history.
 
+Image > Rotate > Arbitrary... turns the whole image by any angle up to
+359.99 degrees, clockwise or counter-clockwise. The canvas grows to hold
+the turned image. A background layer fills its new corners with the
+background color; other layers leave them transparent. It is offered
+for layered RGB, grayscale and indexed images and is one undo step.
+
 # Recorder
 
 The Recorder palette records the edits Glims can replay and runs them

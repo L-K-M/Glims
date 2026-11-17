@@ -6647,3 +6647,19 @@ is offered only for ordinary layered images on an adapter with the
 slot and is dimmed for a single layer, as in Photoshop; Lab documents
 cannot duplicate, as with New Snapshot. The Recorder does not record
 Duplicate.
+
+### Arbitrary canvas rotation (candidate)
+
+Image ▸ Rotate ▸ Arbitrary… is Photoshop's Rotate Canvas Arbitrary
+dialog: an angle up to 359.99° and Clockwise or Counter-Clockwise.
+Additive facade slot 242, `image_rotate_arbitrary`, rotates around the
+canvas center with GIMP's `gimp_image_transform` (every layer, mask,
+channel, path, the selection, guides and sample points) using the
+engine's interpolation preference, with the canvas adjusted to the
+rotated bounds as GIMP's Arbitrary Rotation does. Layers without alpha
+come back from the transform with alpha added; they are flattened onto
+the fill color (the tool background color) inside the same undo group,
+so a background stays opaque with the background color in its new
+corners, as in Photoshop. Component layouts (CMYK, duotone, Lab) and
+older adapters keep the command disabled. The Recorder does not record
+it.
