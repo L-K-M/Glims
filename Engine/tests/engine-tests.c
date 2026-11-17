@@ -2127,6 +2127,44 @@ test_transforms (void)
   api->free_string (error);
   error = NULL;
 
+  {
+    /* Explicit Image Size resampling: nearest neighbour only repeats the
+     * row's existing values, linear blends the strip edge into new ones. */
+    bool     seen[256] = { false }, nearest_only_existing = true, linear_blends = false;
+    int      depth = undo_depth (image);
+
+    for (int32_t x = 0; x < 50; x++)
+      {
+        int red = red_at (image, x, 15);
+        if (red >= 0) seen[red] = true;
+      }
+    CHECK (api->image_scale_with_interpolation (engine, image, 100, 60, GLIMS_INTERPOLATION_NONE, NULL) ==
+           GLIMS_STATUS_OK && api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+           info.width == 100 && info.height == 60 && undo_depth (image) == depth + 1,
+           "Image Size with nearest neighbour scales to 100x60 as one undo step");
+    for (int32_t x = 0; x < 100; x++)
+      {
+        int red = red_at (image, x, 30);
+        if (red < 0 || ! seen[red]) nearest_only_existing = false;
+      }
+    CHECK (nearest_only_existing, "nearest neighbour introduces no new values");
+    CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+           api->image_scale_with_interpolation (engine, image, 100, 60, GLIMS_INTERPOLATION_LINEAR, NULL) ==
+           GLIMS_STATUS_OK && api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 100,
+           "Image Size with linear interpolation scales the same image");
+    for (int32_t x = 0; x < 100; x++)
+      {
+        int red = red_at (image, x, 30);
+        if (red >= 0 && ! seen[red]) linear_blends = true;
+      }
+    CHECK (linear_blends, "linear interpolation blends the strip edge into new values");
+    CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+           api->image_scale_with_interpolation (engine, image, 100, 60, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 50 && info.height == 30 &&
+           undo_depth (image) == depth,
+           "an unknown interpolation is refused without changing the image");
+  }
+
   CHECK (api->image_resize_canvas (engine, image, 70, 50, 10, 10, &blue, NULL) == GLIMS_STATUS_OK &&
          api->image_info (engine, image, &info) == GLIMS_STATUS_OK && info.width == 70 && info.height == 50 &&
          api->image_render (engine, image, 1.0, (GlimsRect) { 2, 2, 1, 1 }, pixel, 4) == GLIMS_STATUS_OK &&

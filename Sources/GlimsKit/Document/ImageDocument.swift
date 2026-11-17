@@ -4268,10 +4268,21 @@ final class ImageDocument {
         }
     }
 
+    /// Image Size with the engine's preferred resampling method.
     func scale(toWidth width: Int, height: Int) {
+        scale(.scale(width: width, height: height))
+    }
+
+    /// Image Size with an explicit method, recorded and replayed with the
+    /// image. Deliberately non-optional: `.none` (Nearest Neighbor) must
+    /// never be read as "no method".
+    func scale(toWidth width: Int, height: Int, interpolation: EngineSession.Interpolation) {
+        scale(.scaleWithInterpolation(width: width, height: height, interpolation: interpolation))
+    }
+
+    private func scale(_ command: SemanticImageCommand) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        let command = SemanticImageCommand.scale(width: width, height: height)
         run(semantic: command, command.apply)
     }
 

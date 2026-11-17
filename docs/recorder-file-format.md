@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 26
+# Recorder file format, versions 1 to 27
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `26`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `27`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -21,11 +21,11 @@ The writer chooses the highest version required by a successful record:
 `fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
 an Eraser stroke with an explicit background color 22, mask Levels 23,
 mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
-`applyUnsharpMask` 26. A file declaring one of those versions must contain at least one
+`applyUnsharpMask` 26, and `scaleWithInterpolation` 27. A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...26 refuse the file.
+version 1. Integers outside 1...27 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -600,3 +600,13 @@ context bindings are refused. Version 26 requires at least one successful
 command of either kind and can contain every earlier command. Replay begins a
 fresh preview on the rebound layer, writes every recorded setting, and commits
 it as one effect and one Undo step; a refused write aborts the preview.
+
+## Image Size with a resampling method (version 27)
+
+`scaleWithInterpolation` has exactly `width` and `height` (1...524288, as for
+`scale`) and `interpolation`, one of the owned names `none`, `linear`,
+`cubic`, `noHalo` or `loHalo` shared with layer transforms. It is target
+independent and needs the `none` binding. `scale` without a method keeps
+version 1 and the engine's preferred resampling. Version 27 requires at least
+one successful `scaleWithInterpolation`. Replay refuses on an adapter that
+cannot choose the method instead of resampling differently.

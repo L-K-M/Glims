@@ -6506,3 +6506,13 @@ spoken position labels. The image keeps its place at the chosen anchor while
 the canvas grows or shrinks; Center remains the default and keeps the earlier
 integer offsets exactly. The offset is the existing native and Recorder
 `resizeCanvas` offset, so no engine or file-format change is needed.
+
+### Image Size resampling (candidate)
+
+Image Size offers Photoshop's Nearest Neighbor, Bilinear and Bicubic plus the
+engine's NoHalo and LoHalo, with Bicubic (the engine's default preference)
+selected. Additive facade slot 234, `image_scale_with_interpolation`, takes an
+owned `GlimsInterpolation`; `image_scale` now delegates to it with DEFAULT. An
+older adapter keeps the previous sheet and refuses an explicit method. A chosen
+method records as `scaleWithInterpolation` in version 27 files; a default scale
+keeps its version 1 command.

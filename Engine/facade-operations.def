@@ -233,3 +233,4 @@ GLIMS_FACADE(image_open_psd_composite, api_image_open_psd_composite, NONE, GLOBA
 GLIMS_FACADE(image_convert_layered_lab_copy, api_image_convert_layered_lab_copy, IMAGE, COMPONENT)
 GLIMS_FACADE(stroke_begin_v2_with_capture_facts, api_stroke_begin_v2_with_capture_facts, IMAGE, COMPONENT)
 GLIMS_FACADE(brush_settings_features, api_brush_settings_features, NONE, DIRECT)
+GLIMS_FACADE(image_scale_with_interpolation, api_image_scale_with_interpolation, IMAGE, ORDINARY)

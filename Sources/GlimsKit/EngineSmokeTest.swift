@@ -6040,6 +6040,46 @@ enum EngineSmokeTest {
         document.scale(toWidth: 100, height: 150)
         settle()
         check(document.info.width == 100 && controller.canvas.frame.width == 100 * canvas.scale, "Image Size scales the image and the canvas")
+        if session.supportsScaleInterpolation {
+            let source = try session.copyPixels(image, merged: true)
+            try document.startRecording()
+            document.scale(toWidth: 200, height: 300, interpolation: .none)
+            settle()
+            try document.stopRecording()
+            let deadline = Date().addingTimeInterval(10)
+            while document.recorder.pendingCount > 0 && Date() < deadline { settle() }
+            // Nearest Neighbor at exactly 2× repeats every source pixel as a
+            // 2 × 2 block; the varied source makes any blending visible.
+            let doubled = try session.copyPixels(image, merged: true)
+            var exact = doubled.width == 2 * source.width && doubled.height == 2 * source.height
+            var distinct = Set<[UInt8]>()
+            for y in 0..<source.height where exact {
+                for x in 0..<source.width {
+                    let from = (y * source.width + x) * 4
+                    let value = [UInt8](source.pixels[from..<from + 4])
+                    distinct.insert(value)
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let to = ((2 * y + dy) * doubled.width + 2 * x + dx) * 4
+                        if [UInt8](doubled.pixels[to..<to + 4]) != value { exact = false }
+                    }
+                }
+            }
+            check(document.info.width == 200 && document.info.height == 300 && distinct.count > 1 && exact,
+                  "Image Size with Nearest Neighbor repeats each of \(distinct.count) distinct source pixels exactly")
+            if case .success(.scaleWithInterpolation(200, 300, .none))? = document.recorder.records.last?.resolution {
+                check(true, "Image Size records its resampling method")
+            } else {
+                check(false, "Image Size records its resampling method (\(String(describing: document.recorder.records.last?.resolution)))")
+            }
+            document.undo()
+            settle()
+            check(document.info.width == 100 && document.info.height == 150, "undo restores the resampled Image Size")
+        } else {
+            var refused = false
+            do { try session.scaleImage(image, width: 200, height: 300, interpolation: .none) }
+            catch { refused = true }
+            check(refused && document.info.width == 100, "an older adapter refuses an explicit resampling method")
+        }
         document.resizeCanvas(width: 140, height: 190, offset: CGPoint(x: 20, y: 20), fill: .blue)
         settle()
         check(document.info.width == 140 && pixel(session, image, x: 2, y: 2)?.prefix(3) == [0, 0, 255],

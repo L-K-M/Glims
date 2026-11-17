@@ -5007,6 +5007,25 @@ final class EngineSession: @unchecked Sendable {
         try check(api.image_scale(engine, image, Int32(width), Int32(height), &error), error)
     }
 
+    /// Whether this adapter scales an image with an explicit interpolation
+    /// (facade slot 234). Older adapters only use the engine's preference.
+    var supportsScaleInterpolation: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_scale_with_interpolation) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_scale_with_interpolation)
+            && api.image_scale_with_interpolation != nil
+    }
+
+    /// Image Size with an explicit resampling method; refuses on adapters
+    /// without the capability instead of silently using another method.
+    func scaleImage(_ image: Int32, width: Int, height: Int, interpolation: Interpolation) throws {
+        guard supportsScaleInterpolation, let scale = api.image_scale_with_interpolation else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot choose the Image Size resampling method.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(scale(engine, image, Int32(width), Int32(height), interpolation.rawValue, &error), error)
+    }
+
     /// Resolves the caller's color once, at execution, and returns the exact
     /// owned value used by the native call for semantic recording.
     @discardableResult

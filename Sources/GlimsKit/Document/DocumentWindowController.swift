@@ -1675,9 +1675,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func flipLayerHorizontally(_ sender: Any?) { imageDocument.transformActiveLayer(.flipHorizontal) }
     @objc func flipLayerVertically(_ sender: Any?) { imageDocument.transformActiveLayer(.flipVertical) }
 
+    /// Image Size offers Photoshop's resampling choice when the adapter
+    /// can honor it; older adapters keep the engine's preferred method.
     @objc func imageSize(_ sender: Any?) {
-        askSize("Image Size", constrain: true) { [weak self] width, height in
-            self?.imageDocument.scale(toWidth: width, height: height)
+        guard imageDocument.session.supportsScaleInterpolation else {
+            return askSize("Image Size", constrain: true) { [weak self] width, height in
+                self?.imageDocument.scale(toWidth: width, height: height)
+            }
+        }
+        let resample = ImageSizeResampling.popUpButton()
+        askSize("Image Size", constrain: true, extra: ("Resample:", resample)) { [weak self] width, height in
+            guard let interpolation = ImageSizeResampling.interpolation(of: resample) else { return }
+            self?.imageDocument.scale(toWidth: width, height: height, interpolation: interpolation)
         }
     }
 
@@ -1686,7 +1695,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// editors.
     @objc func canvasSize(_ sender: Any?) {
         let picker = CanvasAnchorPicker()
-        askSize("Canvas Size", constrain: false, anchor: picker) { [weak self] width, height in
+        askSize("Canvas Size", constrain: false, extra: ("Anchor:", picker)) { [weak self] width, height in
             self?.resizeCanvas(width: width, height: height, anchor: picker.anchor)
         }
     }
@@ -1701,9 +1710,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     /// A sheet asking for a width and height in pixels; with `constrain`
-    /// the proportions stay linked until the box is unchecked. An `anchor`
-    /// picker adds its row below the size fields.
-    private func askSize(_ title: String, constrain: Bool, anchor: CanvasAnchorPicker? = nil,
+    /// the proportions stay linked until the box is unchecked. An `extra`
+    /// labeled control (the Canvas Size anchor or the Image Size resampling
+    /// method) adds its row below the size fields.
+    private func askSize(_ title: String, constrain: Bool, extra: (label: String, view: NSView)? = nil,
                          _ apply: @escaping (Int, Int) -> Void) {
         guard let window else { return }
         let info = imageDocument.info
@@ -1717,12 +1727,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             [NSTextField(labelWithString: "Height (px):"), height],
             [NSGridCell.emptyContentView, link],
         ]
-        if let anchor { rows.append([NSTextField(labelWithString: "Anchor:"), anchor]) }
+        if let extra { rows.append([NSTextField(labelWithString: extra.label), extra.view]) }
         let grid = NSGridView(views: rows)
         grid.column(at: 0).xPlacement = .trailing
-        if anchor != nil { grid.row(at: grid.numberOfRows - 1).yPlacement = .top }
+        if extra != nil { grid.row(at: grid.numberOfRows - 1).yPlacement = .top }
         width.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        let extraHeight = anchor.map { max($0.fittingSize.height, 22) + 10 } ?? 0
+        let extraHeight = extra.map { max($0.view.fittingSize.height, 22) + 10 } ?? 0
         grid.frame = NSRect(x: 0, y: 0, width: 260, height: 80 + extraHeight)
 
         let alert = NSAlert()

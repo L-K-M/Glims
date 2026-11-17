@@ -1346,6 +1346,50 @@ glims_layer_transform (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Maps an owned GlimsInterpolation to the engine's type; DEFAULT is the
+ * engine's preference. FALSE for a value the facade does not define. */
+static gboolean
+native_interpolation (GlimsEngine           *engine,
+                      uint32_t               interpolation,
+                      GimpInterpolationType *type)
+{
+  switch (interpolation)
+    {
+    case GLIMS_INTERPOLATION_DEFAULT: *type = engine->gimp->config->interpolation_type; return TRUE;
+    case GLIMS_INTERPOLATION_NONE:    *type = GIMP_INTERPOLATION_NONE;   return TRUE;
+    case GLIMS_INTERPOLATION_LINEAR:  *type = GIMP_INTERPOLATION_LINEAR; return TRUE;
+    case GLIMS_INTERPOLATION_CUBIC:   *type = GIMP_INTERPOLATION_CUBIC;  return TRUE;
+    case GLIMS_INTERPOLATION_NOHALO:  *type = GIMP_INTERPOLATION_NOHALO; return TRUE;
+    case GLIMS_INTERPOLATION_LOHALO:  *type = GIMP_INTERPOLATION_LOHALO; return TRUE;
+    default:                          return FALSE;
+    }
+}
+
+GlimsStatus
+glims_image_scale_with_interpolation (GlimsEngine  *engine,
+                                      GlimsImageID  id,
+                                      int32_t       width,
+                                      int32_t       height,
+                                      uint32_t      interpolation,
+                                      char        **error)
+{
+  GlimsStatus           status;
+  GimpImage            *image = writable_image (engine, id, &status);
+  GimpInterpolationType type;
+
+  if (! image)
+    return status;
+  if (! native_interpolation (engine, interpolation, &type))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
+    return glims_fail (error, NULL, "The new size must be between 1 and 524288 pixels.");
+
+  gimp_image_scale (image, width, height, type, NULL);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_image_scale (GlimsEngine  *engine,
                    GlimsImageID  id,
@@ -1353,19 +1397,9 @@ glims_image_scale (GlimsEngine  *engine,
                    int32_t       height,
                    char        **error)
 {
-  GlimsStatus status;
-  GimpImage  *image = writable_image (engine, id, &status);
-
-  if (! image)
-    return status;
-  if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
-    return glims_fail (error, NULL, "The new size must be between 1 and 524288 pixels.");
-
   /* With the interpolation the engine's preferences name. */
-  gimp_image_scale (image, width, height, engine->gimp->config->interpolation_type, NULL);
-  gimp_image_flush (image);
-
-  return GLIMS_STATUS_OK;
+  return glims_image_scale_with_interpolation (engine, id, width, height,
+                                               GLIMS_INTERPOLATION_DEFAULT, error);
 }
 
 static GlimsStatus

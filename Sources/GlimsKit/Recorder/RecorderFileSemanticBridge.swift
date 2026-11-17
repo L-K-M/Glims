@@ -100,6 +100,8 @@ enum RecorderFileSemanticBridge {
             }
             return .transformImage(transform)
         case .scale(let width, let height): return .scale(width: width, height: height)
+        case .scaleWithInterpolation(let width, let height, let interpolation):
+            return .scaleWithInterpolation(width: width, height: height, interpolation: interpolation.engine)
         case .resizeCanvas(let width, let height, let offset, let fill):
             return .resizeCanvas(width: width, height: height, offset: point(offset), fill: fill)
         case .crop(let value): return .crop(rect(value))
