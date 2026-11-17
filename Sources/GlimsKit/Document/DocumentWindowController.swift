@@ -1681,21 +1681,30 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
-    /// The canvas grows or shrinks around the image's center; the new area
-    /// takes the background color, as in classic editors.
+    /// The canvas grows or shrinks away from the chosen anchor (the center
+    /// by default); the new area takes the background color, as in classic
+    /// editors.
     @objc func canvasSize(_ sender: Any?) {
-        askSize("Canvas Size", constrain: false) { [weak self] width, height in
-            guard let self else { return }
-            let info = self.imageDocument.info
-            let offset = CGPoint(x: ((width - info.width) / 2), y: ((height - info.height) / 2))
-            self.imageDocument.resizeCanvas(width: width, height: height, offset: offset,
-                                            fill: ToolState.shared.background)
+        let picker = CanvasAnchorPicker()
+        askSize("Canvas Size", constrain: false, anchor: picker) { [weak self] width, height in
+            self?.resizeCanvas(width: width, height: height, anchor: picker.anchor)
         }
     }
 
+    /// Applies an accepted Canvas Size sheet: the image keeps its place at
+    /// `anchor` within the new `width` × `height` canvas.
+    func resizeCanvas(width: Int, height: Int, anchor: CanvasAnchor) {
+        let info = imageDocument.info
+        let offset = anchor.offset(from: (info.width, info.height), to: (width, height))
+        imageDocument.resizeCanvas(width: width, height: height, offset: offset,
+                                   fill: ToolState.shared.background)
+    }
+
     /// A sheet asking for a width and height in pixels; with `constrain`
-    /// the proportions stay linked until the box is unchecked.
-    private func askSize(_ title: String, constrain: Bool, _ apply: @escaping (Int, Int) -> Void) {
+    /// the proportions stay linked until the box is unchecked. An `anchor`
+    /// picker adds its row below the size fields.
+    private func askSize(_ title: String, constrain: Bool, anchor: CanvasAnchorPicker? = nil,
+                         _ apply: @escaping (Int, Int) -> Void) {
         guard let window else { return }
         let info = imageDocument.info
         let width = NSTextField(string: String(info.width))
@@ -1703,14 +1712,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let link = NSButton(checkboxWithTitle: "Constrain proportions", target: nil, action: nil)
         link.state = constrain ? .on : .off
         let linker = ProportionLinker(width: width, height: height, ratio: Double(info.width) / Double(info.height), link: link)
-        let grid = NSGridView(views: [
+        var rows: [[NSView]] = [
             [NSTextField(labelWithString: "Width (px):"), width],
             [NSTextField(labelWithString: "Height (px):"), height],
             [NSGridCell.emptyContentView, link],
-        ])
+        ]
+        if let anchor { rows.append([NSTextField(labelWithString: "Anchor:"), anchor]) }
+        let grid = NSGridView(views: rows)
         grid.column(at: 0).xPlacement = .trailing
+        if anchor != nil { grid.row(at: grid.numberOfRows - 1).yPlacement = .top }
         width.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 80)
+        let extraHeight = anchor.map { max($0.fittingSize.height, 22) + 10 } ?? 0
+        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 80 + extraHeight)
 
         let alert = NSAlert()
         alert.messageText = title
