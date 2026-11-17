@@ -308,6 +308,14 @@ GlimsStatus glims_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImag
                                                  const GlimsLabCopySettings *settings,
                                                  GlimsImageID *result, char **error);
 
+/* history.c */
+GlimsStatus glims_image_duplicate_merged (GlimsEngine *e, GlimsImageID image, const char *name,
+                                          GlimsImageID *result, char **error);
+/* export.c: a duplicate of `source` whose layers are replaced by one
+ * layer named `layer_name` with its visible composite, clipped to the
+ * canvas. Undo stays disabled on the returned image. */
+GimpImage  *glims_merged_image_copy (GimpImage *source, const char *layer_name);
+
 /* image.c */
 GlimsStatus glims_image_new        (GlimsEngine *e, int32_t w, int32_t h, GlimsImageID *out, char **error);
 GlimsStatus glims_image_new_filled (GlimsEngine *e, int32_t w, int32_t h, uint32_t contents,

@@ -423,6 +423,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     func open(_ document: ImageDocument) {
         document.snapshotHandler = { [weak self] document in self?.snapshot(document) }
+        document.duplicateHandler = { [weak self] document, name, merged in
+            self?.snapshot(document, as: name, mergedLayersOnly: merged)
+        }
         document.labCopyHandler = { [weak self] document, destination in
             self?.convertedLabCopy(document, destination: destination)
         }
@@ -1117,7 +1120,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// so Quit waits; a copy nobody can adopt — a failed ImageDocument or
     /// a Quit that already started — is closed again. The callback stays
     /// bound to the source document, whoever is front document then.
-    func snapshot(_ document: ImageDocument) {
+    /// New Snapshot, and Image ▸ Duplicate with its name and Merged
+    /// Layers Only choice: a copy opened as a new unsaved document.
+    func snapshot(_ document: ImageDocument, as name: String? = nil, mergedLayersOnly: Bool = false) {
         guard !terminationRequested else { return }
         guard document.acceptsEdits else {
             document.onError?(document.isClosing
@@ -1127,7 +1132,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
         let session = document.session
         pendingFileOperations += 1
-        document.snapshot { [weak self] result in
+        document.snapshot(mergedLayerName: mergedLayersOnly ? ImageDocument.mergedLayerName : nil) { [weak self] result in
             guard let self else {
                 if case .success(let image) = result { try? session.closeImage(image) }
                 return
@@ -1142,7 +1147,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 }
                 do {
                     self.open(try ImageDocument(session: session, image: image,
-                                                name: "\(document.name) snapshot"))
+                                                name: name ?? "\(document.name) snapshot"))
                 } catch {
                     try? session.closeImage(image)
                     NSAlert(error: error).runModal()

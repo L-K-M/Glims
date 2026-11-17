@@ -118,6 +118,7 @@ enum MainMenu {
             .separator(),
             item("Crop to Selection", #selector(DocumentWindowController.cropToSelection(_:))),
             item("Flatten Image", #selector(DocumentWindowController.flattenImage(_:))),
+            item("Duplicate…", #selector(DocumentWindowController.duplicateImage(_:))),
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
             item("Create Lab Copy…", #selector(DocumentWindowController.createConvertedLabCopy(_:))),
             .separator(),

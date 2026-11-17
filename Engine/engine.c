@@ -4312,6 +4312,27 @@ static GlimsStatus api_image_new_filled (GlimsEngine *e, int32_t width, int32_t 
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
                             image_new_filled_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  const char *name;
+  GlimsImageID *result;
+  char **error;
+} GlimsImageDuplicateMergedArgs;
+static GlimsStatus image_duplicate_merged_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsImageDuplicateMergedArgs *a = data;
+  return glims_image_duplicate_merged (e, a->image, a->name, a->result, a->error);
+}
+static GlimsStatus api_image_duplicate_merged (GlimsEngine *e, GlimsImageID image, const char *name,
+                                               GlimsImageID *result, char **error)
+{
+  GlimsImageDuplicateMergedArgs a = { image, name, result, error };
+  if (error) *error = NULL;
+  if (result) *result = 0;
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_duplicate_merged,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_duplicate_merged_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

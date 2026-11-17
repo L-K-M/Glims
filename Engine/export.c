@@ -125,8 +125,8 @@ configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gb
  * Preserve the source profile/precision and alpha, and explicitly clip the
  * projection to the canvas. Flatten would replace alpha with a background.
  * The duplicate retains image metadata; none of its layers reach the file. */
-static GimpImage *
-merged_export_image (GimpImage *source)
+GimpImage *
+glims_merged_image_copy (GimpImage *source, const char *layer_name)
 {
   GimpImage *copy = gimp_image_duplicate (source);
   GimpLayer *layer;
@@ -140,7 +140,7 @@ merged_export_image (GimpImage *source)
   clipped = gegl_buffer_new (&bounds, gegl_buffer_get_format (projection));
   gegl_buffer_copy (projection, &bounds, GEGL_ABYSS_NONE, clipped, &bounds);
   layer = gimp_layer_new_from_gegl_buffer (clipped, copy,
-            gimp_image_get_layer_format (copy, TRUE), "Merged appearance",
+            gimp_image_get_layer_format (copy, TRUE), layer_name,
             GIMP_OPACITY_OPAQUE, GIMP_LAYER_MODE_NORMAL,
             gimp_color_managed_get_color_profile (GIMP_COLOR_MANAGED (source)));
   g_object_unref (clipped);
@@ -348,7 +348,7 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
                                    settings->format == GLIMS_EXPORT_BMP ||
                                    settings->format == GLIMS_EXPORT_TGA ||
                                    (settings->format == GLIMS_EXPORT_PSD && settings->psd_layout == GLIMS_PSD_MERGED);
-      private_image = need_merged ? merged_export_image (image) : gimp_image_duplicate (image);
+      private_image = need_merged ? glims_merged_image_copy (image, "Merged appearance") : gimp_image_duplicate (image);
       if (!private_image)
         {
           const char *prepare_error = "The visible image could not be prepared for export.";

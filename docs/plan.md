@@ -6631,3 +6631,19 @@ with White. The panel captures the tool background color at Create.
 Multichannel, CMYK and Lab keep their own creation paths and show no
 Contents row, nor does an older adapter without the slot. The Recorder
 does not record New.
+
+### Image Duplicate (candidate)
+
+Image ▸ Duplicate… is Photoshop's Duplicate Image dialog: an "As" name
+(default "<name> copy"; a blank name falls back to it) and Merged
+Layers Only. Without the option it is New Snapshot under the chosen
+name. With it, additive facade slot 241, `image_duplicate_merged`,
+reuses the merged-export copy (the visible projection clipped to the
+canvas on one layer with alpha and the source profile; Flatten would
+fill the alpha with a background), names the layer "Merged Layers" and
+re-enables undo, which frees the frozen steps, so the copy's history is
+empty. Channels and paths come along as in image_duplicate. The option
+is offered only for ordinary layered images on an adapter with the
+slot and is dimmed for a single layer, as in Photoshop; Lab documents
+cannot duplicate, as with New Snapshot. The Recorder does not record
+Duplicate.

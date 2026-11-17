@@ -2298,6 +2298,28 @@ final class EngineSession: @unchecked Sendable {
         return result
     }
 
+    /// Slot 241 (image_duplicate_merged) is present.
+    var supportsImageDuplicateMerged: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_duplicate_merged) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_duplicate_merged)
+            && api.image_duplicate_merged != nil
+    }
+
+    /// Image ▸ Duplicate with Merged Layers Only: like duplicateImage,
+    /// but the copy has one layer named `layerName` with the visible
+    /// composite, clipped to the canvas, transparency kept. Ordinary
+    /// layered images only; an adapter without slot 241 is UNSUPPORTED.
+    func duplicateImageMerged(_ image: Int32, layerName: String) throws -> Int32 {
+        guard supportsImageDuplicateMerged, let duplicate = api.image_duplicate_merged else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot duplicate merged layers.")
+        }
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(duplicate(engine, image, layerName, &result, &error), error)
+        return result
+    }
+
     // MARK: Painting
 
     struct StrokeCaptureFacts: Equatable {

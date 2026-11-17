@@ -4892,6 +4892,11 @@ final class ImageDocument {
     /// by whoever owns document lifetime; nil without one.
     var snapshotHandler: ((ImageDocument) -> Void)?
 
+    /// Image ▸ Duplicate's entry point: the source, the new document's
+    /// name and whether only the merged visible layers are copied. Wired
+    /// by the same owner as snapshotHandler; nil without one.
+    var duplicateHandler: ((ImageDocument, String, Bool) -> Void)?
+
     /// App-owned adoption keeps separate copy results counted through Quit.
     var labCopyHandler: ((ImageDocument, EngineSession.LabCopyDestination) -> Void)?
 
@@ -4964,20 +4969,50 @@ final class ImageDocument {
         snapshotHandler(self)
     }
 
+    /// The one layer of a Merged Layers Only duplicate.
+    static let mergedLayerName = "Merged Layers"
+
+    /// Image ▸ Duplicate's default name, as Photoshop suggests it.
+    var duplicateName: String { "\(name) copy" }
+
+    /// Merged Layers Only needs slot 241 and an ordinary layered image.
+    var canDuplicateMergedLayers: Bool {
+        session.supportsImageDuplicateMerged && storage.layout == .ordinary
+    }
+
+    /// Image ▸ Duplicate: like New Snapshot, under `name`; with
+    /// `mergedLayersOnly` the copy holds only the visible composite.
+    func duplicate(as name: String, mergedLayersOnly: Bool) {
+        guard colorInfo.mode != .lab else { return }
+        guard !refuseWhileEditingUnavailable(allowingReplayRead: true), let duplicateHandler else { return }
+        if mergedLayersOnly, !canDuplicateMergedLayers {
+            onError?("Merged Layers Only is not available for this image.")
+            return
+        }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        duplicateHandler(self, trimmed.isEmpty ? duplicateName : trimmed, mergedLayersOnly)
+    }
+
     /// Queues a native duplicate behind pending input — in-flight
     /// strokes and text edits are part of the copy. The callback runs on
     /// the main actor bound to this document with the new engine image
     /// or the error, whoever is front document then. The work is counted,
     /// so a close waits for it before freeing this image.
-    func snapshot(completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+    /// With `mergedLayerName` the copy holds one layer of that name with
+    /// the visible composite (Image ▸ Duplicate, Merged Layers Only).
+    func snapshot(mergedLayerName: String? = nil, completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
         guard colorInfo.mode != .lab else {
             return completion(.failure(RecorderReplayError(message: "Lab snapshots are not available.")))
         }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
         guard acceptsImageReads else { return completion(.failure(DocumentError.busy)) }
         if !recorder.isReplaying { endPendingUserEdits() }
-        enqueueExclusive(effect: .readsPixels, label: "Creating a snapshot", rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
-            let result = Result { try session.duplicateImage(image) }
+        enqueueExclusive(effect: .readsPixels, label: mergedLayerName == nil ? "Creating a snapshot" : "Duplicating",
+                         rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let result = Result {
+                if let mergedLayerName { return try session.duplicateImageMerged(image, layerName: mergedLayerName) }
+                return try session.duplicateImage(image)
+            }
             DispatchQueue.main.async { completion(result) }
         }
     }
