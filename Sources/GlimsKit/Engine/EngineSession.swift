@@ -3008,8 +3008,13 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         let status = api.filter_input_histogram(engine, filter, &raw, &error)
         try check(status, error)
+        return try decodeHistogram(raw, failure: "The input histogram could not be read.")
+    }
+
+    /// Validates and copies an owned snapshot; the caller still frees `raw`.
+    private func decodeHistogram(_ raw: GlimsHistogramSnapshot, failure: String) throws -> InputHistogram {
         func malformed() -> EngineError {
-            EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: "The input histogram could not be read.")
+            EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: failure)
         }
         guard raw.bin_count <= 4096, raw.channels & ~UInt32(63) == 0,
               let trc = ColorTRC(rawValue: raw.trc), trc != .unknown else { throw malformed() }
@@ -5070,6 +5075,27 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(toLayer(engine, image, target, mode.rawValue, &result, &error), error)
         return result
+    }
+
+    var supportsDrawableHistogram: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.drawable_histogram) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.drawable_histogram)
+            && api.drawable_histogram != nil
+    }
+
+    /// Image > Histogram: one drawable's histogram (0 = the single selected
+    /// drawable), in its own TRC, weighted by the selection. Read-only.
+    func drawableHistogram(_ image: Int32, drawable: Int32) throws -> InputHistogram {
+        guard supportsDrawableHistogram, let read = api.drawable_histogram else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot show a histogram.")
+        }
+        var raw = GlimsHistogramSnapshot()
+        raw.struct_size = UInt32(MemoryLayout<GlimsHistogramSnapshot>.size)
+        defer { api.free_histogram_snapshot(&raw) }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(read(engine, image, drawable, &raw, &error), error)
+        return try decodeHistogram(raw, failure: "The histogram could not be read.")
     }
 
     /// Resolves the caller's color once, at execution, and returns the exact

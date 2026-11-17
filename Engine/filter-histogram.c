@@ -11,6 +11,8 @@
 #include "core/gimpdrawable-filters.h"
 #include "core/gimpdrawable-histogram.h"
 #include "core/gimpfilter.h"
+#include "core/gimpchannel.h"
+#include "core/gimpimage.h"
 #include "core/gimphistogram.h"
 #include "core/gimpitem.h"
 
@@ -183,24 +185,15 @@ glims_filter_input_histogram_native (GlimsEngine *engine, GlimsFilterID id,
   return GLIMS_STATUS_OK;
 }
 
-GlimsStatus
-glims_filter_input_histogram (GlimsEngine *engine, GlimsFilterID id,
-                              GlimsHistogramSnapshot *out, char **error)
+/* Native shape, channel counts and all bin weights are fully validated
+ * before allocating any exported arrays. Signed finite weights are kept.
+ * Consumes `histogram`. */
+static GlimsStatus
+export_histogram (GimpHistogram *histogram, uint32_t trc,
+                  GlimsHistogramSnapshot *out, char **error)
 {
-  GimpHistogram *histogram = NULL;
-  GlimsFilter *session = NULL;
-  uint32_t trc;
-  GlimsStatus status;
   GlimsHistogramSnapshot result = { .struct_size = sizeof result };
 
-  if (!out || out->struct_size < sizeof *out)
-    return histogram_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "A full input histogram output is required.");
-  glims_histogram_snapshot_clear (out);
-  status = glims_filter_input_histogram_native (engine, id, &histogram, &session, &trc, error);
-  if (status != GLIMS_STATUS_OK) return status;
-
-  /* Native shape, channel counts and all bin weights are fully validated
-   * before allocating any exported arrays. Signed finite weights are kept. */
   result.trc = trc;
   result.bin_count = (uint32_t) gimp_histogram_n_bins (histogram);
   for (guint i = 0; i < G_N_ELEMENTS (channels); i++) {
@@ -221,4 +214,79 @@ glims_filter_input_histogram (GlimsEngine *engine, GlimsFilterID id,
   result.struct_size = out->struct_size;
   *out = result; /* Known bytes only; preserve the caller's future tail. */
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_filter_input_histogram (GlimsEngine *engine, GlimsFilterID id,
+                              GlimsHistogramSnapshot *out, char **error)
+{
+  GimpHistogram *histogram = NULL;
+  GlimsFilter *session = NULL;
+  uint32_t trc;
+  GlimsStatus status;
+
+  if (!out || out->struct_size < sizeof *out)
+    return histogram_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "A full input histogram output is required.");
+  glims_histogram_snapshot_clear (out);
+  status = glims_filter_input_histogram_native (engine, id, &histogram, &session, &trc, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  return export_histogram (histogram, trc, out, error);
+}
+
+/* Image > Histogram. Mirrors GIMP's Histogram dockable
+ * (widgets/gimphistogrameditor.c): one drawable, its own TRC
+ * (gimp_drawable_get_trc), visible non-destructive filters included, and
+ * weighted by the image selection and the drawable's alpha. Read-only:
+ * no undo, no dirty flag, no pixel-lock gate. */
+GlimsStatus
+glims_drawable_histogram (GlimsEngine *engine, GlimsImageID image_id,
+                          GlimsItemID drawable_id,
+                          GlimsHistogramSnapshot *out, char **error)
+{
+  GlimsOpenImage *open;
+  GimpImage *image;
+  GimpDrawable *drawable;
+  GimpHistogram *histogram;
+  GlimsStatus status;
+  uint32_t trc;
+
+  if (!out || out->struct_size < sizeof *out)
+    return histogram_error (GLIMS_STATUS_INVALID_ARGUMENT, error, "A full histogram output is required.");
+  glims_histogram_snapshot_clear (out);
+  open = glims_lookup_image (engine, image_id);
+  if (!open) return GLIMS_STATUS_NOT_FOUND;
+  if (engine->busy > 0)
+    return histogram_error (GLIMS_STATUS_BUSY, error, "The image is busy; try the histogram again when it finishes.");
+  image = open->image;
+
+  if (drawable_id == 0) {
+    GList *selected = gimp_image_get_selected_drawables (image);
+    guint count = g_list_length (selected);
+
+    drawable = count == 1 ? selected->data : NULL;
+    g_list_free (selected);
+    if (count == 0)
+      return histogram_error (GLIMS_STATUS_FAILED, error, "Select a layer, mask or channel to show its histogram.");
+    if (count > 1)
+      return histogram_error (GLIMS_STATUS_FAILED, error, "More than one layer is selected; select one to show its histogram.");
+  } else {
+    drawable = glims_lookup_drawable (open, drawable_id);
+    if (!drawable) return GLIMS_STATUS_NOT_FOUND;
+  }
+  if (drawable == GIMP_DRAWABLE (gimp_image_get_mask (image)))
+    return histogram_error (GLIMS_STATUS_FAILED, error, "The selection itself has no histogram; select a layer, mask or channel.");
+
+  trc = own_trc (gimp_drawable_get_trc (drawable));
+  if (trc == GLIMS_COLOR_TRC_UNKNOWN)
+    return histogram_error (GLIMS_STATUS_FAILED, error, "The drawable has an unsupported tone response.");
+  histogram = gimp_histogram_new (gimp_drawable_get_trc (drawable));
+  if (!histogram)
+    return histogram_error (GLIMS_STATUS_FAILED, error, "The histogram could not be created.");
+  gimp_drawable_calculate_histogram (drawable, histogram, TRUE);
+  status = validate_histogram (histogram, error);
+  if (status != GLIMS_STATUS_OK) {
+    g_object_unref (histogram);
+    return status;
+  }
+  return export_histogram (histogram, trc, out, error);
 }

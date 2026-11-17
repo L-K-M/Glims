@@ -71,11 +71,13 @@ final class ColorControlsTests: XCTestCase {
                        #selector(DocumentWindowController.convertImageToIndexed(_:)))
     }
 
-    func testTheImageMenuEndsWithImageInformation() throws {
+    /// Image Information… and then Histogram… close the Image menu.
+    func testTheImageMenuEndsWithImageInformationAndHistogram() throws {
         let items = try XCTUnwrap(imageMenu()).items
         let info = try XCTUnwrap(items.last { $0.action == #selector(DocumentWindowController.imageInformation(_:)) })
         XCTAssertEqual(info.title, "Image Information…")
-        XCTAssertEqual(items.last, info)
+        XCTAssertEqual(items.dropLast().last, info)
+        XCTAssertEqual(items.last?.action, #selector(DocumentWindowController.showHistogram(_:)))
     }
 
     // MARK: Precision form choices

@@ -6541,3 +6541,18 @@ layer target: masks and channels are refused before any change. Layer via
 Cut has Photoshop's Shift-Command-J; Layer via Copy has no shortcut because
 Command-J is Duplicate Layer. Older adapters keep both items disabled. Like
 the other layer commands, they are outside the Recorder's capture scope.
+
+### Image Histogram (candidate)
+
+Image ▸ Histogram… opens a read-only sheet like Photoshop 4's: a channel
+popup (Luminance, Red, Green, Blue, Value, Alpha, as present), the curve,
+Mean, Std Dev, Median and Pixels, and Level, Count and Percentile for the
+level under the pointer. Additive facade slot 237, `drawable_histogram`,
+reads the active layer, mask or channel the way GIMP's Histogram dockable
+does (`gimp_drawable_calculate_histogram` with visible filters, in the
+drawable's own TRC, weighted by the selection and alpha) and returns the
+slot 161 snapshot. It never adds history or dirties the image. Statistics
+use GIMP's mean, standard deviation and median formulas rescaled to 0–255
+levels; Pixels is the weighted total. Like GIMP, the histogram describes one
+drawable, not the merged composite; several selected layers, Lab and
+component layouts, and older adapters keep the item disabled.

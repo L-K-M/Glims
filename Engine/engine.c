@@ -4235,6 +4235,26 @@ static GlimsStatus api_filter_input_histogram (GlimsEngine *e, GlimsFilterID fil
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_FILTER, filter, { 0, 0 } },
                             filter_histogram_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID drawable;
+  GlimsHistogramSnapshot *histogram;
+  char **error;
+} GlimsDrawableHistogramArgs;
+static GlimsStatus drawable_histogram_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsDrawableHistogramArgs *a = data;
+  return glims_drawable_histogram (e, a->image, a->drawable, a->histogram, a->error);
+}
+static GlimsStatus api_drawable_histogram (GlimsEngine *e, GlimsImageID image, GlimsItemID drawable,
+                                          GlimsHistogramSnapshot *out, char **error)
+{
+  glims_histogram_snapshot_clear (out);
+  GlimsDrawableHistogramArgs a = { .image = image, .drawable = drawable, .histogram = out, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_drawable_histogram,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            drawable_histogram_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

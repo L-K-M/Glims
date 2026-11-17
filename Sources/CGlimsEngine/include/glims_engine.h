@@ -4427,6 +4427,18 @@ typedef struct GlimsEngineAPI {
    * before any native call and changes nothing. */
   GlimsStatus (*selection_to_new_layer) (GlimsEngine *engine, GlimsImageID image, GlimsItemID target,
                                          uint32_t mode, GlimsItemID *result, char **error);
+  /* Slot 237: Image > Histogram. Reads one drawable's histogram the way
+   * GIMP's Histogram dockable does: in the drawable's own TRC, with its
+   * visible non-destructive filters, weighted by the image selection and
+   * the drawable's alpha. `drawable` 0 means the single selected drawable;
+   * none or several selected, or the selection mask itself, is FAILED.
+   * Unknown image or drawable is NOT_FOUND, a short `out` is
+   * INVALID_ARGUMENT and a busy engine is BUSY. The snapshot follows the
+   * slot 161 rules (free it with free_histogram_snapshot); bin_count 0
+   * means the selection misses the drawable. Never changes the image,
+   * its history or its dirty state, and pixel locks do not apply. */
+  GlimsStatus (*drawable_histogram) (GlimsEngine *engine, GlimsImageID image, GlimsItemID drawable,
+                                     GlimsHistogramSnapshot *out, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

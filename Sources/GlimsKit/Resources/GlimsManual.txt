@@ -473,6 +473,14 @@ a standard display, but every image pixel is shown crisply, one to
 one. Use Fit Image for an overview and Actual Pixels when the exact
 pixels matter.
 
+Image > Histogram… shows the tonal distribution of the active layer,
+mask or channel, limited to the selection when there is one. Choose a
+channel from the popup; Mean, Std Dev, Median and Pixels describe it,
+and pointing at the histogram shows that level's Count and the
+Percentile of pixels at or below it. Levels run from 0 to 255. Like
+GIMP's Histogram, it describes one layer rather than the merged image,
+and it changes nothing.
+
 # Preferences
 
 Glims > Preferences… (Command-Comma) controls appearance, opening zoom
