@@ -513,11 +513,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         guard let session, !terminationRequested else { return }
         if let newImagePanel { newImagePanel.showWindow(nil); return }
         let panel = NewImagePanel(supportsLab: session.supportsLabCreation
-                                  && session.supportsLabAxes && session.supportsLabFill)
+                                  && session.supportsLabAxes && session.supportsLabFill,
+                                  supportsContents: session.supportsImageNewFilled)
         panel.onCreate = { [weak self] settings in
+            // The background color at Create, like Photoshop; later changes do not apply.
+            let contents: EngineSession.NewImageContents
+            do { contents = try settings.engineContents(background: ToolState.shared.background) } catch {
+                NSAlert(error: error).runModal()
+                return
+            }
             self?.createDocument(width: settings.width, height: settings.height,
                                  kind: settings.kind, component: settings.component,
-                                 channelCount: settings.channelCount, profileICC: settings.profileICC)
+                                 channelCount: settings.channelCount, profileICC: settings.profileICC,
+                                 contents: contents)
         }
         panel.onClose = { [weak self] in self?.newImagePanel = nil }
         newImagePanel = panel
@@ -526,13 +534,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     private func createDocument(width: Int, height: Int, kind: NewImageSettings.Kind = .rgb,
                                 component: EngineSession.ColorComponent = .u8, channelCount: Int = 4,
-                                profileICC: Data? = nil) {
+                                profileICC: Data? = nil, contents: EngineSession.NewImageContents = .white) {
         guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Creating an image", work: {
             let result = Result<Int32, Error> {
                 switch kind {
-                case .rgb: return try session.newImage(width: width, height: height)
+                case .rgb: return try session.newImage(width: width, height: height, contents: contents)
                 case .multichannel:
                     return try session.newMultichannelImage(width: width, height: height,
                                                             component: component, channelCount: channelCount)

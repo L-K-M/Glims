@@ -389,6 +389,13 @@ typedef struct GlimsSampledColor {
   double red, green, blue, alpha;
 } GlimsSampledColor;
 
+/* What a new RGB image's one layer holds (slot 240). */
+typedef enum GlimsNewImageContents {
+  GLIMS_NEW_IMAGE_WHITE       = 0,  /* an opaque white "Background" */
+  GLIMS_NEW_IMAGE_COLOR       = 1,  /* an opaque "Background" of a given color */
+  GLIMS_NEW_IMAGE_TRANSPARENT = 2   /* a transparent "Layer 1" with alpha */
+} GlimsNewImageContents;
+
 typedef enum GlimsFillMode {
   GLIMS_FILL_SIMILAR_COLORS = 1,  /* the area of similar color around the point */
   GLIMS_FILL_SELECTION      = 2   /* the selection, or the whole layer */
@@ -4468,6 +4475,17 @@ typedef struct GlimsEngineAPI {
    * are refused. */
   GlimsStatus (*selection_similar) (GlimsEngine *engine, GlimsImageID image,
                                     const GlimsSelectOptions *options, char **error);
+  /* Slot 240: File > New with Photoshop's Contents choice. Like
+   * image_new (8-bit RGB, an empty history, clean), but the one layer is
+   * white, `color` (sRGB, clamped to 0 ... 1; its alpha is ignored, so
+   * the layer stays opaque) or transparent with an alpha channel, per
+   * GlimsNewImageContents. `color` is read only for
+   * GLIMS_NEW_IMAGE_COLOR, where NULL is INVALID_ARGUMENT, as are an
+   * unknown `contents`, NULL `image` and a size outside 1 ... GIMP's
+   * maximum. A busy engine is BUSY. Every refusal creates nothing. */
+  GlimsStatus (*image_new_filled) (GlimsEngine *engine, int32_t width, int32_t height,
+                                   uint32_t contents, const GlimsColor *color,
+                                   GlimsImageID *image, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

@@ -50,6 +50,9 @@ layouts.
 # Opening, Saving and Exporting
 
 File > New… (Command-N) creates a new image of a size you choose.
+For an RGB image, Contents chooses what its one layer holds: White, the
+Background Color of the Tools palette, or Transparent (a layer named
+Layer 1). The new image has no history.
 File > Open… (Command-O) opens image files; XCF files keep all their
 layers. Open Recent lists the documents you opened lately. Close
 (Command-W) closes the front image, asking first when it has unsaved

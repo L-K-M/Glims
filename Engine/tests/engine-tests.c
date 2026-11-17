@@ -13115,6 +13115,88 @@ test_selection_similar (void)
   api->image_close (engine, image);
 }
 
+/* Slot 240: File > New's Contents. Each kind is one clean layer with an
+ * empty history; the color's alpha is ignored and refusals create nothing. */
+static bool
+new_filled_matches (uint32_t contents, const GlimsColor *color, const char *name,
+                    const uint8_t expected[4], const char *label)
+{
+  GlimsImageID   image = 0;
+  GlimsImageInfo info = { 0 };
+  GlimsLayerInfo row;
+  int32_t        count = 0;
+  uint8_t        corner[4], middle[4];
+  bool           ok;
+
+  if (api->image_new_filled (engine, 40, 30, contents, color, &image, NULL) != GLIMS_STATUS_OK || ! image)
+    {
+      CHECK (false, "image_new_filled makes %s", label);
+      return false;
+    }
+  render_pixel (image, 0, 0, corner);
+  render_pixel (image, 23, 17, middle);
+  ok = api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+       info.width == 40 && info.height == 30 && info.layer_count == 1 && ! info.dirty &&
+       undo_depth (image) == 0 &&
+       api->image_layers (engine, image, &row, 1, &count) == GLIMS_STATUS_OK && count == 1 &&
+       strcmp (row.name, name) == 0 && row.opacity == 1.0 &&
+       memcmp (corner, expected, 4) == 0 && memcmp (middle, expected, 4) == 0;
+  CHECK (ok, "image_new_filled makes %s: one clean \"%s\" layer, no history (%d %d %d %d)",
+         label, name, middle[0], middle[1], middle[2], middle[3]);
+  api->image_close (engine, image);
+  return ok;
+}
+
+static void
+test_image_new_filled (void)
+{
+  GlimsColor    color = { 0.2, 0.4, 0.6, 0.0 };
+  GlimsColor    bright = { 2.0, -1.0, NAN, 1.0 };
+  GlimsImageID  image = 7;
+  char         *error = NULL;
+  const uint8_t white[4] = { 255, 255, 255, 255 };
+  const uint8_t blue[4] = { 51, 102, 153, 255 };
+  const uint8_t clear[4] = { 0, 0, 0, 0 };
+  uint8_t       plain[4] = { 0 };
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_new_filled) + sizeof api->image_new_filled ||
+      ! api->image_new_filled)
+    {
+      CHECK (false, "the adapter exports slot 240 image_new_filled");
+      return;
+    }
+
+  new_filled_matches (GLIMS_NEW_IMAGE_WHITE, NULL, "Background", white, "a white background");
+  new_filled_matches (GLIMS_NEW_IMAGE_COLOR, &color, "Background", blue, "an opaque colored background");
+  new_filled_matches (GLIMS_NEW_IMAGE_TRANSPARENT, &color, "Layer 1", clear, "a transparent layer");
+  bright.blue = 0.5;
+  {
+    const uint8_t clamped[4] = { 255, 0, 128, 255 };
+    new_filled_matches (GLIMS_NEW_IMAGE_COLOR, &bright, "Background", clamped, "a clamped colored background");
+  }
+
+  /* image_new keeps its white background. */
+  if (api->image_new (engine, 8, 8, &image, NULL) == GLIMS_STATUS_OK)
+    {
+      render_pixel (image, 3, 3, plain);
+      api->image_close (engine, image);
+    }
+  CHECK (memcmp (plain, white, 4) == 0, "image_new still makes a white background");
+
+  bright.blue = NAN;
+  image = 7;
+  CHECK (api->image_new_filled (engine, 40, 30, GLIMS_NEW_IMAGE_COLOR, NULL, &image, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && image == 0 && ! error &&
+         api->image_new_filled (engine, 40, 30, GLIMS_NEW_IMAGE_COLOR, &bright, &image, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_new_filled (engine, 40, 30, 3, &color, &image, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_new_filled (engine, 0, 30, GLIMS_NEW_IMAGE_WHITE, NULL, &image, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_new_filled (engine, 40, 30, GLIMS_NEW_IMAGE_WHITE, NULL, NULL, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && image == 0,
+         "image_new_filled refuses a missing or non-finite color, unknown contents, a bad size and no output");
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -14784,6 +14866,7 @@ main (int argc, char **argv)
   test_drawable_histogram ();
   test_selection_smooth ();
   test_selection_similar ();
+  test_image_new_filled ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

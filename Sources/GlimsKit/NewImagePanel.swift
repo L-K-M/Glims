@@ -27,6 +27,19 @@ struct NewImageSettings: Equatable {
         }
     }
 
+    /// What an RGB image's one layer holds, as in Photoshop's New dialog.
+    enum Contents: Int, CaseIterable, Equatable {
+        case white, backgroundColor, transparent
+
+        var title: String {
+            switch self {
+            case .white: return "White"
+            case .backgroundColor: return "Background Color"
+            case .transparent: return "Transparent"
+            }
+        }
+    }
+
     /// Precisions offered for native ink-channel images.
     static let multichannelComponents: [EngineSession.ColorComponent] = [.u8, .u16, .float]
 
@@ -39,18 +52,22 @@ struct NewImageSettings: Equatable {
     let component: EngineSession.ColorComponent
     let channelCount: Int
     let profileICC: Data?
+    /// Always white for the component modes, which have no contents choice.
+    let contents: Contents
 
     /// RGB ignores dormant ink fields. CMYK has exactly four planes and keeps
     /// the selected immutable ICC bytes; Multichannel has a variable ink count.
     /// Lab always has three physical axes and no supplied source profile.
     init?(width: String, height: String, kind: Kind = .rgb,
-          component: EngineSession.ColorComponent = .u8, channelCount: String = "4", profileICC: Data? = nil) {
+          component: EngineSession.ColorComponent = .u8, channelCount: String = "4", profileICC: Data? = nil,
+          contents: Contents = .white) {
         guard let w = Int(width.trimmingCharacters(in: .whitespacesAndNewlines)),
               let h = Int(height.trimmingCharacters(in: .whitespacesAndNewlines)),
               (1...524_288).contains(w), (1...524_288).contains(h) else { return nil }
         self.width = w
         self.height = h
         self.kind = kind
+        self.contents = kind == .rgb ? contents : .white
         switch kind {
         case .rgb:
             self.component = .u8
@@ -76,6 +93,16 @@ struct NewImageSettings: Equatable {
             self.profileICC = nil
         }
     }
+
+    /// The engine's contents for this image, with `background` (the tool
+    /// background color) captured for Background Color.
+    func engineContents(background: NSColor) throws -> EngineSession.NewImageContents {
+        switch contents {
+        case .white: return .white
+        case .transparent: return .transparent
+        case .backgroundColor: return .color(try EngineSession.recorderColor(background))
+        }
+    }
 }
 
 @MainActor
@@ -85,6 +112,9 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     private let modePopup = NSPopUpButton()
     private let precisionPopup = NSPopUpButton()
     private let channelField = NSTextField(string: "4")
+    private let contentsPopup = NSPopUpButton()
+    private var contentsRow: NSGridRow?
+    private let supportsContents: Bool
     private let profilePopup = NSPopUpButton()
     private let profileButton = NSButton(title: "Choose Profile…", target: nil, action: nil)
     private let profileNote = NSTextField(wrappingLabelWithString: "")
@@ -102,10 +132,11 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     var onClose: (() -> Void)?
 
     init(profileLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader(),
-         supportsLab: Bool = false) {
+         supportsLab: Bool = false, supportsContents: Bool = false) {
         self.profileLoader = profileLoader
         self.supportsLab = supportsLab
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 365),
+        self.supportsContents = supportsContents
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 395),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         panel.title = "New Image"
         super.init(window: panel)
@@ -127,6 +158,8 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         modePopup.setAccessibilityLabel("Image mode")
         precisionPopup.addItems(withTitles: ["8-bit", "16-bit", "32-bit float"])
         precisionPopup.setAccessibilityLabel("Precision")
+        contentsPopup.addItems(withTitles: NewImageSettings.Contents.allCases.map(\.title))
+        contentsPopup.setAccessibilityLabel("Contents")
         profilePopup.setAccessibilityLabel("CMYK source profile")
         profilePopup.widthAnchor.constraint(equalToConstant: 270).isActive = true
         profilePopup.target = self
@@ -140,10 +173,12 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
                                      [NSTextField(labelWithString: "Precision:"), precisionPopup],
                                      [NSTextField(labelWithString: "Ink channels:"), channelField],
                                      [NSTextField(labelWithString: "Source profile:"), profilePopup],
-                                     [NSView(), profileButton]])
+                                     [NSView(), profileButton],
+                                     [NSTextField(labelWithString: "Contents:"), contentsPopup]])
         grid.column(at: 0).xPlacement = .trailing
         channelRow = grid.row(at: 4)
         profileRows = [grid.row(at: 5), grid.row(at: 6)]
+        contentsRow = grid.row(at: 7)
         let buttons = NSStackView(views: [cancel, createButton])
         buttons.orientation = .horizontal
         let stack = NSStackView(views: [grid, profileNote, errorLabel, buttons])
@@ -201,7 +236,13 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         let component = components.indices.contains(index) ? components[index] : .u8
         return NewImageSettings(width: widthField.stringValue, height: heightField.stringValue,
                                 kind: kind, component: component, channelCount: channelField.stringValue,
-                                profileICC: selectedProfile?.iccData)
+                                profileICC: selectedProfile?.iccData, contents: contents)
+    }
+
+    /// The Contents choice, White when the adapter or the mode has none.
+    private var contents: NewImageSettings.Contents {
+        guard supportsContents, kind == .rgb else { return .white }
+        return NewImageSettings.Contents(rawValue: contentsPopup.indexOfSelectedItem) ?? .white
     }
 
     private func updateValidation() {
@@ -216,6 +257,7 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         profilePopup.isEnabled = cmyk && !profileLoading
         profileButton.isEnabled = cmyk
         profileRows.forEach { $0.isHidden = !cmyk }
+        contentsRow?.isHidden = !(supportsContents && selectedKind == .rgb)
         profileNote.isHidden = !(cmyk || lab)
         if cmyk {
             profileNote.stringValue = "The source profile defines CMYK color. Preview uses relative colorimetric with black-point compensation."

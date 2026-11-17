@@ -1695,6 +1695,46 @@ final class EngineSession: @unchecked Sendable {
         return image
     }
 
+    /// What a new RGB image's one layer holds, as in Photoshop's New
+    /// dialog: an opaque white or colored "Background", or a transparent
+    /// "Layer 1".
+    enum NewImageContents: Equatable, Sendable {
+        case white
+        case color(RecorderColor)
+        case transparent
+    }
+
+    /// Whether the adapter can make colored and transparent new images (slot 240).
+    var supportsImageNewFilled: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_new_filled) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_new_filled)
+            && api.image_new_filled != nil
+    }
+
+    /// A new 8-bit RGB image with an empty history. White uses the
+    /// original slot, so it works on every adapter.
+    func newImage(width: Int, height: Int, contents: NewImageContents) throws -> Int32 {
+        var color = GlimsColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let kind: GlimsNewImageContents
+        switch contents {
+        case .white:
+            return try newImage(width: width, height: height)
+        case .color(let fill):
+            color = GlimsColor(red: fill.red, green: fill.green, blue: fill.blue, alpha: 1)
+            kind = GLIMS_NEW_IMAGE_COLOR
+        case .transparent:
+            kind = GLIMS_NEW_IMAGE_TRANSPARENT
+        }
+        guard supportsImageNewFilled, let filled = api.image_new_filled else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine can only make new images with a white background.")
+        }
+        var image: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(filled(engine, Int32(width), Int32(height), kind.rawValue, &color, &image, &error), error)
+        return image
+    }
+
     func newMultichannelImage(width: Int, height: Int, component: ColorComponent,
                               channelCount: Int) throws -> Int32 {
         guard (1...524_288).contains(width), (1...524_288).contains(height),
