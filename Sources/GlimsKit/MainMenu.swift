@@ -205,6 +205,7 @@ enum MainMenu {
             item("Trim Layer to Content", #selector(DocumentWindowController.trimLayerToContent(_:))),
             .separator(),
             item("Merge Down", #selector(DocumentWindowController.mergeDown(_:))),
+            item("Merge Visible", #selector(DocumentWindowController.mergeVisible(_:))),
         ])
         let inverse = item("Inverse", #selector(DocumentWindowController.selectInverse(_:)), "i")
         inverse.keyEquivalentModifierMask = [.command, .shift]

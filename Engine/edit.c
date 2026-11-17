@@ -1093,6 +1093,53 @@ glims_layer_command (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Layer > Merge Visible: GIMP's Image > Merge Visible Layers with the
+ * whole image as the container (not only the selected layer's group),
+ * Expand as Necessary, and hidden layers kept
+ * (app/actions/image-commands.c image_merge_layers_callback defaults).
+ * Fewer than two visible top-level layers is refused before any change,
+ * where GIMP would push an empty or single-layer merge step. */
+GlimsStatus
+glims_image_merge_visible (GlimsEngine  *engine,
+                           GlimsImageID  id,
+                           GlimsItemID  *result,
+                           char        **error)
+{
+  GlimsStatus     status;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage      *image;
+  GList          *iter;
+  GList          *merged;  /* owned by the image */
+  gint            visible = 0;
+
+  if (result) *result = 0;
+  if (! open) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_ORDINARY)
+    {
+      glims_fail (error, NULL, "Merge Visible is available for ordinary layered images only.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  image = open->image;
+  for (iter = gimp_image_get_layer_iter (image); iter; iter = iter->next)
+    if (! gimp_layer_is_floating_sel (iter->data) && gimp_item_get_visible (GIMP_ITEM (iter->data)))
+      visible++;
+  if (visible < 2)
+    return glims_fail (error, NULL, "Merge Visible needs at least two visible layers.");
+
+  merged = gimp_image_merge_visible_layers (image, gimp_get_user_context (engine->gimp),
+                                            GIMP_EXPAND_AS_NECESSARY, FALSE, FALSE, NULL);
+  if (! merged)
+    return glims_fail (error, NULL, "The visible layers could not be merged.");
+  /* The list is the image's own selection: read it, never free it. */
+  if (result) *result = gimp_item_get_id (GIMP_ITEM (merged->data));
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_layer_change (GlimsEngine            *engine,
                     GlimsImageID            id,

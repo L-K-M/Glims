@@ -1540,6 +1540,7 @@ MARSHAL (image_scale, return glims_image_scale (e, a->image, a->width, a->height
 MARSHAL (image_scale_with_interpolation,
          return glims_image_scale_with_interpolation (e, a->image, a->width, a->height,
                                                       (uint32_t) a->n, a->error);)
+MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (fonts, return glims_fonts (e, a->out);)
 MARSHAL (text_layer_new, return glims_text_layer_new (e, a->image, a->string, a->in,
                                                       (GlimsPoint) { a->number, a->number2 },
@@ -2402,6 +2403,15 @@ api_layer_command (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32
   return glims_facade_call (e, GLIMS_FACADE_OP_layer_command,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             layer_command_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_merge_visible (GlimsEngine *e, GlimsImageID image, GlimsItemID *result, char **error)
+{
+  GlimsArgs a = { .image = image, .out = result, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_merge_visible,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_merge_visible_on_engine, &a, error);
 }
 
 static GlimsStatus

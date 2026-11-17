@@ -1363,6 +1363,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func trimLayerToContent(_ sender: Any?) { imageDocument.layerCommand(.trimToContent) }
     @objc func mergeDown(_ sender: Any?) { imageDocument.layerCommand(.mergeDown) }
     @objc func flattenImage(_ sender: Any?) { imageDocument.layerCommand(.flatten) }
+    @objc func mergeVisible(_ sender: Any?) { imageDocument.mergeVisible() }
 
     /// Layer ▸ New Layer Group.
     @objc func newLayerGroup(_ sender: Any?) { imageDocument.createGroup() }
@@ -2740,6 +2741,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let mode = LayerTransformSession.Mode.from(menuTag: menuItem.tag) else { return false }
             menuItem.state = ToolState.shared.current == .transform && canvas.tools.transformPreview?.mode == mode ? .on : .off
             return canvas.tools.transformModeSelectionAllowed
+        case #selector(mergeVisible(_:)):
+            // The whole stack, not a layer: a multi-selection does not
+            // matter, two visible top-level layers do.
+            let layout = imageDocument.storage.layout
+            return !editingBlocked && !previewBusy && imageDocument.session.supportsMergeVisible
+                && (layout == .ordinary || layout == .legacyUnknown)
+                && !imageDocument.targetCommandIsPending && !imageDocument.floatingState.isActive
+                && imageDocument.visibleTopLevelLayerCount >= 2
         case #selector(mergeDown(_:)),
              #selector(flattenImage(_:)), #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
              #selector(sendLayerBackward(_:)), #selector(sendLayerToBack(_:)),

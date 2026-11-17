@@ -673,6 +673,8 @@ GlimsStatus glims_image_selected_items (GlimsEngine *e, GlimsImageID image, uint
                                         GlimsItemID *out, int32_t capacity, int32_t *count);
 GlimsStatus glims_layer_command    (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     uint32_t command, GlimsItemID *result, char **error);
+GlimsStatus glims_image_merge_visible (GlimsEngine *e, GlimsImageID image, GlimsItemID *result,
+                                       char **error);
 GlimsStatus glims_layer_change     (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                     const GlimsLayerChange *change, char **error);
 GlimsStatus glims_layer_move       (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
