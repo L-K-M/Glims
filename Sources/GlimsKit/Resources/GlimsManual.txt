@@ -252,7 +252,12 @@ edges again. Smooth… takes a sample radius of 1 to 100 pixels and keeps
 each pixel selected only when most of the square around it is selected,
 which removes stray specks and rounds sharp corners. The canvas edge
 counts as continuing the selection, so a selection that reaches the edge
-stays there. Smooth is one undo step but is not recorded. From Layer Transparency selects the visible area of the
+stays there. Smooth is one undo step but is not recorded. Similar adds
+every pixel of the active layer whose color lies within the Magic Wand's
+Threshold of the colors already selected, wherever it is in the image. It
+uses the wand's Antialiasing and Sample merged options too, but always
+adds to the selection without feathering. Similar is one undo step but is
+not recorded. From Layer Transparency selects the visible area of the
 active layer, and From Path selects along the active path.
 
 When you start a selection drag or click with the Magic Wand, hold a

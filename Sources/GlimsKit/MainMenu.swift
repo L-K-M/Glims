@@ -247,6 +247,7 @@ enum MainMenu {
             item("Border…", #selector(DocumentWindowController.borderSelection(_:))),
             item("Smooth…", #selector(DocumentWindowController.smoothSelection(_:))),
             item("Remove Antialiasing", #selector(DocumentWindowController.sharpenSelection(_:))),
+            item("Similar", #selector(DocumentWindowController.selectSimilar(_:))),
             .separator(),
             item("From Layer Transparency", #selector(DocumentWindowController.selectFromAlpha(_:))),
             item("From Path", #selector(DocumentWindowController.selectFromPath(_:))),

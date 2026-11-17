@@ -451,6 +451,135 @@ glims_selection_smooth (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Photoshop's Select > Similar: every pixel of the source whose
+ * premultiplied R'G'B'A channels each lie within `threshold` of the range
+ * the selected pixels span joins the selection. Selected means a mask
+ * value of at least one half. GIMP's Fuzzy Select antialiasing ramp
+ * softens the edge of the range when asked. */
+static gfloat
+similar_value (const gfloat *pixel, const gfloat *low, const gfloat *high,
+               gfloat threshold, gboolean antialias)
+{
+  gfloat distance = 0.0f;
+
+  for (gint c = 0; c < 4; c++)
+    distance = MAX (distance, MAX (low[c] - pixel[c], pixel[c] - high[c]));
+
+  if (antialias && threshold > 0.0f)
+    {
+      gfloat ramp = 1.5f - distance / threshold;
+
+      return ramp <= 0.0f ? 0.0f : ramp < 0.5f ? ramp * 2.0f : 1.0f;
+    }
+  return distance > threshold ? 0.0f : 1.0f;
+}
+
+GlimsStatus
+glims_selection_similar (GlimsEngine              *engine,
+                         GlimsImageID              id,
+                         const GlimsSelectOptions *options,
+                         char                    **error)
+{
+  GlimsSelectOptions  settings;
+  GlimsStatus         status;
+  GimpImage          *image;
+  GimpChannel        *mask;
+  GimpPickable       *pickable;
+  GeglBuffer         *source;
+  GeglBuffer         *selection;
+  GeglBuffer         *similar;
+  GeglBufferIterator *iter;
+  const Babl         *format;
+  GeglRectangle       extent;
+  GeglRectangle       mask_area;
+  gint                offset_x = 0;
+  gint                offset_y = 0;
+  gfloat              low[4]   = { G_MAXFLOAT, G_MAXFLOAT, G_MAXFLOAT, G_MAXFLOAT };
+  gfloat              high[4]  = { -G_MAXFLOAT, -G_MAXFLOAT, -G_MAXFLOAT, -G_MAXFLOAT };
+  gboolean            sampled  = FALSE;
+
+  if (! options || ! read_options (options, &settings) || ! isfinite (settings.threshold))
+    {
+      glims_fail (error, NULL, "The Similar settings are invalid.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  image = writable_image (engine, id, &status);
+  if (! image)
+    return status;
+
+  mask = gimp_image_get_mask (image);
+  if (gimp_channel_is_empty (mask))
+    return glims_fail (error, NULL, "There is no selection to extend.");
+
+  if (settings.sample_merged)
+    {
+      pickable = GIMP_PICKABLE (image);
+    }
+  else
+    {
+      GimpDrawable *drawable = active_drawable (image);
+
+      if (! drawable)
+        return glims_fail (error, NULL, "Select a layer first.");
+      gimp_item_get_offset (GIMP_ITEM (drawable), &offset_x, &offset_y);
+      pickable = GIMP_PICKABLE (drawable);
+    }
+
+  gimp_pickable_flush (pickable);
+  source    = gimp_pickable_get_buffer (pickable);
+  format    = babl_format_with_space ("R'aG'aB'aA float", gimp_pickable_get_format (pickable));
+  extent    = *gegl_buffer_get_extent (source);
+  mask_area = (GeglRectangle) { extent.x + offset_x, extent.y + offset_y, extent.width, extent.height };
+  selection = gimp_drawable_get_buffer (GIMP_DRAWABLE (mask));
+
+  /* The range of the selected pixels, where the selection covers the source. */
+  iter = gegl_buffer_iterator_new (source, &extent, 0, format, GEGL_ACCESS_READ, GEGL_ABYSS_NONE, 2);
+  gegl_buffer_iterator_add (iter, selection, &mask_area, 0, babl_format ("Y float"),
+                            GEGL_ACCESS_READ, GEGL_ABYSS_NONE);
+  while (gegl_buffer_iterator_next (iter))
+    {
+      const gfloat *pixel    = iter->items[0].data;
+      const gfloat *selected = iter->items[1].data;
+
+      for (gint i = 0; i < iter->length; i++, pixel += 4)
+        if (selected[i] >= 0.5f)
+          {
+            sampled = TRUE;
+            for (gint c = 0; c < 4; c++)
+              {
+                low[c]  = MIN (low[c], pixel[c]);
+                high[c] = MAX (high[c], pixel[c]);
+              }
+          }
+    }
+
+  if (! sampled)
+    return glims_fail (error, NULL, "The selection does not cover the layer.");
+
+  similar = gegl_buffer_new (&extent, babl_format ("Y float"));
+  iter = gegl_buffer_iterator_new (similar, &extent, 0, babl_format ("Y float"),
+                                   GEGL_ACCESS_WRITE, GEGL_ABYSS_NONE, 2);
+  gegl_buffer_iterator_add (iter, source, &extent, 0, format, GEGL_ACCESS_READ, GEGL_ABYSS_NONE);
+  while (gegl_buffer_iterator_next (iter))
+    {
+      gfloat       *out   = iter->items[0].data;
+      const gfloat *pixel = iter->items[1].data;
+
+      for (gint i = 0; i < iter->length; i++, pixel += 4)
+        out[i] = similar_value (pixel, low, high, (gfloat) settings.threshold, settings.antialias);
+    }
+
+  forget_mask_state (mask);
+  gimp_channel_select_buffer (mask, C_("undo-type", "Select Similar"), similar, offset_x, offset_y,
+                              GIMP_CHANNEL_OP_ADD, FALSE, 0.0, 0.0);
+  g_object_unref (similar);
+  forget_mask_state (mask);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
 GlimsStatus
 glims_selection_bounds (GlimsEngine  *engine,
                         GlimsImageID  id,

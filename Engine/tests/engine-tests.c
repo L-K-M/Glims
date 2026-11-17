@@ -13007,6 +13007,115 @@ test_selection_smooth (void)
 }
 
 static void
+paint_rect (uint8_t *pixels, int width, int x0, int y0, int w, int h, uint8_t r, uint8_t g, uint8_t b)
+{
+  for (int y = y0; y < y0 + h; y++)
+    for (int x = x0; x < x0 + w; x++)
+      {
+        uint8_t *p = pixels + 4 * (y * width + x);
+        p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+      }
+}
+
+static void
+test_selection_similar (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        layer;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsSelectOptions similar = { .struct_size = sizeof similar, .antialias = false, .threshold = 0 };
+  GlimsSelectOptions short_options = { .struct_size = 4 };
+  GlimsRect          bounds;
+  bool               empty = true;
+  int32_t            before;
+  double             pixels;
+  char              *error = NULL;
+  uint8_t            known[32 * 32 * 4];
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, selection_similar) + sizeof api->selection_similar ||
+      ! api->selection_similar)
+    {
+      CHECK (false, "the adapter exports slot 239 selection_similar");
+      return;
+    }
+  /* Blue, with pure red at (0,0) 8x8 and (20,20) 4x4, red 250 at (10,0)
+   * 4x4 and red 252 at (26,26) 2x2. */
+  paint_rect (known, 32, 0, 0, 32, 32, 0, 0, 255);
+  paint_rect (known, 32, 0, 0, 8, 8, 255, 0, 0);
+  paint_rect (known, 32, 20, 20, 4, 4, 255, 0, 0);
+  paint_rect (known, 32, 10, 0, 4, 4, 250, 0, 0);
+  paint_rect (known, 32, 26, 26, 2, 2, 252, 0, 0);
+  CHECK (api->image_from_pixels (engine, 32, 32, known, sizeof known, &image, NULL) == GLIMS_STATUS_OK && image != 0,
+         "the Similar fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  api->layer_select (engine, image, layer);
+
+  /* Refusals change nothing. */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (image);
+  CHECK (api->selection_similar (engine, 9999, &similar, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->selection_similar (engine, image, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->selection_similar (engine, image, &short_options, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "Similar: unknown image NOT_FOUND, missing or short options INVALID_ARGUMENT");
+  CHECK (api->selection_similar (engine, image, &similar, &error) == GLIMS_STATUS_FAILED && error &&
+         undo_depth (image) == before,
+         "Similar refuses an empty selection with no undo (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+
+  /* Tolerance 0 from a pure red seed adds the other pure red patch only. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 4, 4 } }, 2, &sel);
+  before = undo_depth (image);
+  CHECK (api->selection_similar (engine, image, &similar, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "Similar is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && ! empty &&
+         rect_equals (bounds, 0, 0, 24, 24) && selected_pixels (image, layer) == 80,
+         "Similar at tolerance 0 selects every pure red pixel (%.1f)", selected_pixels (image, layer));
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && selected_pixels (image, layer) == 16,
+         "one Undo restores the seed selection");
+
+  /* Tolerance 4 reaches red 252 but not red 250; 6 reaches both. */
+  similar.threshold = 4.0 / 255.0;
+  pixels = api->selection_similar (engine, image, &similar, NULL) == GLIMS_STATUS_OK
+           ? selected_pixels (image, layer) : -1;
+  CHECK (pixels == 84, "tolerance 4 adds red 252 but not red 250 (%.1f)", pixels);
+  api->image_undo (engine, image);
+  similar.threshold = 6.0 / 255.0;
+  pixels = api->selection_similar (engine, image, &similar, NULL) == GLIMS_STATUS_OK
+           ? selected_pixels (image, layer) : -1;
+  CHECK (pixels == 100, "tolerance 6 adds both near reds (%.1f)", pixels);
+  api->image_undo (engine, image);
+
+  /* Antialiasing ramps the edge: red 250 sits 1.25 tolerances out and
+   * joins at half strength. */
+  similar.threshold = 4.0 / 255.0;
+  similar.antialias = true;
+  pixels = api->selection_similar (engine, image, &similar, NULL) == GLIMS_STATUS_OK
+           ? selected_pixels (image, layer) : -1;
+  CHECK (fabs (pixels - 92) < 0.2, "antialiased tolerance 4 adds red 250 at half strength (%.2f)", pixels);
+  api->image_undo (engine, image);
+
+  /* A seed spanning red 250 to 255 covers red 252 at tolerance 0, and
+   * the composite source agrees with the single layer. */
+  sel.operation = GLIMS_SELECT_ADD;
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 10, 0 }, { 11, 1 } }, 2, &sel);
+  sel.operation = GLIMS_SELECT_REPLACE;
+  similar.threshold = 0;
+  similar.antialias = false;
+  similar.sample_merged = true;
+  pixels = api->selection_similar (engine, image, &similar, NULL) == GLIMS_STATUS_OK
+           ? selected_pixels (image, layer) : -1;
+  CHECK (pixels == 100, "a red 250 to 255 seed adds red 252 from the composite (%.1f)", pixels);
+
+  api->image_close (engine, image);
+}
+
+static void
 test_selection_to_new_layer (void)
 {
   GlimsImageID       image = 0;
@@ -14674,6 +14783,7 @@ main (int argc, char **argv)
   test_selection_to_new_layer ();
   test_drawable_histogram ();
   test_selection_smooth ();
+  test_selection_similar ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

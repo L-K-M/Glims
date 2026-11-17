@@ -5103,6 +5103,27 @@ final class EngineSession: @unchecked Sendable {
         try check(smooth(engine, image, UInt32(radius), &error), error)
     }
 
+    /// Whether the adapter has Select ▸ Similar (slot 239).
+    var supportsSelectionSimilar: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.selection_similar) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.selection_similar)
+            && api.selection_similar != nil
+    }
+
+    /// Select ▸ Similar: adds every pixel within `options.threshold` of the
+    /// range of colors the selection holds, sampling the active drawable
+    /// or, with `sampleMerged`, the composite. One undo step. Only the
+    /// threshold, antialias and sample-merged settings apply.
+    func selectSimilar(_ image: Int32, options: SelectOptions) throws {
+        guard supportsSelectionSimilar, let similar = api.selection_similar else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot select similar colors.")
+        }
+        var settings = Self.selectOptions(options)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(similar(engine, image, &settings, &error), error)
+    }
+
     var supportsDrawableHistogram: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.drawable_histogram) else { return false }
         return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.drawable_histogram)

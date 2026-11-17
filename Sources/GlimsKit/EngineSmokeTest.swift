@@ -6019,6 +6019,7 @@ enum EngineSmokeTest {
         exerciseLayerVia(document, controller: controller, session: session, image: image)
         exerciseHistogram(document, controller: controller, session: session, image: image)
         exerciseSmoothSelection(document, controller: controller, session: session, image: image)
+        exerciseSelectSimilar(document, controller: controller, session: session, image: image)
 
         controller.mergeDown(nil)
         settle()
@@ -12145,6 +12146,82 @@ extension EngineSmokeTest {
             controller.window?.endSheet(attached, returnCode: .alertFirstButtonReturn)
             spin()
         }
+        document.select(.none)
+        settle()
+    }
+
+    static func exerciseSelectSimilar(_ document: ImageDocument, controller: DocumentWindowController,
+                                      session: EngineSession, image: Int32) {
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+        }
+        func selectedPixels() -> Double? {
+            var read: Result<EngineSession.InputHistogram, Error>?
+            document.readHistogram { read = $0 }
+            let deadline = Date().addingTimeInterval(10)
+            while read == nil && Date() < deadline { spin() }
+            guard case .success(let histogram)? = read else { return nil }
+            return histogram[.value].map { HistogramStatistics(bins: $0).pixels }
+        }
+        let item = NSMenuItem(title: "Similar", action: #selector(DocumentWindowController.selectSimilar(_:)),
+                              keyEquivalent: "")
+        guard session.supportsSelectionSimilar else {
+            check(!controller.validateMenuItem(item) && document.selectSimilarRefusal != nil,
+                  "an older adapter keeps Similar disabled")
+            return
+        }
+        guard let source = document.layers.last?.id else { return check(false, "Similar has a source layer") }
+        document.selectLayer(source)
+        document.select(.none)
+        settle()
+        check(!controller.validateMenuItem(item), "Similar is disabled without a selection")
+
+        // Two patches of a color the grayscale gradient never holds.
+        let undoStart = (try? session.undoInfo(image).undoCount) ?? -1
+        var add = EngineSession.SelectOptions()
+        add.operation = .add
+        document.select(.rectangle(CGRect(x: 100, y: 40, width: 10, height: 10)), options: EngineSession.SelectOptions())
+        document.select(.rectangle(CGRect(x: 150, y: 40, width: 6, height: 6)), options: add)
+        document.fill(at: .zero, mode: .selection, color: NSColor(srgbRed: 0.07, green: 0.79, blue: 0.36, alpha: 1),
+                      threshold: 0, sampleMerged: false)
+        document.select(.rectangle(CGRect(x: 100, y: 40, width: 2, height: 2)), options: EngineSession.SelectOptions())
+        settle()
+        check(controller.validateMenuItem(item) && item.toolTip == DocumentWindowController.similarHint,
+              "Similar is enabled for a selection and names the wand options it uses")
+
+        let wand = ToolState.shared.selectOptions
+        defer { ToolState.shared.selectOptions = wand }
+        ToolState.shared.selectOptions.threshold = 0
+        ToolState.shared.selectOptions.antialias = false
+        ToolState.shared.selectOptions.sampleMerged = false
+        ToolState.shared.selectOptions.operation = .subtract
+        ToolState.shared.selectOptions.feather = 8
+        let undoBefore = (try? session.undoInfo(image).undoCount) ?? -1
+        controller.selectSimilar(nil)
+        settle()
+        check((try? session.undoInfo(image).undoCount) == undoBefore + 1
+                && document.selectionBounds == CGRect(x: 100, y: 40, width: 56, height: 10),
+              "Similar adds the matching patch as one undo step (\(String(describing: document.selectionBounds)))")
+        let pixels = selectedPixels()
+        check(pixels == 136, "Similar ignores the wand's mode and feather: both patches, unfeathered (\(String(describing: pixels)))")
+        let options = DocumentWindowController.similarOptions(ToolState.shared.selectOptions)
+        check(options.operation == .add && options.feather == 0 && options.threshold == 0 && !options.contiguous,
+              "Similar always adds with the wand's threshold")
+
+        document.undo()
+        settle()
+        check(document.selectionBounds == CGRect(x: 100, y: 40, width: 2, height: 2),
+              "Undo restores the seed selection (\(String(describing: document.selectionBounds)))")
+        while ((try? session.undoInfo(image).undoCount) ?? 0) > undoStart {
+            let count = (try? session.undoInfo(image).undoCount) ?? 0
+            document.undo()
+            settle()
+            if (try? session.undoInfo(image).undoCount) == count { break }
+        }
+        check((try? session.undoInfo(image).undoCount) == undoStart, "the Similar fixture undoes cleanly")
         document.select(.none)
         settle()
     }

@@ -5529,6 +5529,37 @@ final class ImageDocument {
         }, completion: completion)
     }
 
+    // MARK: Select Similar
+
+    /// Select ▸ Similar: why it is unavailable now, or nil.
+    var selectSimilarRefusal: String? {
+        guard session.supportsSelectionSimilar else { return "This image engine cannot select similar colors." }
+        guard colorInfo.mode != .lab,
+              storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Similar is available for ordinary layered images only."
+        }
+        guard selectionBounds != nil else { return "Make a selection to match first." }
+        guard !isClosing, acceptsEdits else { return "Wait for the current operation to finish." }
+        return nil
+    }
+
+    /// Adds the pixels similar to the selected ones as one queued command
+    /// and one undo step, using `options`' threshold, antialiasing and
+    /// sample-merged settings; pending edits end first. Not recorded.
+    func selectSimilar(options: EngineSession.SelectOptions,
+                       completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        if let reason = selectSimilarRefusal {
+            onError?(reason)
+            completion?(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue), message: reason)))
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        endPendingUserEdits()
+        enqueueTargetCommand({ session, image in
+            try session.selectSimilar(image, options: options)
+        }, completion: completion)
+    }
+
     // MARK: Histogram
 
     /// Image ▸ Histogram…: why it is unavailable now, or nil. The engine

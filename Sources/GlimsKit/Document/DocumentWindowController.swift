@@ -1809,6 +1809,38 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Select ▸ Similar: adds every pixel whose color lies within the
+    /// Magic Wand's Threshold of the colors already selected, as
+    /// Photoshop does with its Magic Wand tolerance. Antialiasing and
+    /// Sample merged come from the wand's options too.
+    @objc func selectSimilar(_ sender: Any?) {
+        if let reason = imageDocument.selectSimilarRefusal {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        let options = Self.similarOptions(ToolState.shared.selectOptions)
+        let threshold = Int((options.threshold * 255).rounded())
+        imageDocument.selectSimilar(options: options) { [weak self] result in
+            guard let self, case .success = result else { return }
+            self.statusBar.message = "Added similar colors (Magic Wand threshold \(threshold))"
+        }
+    }
+
+    /// The wand settings Similar uses: threshold, antialiasing and sample
+    /// merged; the result always adds to the selection, unfeathered.
+    nonisolated static func similarOptions(_ wand: EngineSession.SelectOptions) -> EngineSession.SelectOptions {
+        var options = EngineSession.SelectOptions()
+        options.operation = .add
+        options.threshold = wand.threshold
+        options.antialias = wand.antialias
+        options.sampleMerged = wand.sampleMerged
+        options.contiguous = false
+        return options
+    }
+
+    static let similarHint = "Uses the Magic Wand's Threshold, Antialiasing and Sample merged options."
+
     /// A Smooth radius typed into the sheet: a whole number 1 ... 100.
     nonisolated static func smoothRadius(_ text: String) -> Int? {
         guard let value = Int(text.trimmingCharacters(in: .whitespaces)),
@@ -3051,6 +3083,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(smoothSelection(_:)):
             let refusal = imageDocument.smoothSelectionRefusal
             menuItem.toolTip = refusal
+            return refusal == nil && window?.attachedSheet == nil
+        case #selector(selectSimilar(_:)):
+            let refusal = imageDocument.selectSimilarRefusal
+            menuItem.toolTip = refusal ?? Self.similarHint
             return refusal == nil && window?.attachedSheet == nil
         case #selector(showHistogram(_:)):
             let refusal = imageDocument.histogramRefusal
