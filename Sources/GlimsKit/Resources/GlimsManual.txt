@@ -314,6 +314,11 @@ and zoom while the window is open.
   Cancel  closes the window and leaves the image untouched, as does
           closing the window.
 
+Filter > Other > Maximum… and Minimum… take a radius of 1 to 100 whole
+pixels. Each channel of every pixel becomes the largest (Maximum) or
+smallest (Minimum) value in the square of that radius around it, so
+light or dark areas spread. Transparency spreads the same way.
+
 Entries that cannot run yet stay listed but disabled, and their title
 says why (for example "needs a second layer as its source").
 

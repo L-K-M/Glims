@@ -89,7 +89,7 @@ The 3.2 features below come from the release notes (https://www.gimp.org/release
 | Image | Mode, Precision, Color Profile (Assign/Convert/Soft-Proof), Adjust ▸ (GIMP's Colors menu: Levels, Curves, Hue-Saturation, Color Balance, Threshold, Invert…), Image Size…, Canvas Size…, Crop to Selection, Rotate/Flip, Guides, Metadata, Histogram… |
 | Layer | New ▸ (Layer, Group, Adjustment, Text, Vector), Duplicate, Layer via Copy, Layer via Cut, Delete, Mask ▸, Filters on Layer ▸, Rasterize / Revert Rasterize, Arrange ▸, Merge Down, Merge Visible, Flatten, Fit to Canvas, Trim, Lock ▸ (Pixels, Position, Transparency) |
 | Select | All A, Deselect D, Inverse Shift-I, Float, By Color, Grow/Shrink/Feather/Border/Smooth, Similar, Save to Channel, Load from Channel, Quick Mask |
-| Filter | Last Filter, Recently Used, then dynamic categories (Blur, Enhance, Distort, Light & Shadow, Noise, Edge, Generic, Artistic, Map, Render, Web, Script-Fu, Python) |
+| Filter | Last Filter, Recently Used, Blur ▸ Gaussian Blur, Other ▸ Maximum/Minimum, then dynamic categories (Blur, Enhance, Distort, Light & Shadow, Noise, Edge, Generic, Artistic, Map, Render, Web, Script-Fu, Python) |
 | View | Zoom In/Out, Fit (Cmd-0), Actual Pixels (Cmd-1), Rotate View, Rulers, Guides, Grid, Snap, Layer Boundary, Selection Edges, Canvas Surround Color, Display Proof |
 | Window | Palettes by name, Workspaces ▸ (Save, Reset, list), Arrange, documents |
 | Help | Search, Manual (links to GIMP docs) |

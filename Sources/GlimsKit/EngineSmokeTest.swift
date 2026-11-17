@@ -6020,6 +6020,7 @@ enum EngineSmokeTest {
         exerciseHistogram(document, controller: controller, session: session, image: image)
         exerciseSmoothSelection(document, controller: controller, session: session, image: image)
         exerciseSelectSimilar(document, controller: controller, session: session, image: image)
+        exerciseRankFilters(document, controller: controller, session: session, image: image)
 
         controller.mergeDown(nil)
         settle()
@@ -12148,6 +12149,66 @@ extension EngineSmokeTest {
         }
         document.select(.none)
         settle()
+    }
+
+    /// Filter ▸ Other ▸ Maximum… and Minimum… on the black-to-white
+    /// gradient background: the panel starts GEGL's median blur with
+    /// Photoshop's fixed rank settings, only the radius changes, and the
+    /// result spreads the lighter or darker neighbors as one undo step.
+    static func exerciseRankFilters(_ document: ImageDocument, controller: DocumentWindowController,
+                                    session: EngineSession, image: Int32) {
+        func settle() {
+            document.inputQueue.sync {}
+            spin()
+            let deadline = Date().addingTimeInterval(10)
+            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+        }
+        guard let source = document.layers.last?.id else { return check(false, "the rank filters have a source layer") }
+        document.selectLayer(source)
+        document.select(.none)
+        settle()
+        let x = 40, y = 5
+        guard let before = pixel(session, image, x: x, y: y)?[0] else { return check(false, "the gradient pixel reads") }
+        for rank in RankFilterPanel.Rank.allCases {
+            let item = NSMenuItem(title: "\(rank.title)…", action: rank == .maximum
+                                  ? #selector(DocumentWindowController.maximumFilter(_:))
+                                  : #selector(DocumentWindowController.minimumFilter(_:)), keyEquivalent: "")
+            check(controller.validateMenuItem(item), "\(rank.title) is enabled for a single layer")
+            if rank == .maximum { controller.maximumFilter(nil) } else { controller.minimumFilter(nil) }
+            let opened = Date().addingTimeInterval(10)
+            while !(controller.previewPanel is RankFilterPanel) && Date() < opened { spin() }
+            settle()
+            guard let panel = controller.previewPanel as? RankFilterPanel, let filter = panel.filter else {
+                check(false, "\(rank.title) opens its panel")
+                continue
+            }
+            func value(_ name: String) -> EngineSession.FilterValue? { try? session.filterProperty(filter, name) }
+            check(panel.rank == rank && value("percentile") == .number(rank.percentile)
+                    && value("alpha-percentile") == .number(rank.percentile)
+                    && value("neighborhood") == .enumeration("square") && value("high-precision") == .boolean(true)
+                    && value("radius") == .integer(1),
+                  "\(rank.title) starts square, high precision, at percentile \(rank.percentile) and radius 1")
+            panel.apply(radius: 10)
+            panel.apply(radius: 0)
+            settle()
+            check(value("radius") == .integer(10) && panel.appliedRadius == 10,
+                  "\(rank.title) takes radius 10 and ignores radius 0")
+            let undoBefore = (try? session.undoInfo(image).undoCount) ?? -1
+            panel.commit()
+            let closed = Date().addingTimeInterval(10)
+            while controller.previewPanel != nil && Date() < closed { spin() }
+            settle()
+            let after = pixel(session, image, x: x, y: y)?[0] ?? before
+            check((try? session.undoInfo(image).undoCount) == undoBefore + 1
+                    && (rank == .maximum ? after > before : after < before),
+                  "\(rank.title) radius 10 spreads the \(rank == .maximum ? "lighter" : "darker") neighbors as one undo step (\(before) -> \(after))")
+            document.undo()
+            settle()
+            check(pixel(session, image, x: x, y: y)?[0] == before, "Undo removes \(rank.title)")
+        }
+        check(RankFilterPanel.radius(" 7 ") == 7 && RankFilterPanel.radius("0") == nil
+                && RankFilterPanel.radius("101") == nil && RankFilterPanel.radius("2.5") == nil,
+              "the rank filter radius field accepts whole pixels 1 to 100 only")
     }
 
     static func exerciseSelectSimilar(_ document: ImageDocument, controller: DocumentWindowController,

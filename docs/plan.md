@@ -6586,3 +6586,16 @@ Photoshop does not document its exact color metric; this per-channel
 range is an approximation. An empty selection, one that misses the
 source, Lab and component layouts, and older adapters are refused before
 any change. The Recorder does not record Similar.
+
+### Filter Maximum and Minimum (candidate)
+
+Filter ▸ Other ▸ Maximum… and Minimum… are Photoshop's rank filters. A
+dedicated panel, like Gaussian Blur's, starts a preview of GEGL's
+`gegl:median-blur` with fixed settings: square neighborhood (Photoshop 4
+had no roundness option), color and alpha percentile 100 or 0, clamped
+edges and high precision so high-bit values are not binned. Only the
+radius, 1 to 100 whole pixels, is editable. No facade change: the panel
+uses the existing filter preview session and commits as one undo step
+like every other filter. The static "Other" submenu takes the catalog's
+and plug-ins' "Other" entries below the two dedicated items. The
+Recorder does not record them, and Last Filter does not repeat them.

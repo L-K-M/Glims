@@ -356,12 +356,19 @@ enum MainMenu {
         let blur = NSMenuItem(title: "Blur", action: nil, keyEquivalent: "")
         blur.submenu = NSMenu(title: "Blur")
         blur.submenu?.addItem(item("Gaussian Blur…", #selector(DocumentWindowController.gaussianBlur(_:))))
+        // Photoshop's Other category; the engine catalog merges its own
+        // "Other" operations below these dedicated rank filters.
+        let other = submenu("Other", [
+            item("Maximum…", #selector(DocumentWindowController.maximumFilter(_:))),
+            item("Minimum…", #selector(DocumentWindowController.minimumFilter(_:))),
+        ])
         add(menu, "Filter", [
             item("Last Filter", #selector(DocumentWindowController.repeatLastFilter(_:)), "f"),
             lastFilterSettings,
             recent,
             .separator(),
             blur,
+            other,
         ])
         let windowMenu = add(menu, "Window", [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
