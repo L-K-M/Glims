@@ -600,6 +600,8 @@ GlimsStatus glims_select_color     (GlimsEngine *e, GlimsImageID image, GlimsPoi
 GlimsStatus glims_select_command   (GlimsEngine *e, GlimsImageID image, uint32_t command,
                                     double radius, char **error);
 GlimsStatus glims_selection_smooth (GlimsEngine *e, GlimsImageID image, uint32_t radius, char **error);
+GlimsStatus glims_selection_similar (GlimsEngine *e, GlimsImageID image,
+                                     const GlimsSelectOptions *options, char **error);
 GlimsStatus glims_selection_bounds (GlimsEngine *e, GlimsImageID image, bool *empty, GlimsRect *bounds);
 GlimsStatus glims_selection_outline(GlimsEngine *e, GlimsImageID image, GlimsSegment *segments,
                                     int32_t capacity, int32_t *count);

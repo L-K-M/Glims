@@ -4272,6 +4272,24 @@ static GlimsStatus api_selection_smooth (GlimsEngine *e, GlimsImageID image, uin
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             selection_smooth_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  const GlimsSelectOptions *options;
+  char **error;
+} GlimsSelectionSimilarArgs;
+static GlimsStatus selection_similar_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsSelectionSimilarArgs *a = data;
+  return glims_selection_similar (e, a->image, a->options, a->error);
+}
+static GlimsStatus api_selection_similar (GlimsEngine *e, GlimsImageID image,
+                                         const GlimsSelectOptions *options, char **error)
+{
+  GlimsSelectionSimilarArgs a = { .image = image, .options = options, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_similar,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            selection_similar_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

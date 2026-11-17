@@ -6569,3 +6569,20 @@ Selection" undo step. Clamping keeps a selection that reaches the canvas
 edge in place there. An empty selection, a radius outside 1–100, Lab and
 component layouts, and older adapters are refused before any change. The
 Recorder does not record Smooth.
+
+### Select Similar (candidate)
+
+Select ▸ Similar is Photoshop's Select ▸ Similar: every pixel whose color
+lies within the Magic Wand tolerance of the colors already selected joins
+the selection, wherever it is. Additive facade slot 239,
+`selection_similar`, takes the `GlimsSelectOptions` the wand uses and
+reads only its threshold, antialias and sample-merged fields. It spans
+the premultiplied R'G'B'A range of the pixels whose mask value is at least
+one half, then marks each pixel of the source whose channels all lie
+within the threshold of that range, ramping the edge like GIMP's Fuzzy
+Select when antialiasing is on. The result is added with
+`gimp_channel_select_buffer` (ADD) as one "Select Similar" undo step.
+Photoshop does not document its exact color metric; this per-channel
+range is an approximation. An empty selection, one that misses the
+source, Lab and component layouts, and older adapters are refused before
+any change. The Recorder does not record Similar.

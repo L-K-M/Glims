@@ -4453,6 +4453,21 @@ typedef struct GlimsEngineAPI {
    * changes nothing. Component (CMYK, Lab) documents are refused. */
   GlimsStatus (*selection_smooth) (GlimsEngine *engine, GlimsImageID image, uint32_t radius,
                                    char **error);
+  /* Slot 239: Select > Similar. Adds every pixel of the source whose
+   * premultiplied R'G'B'A channels each lie within `threshold` of the
+   * range spanned by the selected pixels (mask value at least one half),
+   * as Photoshop's Similar does with the Magic Wand tolerance. The source
+   * is the active drawable, or the composite image with `sample_merged`;
+   * `antialias` softens the range edge like Fuzzy Select. `operation`,
+   * `feather`, `corner_radius` and `contiguous` are ignored: the result is
+   * always added to the selection, unfeathered. One undo step, "Select
+   * Similar". NULL or invalid `options` is INVALID_ARGUMENT; an empty
+   * selection, one that misses the source and no active drawable are
+   * FAILED with a message; an unknown image is NOT_FOUND and a busy engine
+   * BUSY. Every refusal changes nothing. Component (CMYK, Lab) documents
+   * are refused. */
+  GlimsStatus (*selection_similar) (GlimsEngine *engine, GlimsImageID image,
+                                    const GlimsSelectOptions *options, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
