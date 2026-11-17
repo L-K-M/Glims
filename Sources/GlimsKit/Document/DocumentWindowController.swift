@@ -863,6 +863,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// Filter ▸ Other ▸ Maximum…: each channel takes the largest value
+    /// around it, spreading light areas.
+    @objc func maximumFilter(_ sender: Any?) { openRankFilter(.maximum) }
+
+    /// Filter ▸ Other ▸ Minimum…: each channel takes the smallest value
+    /// around it, spreading dark areas.
+    @objc func minimumFilter(_ sender: Any?) { openRankFilter(.minimum) }
+
+    private func openRankFilter(_ rank: RankFilterPanel.Rank) {
+        guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        endPendingEdits()
+        startFilterPreview(title: rank.title, operation: RankFilterPanel.operation) { [imageDocument] filter, _ in
+            RankFilterPanel(document: imageDocument, filter: filter, rank: rank)
+        }
+    }
+
     /// Image ▸ New Snapshot: an independent copy opened as a new document.
     @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
 
@@ -3195,6 +3212,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(gaussianBlur(_:)):
             guard !editingBlocked, !previewBusy else { return false }
             return singleLayerItemAllowed(menuItem, action: "Gaussian Blur")
+        case #selector(maximumFilter(_:)), #selector(minimumFilter(_:)):
+            guard !editingBlocked, !previewBusy else { return false }
+            return singleLayerItemAllowed(menuItem, action: menuItem.action == #selector(maximumFilter(_:))
+                                          ? "Maximum" : "Minimum")
         case #selector(runNativeFilter(_:)):
             // Operations without an admitted source contract or dedicated
             // config editor stay disabled with their reason in the title.
