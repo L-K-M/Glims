@@ -883,6 +883,25 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Image ▸ New Snapshot: an independent copy opened as a new document.
     @objc func newSnapshot(_ sender: Any?) { imageDocument.newSnapshot() }
 
+    /// Image ▸ Duplicate…: Photoshop's Duplicate Image dialog. The copy
+    /// opens as a new unsaved document under the chosen name.
+    @objc func duplicateImage(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy else { return }
+        let form = DuplicateImageForm(name: imageDocument.duplicateName,
+                                      offersMerged: imageDocument.canDuplicateMergedLayers,
+                                      layerCount: imageDocument.info.layerCount)
+        let alert = NSAlert()
+        alert.messageText = "Duplicate Image"
+        alert.accessoryView = form.view
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = form.name
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            self.imageDocument.duplicate(as: form.name.stringValue, mergedLayersOnly: form.mergedLayersOnly)
+        }
+    }
+
     @objc func createConvertedLabCopy(_ sender: Any?) {
         guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
               imageDocument.labCopyHandler != nil else { return }
@@ -2652,7 +2671,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(exportDocument(_:)), #selector(repeatExport(_:)):
             return supportsNativeCmykPSD
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
-             #selector(revertDocument(_:)), #selector(newSnapshot(_:)),
+             #selector(revertDocument(_:)), #selector(newSnapshot(_:)), #selector(duplicateImage(_:)),
              #selector(channelAttributesMenu(_:)), #selector(imageInformation(_:)),
              #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)),
              #selector(sharpenSelection(_:)), #selector(featherSelection(_:)),
@@ -3209,6 +3228,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy
+        case #selector(duplicateImage(_:)):
+            return imageDocument.duplicateHandler != nil && imageDocument.colorInfo.mode != .lab
+                && !editingBlocked && !previewBusy
         case #selector(gaussianBlur(_:)):
             guard !editingBlocked, !previewBusy else { return false }
             return singleLayerItemAllowed(menuItem, action: "Gaussian Blur")

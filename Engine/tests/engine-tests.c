@@ -13197,6 +13197,87 @@ test_image_new_filled (void)
          "image_new_filled refuses a missing or non-finite color, unknown contents, a bad size and no output");
 }
 
+/* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
+ * half-opaque red layer moved partly off the canvas and a hidden blue
+ * layer: the copy is one canvas-sized layer with the visible composite
+ * (alpha kept, the hidden layer left out) and no history, and the
+ * source keeps its layers and history. */
+static void
+test_image_duplicate_merged (void)
+{
+  GlimsImageID      image = 0, copy = 0;
+  GlimsItemID       red = 0, blue = 0;
+  GlimsLayerInfo    row;
+  GlimsLayerChange  change = { .struct_size = sizeof change };
+  GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1, .threshold = 0.1, .antialias = true };
+  int32_t           count = 0, depth;
+  uint8_t           source[4], merged[4], outside[4], copied[4];
+  char             *error = NULL;
+  bool              ok;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_duplicate_merged) + sizeof api->image_duplicate_merged ||
+      ! api->image_duplicate_merged)
+    {
+      CHECK (false, "the adapter exports slot 241 image_duplicate_merged");
+      return;
+    }
+
+  ok = api->image_new_filled (engine, 40, 30, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &image, NULL) == GLIMS_STATUS_OK &&
+       api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &red, NULL) == GLIMS_STATUS_OK &&
+       api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK &&
+       api->layer_move (engine, image, red, 20, 0) == GLIMS_STATUS_OK;
+  change.properties = GLIMS_LAYER_OPACITY;
+  change.opacity    = 0.5;
+  ok = ok && api->layer_change (engine, image, red, &change, NULL) == GLIMS_STATUS_OK &&
+       api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &blue, NULL) == GLIMS_STATUS_OK;
+  fill.color = (GlimsColor) { 0, 0, 1, 1 };
+  ok = ok && api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK;
+  change.properties = GLIMS_LAYER_VISIBLE;
+  change.visible    = false;
+  ok = ok && api->layer_change (engine, image, blue, &change, NULL) == GLIMS_STATUS_OK && layer_count (image) == 3;
+  CHECK (ok, "a three-layer source with a hidden layer and an offset half-opaque layer");
+  if (! ok)
+    {
+      api->image_close (engine, image);
+      return;
+    }
+  render_pixel (image, 30, 10, source);
+  render_pixel (image, 5, 10, outside);
+  depth = undo_depth (image);
+
+  CHECK (api->image_duplicate_merged (engine, image, "Merged Layers", &copy, &error) == GLIMS_STATUS_OK && copy > 0 && ! error,
+         "image_duplicate_merged makes a copy (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (copy)
+    {
+      render_pixel (copy, 30, 10, merged);
+      render_pixel (copy, 5, 10, copied);
+      CHECK (layer_count (copy) == 1 && undo_depth (copy) == 0 &&
+             api->image_layers (engine, copy, &row, 1, &count) == GLIMS_STATUS_OK && count == 1 &&
+             strcmp (row.name, "Merged Layers") == 0 && row.visible &&
+             row.bounds.x == 0 && row.bounds.y == 0 && row.bounds.width == 40 && row.bounds.height == 30,
+             "the copy is one canvas-sized \"Merged Layers\" layer with no history (%d,%d %dx%d)",
+             row.bounds.x, row.bounds.y, row.bounds.width, row.bounds.height);
+      CHECK (memcmp (merged, source, 4) == 0 && merged[3] > 0 && merged[3] < 255 && merged[2] == 0 &&
+             memcmp (copied, outside, 4) == 0 && copied[3] == 0,
+             "the copy keeps the visible composite and its transparency, without the hidden layer "
+             "(%d,%d,%d,%d; source %d,%d,%d,%d)", merged[0], merged[1], merged[2], merged[3],
+             source[0], source[1], source[2], source[3]);
+      api->image_close (engine, copy);
+    }
+  CHECK (layer_count (image) == 3 && undo_depth (image) == depth, "the source keeps its layers and history");
+
+  copy = 7;
+  CHECK (api->image_duplicate_merged (engine, image, NULL, &copy, NULL) == GLIMS_STATUS_INVALID_ARGUMENT && copy == 0 &&
+         api->image_duplicate_merged (engine, image, "", &copy, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_duplicate_merged (engine, image, "Merged", NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_duplicate_merged (engine, 4242, "Merged", &copy, NULL) == GLIMS_STATUS_NOT_FOUND && copy == 0,
+         "image_duplicate_merged refuses no name, an empty name, no output and an unknown image");
+  api->image_close (engine, image);
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -14867,6 +14948,7 @@ main (int argc, char **argv)
   test_selection_smooth ();
   test_selection_similar ();
   test_image_new_filled ();
+  test_image_duplicate_merged ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

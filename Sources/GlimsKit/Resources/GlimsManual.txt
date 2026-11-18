@@ -349,6 +349,13 @@ opens an independent copy of the current image in a new window, named
 after the original with " snapshot" added. It is an ordinary document:
 edit it, export it or close it without affecting the original.
 
+Image > Duplicate... does the same under a name you choose ("As", by
+default the original's name with " copy" added). Merged Layers Only
+gives the copy a single layer with what the visible layers show,
+transparency included; hidden layers are left out. It is offered for
+layered RGB, grayscale and indexed images and is dimmed when the image
+has one layer. The copy starts with an empty history.
+
 # Recorder
 
 The Recorder palette records the edits Glims can replay and runs them

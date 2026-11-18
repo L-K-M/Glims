@@ -4486,6 +4486,18 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_new_filled) (GlimsEngine *engine, int32_t width, int32_t height,
                                    uint32_t contents, const GlimsColor *color,
                                    GlimsImageID *image, char **error);
+  /* Slot 241: Image > Duplicate with Merged Layers Only. Like
+   * image_duplicate (an independent unsaved copy with no undo history;
+   * the source is unchanged), but the copy's layers are replaced by one
+   * layer named `name` holding the source's visible composite clipped to
+   * the canvas, with an alpha channel and the source's color profile.
+   * Channels and paths are copied as image_duplicate copies them. NULL
+   * or empty `name` and NULL `result` are INVALID_ARGUMENT; a component
+   * layout is UNSUPPORTED; strokes, previews and plug-ins report BUSY.
+   * Every refusal creates nothing. */
+  GlimsStatus (*image_duplicate_merged) (GlimsEngine *engine, GlimsImageID image,
+                                         const char *name, GlimsImageID *result,
+                                         char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

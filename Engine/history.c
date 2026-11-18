@@ -115,3 +115,33 @@ glims_image_duplicate (GlimsEngine *engine, GlimsImageID id,
   if (adopted != GLIMS_STATUS_OK) g_object_unref (copy);
   return adopted;
 }
+
+/* Image > Duplicate with Merged Layers Only: the export path's merged
+ * copy, which keeps alpha (Flatten would fill it with a background),
+ * then undo re-enabled. Enabling frees the steps recorded while frozen,
+ * so the new document starts with an empty history. */
+GlimsStatus
+glims_image_duplicate_merged (GlimsEngine *engine, GlimsImageID id, const char *name,
+                              GlimsImageID *result, char **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage *copy;
+  GlimsStatus status;
+
+  if (result) *result = 0;
+  if (! open) return GLIMS_STATUS_NOT_FOUND;
+  if (! result || ! name || ! *name) return GLIMS_STATUS_INVALID_ARGUMENT;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_ORDINARY)
+    {
+      glims_fail (error, NULL, "Merged Layers Only is available for ordinary layered images only.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+  copy = glims_merged_image_copy (open->image, name);
+  if (! copy) return glims_fail (error, NULL, "The merged duplicate could not be created.");
+  gimp_image_undo_enable (copy);
+  status = glims_adopt_image (engine, copy, result);
+  if (status != GLIMS_STATUS_OK) g_object_unref (copy);
+  return status;
+}
