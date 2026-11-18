@@ -330,20 +330,25 @@ extension EngineSmokeTest {
         check(docA.guides.contains(lockedGuide) && docA.undoInfo.undoCount == undoA,
               "the locked-guide click leaves the guide and history alone")
         let lockedRulerDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
-        let lockedRulerDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 40, y: 90), canvasA), windowA)
-        let lockedRulerUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 40, y: 90), canvasA), windowA)
+        let lockedRulerDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 40, y: 70), canvasA), windowA)
+        let lockedRulerUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 40, y: 70), canvasA), windowA)
         guard let lockedRulerDown, let lockedRulerDrag, let lockedRulerUp else {
             return check(false, "the locked ruler drag events build")
         }
         hRuler.mouseDown(with: lockedRulerDown)
         hRuler.mouseDragged(with: lockedRulerDrag)
         hRuler.mouseUp(with: lockedRulerUp)
-        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 }) }
+        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 70 }) }
         settle(docA)
-        check(docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 })
+        check(docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 70 })
                 && docA.undoInfo.undoCount == undoA + 1,
               "a new guide still comes out of the ruler while guides are locked")
-        undoA = docA.undoInfo.undoCount
+        // Later checks count the two existing guides; take this one back out.
+        try session.undo(imageA)
+        try docA.reload()
+        settle(docA)
+        check(docA.guides.count == 2 && docA.undoInfo.undoCount == undoA,
+              "undoing the locked-time guide restores the two guides")
         a.toggleLockGuides(lockItem)
         check(!canvasA.locksGuides && lockItem.state == .off, "Lock Guides toggles back off")
         canvasA.mouseDown(with: lockedDown)
