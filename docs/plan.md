@@ -6383,6 +6383,22 @@ lookup so an import after Revert finds the replacement. Focused real-window
 checks cover both routes on four engine versions, including failed-Revert retry
 and source preservation. Full editor, bundle and review checks remain open.
 
+### Navigator palette (candidate)
+
+Window ▸ Navigator, new in Photoshop 4, shows the front image's composite
+as a thumbnail with the window's visible area boxed in red; a rotated view
+gives a rotated box. A click or drag centers the window on that point. A
+zoom field, Zoom Out and Zoom In buttons and a logarithmic slider set the
+window's zoom within the zoom ladder's range. The thumbnail renders off the
+main thread at up to 480 pixels on its long edge, one render at a time,
+coalescing pixel changes during a stroke, and only while the palette is
+visible. It is a plain sRGB render: the window's display profile and soft
+proof are not applied to it. Navigating changes neither the image nor its
+history. A focused test covers the thumbnail, the box under zoom and
+scroll, click and drag, the controls, refresh after an edit, document
+scoping and an empty palette. Photoshop's palette menu (Palette Options for
+the box color) is not provided, and the layout was not checked on screen.
+
 ### Remove a recorded step (candidate)
 
 The Recorder palette can remove a selected step from a stopped recording.

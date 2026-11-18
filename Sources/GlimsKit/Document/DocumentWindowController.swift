@@ -188,7 +188,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         NotificationCenter.default.addObserver(self, selector: #selector(applyPreferences),
                                                name: EditorPreferences.didChange, object: self.preferences)
         applyPreferences()
-        imageDocument.onProjectionChange = { [weak self] rect in self?.canvas.imageDidChange(in: rect) }
+        imageDocument.onProjectionChange = { [weak self] rect in
+            guard let self else { return }
+            self.canvas.imageDidChange(in: rect)
+            NotificationCenter.default.post(name: .glimsNavigatorImageChanged, object: self.imageDocument)
+        }
         imageDocument.onStateChange = { [weak self] in self?.stateDidChange() }
         imageDocument.onError = { [weak self] message in
             self?.showStatusError(message)
@@ -343,6 +347,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // Scrolling moves the rulers with the content; the scroll view also
         // relayouts its native ruler slots here.
         invalidateRulers()
+        postNavigatorViewportChange()
+    }
+
+    /// The Navigator palette follows this window's viewport: scrolling,
+    /// zoom, view rotation and window size.
+    private func postNavigatorViewportChange() {
+        NotificationCenter.default.post(name: .glimsNavigatorViewportChanged, object: imageDocument)
     }
 
     /// Watches the geometry the rulers depend on besides the scroll offset:
@@ -358,7 +369,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         rulerObserversActive = true
     }
 
-    @objc private func canvasFrameChanged() { invalidateRulers() }
+    @objc private func canvasFrameChanged() {
+        invalidateRulers()
+        postNavigatorViewportChange()
+    }
 
     @objc private func windowBackingChanged(_ note: Notification) {
         guard let window = note.object as? NSWindow, window === self.window else { return }
@@ -405,6 +419,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         center(on: imageCenter)
         statusBar.setZoom(percent: percent)
         stateDidChange()
+        postNavigatorViewportChange()
     }
 
     @discardableResult
@@ -422,6 +437,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.setNeedsRender()
         invalidateRulers()
         stateDidChange()
+        postNavigatorViewportChange()
         return true
     }
 
@@ -563,6 +579,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowDidResize(_ notification: Notification) {
         refreshStatusInformationVisibility()
+        postNavigatorViewportChange()
     }
 
     private func stateDidChange() {
@@ -581,6 +598,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         (PaletteCenter.shared.registeredPalette(for: PathsPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: HistoryPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: InfoPaletteController.definition.kind))?.retarget()
+        (PaletteCenter.shared.registeredPalette(for: NavigatorPaletteController.definition.kind))?.retarget()
         (PaletteCenter.shared.registeredPalette(for: RecorderPaletteController.definition.kind))?.retarget()
         // Path shapes arrive with the state; the canvas draws them, and
         // the cached guide list arrives with it too (reloadGuides fires

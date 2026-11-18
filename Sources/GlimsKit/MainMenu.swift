@@ -381,6 +381,7 @@ enum MainMenu {
             item("Paths", #selector(AppController.showPaths(_:))),
             item("History", #selector(AppController.showHistory(_:))),
             item("Info", #selector(AppController.showInfo(_:))),
+            item("Navigator", #selector(AppController.showNavigator(_:))),
             item("Recorder", #selector(AppController.showRecorder(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
             item("Reset Palettes", #selector(AppController.resetPaletteLayout(_:))),
