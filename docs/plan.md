@@ -6397,6 +6397,18 @@ The Remove Step control explains why it is disabled: it reports pending
 recording, replay or image work first, then asks for a current selection.
 Its normal action help returns when the selected step can be removed.
 
+### Lock Guides (candidate)
+
+View ▸ Lock Guides (Option-Command-semicolon), as in Photoshop 4, is a
+cached per-window Boolean like Show Guides. While it is on, the Move tool
+does not grab a guide and moves the layer as usual; new guides still come
+out of the rulers, and the Guides sheet still edits guides. Toggling it
+cancels a guide drag in progress and touches no pixels, history or
+settings. The guide-dragging case covers the shortcut, the checkmark, a
+refused grab, a ruler drag while locked and the unlocked grab. Photoshop's
+View ▸ Clear Guides is not provided: removing every guide as one undo
+step needs a new facade call.
+
 ### Reopen after Revert (candidate)
 
 An ordinary Open no longer brings a discarded window back while its document

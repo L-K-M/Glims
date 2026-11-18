@@ -180,6 +180,9 @@ final class EngineCanvasView: NSView {
     var showsGuides = true {
         didSet { needsDisplay = true }
     }
+    /// View ▸ Lock Guides: the Move tool cannot grab a guide. Cached per
+    /// window like Show Guides; nothing is drawn differently.
+    var locksGuides = false
     /// View ▸ Show Grid: whether the canvas draws the image's cached
     /// grid. Cached per window, default OFF; flipping it is pure view
     /// state — no pixels, dirty flag, history, selection, export or print

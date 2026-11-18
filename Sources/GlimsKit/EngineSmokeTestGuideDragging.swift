@@ -304,6 +304,54 @@ extension EngineSmokeTest {
         undoA = docA.undoInfo.undoCount
 
 
+        // MARK: Lock Guides: the Move tool cannot grab a guide; rulers still add one
+
+        let lockItem = NSMenuItem(title: "Lock Guides",
+                                  action: #selector(DocumentWindowController.toggleLockGuides(_:)), keyEquivalent: "")
+        let menuLock = NSApp.mainMenu?.item(withTitle: "View")?.submenu?.items
+            .first { $0.action == #selector(DocumentWindowController.toggleLockGuides(_:)) }
+        check(menuLock?.title == "Lock Guides" && menuLock?.keyEquivalent == ";"
+                && menuLock?.keyEquivalentModifierMask == [.command, .option],
+              "View ▸ Lock Guides uses Option-Command-semicolon")
+        check(a.validateMenuItem(lockItem) && lockItem.state == .off, "guides start unlocked")
+        a.toggleLockGuides(lockItem)
+        check(canvasA.locksGuides && lockItem.state == .on && a.validateMenuItem(lockItem) && lockItem.state == .on,
+              "Lock Guides locks this window's guides and shows a checkmark")
+        guard let lockedGuide = docA.guides.first(where: { $0.orientation == .vertical && $0.position == 200 }) else {
+            return check(false, "the vertical guide exists for the Lock Guides checks")
+        }
+        let lockedDown = mouse(.leftMouseDown, windowPoint(ofImagePoint: CGPoint(x: 200, y: 50), canvasA), windowA)
+        let lockedUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 200, y: 50), canvasA), windowA)
+        guard let lockedDown, let lockedUp else { return check(false, "the locked-guide events build") }
+        canvasA.mouseDown(with: lockedDown)
+        check(!canvasA.guideDrag.isActive, "a locked guide cannot be grabbed by the Move tool")
+        canvasA.mouseUp(with: lockedUp)
+        settle(docA)
+        check(docA.guides.contains(lockedGuide) && docA.undoInfo.undoCount == undoA,
+              "the locked-guide click leaves the guide and history alone")
+        let lockedRulerDown = mouse(.leftMouseDown, hRuler.convert(CGPoint(x: 100, y: 5), to: nil), windowA)
+        let lockedRulerDrag = mouse(.leftMouseDragged, windowPoint(ofImagePoint: CGPoint(x: 40, y: 90), canvasA), windowA)
+        let lockedRulerUp = mouse(.leftMouseUp, windowPoint(ofImagePoint: CGPoint(x: 40, y: 90), canvasA), windowA)
+        guard let lockedRulerDown, let lockedRulerDrag, let lockedRulerUp else {
+            return check(false, "the locked ruler drag events build")
+        }
+        hRuler.mouseDown(with: lockedRulerDown)
+        hRuler.mouseDragged(with: lockedRulerDrag)
+        hRuler.mouseUp(with: lockedRulerUp)
+        wait { docA.pendingWork == 0 && docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 }) }
+        settle(docA)
+        check(docA.guides.contains(where: { $0.orientation == .horizontal && $0.position == 90 })
+                && docA.undoInfo.undoCount == undoA + 1,
+              "a new guide still comes out of the ruler while guides are locked")
+        undoA = docA.undoInfo.undoCount
+        a.toggleLockGuides(lockItem)
+        check(!canvasA.locksGuides && lockItem.state == .off, "Lock Guides toggles back off")
+        canvasA.mouseDown(with: lockedDown)
+        check(canvasA.guideDrag.isActive, "an unlocked guide can be grabbed again")
+        canvasA.mouseUp(with: lockedUp)
+        settle(docA)
+        check(docA.undoInfo.undoCount == undoA, "releasing the unlocked guide in place changes nothing")
+
         // MARK: Hidden guides are not hit; hidden rulers cannot start a drag
 
         let guidesItem = NSMenuItem(title: "Show Guides",

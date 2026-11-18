@@ -55,8 +55,13 @@ enum GuidesSheetLogic {
 /// pixels, the file's dirty state, export or print.
 struct GuideViewState {
     var showsGuides = true
+    /// View ▸ Lock Guides: existing guides cannot be dragged. New guides
+    /// can still come out of the rulers, as in Photoshop.
+    var locksGuides = false
     var menuState: NSControl.StateValue { showsGuides ? .on : .off }
+    var lockMenuState: NSControl.StateValue { locksGuides ? .on : .off }
     mutating func toggle() { showsGuides.toggle() }
+    mutating func toggleLock() { locksGuides.toggle() }
 }
 
 /// Image ▸ Guides…: the document-owned guide management sheet. It lists
