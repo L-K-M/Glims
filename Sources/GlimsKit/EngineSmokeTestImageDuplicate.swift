@@ -62,6 +62,24 @@ extension EngineSmokeTest {
         check(source.duplicateName == "Art copy" && sourceLayers == 3,
               "Duplicate suggests \"Art copy\" for a three-layer source")
 
+        // Duplicate never stacks its sheet on another one.
+        let controller = DocumentWindowController(document: source)
+        controller.showWindow(nil)
+        if let window = controller.window {
+            let blocker = NSAlert()
+            blocker.messageText = "Blocking sheet"
+            blocker.beginSheetModal(for: window) { _ in }
+            wait { window.attachedSheet != nil }
+            controller.duplicateImage(nil)
+            spin()
+            check(window.sheets.count == 1 && window.attachedSheet === blocker.window,
+                  "Duplicate presents nothing while another sheet is attached (\(window.sheets.count))")
+            window.endSheet(blocker.window)
+            wait { window.attachedSheet == nil }
+            window.orderOut(nil)
+        }
+        var stopped = false; controller.canvas.stopRendering { stopped = true }; wait { stopped }
+
         var errors: [String] = []
         let previousError = source.onError
         source.onError = { errors.append($0) }
@@ -109,8 +127,11 @@ extension EngineSmokeTest {
 
         source.duplicate(as: " ", mergedLayersOnly: false)
         wait { app.documents.count == 2 }
-        let copy = app.documents.count == 2 ? app.documents[1].imageDocument : nil
-        if let copy { opened.append(copy); documents.items.append(copy) }
+        let copy = app.documents.compactMap(\.imageDocument).first { $0 !== flat }
+        if let copy {
+            opened.append(copy); documents.items.append(copy)
+            wait { copy.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        }
         let copyName = copy?.name, copyLayers = copy?.layers.count, copyUndo = copy?.undoInfo.undoCount
         check(copyName == "Art copy" && copyLayers == 3 && copyUndo == 0,
               "a blank name duplicates every layer as \"Art copy\"")

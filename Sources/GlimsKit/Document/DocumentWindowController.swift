@@ -886,7 +886,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Image ▸ Duplicate…: Photoshop's Duplicate Image dialog. The copy
     /// opens as a new unsaved document under the chosen name.
     @objc func duplicateImage(_ sender: Any?) {
-        guard let window else { return }
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy else { return }
         let form = DuplicateImageForm(name: imageDocument.duplicateName,
                                       offersMerged: imageDocument.canDuplicateMergedLayers,
                                       layerCount: imageDocument.info.layerCount)
