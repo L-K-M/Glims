@@ -135,6 +135,24 @@ final class ColorPaletteTests: XCTestCase {
     }
 
     @MainActor
+    func testAColorChangedBeforeTheViewLoadsReachesTheSliders() throws {
+        let suite = "ColorPaletteTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tools = ToolState()
+        tools.foreground = .black
+        let palette = ColorPaletteController(tools: tools, defaults: defaults)
+        tools.foreground = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        tools.notifyChange()
+        palette.loadView()
+        XCTAssertEqual(palette.fields.map(\.stringValue), ["255", "0", "0"])
+
+        palette.fields[2].stringValue = "255"
+        palette.fields[2].sendAction(palette.fields[2].action, to: palette.fields[2].target)
+        XCTAssertEqual(Swatch(tools.foreground)?.hex, "#FF00FF", "an edit starts from the current color")
+    }
+
+    @MainActor
     func testAFocusedFieldStillFollowsTheSliders() throws {
         let suite = "ColorPaletteTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

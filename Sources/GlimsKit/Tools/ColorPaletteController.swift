@@ -44,6 +44,7 @@ final class ColorBarView: NSView {
         NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5)).stroke()
     }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { pick(event) }
     override func mouseDragged(with event: NSEvent) { pick(event) }
 
@@ -220,7 +221,8 @@ final class ColorPaletteController: NSViewController, PaletteContent {
         view = stack
 
         toolsObserver = tools.observe { [weak self] in self?.toolsChanged() }
-        refresh()
+        // The colors may have changed since init took its snapshot.
+        toolsChanged()
     }
 
     func retarget(to target: ImageDocument?) {}
