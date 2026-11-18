@@ -396,6 +396,24 @@ typedef enum GlimsNewImageContents {
   GLIMS_NEW_IMAGE_TRANSPARENT = 2   /* a transparent "Layer 1" with alpha */
 } GlimsNewImageContents;
 
+/* Layer > Align and Layer > Distribute (slot 243). Align moves layers so
+ * their content edge or center meets the reference's; Distribute spaces
+ * their edges or centers evenly between the outermost two. */
+typedef enum GlimsLayerAlignment {
+  GLIMS_ALIGN_TOP                    = 1,
+  GLIMS_ALIGN_VERTICAL_CENTER        = 2,
+  GLIMS_ALIGN_BOTTOM                 = 3,
+  GLIMS_ALIGN_LEFT                   = 4,
+  GLIMS_ALIGN_HORIZONTAL_CENTER      = 5,
+  GLIMS_ALIGN_RIGHT                  = 6,
+  GLIMS_DISTRIBUTE_TOP               = 7,
+  GLIMS_DISTRIBUTE_VERTICAL_CENTER   = 8,
+  GLIMS_DISTRIBUTE_BOTTOM            = 9,
+  GLIMS_DISTRIBUTE_LEFT              = 10,
+  GLIMS_DISTRIBUTE_HORIZONTAL_CENTER = 11,
+  GLIMS_DISTRIBUTE_RIGHT             = 12
+} GlimsLayerAlignment;
+
 typedef enum GlimsFillMode {
   GLIMS_FILL_SIMILAR_COLORS = 1,  /* the area of similar color around the point */
   GLIMS_FILL_SELECTION      = 2   /* the selection, or the whole layer */
@@ -4511,6 +4529,23 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_rotate_arbitrary) (GlimsEngine *engine, GlimsImageID image,
                                          double degrees, const GlimsColor *fill,
                                          char **error);
+  /* Slot 243: Layer > Align and Layer > Distribute. `layers` are 1..256
+   * distinct top-level or nested layers of `image`; a layer inside
+   * another listed group moves with it. Layers are measured by their
+   * nontransparent content, as in Photoshop, or by their bounds when
+   * empty. Align (GLIMS_ALIGN_*) moves every listed layer except
+   * `reference` to the reference: a layer ID, which need not be listed,
+   * or 0 for the selection's bounds. Distribute (GLIMS_DISTRIBUTE_*)
+   * needs at least three layers and `reference` 0; the outermost two
+   * stay put. One undo step. An unknown alignment, a count out of range,
+   * a repeated or foreign layer, a missing reference or an empty
+   * selection is INVALID_ARGUMENT; a position-locked layer is LOCKED; a
+   * component layout is UNSUPPORTED; a floating selection, strokes,
+   * previews and plug-ins refuse. Every refusal changes nothing. */
+  GlimsStatus (*image_align_layers) (GlimsEngine *engine, GlimsImageID image,
+                                     const GlimsItemID *layers, int32_t count,
+                                     GlimsItemID reference, uint32_t alignment,
+                                     char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

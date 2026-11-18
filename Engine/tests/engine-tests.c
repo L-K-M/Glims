@@ -13374,6 +13374,115 @@ test_image_rotate_arbitrary (void)
   api->image_close (engine, image);
 }
 
+/* Slot 243: Layer > Align and Distribute. Three canvas-sized layers
+ * with content at x 5..15, 20..30 and 45..55: aligning moves each
+ * layer by the distance between content edges, the selection can be
+ * the reference, Distribute moves only the middle layer, and each
+ * change is one undo step. */
+static int32_t
+align_layer_x (GlimsImageID image, GlimsItemID layer)
+{
+  GlimsLayerInfo rows[8];
+  int32_t        count = 0;
+
+  if (api->image_layers (engine, image, rows, 8, &count) != GLIMS_STATUS_OK)
+    return INT32_MIN;
+  for (int32_t i = 0; i < count && i < 8; i++)
+    if (rows[i].id == layer)
+      return rows[i].bounds.x;
+
+  return INT32_MIN;
+}
+
+static void
+test_image_align_layers (void)
+{
+  GlimsImageID       image = 0;
+  GlimsItemID        ids[3] = { 0 };
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsFillSettings  fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                              .color = { 1, 0, 0, 1 }, .opacity = 1, .threshold = 0.1, .antialias = true };
+  const int32_t      left[3] = { 5, 20, 45 };
+  int32_t            depth;
+  char              *error = NULL;
+  bool               ok;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_align_layers) + sizeof api->image_align_layers ||
+      ! api->image_align_layers)
+    {
+      CHECK (false, "the adapter exports slot 243 image_align_layers");
+      return;
+    }
+
+  ok = api->image_new_filled (engine, 60, 40, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &image, NULL) == GLIMS_STATUS_OK;
+  for (int i = 0; ok && i < 3; i++)
+    ok = api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &ids[i], NULL) == GLIMS_STATUS_OK &&
+         api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { left[i], 2 + 10 * i }, { left[i] + 10, 8 + 10 * i } }, 2, &sel) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK;
+  ok = ok && api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK &&
+       align_layer_x (image, ids[0]) == 0 && align_layer_x (image, ids[1]) == 0 && align_layer_x (image, ids[2]) == 0;
+  CHECK (ok, "three canvas-sized layers with content at x 5, 20 and 45");
+  if (! ok)
+    {
+      api->image_close (engine, image);
+      return;
+    }
+
+  depth = undo_depth (image);
+  CHECK (api->image_align_layers (engine, image, ids, 3, ids[0], GLIMS_ALIGN_LEFT, &error) == GLIMS_STATUS_OK && ! error &&
+         align_layer_x (image, ids[0]) == 0 && align_layer_x (image, ids[1]) == -15 && align_layer_x (image, ids[2]) == -40 &&
+         undo_depth (image) == depth + 1,
+         "Align Left moves the other layers' content to the reference's left edge in one step (%d, %d; %s)",
+         align_layer_x (image, ids[1]), align_layer_x (image, ids[2]), error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_align_layers (engine, image, ids, 3, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "aligning layers that are already aligned adds no undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && align_layer_x (image, ids[1]) == 0 &&
+         align_layer_x (image, ids[2]) == 0 && undo_depth (image) == depth,
+         "one Undo restores every layer");
+
+  ok = api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 58, 40 } }, 2, &sel) == GLIMS_STATUS_OK;
+  depth = undo_depth (image);
+  CHECK (ok && api->image_align_layers (engine, image, ids, 3, 0, GLIMS_ALIGN_RIGHT, NULL) == GLIMS_STATUS_OK &&
+         align_layer_x (image, ids[0]) == 43 && align_layer_x (image, ids[1]) == 28 && align_layer_x (image, ids[2]) == 3 &&
+         undo_depth (image) == depth + 1,
+         "Align Right with reference 0 aligns every layer to the selection's right edge (%d, %d, %d)",
+         align_layer_x (image, ids[0]), align_layer_x (image, ids[1]), align_layer_x (image, ids[2]));
+  api->image_undo (engine, image);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  depth = undo_depth (image);
+  CHECK (api->image_align_layers (engine, image, ids, 3, 0, GLIMS_DISTRIBUTE_HORIZONTAL_CENTER, NULL) == GLIMS_STATUS_OK &&
+         align_layer_x (image, ids[0]) == 0 && align_layer_x (image, ids[1]) == 5 && align_layer_x (image, ids[2]) == 0 &&
+         undo_depth (image) == depth + 1,
+         "Distribute Horizontal Centers moves only the middle layer to center 30 (%d)", align_layer_x (image, ids[1]));
+  api->image_undo (engine, image);
+
+  depth = undo_depth (image);
+  ok = api->image_align_layers (engine, image, ids, 3, ids[0], 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 3, ids[0], 13, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 0, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, NULL, 3, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, (GlimsItemID[]) { ids[1], ids[1] }, 2, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, (GlimsItemID[]) { ids[1], 99999 }, 2, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 1, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 2, 99999, GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 2, 0, GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 2, 0, GLIMS_DISTRIBUTE_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, image, ids, 3, ids[0], GLIMS_DISTRIBUTE_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->image_align_layers (engine, 4242, ids, 3, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_NOT_FOUND;
+  api->set_layer_locks (engine, image, ids[2], GLIMS_LOCK_POSITION, GLIMS_LOCK_POSITION, NULL);
+  depth = undo_depth (image);  /* the lock change is a step of its own */
+  ok = ok && api->image_align_layers (engine, image, ids, 3, ids[0], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_LOCKED &&
+       align_layer_x (image, ids[1]) == 0 && undo_depth (image) == depth;
+  CHECK (ok, "image_align_layers refuses bad alignments, counts, lists, references, an empty selection, "
+             "two layers to distribute and a position lock, changing nothing");
+  api->image_close (engine, image);
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -15046,6 +15155,7 @@ main (int argc, char **argv)
   test_image_new_filled ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
+  test_image_align_layers ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

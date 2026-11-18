@@ -4315,6 +4315,34 @@ final class ImageDocument {
         }
     }
 
+    /// Why Layer ▸ Align or Distribute cannot run now, or nil. Align
+    /// moves the selected layers to the selection when there is one, as
+    /// Photoshop's Align Layers to Selection does, and otherwise to the
+    /// active layer; Distribute needs three selected layers.
+    func alignmentRefusal(_ alignment: EngineSession.LayerAlignment) -> String? {
+        guard session.supportsAlignLayers, storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Align and Distribute are not available for this image."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        let count = selectedLayerIDs.count
+        if alignment.isDistribute {
+            return count >= 3 ? nil : "Select three or more layers to distribute."
+        }
+        if selectionBounds != nil { return count >= 1 ? nil : "Select a layer to align." }
+        return count >= 2 ? nil : "Select two or more layers, or make a selection, to align."
+    }
+
+    func alignLayers(_ alignment: EngineSession.LayerAlignment) {
+        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else { return }
+        if let reason = alignmentRefusal(alignment) {
+            onError?(reason)
+            return
+        }
+        let layers = selectedLayerIDs
+        let reference: Int32? = alignment.isDistribute || selectionBounds != nil ? nil : activeLayer
+        run { session, image in try session.alignLayers(layers, image: image, reference: reference, alignment) }
+    }
+
     /// Image ▸ Rotate ▸ Arbitrary is offered for ordinary layered images
     /// on adapters with slot 242.
     var canRotateArbitrary: Bool {

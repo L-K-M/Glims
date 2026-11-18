@@ -2340,6 +2340,50 @@ final class EngineSession: @unchecked Sendable {
         try check(rotate(engine, image, degrees, &color, &error), error)
     }
 
+    /// Layer ▸ Align and Layer ▸ Distribute, in Photoshop's menu order
+    /// (GlimsLayerAlignment).
+    enum LayerAlignment: UInt32, CaseIterable, Sendable {
+        case alignTop = 1, alignVerticalCenter, alignBottom, alignLeft, alignHorizontalCenter, alignRight
+        case distributeTop, distributeVerticalCenter, distributeBottom
+        case distributeLeft, distributeHorizontalCenter, distributeRight
+
+        var isDistribute: Bool { rawValue >= Self.distributeTop.rawValue }
+
+        /// The menu title, as Photoshop names these commands.
+        var title: String {
+            switch self {
+            case .alignTop, .distributeTop: return "Top Edges"
+            case .alignVerticalCenter, .distributeVerticalCenter: return "Vertical Centers"
+            case .alignBottom, .distributeBottom: return "Bottom Edges"
+            case .alignLeft, .distributeLeft: return "Left Edges"
+            case .alignHorizontalCenter, .distributeHorizontalCenter: return "Horizontal Centers"
+            case .alignRight, .distributeRight: return "Right Edges"
+            }
+        }
+    }
+
+    var supportsAlignLayers: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_align_layers) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_align_layers)
+            && api.image_align_layers != nil
+    }
+
+    /// Moves `layers` by their visible content: Align brings each edge or
+    /// center to `reference` (a layer, or nil for the selection bounds);
+    /// Distribute spaces at least three evenly between the outermost two.
+    /// One undo step. An adapter without slot 243 is UNSUPPORTED.
+    func alignLayers(_ layers: [Int32], image: Int32, reference: Int32?, _ alignment: LayerAlignment) throws {
+        guard supportsAlignLayers, let align = api.image_align_layers else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot align layers.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try layers.withUnsafeBufferPointer { ids in
+            try check(align(engine, image, ids.baseAddress, Int32(ids.count), reference ?? 0,
+                            alignment.rawValue, &error), error)
+        }
+    }
+
     // MARK: Painting
 
     struct StrokeCaptureFacts: Equatable {

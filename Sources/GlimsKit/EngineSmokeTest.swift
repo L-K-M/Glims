@@ -827,6 +827,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Polygon Lasso)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "align-layers" {
+                try exerciseAlignLayers(session, documents: documents)
+                print(failures == 0 ? "PASSED (Align Layers)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "rotate-arbitrary" {
                 try exerciseRotateArbitrary(session, documents: documents)
                 print(failures == 0 ? "PASSED (Rotate Arbitrary)" : "FAILED: \(failures) failure(s)")
@@ -1214,6 +1219,7 @@ enum EngineSmokeTest {
             try exerciseNewImageContents(session, documents: documents)
             try exerciseImageDuplicate(session, documents: documents)
             try exerciseRotateArbitrary(session, documents: documents)
+            try exerciseAlignLayers(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
