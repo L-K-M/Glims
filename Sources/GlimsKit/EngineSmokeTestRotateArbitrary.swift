@@ -69,6 +69,18 @@ extension EngineSmokeTest {
 
         check(document.canRotateArbitrary && controller.validateMenuItem(item),
               "Rotate ▸ Arbitrary is enabled for an ordinary layered image")
+        if let window = controller.window {
+            let blocker = NSAlert()
+            blocker.messageText = "Blocking sheet"
+            blocker.beginSheetModal(for: window) { _ in }
+            wait { window.attachedSheet != nil }
+            controller.rotateImageArbitrary(nil)
+            spin()
+            check(window.sheets.count == 1 && window.attachedSheet === blocker.window,
+                  "Rotate Canvas presents nothing while another sheet is attached (\(window.sheets.count))")
+            window.endSheet(blocker.window)
+            wait { window.attachedSheet == nil }
+        }
         let undoBefore = document.undoInfo.undoCount
         document.rotateCanvas(degrees: -30, fill: .blue)
         settle()

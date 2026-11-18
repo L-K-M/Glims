@@ -1714,7 +1714,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// The canvas grows to fit; the background's new corners take the
     /// background color.
     @objc func rotateImageArbitrary(_ sender: Any?) {
-        guard let window else { return }
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy else { return }
         endPendingEdits()
         let form = ArbitraryRotationForm()
         let alert = NSAlert()
