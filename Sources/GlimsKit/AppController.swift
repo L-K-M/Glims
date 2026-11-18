@@ -103,6 +103,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             })
         })
 
+    private lazy var swatchesPalette: Palette = PaletteCenter.shared.palette(
+        for: SwatchesPaletteController.definition,
+        target: { [weak self] in self?.frontDocument },
+        makeContent: { SwatchesPaletteController() })
+
     private lazy var recorderPalette: Palette = PaletteCenter.shared.palette(
         for: RecorderPaletteController.definition,
         target: { [weak self] in self?.frontDocument },
@@ -149,7 +154,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         PaletteGroupDefault([LayersPaletteController.definition.kind, ChannelsPaletteController.definition.kind,
                              PathsPaletteController.definition.kind,
                              HistoryPaletteController.definition.kind, RecorderPaletteController.definition.kind,
-                             InfoPaletteController.definition.kind, NavigatorPaletteController.definition.kind],
+                             InfoPaletteController.definition.kind, NavigatorPaletteController.definition.kind,
+                             SwatchesPaletteController.definition.kind],
                             placement: .topTrailing),
     ]
 
@@ -484,7 +490,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
         // Paths, History and Recorder before Layers, so Layers is the tab their
         // shared group shows.
-        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, recorderPalette, infoPalette, navigatorPalette, layersPalette]
+        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, recorderPalette, infoPalette, navigatorPalette, swatchesPalette, layersPalette]
         where !palette.isPresented {
             palette.showPanel()
         }
@@ -894,6 +900,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     @objc func showNavigator(_ sender: Any?) {
         navigatorPalette.focusPanel()
+    }
+
+    @objc func showSwatches(_ sender: Any?) {
+        swatchesPalette.focusPanel()
     }
 
     @objc func showRecorder(_ sender: Any?) {
@@ -1416,7 +1426,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 return false
             }
             return RecorderPalettePresentation(document: document).canPerform(action)
-        case #selector(showLayers(_:)), #selector(showChannels(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)), #selector(showRecorder(_:)), #selector(showInfo(_:)), #selector(showNavigator(_:)),
+        case #selector(showLayers(_:)), #selector(showChannels(_:)), #selector(showPaths(_:)), #selector(showHistory(_:)), #selector(showRecorder(_:)), #selector(showInfo(_:)), #selector(showNavigator(_:)), #selector(showSwatches(_:)),
              #selector(showTools(_:)), #selector(showToolOptions(_:)):
             return session != nil
         case #selector(togglePaletteVisibility(_:)):

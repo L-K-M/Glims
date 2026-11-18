@@ -25,7 +25,7 @@ Last tile is the elapsed time of the last accepted render, including
 its wait for the engine. It clears when the canvas generation changes.
 In a narrow window, progress and Cancel temporarily replace this readout.
 
-Seven palettes hold the controls:
+These palettes hold the controls:
 
   Tools        the tool buttons, two columns.
   Tool Options the settings of the current tool.
@@ -34,6 +34,14 @@ Seven palettes hold the controls:
   Paths        the image's vector paths.
   History      the edit history and snapshots.
   Recorder     the recorded commands and their replay.
+  Swatches     saved colors for the foreground and background.
+
+In Swatches, click a swatch to make it the foreground color and
+Option-click one for the background color. Click the empty space after
+the last swatch to add the foreground color, Shift-click a swatch to
+replace it with the foreground color and Command-click one to delete
+it. The palette's menu adds the foreground color or resets the default
+swatches. Your swatches are kept between launches.
 
 Palettes always follow the front image. The Window menu shows and
 hides them by name, Hide Palettes (which becomes Show Palettes) hides
