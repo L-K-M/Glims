@@ -4896,7 +4896,9 @@ final class ImageDocument {
 
     /// Sets the faded filter's effect opacity (0 ... 1) as one undo step.
     /// While recording, the Recorder gets an explicit unsupported row,
-    /// never a silent gap.
+    /// never a silent gap. The cached history can trail queued work, so
+    /// the queued job checks the engine's own history again and refuses a
+    /// filter that is no longer the newest step.
     func fade(_ target: FadeTarget, opacity: Double) {
         guard !isClosing, !refuseWhileEditingUnavailable() else { return }
         guard fadeTarget == target, opacity.isFinite, (0...1).contains(opacity) else {
@@ -4904,6 +4906,8 @@ final class ImageDocument {
             NSSound.beep()
             return
         }
+        // The same opacity changes nothing and adds no history step.
+        if let current = fadeOpacity(target), abs(current - opacity) < 0.000_5 { return }
         endPendingUserEdits()
         let capture: RecorderCapture?
         do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(Self.fadeRecordingGap)) : nil }
@@ -4911,6 +4915,11 @@ final class ImageDocument {
         enqueue(on: inputQueue, input: true) { [session, image] in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result {
+                let undo = try session.undoInfo(image)
+                guard undo.undoCount == target.undoCount, undo.nextUndo == target.nextUndo,
+                      try session.effects(on: target.layer, image: image).first?.id == target.effect else {
+                    throw DocumentError.targetChanged
+                }
                 try session.changeEffect(target.effect, on: target.layer, image: image,
                                          EngineSession.EffectChange(opacity: opacity))
             }

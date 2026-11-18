@@ -19,6 +19,9 @@ extension EngineSmokeTest {
         }
         func drain(_ doc: ImageDocument) throws {
             try wait { doc.pendingWork == 0 && doc.recorder.pendingCount == 0 && !EngineActivity.shared.isBusy }
+            // Assertions read the cached history; do not leave it to the
+            // engine-event refresh landing first.
+            if (try? session.info(doc.image)) != nil { try doc.reload() }
         }
         func pixels(_ image: Int32) throws -> [UInt8] { [UInt8](try session.copyPixels(image, merged: true).pixels) }
         func maxDifference(_ a: [UInt8], _ b: [UInt8]) -> Int {
@@ -153,6 +156,22 @@ extension EngineSmokeTest {
               "the Fade sheet's OK applies its opacity as one step")
         try session.undo(doc.image); try doc.reload()
 
+        // A step queued ahead of Fade, which the cached history has not
+        // seen yet, still buries the filter: the queued Fade refuses it.
+        doc.select(.all)
+        check(doc.fadeTarget == target, "the cached history still offers Fade before the queued step lands")
+        doc.fade(target, opacity: 0.3)
+        try drain(doc)
+        check(abs((topOpacity(doc, layer) ?? -1) - 1) < 0.001 && doc.undoInfo.undoCount == undoAfterBlur + 1,
+              "Fade refuses a filter that a queued step buried")
+        try session.undo(doc.image); try doc.reload()
+
+        // Fade at the effect's own opacity changes nothing.
+        doc.fade(target, opacity: 1)
+        try drain(doc)
+        check(doc.undoInfo.undoCount == undoAfterBlur && doc.fadeTarget == target,
+              "Fade at the current opacity adds no step")
+
         // Another step after the filter withdraws Fade.
         doc.select(.all)
         try drain(doc)
@@ -175,6 +194,9 @@ extension EngineSmokeTest {
         try recorded.startRecording()
         try blur(recorded)
         if let recordedTarget = recorded.fadeTarget {
+            // A no-op Fade adds no row: it has no history step to match.
+            recorded.fade(recordedTarget, opacity: 1)
+            try drain(recorded)
             recorded.fade(recordedTarget, opacity: 0.5)
             try drain(recorded)
             check(abs((topOpacity(recorded, recordedLayer) ?? -1) - 0.5) < 0.001, "Fade applies while recording")
