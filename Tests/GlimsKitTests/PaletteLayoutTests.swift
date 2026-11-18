@@ -4,7 +4,7 @@ import XCTest
 
 /// The first-launch palette arrangement (docs/design.md, section 2): Tools
 /// at the top left with Tool Options docked under it, Layers, Channels, Paths and
-/// History, Recorder and Info as tabs of one group at the right, Layers its front tab.
+/// History, Recorder, Info and Navigator as tabs of one group at the right, Layers its front tab.
 @MainActor
 final class PaletteLayoutTests: XCTestCase {
     func testToolOptionsHangsUnderToolsAndLayersAndPathsShareATabGroupAtTheRight() {
@@ -16,11 +16,12 @@ final class PaletteLayoutTests: XCTestCase {
         let history = HistoryPaletteController.definition.kind
         let recorder = RecorderPaletteController.definition.kind
         let info = InfoPaletteController.definition.kind
+        let navigator = NavigatorPaletteController.definition.kind
 
         XCTAssertEqual(AppController.defaultPaletteLayout, [
             PaletteGroupDefault([tools], placement: .topLeading),
             PaletteGroupDefault([options], placement: .docked(below: tools)),
-            PaletteGroupDefault([layers, channels, paths, history, recorder, info], placement: .topTrailing),
+            PaletteGroupDefault([layers, channels, paths, history, recorder, info, navigator], placement: .topTrailing),
         ])
     }
 }
