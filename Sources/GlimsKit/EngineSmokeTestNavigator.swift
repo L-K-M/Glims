@@ -145,6 +145,13 @@ extension EngineSmokeTest {
         expect(wait { palette.renderCount > rendersBeforeEdit && (pixel(palette.thumbnailView.image, x: 2, y: 100)?[0] ?? 0) > 245 },
                "an edit refreshes the thumbnail")
 
+        // A size change renders a new thumbnail at the new size.
+        document.crop(to: CGRect(x: 0, y: 0, width: 100, height: 150))
+        expect(wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "the crop finishes")
+        expect(wait { palette.thumbnailView.imageSize == CGSize(width: 100, height: 150)
+                    && palette.thumbnailView.image?.width == 100 && palette.thumbnailView.image?.height == 150 },
+               "a crop re-renders the thumbnail at the new size (\(palette.thumbnailView.image?.width ?? 0)x\(palette.thumbnailView.image?.height ?? 0))")
+
         palette.retarget(to: nil)
         expect(palette.thumbnailView.image == nil && palette.thumbnailView.viewportCorners.isEmpty
                 && !palette.zoomField.isEnabled && !palette.zoomSlider.isEnabled,

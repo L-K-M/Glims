@@ -269,7 +269,10 @@ final class NavigatorPaletteController: NSViewController, PaletteContent {
     }
 
     func retarget(to target: ImageDocument?) {
-        guard document !== target else { return refreshViewport() }
+        guard document !== target else {
+            if refreshViewport() { requestThumbnail() }
+            return
+        }
         document = target
         renderGeneration += 1
         thumbnailView.image = nil
@@ -285,8 +288,10 @@ final class NavigatorPaletteController: NSViewController, PaletteContent {
         requestThumbnail()
     }
 
-    private func refreshViewport() {
-        guard isViewLoaded else { return }
+    /// Returns whether the image size changed, which needs a new thumbnail.
+    @discardableResult
+    private func refreshViewport() -> Bool {
+        guard isViewLoaded else { return false }
         let viewport = document.flatMap(viewportFor)
         let enabled = viewport != nil
         for control in [zoomField, zoomSlider, zoomOutButton, zoomInButton] as [NSControl] { control.isEnabled = enabled }
@@ -294,22 +299,25 @@ final class NavigatorPaletteController: NSViewController, PaletteContent {
             thumbnailView.imageSize = .zero
             thumbnailView.viewportCorners = []
             zoomField.stringValue = ""
-            return
+            return false
         }
         let size = CGSize(width: document.info.width, height: document.info.height)
-        if thumbnailView.imageSize != size {
+        let resized = thumbnailView.imageSize != size
+        if resized {
             thumbnailView.imageSize = size
-            requestThumbnail()
+            // A render started at the old size must not land afterwards.
+            renderGeneration += 1
         }
         thumbnailView.viewportCorners = viewport.navigatorVisibleCorners
         let zoom = viewport.navigatorZoomPercent
         if zoomField.currentEditor() == nil { zoomField.stringValue = "\(zoom)%" }
         zoomSlider.doubleValue = NavigatorGeometry.sliderValue(zoomPercent: zoom)
+        return resized
     }
 
     @objc private func viewportChanged(_ note: Notification) {
         guard (note.object as? ImageDocument) === document, canDisplay else { return }
-        refreshViewport()
+        if refreshViewport() { requestThumbnail() }
     }
 
     @objc private func imageChanged(_ note: Notification) {

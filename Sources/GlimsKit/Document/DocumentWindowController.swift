@@ -377,6 +377,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc private func windowBackingChanged(_ note: Notification) {
         guard let window = note.object as? NSWindow, window === self.window else { return }
         invalidateRulers()
+        postNavigatorViewportChange()
     }
 
     private func removeRulerObservers() {
