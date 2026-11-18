@@ -353,6 +353,9 @@ enum MainMenu {
         ])
         let lastFilterSettings = item("Last Filter Settings…", #selector(DocumentWindowController.reshowLastFilter(_:)), "f")
         lastFilterSettings.keyEquivalentModifierMask = [.command, .option]
+        // Photoshop's Fade, Shift-Command-F, right after the filter.
+        let fade = item("Fade…", #selector(DocumentWindowController.fadeLastFilter(_:)), "f")
+        fade.keyEquivalentModifierMask = [.command, .shift]
         let recent = NSMenuItem(title: recentlyUsedTitle, action: nil, keyEquivalent: "")
         recent.submenu = NSMenu(title: recentlyUsedTitle)
         let blur = NSMenuItem(title: "Blur", action: nil, keyEquivalent: "")
@@ -367,6 +370,7 @@ enum MainMenu {
         add(menu, "Filter", [
             item("Last Filter", #selector(DocumentWindowController.repeatLastFilter(_:)), "f"),
             lastFilterSettings,
+            fade,
             recent,
             .separator(),
             blur,
