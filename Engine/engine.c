@@ -4353,6 +4353,29 @@ static GlimsStatus api_image_rotate_arbitrary (GlimsEngine *e, GlimsImageID imag
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_rotate_arbitrary_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  const GlimsItemID *layers;
+  int32_t count;
+  GlimsItemID reference;
+  uint32_t alignment;
+  char **error;
+} GlimsImageAlignLayersArgs;
+static GlimsStatus image_align_layers_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsImageAlignLayersArgs *a = data;
+  return glims_image_align_layers (e, a->image, a->layers, a->count, a->reference, a->alignment, a->error);
+}
+static GlimsStatus api_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
+                                           int32_t count, GlimsItemID reference, uint32_t alignment,
+                                           char **error)
+{
+  GlimsImageAlignLayersArgs a = { image, layers, count, reference, alignment, error };
+  if (error) *error = NULL;
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_align_layers,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_align_layers_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

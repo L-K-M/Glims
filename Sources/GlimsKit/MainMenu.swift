@@ -147,6 +147,13 @@ enum MainMenu {
          item("Bring Forward", #selector(DocumentWindowController.bringLayerForward(_:)), "]"),
          item("Send Backward", #selector(DocumentWindowController.sendLayerBackward(_:)), "["),
          toBack].forEach { arrange.submenu?.addItem($0) }
+        func alignment(_ title: String, distribute: Bool) -> NSMenuItem {
+            submenu(title, EngineSession.LayerAlignment.allCases.filter { $0.isDistribute == distribute }.map {
+                let entry = item($0.title, #selector(DocumentWindowController.alignLayersFromMenu(_:)))
+                entry.tag = Int($0.rawValue)
+                return entry
+            })
+        }
         let lock = NSMenuItem(title: "Lock", action: nil, keyEquivalent: "")
         lock.submenu = NSMenu(title: "Lock")
         for (bit, title) in EngineSession.LayerLocks.menuOrder {
@@ -194,6 +201,8 @@ enum MainMenu {
             item("Rasterize Layer…", #selector(DocumentWindowController.rasterizeLayer(_:))),
             item("Restore Layer Source…", #selector(DocumentWindowController.restoreLayerSource(_:))),
             arrange,
+            alignment("Align", distribute: false),
+            alignment("Distribute", distribute: true),
             lock,
             submenu("Transform", LayerTransformSession.Mode.allCases.map { mode in
                 let entry = item(mode.title, #selector(DocumentWindowController.setTransformModeFromMenu(_:)))

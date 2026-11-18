@@ -1710,6 +1710,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func flipImageHorizontally(_ sender: Any?) { imageDocument.transformImage(.flipHorizontal) }
     @objc func flipImageVertically(_ sender: Any?) { imageDocument.transformImage(.flipVertical) }
 
+    /// Layer ▸ Align and Layer ▸ Distribute; the item's tag is the
+    /// alignment.
+    @objc func alignLayersFromMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let alignment = EngineSession.LayerAlignment(rawValue: UInt32(item.tag)) else { return }
+        imageDocument.alignLayers(alignment)
+    }
+
     /// Image ▸ Rotate ▸ Arbitrary…: Photoshop's angle and direction sheet.
     /// The canvas grows to fit; the background's new corners take the
     /// background color.
@@ -2891,6 +2899,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard let mode = LayerTransformSession.Mode.from(menuTag: menuItem.tag) else { return false }
             menuItem.state = ToolState.shared.current == .transform && canvas.tools.transformPreview?.mode == mode ? .on : .off
             return canvas.tools.transformModeSelectionAllowed
+        case #selector(alignLayersFromMenu(_:)):
+            guard let alignment = EngineSession.LayerAlignment(rawValue: UInt32(menuItem.tag)) else { return false }
+            let reason = imageDocument.alignmentRefusal(alignment)
+            menuItem.toolTip = reason
+            return !editingBlocked && !previewBusy && !imageDocument.targetCommandIsPending && reason == nil
         case #selector(rotateImageArbitrary(_:)):
             return !editingBlocked && !previewBusy && imageDocument.canRotateArbitrary
                 && !imageDocument.floatingState.isActive

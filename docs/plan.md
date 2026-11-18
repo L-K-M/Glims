@@ -6679,3 +6679,24 @@ so a background stays opaque with the background color in its new
 corners, as in Photoshop. Component layouts (CMYK, duotone, Lab) and
 older adapters keep the command disabled. The Recorder does not record
 it.
+
+### Align and Distribute layers (candidate)
+
+Layer ▸ Align and Layer ▸ Distribute carry Photoshop's six items each
+(Top Edges, Vertical Centers, Bottom Edges, Left Edges, Horizontal
+Centers, Right Edges) for the selected layers, the multi-selection
+standing in for Photoshop 4's linked layers. Align uses the selection
+bounds as the reference when there is a selection (Photoshop's Align
+Layers to Selection) and the active layer otherwise; Distribute needs
+three layers and keeps the outermost two. Additive facade slot 243,
+`image_align_layers`, measures each layer by the bounding box of its
+nonzero alpha (its bounds when it has no alpha or no visible pixel), as
+Photoshop measures layer content, and translates in one undo group;
+nothing moves and no step is added when everything already lines up.
+It does not call `gimp_image_arrange_objects`: read in
+`gimpimage-arrange.c`, with `align_contents` it would add the selection
+mask's offset twice (the mask's item bounds are already the selection
+bounds, and the auto-shrink offset is added on top), and its content
+test shrinks by border color rather than alpha. Nested layers
+of a listed group move with the group. Position locks refuse before any
+move. The Recorder does not record it.

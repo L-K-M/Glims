@@ -1910,6 +1910,244 @@ glims_image_resize_canvas (GlimsEngine      *engine,
   return GLIMS_STATUS_OK;
 }
 
+#define GLIMS_ALIGN_LAYERS_MAX 256
+
+/* The image rectangle a layer's nontransparent pixels cover, as
+ * Photoshop measures layers for Align; a layer without alpha or with
+ * no visible pixel at all is measured by its bounds. */
+static GeglRectangle
+layer_content_bounds (GimpLayer *layer)
+{
+  GimpItem           *item = GIMP_ITEM (layer);
+  GeglBuffer         *buffer = gimp_drawable_get_buffer (GIMP_DRAWABLE (layer));
+  GeglRectangle       extent = { 0, 0, gimp_item_get_width (item), gimp_item_get_height (item) };
+  GeglRectangle       bounds = extent;
+  GeglBufferIterator *iter;
+  gint                x0 = G_MAXINT, y0 = G_MAXINT, x1 = G_MININT, y1 = G_MININT;
+  gint                ox, oy;
+
+  gimp_item_get_offset (item, &ox, &oy);
+  if (gimp_drawable_has_alpha (GIMP_DRAWABLE (layer)))
+    {
+      iter = gegl_buffer_iterator_new (buffer, &extent, 0, babl_format ("A u8"),
+                                       GEGL_ACCESS_READ, GEGL_ABYSS_NONE, 1);
+      while (gegl_buffer_iterator_next (iter))
+        {
+          const guint8        *alpha = iter->items[0].data;
+          const GeglRectangle *roi   = &iter->items[0].roi;
+
+          for (gint y = 0; y < roi->height; y++)
+            for (gint x = 0; x < roi->width; x++)
+              if (alpha[y * roi->width + x])
+                {
+                  x0 = MIN (x0, roi->x + x);
+                  y0 = MIN (y0, roi->y + y);
+                  x1 = MAX (x1, roi->x + x + 1);
+                  y1 = MAX (y1, roi->y + y + 1);
+                }
+        }
+      if (x0 < x1)
+        bounds = (GeglRectangle) { x0, y0, x1 - x0, y1 - y0 };
+    }
+
+  bounds.x += ox;
+  bounds.y += oy;
+
+  return bounds;
+}
+
+typedef struct {
+  gboolean horizontal;  /* moves along x */
+  gdouble  anchor;      /* 0, 0.5 or 1 across the measured extent */
+} LayerAlignment;
+
+static gboolean
+layer_alignment (uint32_t alignment, LayerAlignment *out)
+{
+  static const gdouble anchors[] = { 0.0, 0.5, 1.0 };
+
+  if (alignment < GLIMS_ALIGN_TOP || alignment > GLIMS_DISTRIBUTE_RIGHT)
+    return FALSE;
+
+  /* Values 1..12: align or distribute, then vertical (top, center,
+   * bottom) or horizontal (left, center, right). */
+  {
+    guint within = (alignment - GLIMS_ALIGN_TOP) % 6;
+
+    out->horizontal = within >= 3;
+    out->anchor     = anchors[within % 3];
+  }
+
+  return TRUE;
+}
+
+static gdouble
+alignment_point (const GeglRectangle *r, const LayerAlignment *a)
+{
+  return a->horizontal ? r->x + r->width * a->anchor : r->y + r->height * a->anchor;
+}
+
+typedef struct {
+  GimpLayer *layer;
+  gdouble    point;
+  gint       order;
+} AlignTarget;
+
+static gint
+align_target_compare (gconstpointer a, gconstpointer b)
+{
+  const AlignTarget *x = a, *y = b;
+
+  if (x->point != y->point) return x->point < y->point ? -1 : 1;
+  return x->order - y->order;
+}
+
+static GlimsStatus
+invalid_alignment (char **error, const char *message)
+{
+  glims_fail (error, NULL, message);
+  return GLIMS_STATUS_INVALID_ARGUMENT;
+}
+
+GlimsStatus
+glims_image_align_layers (GlimsEngine        *engine,
+                          GlimsImageID        id,
+                          const GlimsItemID  *ids,
+                          int32_t             count,
+                          GlimsItemID         reference_id,
+                          uint32_t            alignment,
+                          char              **error)
+{
+  GlimsStatus     status;
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpImage      *image;
+  LayerAlignment  how;
+  gboolean        distribute;
+  GimpLayer      *layers[GLIMS_ALIGN_LAYERS_MAX];
+  AlignTarget     targets[GLIMS_ALIGN_LAYERS_MAX];
+  gint            shifts[GLIMS_ALIGN_LAYERS_MAX];
+  gint            n = 0, moving = 0;
+  GimpLayer      *reference = NULL;
+  GeglRectangle   reference_bounds = { 0 };
+
+  if (! open) return GLIMS_STATUS_NOT_FOUND;
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  if (! layer_alignment (alignment, &how))
+    return invalid_alignment (error, "Unknown alignment.");
+  distribute = alignment >= GLIMS_DISTRIBUTE_TOP;
+  if (! ids || count < 1 || count > GLIMS_ALIGN_LAYERS_MAX)
+    return invalid_alignment (error, "Choose between 1 and 256 layers.");
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_ORDINARY)
+    {
+      glims_fail (error, NULL, "Align and Distribute are available for ordinary layered images only.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  image = open->image;
+  if (gimp_image_get_floating_selection (image))
+    return glims_fail (error, NULL, "Anchor or cancel the floating selection before aligning layers.");
+
+  for (gint i = 0; i < count; i++)
+    {
+      GimpLayer *layer = ids[i] > 0 ? find_layer (image, ids[i]) : NULL;
+
+      if (! layer)
+        return invalid_alignment (error, "A layer to align is not in this image.");
+      for (gint j = 0; j < i; j++)
+        if (layers[j] == layer)
+          return invalid_alignment (error, "A layer is listed twice.");
+      layers[i] = layer;
+    }
+
+  if (distribute)
+    {
+      if (reference_id != 0)
+        return invalid_alignment (error, "Distribute takes no reference.");
+    }
+  else if (reference_id != 0)
+    {
+      reference = find_layer (image, reference_id);
+      if (! reference)
+        return invalid_alignment (error, "The reference layer is not in this image.");
+      reference_bounds = layer_content_bounds (reference);
+    }
+  else
+    {
+      GimpChannel *mask = gimp_image_get_mask (image);
+      gint         x, y, w, h;
+
+      if (gimp_channel_is_empty (mask) || ! gimp_item_bounds (GIMP_ITEM (mask), &x, &y, &w, &h))
+        return invalid_alignment (error, "Make a selection to align layers to.");
+      reference_bounds = (GeglRectangle) { x, y, w, h };
+    }
+
+  /* A layer inside another listed group moves with that group; the
+   * reference layer stays put. */
+  for (gint i = 0; i < count; i++)
+    {
+      gboolean nested = FALSE;
+
+      if (layers[i] == reference)
+        continue;
+      for (gint j = 0; j < count && ! nested; j++)
+        nested = j != i && gimp_viewable_is_ancestor (GIMP_VIEWABLE (layers[j]), GIMP_VIEWABLE (layers[i]));
+      if (nested)
+        continue;
+      status = glims_check_item_locks (GIMP_ITEM (layers[i]), GLIMS_LOCK_POSITION, error);
+      if (status != GLIMS_STATUS_OK)
+        return status;
+      targets[n] = (AlignTarget) { layers[i], 0, n };
+      n++;
+    }
+
+  if (distribute ? n < 3 : n < 1)
+    return invalid_alignment (error, distribute ? "Distribute needs at least three layers that move on their own."
+                                  : "Choose a layer to align besides the reference.");
+
+  for (gint i = 0; i < n; i++)
+    {
+      GeglRectangle bounds = layer_content_bounds (targets[i].layer);
+
+      targets[i].point = alignment_point (&bounds, &how);
+    }
+
+  if (distribute)
+    {
+      gdouble first, step;
+
+      qsort (targets, n, sizeof targets[0], (int (*) (const void *, const void *)) align_target_compare);
+      first = targets[0].point;
+      step  = (targets[n - 1].point - first) / (n - 1);
+      for (gint i = 0; i < n; i++)
+        shifts[i] = (i == 0 || i == n - 1) ? 0 : (gint) floor (first + i * step - targets[i].point + 0.5);
+    }
+  else
+    {
+      gdouble goal = alignment_point (&reference_bounds, &how);
+
+      for (gint i = 0; i < n; i++)
+        shifts[i] = (gint) floor (goal - targets[i].point + 0.5);
+    }
+
+  for (gint i = 0; i < n; i++)
+    if (shifts[i] != 0)
+      moving++;
+  if (moving == 0)
+    return GLIMS_STATUS_OK;
+
+  gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_ITEM_DISPLACE,
+                               distribute ? "Distribute Layers" : "Align Layers");
+  for (gint i = 0; i < n; i++)
+    if (shifts[i] != 0)
+      gimp_item_translate (GIMP_ITEM (targets[i].layer),
+                           how.horizontal ? shifts[i] : 0, how.horizontal ? 0 : shifts[i], TRUE);
+  gimp_image_undo_group_end (image);
+  gimp_image_flush (image);
+
+  return GLIMS_STATUS_OK;
+}
+
 #define GLIMS_ROTATE_ARBITRARY_LIMIT 359.99
 
 GlimsStatus

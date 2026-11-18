@@ -362,6 +362,15 @@ the turned image. A background layer fills its new corners with the
 background color; other layers leave them transparent. It is offered
 for layered RGB, grayscale and indexed images and is one undo step.
 
+Layer > Align moves the selected layers so the edges or centers of
+their visible pixels line up: Top Edges, Vertical Centers, Bottom
+Edges, Left Edges, Horizontal Centers or Right Edges. With a selection
+the layers align to the selection's edges, so one layer is enough;
+without one they align to the active layer, which stays put. Layer >
+Distribute spaces three or more selected layers' edges or centers
+evenly between the outermost two. Position-locked layers refuse. Each
+command is one undo step.
+
 # Recorder
 
 The Recorder palette records the edits Glims can replay and runs them
