@@ -153,10 +153,10 @@ extension EngineSmokeTest {
             ("Eraser", .eraser), ("Clone", .clone), ("Heal", .heal), ("Smudge", .smudge),
             ("Blur", .blur), ("Sharpen", .sharpen), ("Dodge", .dodge), ("Burn", .burn),
             ("Sponge Desaturate", .spongeDesaturate), ("Sponge Saturate", .spongeSaturate),
-            ("Gradient", .gradient), ("Paint Bucket", .bucketFill), ("Hand", .hand), ("Zoom", .zoom),
+            ("Gradient", .gradient), ("Paint Bucket", .bucketFill), ("Line", .line), ("Hand", .hand), ("Zoom", .zoom),
         ]
-        expect(toolItems.count == 29 && Set(toolItems.map(\.tag)).count == 29 && tools.items.count == 21,
-               "actual menu mirrors exactly 29 choices in the 16 palette slots")
+        expect(toolItems.count == 30 && Set(toolItems.map(\.tag)).count == 30 && tools.items.count == 22,
+               "actual menu mirrors exactly 30 choices in the 17 palette slots")
         expect(items.allSatisfy { $0.keyEquivalent.isEmpty && $0.keyEquivalentModifierMask.isEmpty },
                "every tool and color command has an unassigned factory shortcut")
         expect(owner.session == nil && items.allSatisfy(owner.validateMenuItem), "global context commands validate without an app-owned engine session")
@@ -171,7 +171,7 @@ extension EngineSmokeTest {
                    "\(name) is the sole cached selected menu mark")
             expect(grid.selectedToolID == tool.rawValue, "the existing Tools palette follows menu selection of \(name)")
         }
-        expect(try snapshot(image) == before, "all 29 context choices leave native pixels, selection and history unchanged")
+        expect(try snapshot(image) == before, "all 30 context choices leave native pixels, selection and history unchanged")
         guard let swap = items.first(where: { $0.action == Selector(("swapColorsFromMenu:")) }),
               let reset = items.first(where: { $0.action == Selector(("resetColorsFromMenu:")) }) else {
             throw NSError(domain: "ToolMenuFixture", code: 4)

@@ -13,7 +13,7 @@ final class ToolColorMenuTests: XCTestCase {
         let menu = MainMenu.make()
         let tools = try XCTUnwrap(toolsSubmenu(in: menu))
         let topItems = tools.items
-        XCTAssertEqual(topItems.count, 21)
+        XCTAssertEqual(topItems.count, 22)
 
         let directCrops = try XCTUnwrap(topItems.first { $0.title == "Crop" })
         XCTAssertEqual(directCrops.action, Selector(("selectToolFromMenu:")))
@@ -27,7 +27,7 @@ final class ToolColorMenuTests: XCTestCase {
             XCTAssertTrue(item.tag != 0)
         }
 
-        XCTAssertTrue(topItems.dropFirst(16).first?.isSeparatorItem == true)
+        XCTAssertTrue(topItems.dropFirst(17).first?.isSeparatorItem == true)
         let swap = try XCTUnwrap(topItems.first { $0.title == "Swap Colors" })
         XCTAssertEqual(swap.action, Selector(("swapColorsFromMenu:")))
         let reset = try XCTUnwrap(topItems.first { $0.title == "Default Colors" })
@@ -37,8 +37,8 @@ final class ToolColorMenuTests: XCTestCase {
             if let submenu = item.submenu { return submenu.items.map(\.tag) }
             return item.isSeparatorItem ? [] : [item.tag]
         }
-        XCTAssertEqual(allTags.count, 33)
-        XCTAssertEqual(Set(allTags).count, 33)
+        XCTAssertEqual(allTags.count, 34)
+        XCTAssertEqual(Set(allTags).count, 34)
         XCTAssertEqual(tools.items.filter(\.isSeparatorItem).count, 1)
     }
 
@@ -87,11 +87,11 @@ final class ToolColorMenuTests: XCTestCase {
         let collection = MenuShortcutBridge.collect(from: menu)
         let leaves = tools.items.flatMap { $0.submenu?.items ?? [$0] }.filter { !$0.isSeparatorItem }
         let records = collection.records.filter { record in leaves.contains { $0 === record.item } }
-        XCTAssertEqual(records.count, 33)
-        XCTAssertEqual(Set(records.map(\.id)).count, 33)
+        XCTAssertEqual(records.count, 34)
+        XCTAssertEqual(Set(records.map(\.id)).count, 34)
         XCTAssertTrue(records.allSatisfy { $0.base == nil && $0.snapshot.keyEquivalent.isEmpty
             && $0.snapshot.modifierMask.isEmpty })
-        XCTAssertEqual(Set(records.filter { $0.item.action == Selector(("selectToolFromMenu:")) }.map { $0.item.tag }), Set(1...29))
+        XCTAssertEqual(Set(records.filter { $0.item.action == Selector(("selectToolFromMenu:")) }.map { $0.item.tag }), Set(1...30))
         XCTAssertEqual(collection.byID["saveDocumentAs:#0"]?.first?.snapshot.keyEquivalent, "S")
         XCTAssertEqual(collection.byID["saveDocumentAs:#0"]?.first?.snapshot.modifierMask, [.command])
     }

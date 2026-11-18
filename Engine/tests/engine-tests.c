@@ -13483,6 +13483,138 @@ test_image_align_layers (void)
   api->image_close (engine, image);
 }
 
+/* Slot 244: the Line tool. On a white 100x60 image: a black line has
+ * square ends at its endpoints, an arrowhead widens toward its base and
+ * narrows to its tip, arrowheads longer than the line shrink until they
+ * meet, the selection clips the line, opacity blends it, each line is
+ * one undo step named "Line", and every refusal changes nothing. */
+static void
+test_layer_draw_line (void)
+{
+  GlimsImageID          image = 0;
+  GlimsItemID           group = 0;
+  GlimsLineDrawSettings line = { .struct_size = sizeof line, .width = 4, .color = { 0, 0, 0, 1 },
+                                 .opacity = 1, .antialias = false, .arrowheads = 0,
+                                 .arrow_width = 500, .arrow_length = 1000, .arrow_concavity = 0 };
+  GlimsLineDrawSettings bad;
+  GlimsSelectOptions    sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsUndoInfo         info = { 0 };
+  const GlimsPoint      from = { 10, 30 }, to = { 90, 30 };
+  int32_t               depth;
+  char                 *error = NULL;
+  bool                  ok;
+  int                   gray;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, layer_draw_line) + sizeof api->layer_draw_line ||
+      ! api->layer_draw_line)
+    {
+      CHECK (false, "the adapter exports slot 244 layer_draw_line");
+      return;
+    }
+  if (api->image_new_filled (engine, 100, 60, GLIMS_NEW_IMAGE_WHITE, NULL, &image, NULL) != GLIMS_STATUS_OK)
+    {
+      CHECK (false, "a white 100x60 image for the Line tool");
+      return;
+    }
+
+  depth = undo_depth (image);
+  CHECK (api->layer_draw_line (engine, image, 0, from, to, &line, &error) == GLIMS_STATUS_OK && ! error &&
+         undo_depth (image) == depth + 1 &&
+         api->image_undo_info (engine, image, &info) == GLIMS_STATUS_OK && strcmp (info.next_undo, "Line") == 0,
+         "a line is one undo step named Line (%s; \"%s\")", error ? error : "", info.next_undo);
+  api->free_string (error);
+  error = NULL;
+  CHECK (red_at (image, 50, 28) < 64 && red_at (image, 50, 31) < 64 && red_at (image, 10, 30) < 64 &&
+         red_at (image, 89, 30) < 64 && red_at (image, 50, 27) > 200 && red_at (image, 50, 32) > 200 &&
+         red_at (image, 9, 30) > 200 && red_at (image, 90, 30) > 200,
+         "the 4 px line covers rows 28 to 31 and stops square at x 10 and 90 (%d %d %d %d)",
+         red_at (image, 50, 27), red_at (image, 50, 32), red_at (image, 9, 30), red_at (image, 90, 30));
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && red_at (image, 50, 30) > 200 &&
+         undo_depth (image) == depth,
+         "one Undo removes the line");
+
+  line.width = 2;
+  line.arrowheads = GLIMS_LINE_ARROW_END;
+  CHECK (api->layer_draw_line (engine, image, 0, from, to, &line, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 72, 26) < 64 && red_at (image, 72, 33) < 64 && red_at (image, 88, 26) > 200 &&
+         red_at (image, 60, 26) > 200 && red_at (image, 60, 30) < 64 && red_at (image, 27, 26) > 200,
+         "an end arrowhead 10 px wide and 20 px long widens toward its base at x 70 and narrows "
+         "to its tip, and the start stays square (%d %d %d %d)",
+         red_at (image, 72, 26), red_at (image, 88, 26), red_at (image, 60, 26), red_at (image, 27, 26));
+  api->image_undo (engine, image);
+
+  line.arrowheads = GLIMS_LINE_ARROW_START | GLIMS_LINE_ARROW_END;
+  line.arrow_concavity = 50;
+  CHECK (api->layer_draw_line (engine, image, 0, from, to, &line, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 22, 27) < 64 && red_at (image, 77, 27) < 64 && red_at (image, 28, 33) > 200 &&
+         red_at (image, 71, 26) > 200 && red_at (image, 50, 30) < 64,
+         "two concave arrowheads leave a notch behind each wing (%d %d %d %d)",
+         red_at (image, 22, 27), red_at (image, 77, 27), red_at (image, 28, 33), red_at (image, 71, 26));
+  api->image_undo (engine, image);
+  line.arrow_concavity = 0;
+
+  CHECK (api->layer_draw_line (engine, image, 0, (GlimsPoint) { 10, 30 }, (GlimsPoint) { 30, 30 }, &line, NULL)
+           == GLIMS_STATUS_OK &&
+         red_at (image, 20, 26) < 64 && red_at (image, 20, 33) < 64 && red_at (image, 11, 26) > 200,
+         "arrowheads longer than the line shrink to meet in its middle (%d %d)",
+         red_at (image, 20, 26), red_at (image, 11, 26));
+  api->image_undo (engine, image);
+  line.arrowheads = 0;
+  line.width = 4;
+
+  ok = api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 50, 60 } }, 2, &sel)
+         == GLIMS_STATUS_OK;
+  CHECK (ok && api->layer_draw_line (engine, image, 0, from, to, &line, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 30, 30) < 64 && red_at (image, 70, 30) > 200,
+         "the selection clips the line (%d %d)", red_at (image, 30, 30), red_at (image, 70, 30));
+  api->image_undo (engine, image);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  line.opacity = 0.5;
+  ok = api->layer_draw_line (engine, image, 0, from, to, &line, NULL) == GLIMS_STATUS_OK;
+  gray = red_at (image, 50, 30);
+  CHECK (ok && gray > 64 && gray < 230, "half opacity blends the line with the white below (%d)", gray);
+  api->image_undo (engine, image);
+  line.opacity = 1;
+
+  depth = undo_depth (image);
+  CHECK (api->layer_draw_line (engine, image, 0, (GlimsPoint) { 200, 200 }, (GlimsPoint) { 300, 200 }, &line, NULL)
+           == GLIMS_STATUS_OK && undo_depth (image) == depth,
+         "a line entirely outside the layer adds no undo step (%d)", undo_depth (image) - depth);
+
+  ok = true;
+  bad = line; bad.width = 0;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  bad = line; bad.width = 1001;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  bad = line; bad.opacity = 1.5;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  bad = line; bad.arrowheads = 4;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  bad = line; bad.arrowheads = GLIMS_LINE_ARROW_END; bad.arrow_width = 5;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  bad = line; bad.arrowheads = GLIMS_LINE_ARROW_END; bad.arrow_concavity = 60;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  bad = line; bad.struct_size = 8;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, &bad, NULL) == GLIMS_STATUS_INVALID_ARGUMENT;
+  ok = ok && api->layer_draw_line (engine, image, 0, from, to, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->layer_draw_line (engine, image, 0, from, from, &line, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->layer_draw_line (engine, image, 0, (GlimsPoint) { NAN, 1 }, to, &line, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+       api->layer_draw_line (engine, 4242, 0, from, to, &line, NULL) == GLIMS_STATUS_NOT_FOUND &&
+       api->layer_draw_line (engine, image, 99999, from, to, &line, NULL) == GLIMS_STATUS_FAILED;
+  ok = ok && api->create_group (engine, image, 0, 0, "Group", &group, NULL) == GLIMS_STATUS_OK;
+  depth = undo_depth (image);
+  ok = ok && api->layer_draw_line (engine, image, group, from, to, &line, NULL) == GLIMS_STATUS_FAILED;
+  ok = ok && api->set_layer_locks (engine, image, first_layer (image), GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL)
+               == GLIMS_STATUS_OK;
+  depth = undo_depth (image);  /* the lock change is a step of its own */
+  ok = ok && api->layer_draw_line (engine, image, first_layer (image), from, to, &line, NULL) == GLIMS_STATUS_FAILED &&
+       undo_depth (image) == depth && red_at (image, 50, 30) > 200;
+  CHECK (ok, "layer_draw_line refuses bad settings and points, an unknown image or layer, a group and "
+             "locked pixels, changing nothing");
+  api->image_close (engine, image);
+}
+
 static void
 test_selection_to_new_layer (void)
 {
@@ -15156,6 +15288,7 @@ main (int argc, char **argv)
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();
+  test_layer_draw_line ();
   test_layer_multiselection ();
   test_procedures ();
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));

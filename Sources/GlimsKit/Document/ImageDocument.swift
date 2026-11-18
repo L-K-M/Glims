@@ -321,6 +321,9 @@ final class ImageDocument {
         }
         if storage.readOnly { return [.hand, .zoom].contains(tool) }
         guard tool.isAvailable(in: colorInfo.mode) else { return false }
+        if tool == .line {
+            return session.supportsDrawLine && (storage.layout == .ordinary || storage.layout == .legacyUnknown)
+        }
         guard colorInfo.mode == .lab else { return true }
         switch tool {
         case .paintbrush: return session.supportsLabBrush
@@ -4959,6 +4962,52 @@ final class ImageDocument {
                 recording = .failure(error)
             case .success:
                 recording = .failure(RecorderReplayError(message: Self.fadeRecordingGap))
+            }
+            self.settleRecording(capture, result: recording, confirmed: confirmed)
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
+    static let lineRecordingGap = "Recorder does not yet save the Line tool."
+
+    /// The Line tool: a straight line on the layer being painted, inside
+    /// the selection, as one undo step. Masks and channels refuse, since
+    /// the engine draws on layer pixels. While recording, the Recorder
+    /// gets an explicit unsupported row, never a silent gap.
+    func drawLine(from start: CGPoint, to end: CGPoint, settings: EngineSession.LineDrawSettings) {
+        guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        guard toolIsAvailable(.line) else {
+            onError?("The Line tool is not available for this image.")
+            return
+        }
+        guard !refuseWhileTargetPending(), !refuseSingleLayerCommand("Line"),
+              !refuseMultiChannelCommand("Line") else { return }
+        guard activeDrawable != nil, let target = paintTarget else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            return
+        }
+        guard case .layer(let layer) = target else {
+            onError?("The Line tool draws on layer pixels. Select the layer, not its mask or a channel.")
+            return
+        }
+        guard !refuseStructuredPaint(on: target) else { return }
+        let capture: RecorderCapture?
+        do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(Self.lineRecordingGap)) : nil }
+        catch { assertionFailure("A recording log refused an admitted line: \(error)"); return }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result {
+                try self.requirePaintTarget()
+                try self.requireRasterizedPaintTarget(target)
+                try session.drawLine(image: image, layer: layer, from: start, to: end, settings: settings)
+            }
+            let recording: Result<SemanticImageCommand, Error>
+            switch result {
+            case .failure(let error):
+                self.report(error)
+                recording = .failure(error)
+            case .success:
+                recording = .failure(RecorderReplayError(message: Self.lineRecordingGap))
             }
             self.settleRecording(capture, result: recording, confirmed: confirmed)
         }

@@ -98,6 +98,10 @@ enum ToolHintPolicy {
                 : "Option-click sets the \(tool.name.lowercased()) source; drag to paint."
         case .gradient: return "Drag the gradient endpoints; release to apply."
         case .bucketFill: return "Click to fill using the Paint Bucket options."
+        case .line:
+            return phase == .dragging && flags.contains(.shift)
+                ? "Constrained line. Release to draw it."
+                : "Drag to draw a line in the foreground color. Shift keeps 45-degree angles."
         case .hand: return "Drag to pan the view."
         case .zoom:
             return flags.contains(.option) ? "Click to zoom out. Release Option to zoom in."

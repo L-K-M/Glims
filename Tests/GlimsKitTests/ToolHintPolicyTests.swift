@@ -32,6 +32,7 @@ final class ToolHintPolicyTests: XCTestCase {
             .spongeSaturate: "Drag to change saturation on RGB pixels; Opacity sets strength; [ ] changes size.",
             .gradient: "Drag the gradient endpoints; release to apply.",
             .bucketFill: "Click to fill using the Paint Bucket options.",
+            .line: "Drag to draw a line in the foreground color. Shift keeps 45-degree angles.",
             .hand: "Drag to pan the view.",
             .zoom: "Click to zoom in. Option-click zooms out."
         ]

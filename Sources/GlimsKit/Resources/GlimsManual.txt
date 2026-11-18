@@ -166,6 +166,7 @@ grouped tools. The letter of each group:
   R    Smudge, Blur, Sharpen
   O    Dodge, Burn, Sponge Desaturate, Sponge Saturate
   G    Gradient, Paint Bucket
+  N    Line
   H    Hand
   Z    Zoom
 
@@ -192,6 +193,14 @@ What the tools do:
   corner and Escape drops the polygon. Magic Wand selects the similar colors around a
   click; Select by Color takes every similar pixel in the image.
   Eyedropper sets the foreground color from the pixel you click.
+
+  Line draws a straight line in the foreground color on the selected
+  layer when you drag, inside the selection if there is one. Shift keeps
+  it at a multiple of 45 degrees. Tool Options set its weight, opacity
+  and antialiasing, and arrowheads at its start, its end or both: their
+  width and length are percentages of the weight, and concavity bends
+  the arrowhead's base toward its tip or away from it. Each line is one
+  undo step. Masks and channels cannot be drawn on with the Line tool.
 
   Brush, Pencil and Airbrush paint with the foreground color. Eraser
   removes pixels on layers with transparency; on an opaque layer it
@@ -598,6 +607,7 @@ Keys on the canvas (the canvas must have focus):
     L    Lasso / Polygon Lasso   I    Eyedropper
     T    Text                    P    Path
     H    Hand                    Z    Zoom
+    N    Line
 
   Shift with a letter  cycle through the grouped tools
 

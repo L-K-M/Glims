@@ -14,6 +14,7 @@ enum ToolID: String, CaseIterable {
     case smudge, blur, sharpen
     case dodge, burn, spongeDesaturate, spongeSaturate
     case gradient, bucketFill
+    case line
     case hand, zoom
 
     /// Match the native component routes; unavailable tools are excluded
@@ -37,6 +38,7 @@ enum ToolID: String, CaseIterable {
         case .crop: return "Crop"
         case .gradient: return "Gradient"
         case .bucketFill: return "Paint Bucket"
+        case .line: return "Line"
         case .rectangleSelect: return "Rectangle Select"
         case .ellipseSelect: return "Ellipse Select"
         case .lasso: return "Lasso"
@@ -70,6 +72,7 @@ enum ToolID: String, CaseIterable {
         case .move, .transform: return "V"
         case .crop: return "C"
         case .gradient, .bucketFill: return "G"
+        case .line: return "N"
         case .rectangleSelect, .ellipseSelect: return "M"
         case .lasso, .polygonLasso: return "L"
         case .magicWand, .selectByColor: return "W"
@@ -94,6 +97,7 @@ enum ToolID: String, CaseIterable {
         case .crop: return ["crop"]
         case .gradient: return ["square.lefthalf.filled", "circle.lefthalf.filled"]
         case .bucketFill: return ["drop.fill", "paintbrush.fill"]
+        case .line: return ["line.diagonal", "line.diagonal.arrow"]
         case .rectangleSelect: return ["rectangle.dashed"]
         case .ellipseSelect: return ["circle.dashed"]
         case .lasso: return ["lasso"]
@@ -176,7 +180,8 @@ enum ToolID: String, CaseIterable {
         [.clone, .heal], [.smudge, .blur, .sharpen],
         [.dodge, .burn, .spongeDesaturate, .spongeSaturate], [.gradient, .bucketFill],
         [.text], [.path],
-        [.hand], [.zoom],
+        [.line], [.hand],
+        [.zoom],
     ]
 
     /// The group a shortcut letter picks.
@@ -298,6 +303,8 @@ final class ToolState {
     var fillMode = EngineSession.FillMode.similarColors
     var fillThreshold: Double = 15.0 / 255.0
     var fillSampleMerged = false
+    /// The Line tool's options; the color is the foreground at the press.
+    var lineSettings = EngineSession.LineDrawSettings()
     /// Where clone and heal copy from; set with Option-click on the canvas.
     var cloneSource: EngineSession.Brush.Source?
 
