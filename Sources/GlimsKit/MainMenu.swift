@@ -400,6 +400,7 @@ enum MainMenu {
             item("History", #selector(AppController.showHistory(_:))),
             item("Info", #selector(AppController.showInfo(_:))),
             item("Navigator", #selector(AppController.showNavigator(_:))),
+            item("Color", #selector(AppController.showColor(_:))),
             item("Swatches", #selector(AppController.showSwatches(_:))),
             item("Recorder", #selector(AppController.showRecorder(_:))),
             item("Hide Palettes", #selector(AppController.togglePaletteVisibility(_:))),
