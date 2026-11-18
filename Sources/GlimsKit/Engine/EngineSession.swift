@@ -2320,6 +2320,26 @@ final class EngineSession: @unchecked Sendable {
         return result
     }
 
+    var supportsRotateArbitrary: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_rotate_arbitrary) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_rotate_arbitrary)
+            && api.image_rotate_arbitrary != nil
+    }
+
+    /// Image ▸ Rotate ▸ Arbitrary: turns the whole image `degrees`
+    /// clockwise (negative is counter-clockwise) and grows the canvas to
+    /// hold it; layers without alpha take `fill` in the new corners. One
+    /// undo step. An adapter without slot 242 is UNSUPPORTED.
+    func rotateImageArbitrary(_ image: Int32, degrees: Double, fill: NSColor) throws {
+        guard supportsRotateArbitrary, let rotate = api.image_rotate_arbitrary else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot rotate the canvas by an arbitrary angle.")
+        }
+        var color = try Self.color(fill)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(rotate(engine, image, degrees, &color, &error), error)
+    }
+
     // MARK: Painting
 
     struct StrokeCaptureFacts: Equatable {

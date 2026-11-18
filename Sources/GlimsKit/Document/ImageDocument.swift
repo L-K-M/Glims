@@ -4315,6 +4315,26 @@ final class ImageDocument {
         }
     }
 
+    /// Image ▸ Rotate ▸ Arbitrary is offered for ordinary layered images
+    /// on adapters with slot 242.
+    var canRotateArbitrary: Bool {
+        session.supportsRotateArbitrary && (storage.layout == .ordinary || storage.layout == .legacyUnknown)
+    }
+
+    /// Turns the whole image `degrees` clockwise around its center; the
+    /// canvas grows to fit and the background's new corners take `fill`,
+    /// as in classic editors. Not recorded.
+    func rotateCanvas(degrees: Double, fill: NSColor) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
+        guard canRotateArbitrary else {
+            onError?("Arbitrary rotation is not available for this image.")
+            return
+        }
+        let capturedFill = (fill.copy() as? NSColor) ?? fill
+        run { session, image in try session.rotateImageArbitrary(image, degrees: degrees, fill: capturedFill) }
+    }
+
     func crop(to rect: CGRect) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
