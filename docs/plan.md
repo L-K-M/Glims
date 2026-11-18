@@ -6420,6 +6420,21 @@ The Remove Step control explains why it is disabled: it reports pending
 recording, replay or image work first, then asks for a current selection.
 Its normal action help returns when the selected step can be removed.
 
+### Swatches palette (candidate)
+
+Photoshop 4's Swatches palette: Window ▸ Swatches, a tab of the right
+palette group. Click a swatch for the foreground color and Option-click
+for the background; click the empty space after the last swatch to add
+the foreground color, Shift-click to replace a swatch with it and
+Command-click to delete one, as in Photoshop. The palette menu adds the
+foreground color and resets the 47 default swatches (twelve hues at
+full strength, lighter and darker, and eleven grays). The swatches are
+app-wide opaque sRGB colors, kept as JSON in the user defaults (at most
+1,000; a corrupt preference falls back to the defaults). Each swatch is
+an accessibility button that chooses the foreground color. No facade
+change; the engine's palette resources are not used. Loading and saving
+Photoshop .aco swatch files is not implemented yet.
+
 ### Lock Guides (candidate)
 
 View ▸ Lock Guides (Option-Command-semicolon), as in Photoshop 4, is a
