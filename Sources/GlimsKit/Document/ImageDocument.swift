@@ -69,6 +69,8 @@ final class ImageDocument {
         }
     }
     private var filterPreviewRecords: [Int32: FilterPreviewRecord] = [:]
+    /// The newest new-filter Apply on a layer, as Filter ▸ Fade sees it.
+    private var fadeCandidate: FadeTarget?
 
     private struct RecorderTargetContext {
         let layers: [Int32]
@@ -4866,6 +4868,65 @@ final class ImageDocument {
         run { session, image in try session.changeEffect(effect, on: drawable, image: image, change) }
     }
 
+    /// The filter Filter ▸ Fade can blend back: the newest new-filter
+    /// Apply on a layer, only while its step is still the newest undo
+    /// step and its effect is still on that layer. Undoing a Fade
+    /// offers it again, as Photoshop does.
+    struct FadeTarget: Equatable {
+        let layer: Int32
+        let effect: Int32
+        let title: String
+        let undoCount: Int
+        let nextUndo: String
+    }
+
+    var fadeTarget: FadeTarget? {
+        guard let candidate = fadeCandidate, undoInfo.undoCount == candidate.undoCount,
+              undoInfo.nextUndo == candidate.nextUndo,
+              canChangeEffect(candidate.effect, on: candidate.layer) else { return nil }
+        return candidate
+    }
+
+    /// The opacity the Fade sheet starts from: the effect's own.
+    func fadeOpacity(_ target: FadeTarget) -> Double? {
+        layerEffects[target.layer]?.first(where: { $0.id == target.effect })?.opacity
+    }
+
+    static let fadeRecordingGap = "Recorder does not yet save Fade."
+
+    /// Sets the faded filter's effect opacity (0 ... 1) as one undo step.
+    /// While recording, the Recorder gets an explicit unsupported row,
+    /// never a silent gap.
+    func fade(_ target: FadeTarget, opacity: Double) {
+        guard !isClosing, !refuseWhileEditingUnavailable() else { return }
+        guard fadeTarget == target, opacity.isFinite, (0...1).contains(opacity) else {
+            onError?(DocumentError.targetChanged.localizedDescription)
+            NSSound.beep()
+            return
+        }
+        endPendingUserEdits()
+        let capture: RecorderCapture?
+        do { capture = recorder.isRecording ? try reserveRecording(context: .unavailable(Self.fadeRecordingGap)) : nil }
+        catch { assertionFailure("A recording log refused an admitted Fade: \(error)"); return }
+        enqueue(on: inputQueue, input: true) { [session, image] in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result {
+                try session.changeEffect(target.effect, on: target.layer, image: image,
+                                         EngineSession.EffectChange(opacity: opacity))
+            }
+            let recording: Result<SemanticImageCommand, Error>
+            switch result {
+            case .failure(let error):
+                self.report(error)
+                recording = .failure(error)
+            case .success:
+                recording = .failure(RecorderReplayError(message: Self.fadeRecordingGap))
+            }
+            self.settleRecording(capture, result: recording, confirmed: confirmed)
+        }
+        if capture != nil { notifyRecorderChanged() }
+    }
+
     /// A stack command — remove, merge or reorder — on the committed
     /// effect, as one undo step (`effect_command`). The ids are
     /// explicit: a stale row's command cannot reach another drawable's
@@ -6709,6 +6770,15 @@ final class ImageDocument {
                 commitError = error
                 if commit { self.report(error) }
             }
+            // A new filter on a layer commits as the top effect of its
+            // stack; Fade remembers it with the history it produced.
+            var fade: FadeTarget?
+            if commit, success, case .layer(let layer)? = record?.coverage, let operation = record?.operation,
+               let top = try? session.effects(on: layer, image: image).first, top.operation == operation,
+               let undo = try? session.undoInfo(image) {
+                fade = FadeTarget(layer: layer, effect: top.id, title: top.name,
+                                  undoCount: undo.undoCount, nextUndo: undo.nextUndo)
+            }
             if commit, capture != nil {
                 let result: Result<SemanticImageCommand, Error>
                 if let commitError {
@@ -6726,6 +6796,7 @@ final class ImageDocument {
             }
             DispatchQueue.main.async {
                 if success { self.filterPreviewRecords[filter] = nil }
+                if success && commit { self.fadeCandidate = fade }
                 completion(success)
             }
         }

@@ -1938,6 +1938,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         run(last, mode: .withLastValues)
     }
 
+    /// Filter ▸ Fade: blends the newest filter Apply with the layer as
+    /// it was, while that Apply is still the newest history step.
+    @objc func fadeLastFilter(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
+              let target = imageDocument.fadeTarget else { return }
+        FadeForm.present(in: imageDocument, target: target, on: window)
+    }
+
     @objc func reshowLastFilter(_ sender: Any?) {
         guard let last = PlugInCommands.last else { return }
         run(last, mode: .interactive)
@@ -3314,6 +3322,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
             guard !editingBlocked && !previewBusy && imageDocument.canRun(last) else { return false }
             return singleLayerItemAllowed(menuItem, action: last.label)
+        case #selector(fadeLastFilter(_:)):
+            guard let target = imageDocument.fadeTarget else {
+                menuItem.title = "Fade…"
+                return false
+            }
+            menuItem.title = "Fade \(target.title)…"
+            return !editingBlocked && !previewBusy && window?.attachedSheet == nil
         case #selector(runGlimsPageSetup(_:)):
             // Page setup edits only the document's print info; it just
             // must not compete with another sheet on the same window.

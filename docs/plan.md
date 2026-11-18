@@ -6587,6 +6587,22 @@ range is an approximation. An empty selection, one that misses the
 source, Lab and component layouts, and older adapters are refused before
 any change. The Recorder does not record Similar.
 
+### Filter Fade (candidate)
+
+Filter ▸ Fade… (Shift-Command-F) is Photoshop's blend of the last filter's
+result with the layer as it was. GIMP 3 has no Fade command; Glims builds
+it on the fact that a new filter applied to a layer commits as the top
+non-destructive effect of its stack, so the fade is that effect's opacity,
+set with `effect_change` as one undo step. Fade is offered only while that
+Apply is still the newest undo step and its effect is still on the layer;
+undoing a Fade offers it again. The sheet captures its target when it
+opens and a changed history refuses rather than redirects it. While
+recording, Fade adds an explicit unsupported Recorder row.
+
+Not provided: Photoshop's Fade mode (the facade has no effect blend-mode
+setter yet), a live preview, and Fade after plug-in filters, adjustments
+merged into masks or channels, or Last Filter, which repeats plug-ins.
+
 ### Filter Maximum and Minimum (candidate)
 
 Filter ▸ Other ▸ Maximum… and Minimum… are Photoshop's rank filters. A
