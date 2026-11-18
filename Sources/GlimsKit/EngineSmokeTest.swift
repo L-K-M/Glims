@@ -514,6 +514,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Swatches)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "color-palette" {
+                try exerciseColorPalette(session, documents: documents)
+                print(failures == 0 ? "PASSED (Color palette)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-palette" {
                 try exerciseRecorderPalette(session, documents: documents)
                 print(failures == 0 ? "PASSED (recorder palette)" : "FAILED: \(failures) failure(s)")
@@ -1257,6 +1262,7 @@ enum EngineSmokeTest {
             try exerciseCanvasOverlays(session, documents: documents)
             try exerciseNavigator(session, documents: documents)
             try exerciseSwatches(session, documents: documents)
+            try exerciseColorPalette(session, documents: documents)
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exerciseRecorderCapture(session, documents: documents)

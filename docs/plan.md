@@ -6435,6 +6435,23 @@ an accessibility button that chooses the foreground color. No facade
 change; the engine's palette resources are not used. Loading and saving
 Photoshop .aco swatch files is not implemented yet.
 
+### Color palette (candidate)
+
+Photoshop 4's Color palette: Window ▸ Color, a tab of the right palette
+group. A Foreground/Background selector (and the overlapped color
+squares) chooses which tool color the sliders edit; the palette menu
+offers RGB (0 to 255), HSB (degrees and percent) and Grayscale (K
+percent, from Rec. 601 luma) sliders and remembers the choice. Each
+slider has a field; an entry that is not a number in range beeps and
+changes nothing. HSB keeps the hue of a gray and the hue and saturation
+of black, so dragging Saturation or Brightness to zero and back restores
+the color. The color bar runs through the hues from white at the top to
+black at the bottom; a click picks for the active color and an
+Option-click for the other, as in Photoshop. Double-clicking a square
+opens the existing numeric color editor. CMYK and Lab sliders are not
+offered: the tool colors are sRGB and there is no color-managed
+conversion for them. No facade change.
+
 ### Lock Guides (candidate)
 
 View ▸ Lock Guides (Option-Command-semicolon), as in Photoshop 4, is a

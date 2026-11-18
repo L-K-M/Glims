@@ -34,6 +34,7 @@ These palettes hold the controls:
   Paths        the image's vector paths.
   History      the edit history and snapshots.
   Recorder     the recorded commands and their replay.
+  Color        sliders and a color bar for the foreground and background.
   Swatches     saved colors for the foreground and background.
 
 In Swatches, click a swatch to make it the foreground color and
@@ -42,6 +43,12 @@ the last swatch to add the foreground color, Shift-click a swatch to
 replace it with the foreground color and Command-click one to delete
 it. The palette's menu adds the foreground color or resets the default
 swatches. Your swatches are kept between launches.
+
+In Color, choose Foreground or Background (or click its square), then
+drag the sliders or type values. The palette's menu switches between
+RGB, HSB and Grayscale sliders. Click the color bar to pick a color for
+the chosen square, or Option-click it for the other one. Double-click a
+square to type exact values in the color editor.
 
 Palettes always follow the front image. The Window menu shows and
 hides them by name, Hide Palettes (which becomes Show Palettes) hides
