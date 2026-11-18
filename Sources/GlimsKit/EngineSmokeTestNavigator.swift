@@ -125,17 +125,24 @@ extension EngineSmokeTest {
         expect(undoAfter.undoCount == undoBefore.undoCount && (try? session.info(image).isDirty) == dirtyBefore,
                "navigating and zooming leave the image and its history alone")
 
-        // Another document's change does not refresh this thumbnail.
+        // Another document's change does not refresh this thumbnail. The
+        // notification is delivered synchronously, so nothing scheduled
+        // after it means it was ignored.
+        expect(wait { !palette.isRefreshing }, "pending thumbnail work settles")
         let rendersBefore = palette.renderCount
         NotificationCenter.default.post(name: .glimsNavigatorImageChanged, object: otherDocument)
-        EngineSmokeTestHost.pumpEvents(for: 0.6)
-        expect(palette.renderCount == rendersBefore, "another document's edit leaves the thumbnail alone")
+        expect(!palette.isRefreshing && palette.renderCount == rendersBefore,
+               "another document's edit leaves the thumbnail alone")
+        NotificationCenter.default.post(name: .glimsNavigatorImageChanged, object: document)
+        expect(palette.isRefreshing, "this document's edit schedules a refresh")
+        expect(wait { !palette.isRefreshing && palette.renderCount > rendersBefore }, "the scheduled refresh renders")
 
         // An edit refreshes the thumbnail.
+        let rendersBeforeEdit = palette.renderCount
         document.select(.all)
         document.fill(at: CGPoint(x: 10, y: 10), mode: .selection, color: .red, threshold: 0, sampleMerged: false)
         expect(wait { document.pendingWork == 0 && !EngineActivity.shared.isBusy }, "the fill finishes")
-        expect(wait { palette.renderCount > rendersBefore && (pixel(palette.thumbnailView.image, x: 2, y: 100)?[0] ?? 0) > 245 },
+        expect(wait { palette.renderCount > rendersBeforeEdit && (pixel(palette.thumbnailView.image, x: 2, y: 100)?[0] ?? 0) > 245 },
                "an edit refreshes the thumbnail")
 
         palette.retarget(to: nil)

@@ -199,6 +199,8 @@ final class NavigatorPaletteController: NSViewController, PaletteContent {
     private var renderInFlight = false
     private var renderPending = false
     private var refreshTimer: Timer?
+    /// A coalesced refresh or a render is scheduled or running.
+    var isRefreshing: Bool { refreshTimer != nil || renderInFlight || renderPending }
     private let renderQueue = DispatchQueue(label: "ch.lkmc.Glims.navigator.render", qos: .utility)
 
     init(viewport: @escaping (ImageDocument) -> NavigatorViewport?) {
