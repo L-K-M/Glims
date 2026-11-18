@@ -6374,6 +6374,13 @@ rotation, alpha, document changes and deferred reads. Whole-editor integration,
 accessibility and review remain in qualification. Native CMYK/Lab readouts
 and sampling of temporary previews are not yet provided.
 
+Info also shows the sample's HSB, computed from the encoded sRGB values as
+Photoshop does (hue in whole degrees, 0 for neutrals), and the selection's
+bounding-box width and height in pixels. The size follows the document's
+committed selection: each selection re-read posts a document-scoped
+notification. Photoshop's live marquee and crop size while dragging is not
+shown.
+
 ### Photoshop import Revert admission (candidate)
 
 Reverting a composite or ink-preserving CMYK import reserves its source until

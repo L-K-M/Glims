@@ -89,6 +89,8 @@ extension EngineSmokeTest {
                    "the visible palette samples the composite asynchronously")
             expect(labels(palette.view).contains("sRGB: R 0.0%  G 100.0%  B 0.0%"),
                    "the sampled RGB values match the green fixture pixel")
+            expect(labels(palette.view).contains("HSB: H 120°  S 100.0%  B 100.0%"),
+                   "the HSB readout matches the green fixture pixel")
         } else { expect(false, "a pointer event can be constructed") }
         let dispatchPoint = placePointer(x: 0.5, y: 0.5)
         NotificationCenter.default.post(name: .glimsCanvasPointerChanged, object: document)
@@ -224,6 +226,20 @@ extension EngineSmokeTest {
         EngineSmokeTestHost.pumpEvents(for: 0.15)
         expect(labels(palette.view).contains("X: —    Y: —"),
                "hiding the palette clears the pointer and cancels pending display")
+        // Photoshop's Info palette also shows the selection's size.
+        expect(labels(palette.view).contains("W: —    H: —"), "an empty selection shows no size")
+        document.select(.rectangle(CGRect(x: 0, y: 0, width: 1, height: 2)), options: EngineSession.SelectOptions())
+        expect(wait { labels(palette.view).contains("W: 1    H: 2") }, "a selection shows its pixel size")
+        otherDocument.select(.all)
+        expect(wait { otherDocument.selectionBounds != nil && otherDocument.pendingWork == 0 }
+               && labels(palette.view).contains("W: 1    H: 2"),
+               "another document's selection leaves the readout alone")
+        palette.retarget(to: otherDocument)
+        expect(labels(palette.view).contains("W: 2    H: 2"), "retargeting shows the new document's selection size")
+        palette.retarget(to: document)
+        document.select(.none)
+        expect(wait { labels(palette.view).contains("W: —    H: —") }, "deselecting clears the size")
+        _ = wait { document.pendingWork == 0 }
         let closeStarted = DispatchSemaphore(value: 0), closeRelease = DispatchSemaphore(value: 0)
         defer { closeRelease.signal() }
         var closeActivityFinished = false
