@@ -4875,6 +4875,7 @@ final class ImageDocument {
         selectionOutline = (try? session.selectionOutline(image: image)) ?? []
         selectionBounds = try? session.selectionBounds(image: image)
         onSelectionChange?()
+        NotificationCenter.default.post(name: .glimsSelectionChanged, object: self)
     }
 
     // MARK: Committed effects
