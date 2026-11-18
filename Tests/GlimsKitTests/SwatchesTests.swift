@@ -60,6 +60,33 @@ final class SwatchesTests: XCTestCase {
 
         defaults.set(Data("not json".utf8), forKey: "Glims.swatches")
         XCTAssertEqual(SwatchStore(defaults: defaults).list.swatches, SwatchList.defaults)
+
+        defaults.set(Data(#"[{"red":2,"green":-1,"blue":0.5}]"#.utf8), forKey: "Glims.swatches")
+        let decoded = SwatchStore(defaults: defaults).list.swatches
+        XCTAssertEqual(decoded, [Swatch(red: 1, green: 0, blue: 0.5)], "saved components are clamped to 0 ... 1")
+        XCTAssertEqual(decoded.first?.hex, "#FF0080")
+    }
+
+    @MainActor
+    func testHintKeepsItsInsetBesideTheGrid() throws {
+        let suite = "SwatchesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let palette = SwatchesPaletteController(store: SwatchStore(defaults: defaults), tools: ToolState())
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 220, height: 200), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentViewController = palette
+        window.setContentSize(NSSize(width: 220, height: 200))
+        palette.view.layoutSubtreeIfNeeded()
+        let stack = try XCTUnwrap(palette.view as? NSStackView)
+        XCTAssertFalse(stack.hasAmbiguousLayout)
+        let hint = try XCTUnwrap(stack.arrangedSubviews.last)
+        let text = hint.alignmentRect(forFrame: hint.frame)
+        XCTAssertEqual(text.minX, 8, "the hint text is inset 8 points from the leading edge")
+        XCTAssertEqual(text.maxX, 212, "and from the trailing edge")
+        XCTAssertEqual(stack.arrangedSubviews.first?.frame.width, 220, "the grid spans the palette")
     }
 
     @MainActor

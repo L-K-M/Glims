@@ -25,7 +25,7 @@ Last tile is the elapsed time of the last accepted render, including
 its wait for the engine. It clears when the canvas generation changes.
 In a narrow window, progress and Cancel temporarily replace this readout.
 
-Seven palettes hold the controls:
+These palettes hold the controls:
 
   Tools        the tool buttons, two columns.
   Tool Options the settings of the current tool.

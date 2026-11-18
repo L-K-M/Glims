@@ -13,6 +13,15 @@ struct Swatch: Codable, Equatable {
         self.blue = Self.clamped(blue)
     }
 
+    /// Saved swatches go through the clamping initializer, so a corrupt
+    /// preference cannot store components outside 0 ... 1.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(red: try container.decode(Double.self, forKey: .red),
+                  green: try container.decode(Double.self, forKey: .green),
+                  blue: try container.decode(Double.self, forKey: .blue))
+    }
+
     /// The color's sRGB components, opaque; nil when it has none.
     init?(_ color: NSColor) {
         guard let srgb = color.usingColorSpace(.sRGB) else { return nil }
