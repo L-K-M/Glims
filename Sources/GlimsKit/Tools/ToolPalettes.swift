@@ -461,6 +461,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             stack.addArrangedSubview(hint("Click to add corners, drag for curves; click the first anchor to "
                 + "close. Drag anchors and handles to reshape (Option-drag an anchor pulls out handles). "
                 + "Shift-click starts a new subpath; Return ends one; Delete removes the selected anchor."))
+        } else if tool == .line {
+            addLineRows(state.lineSettings)
         } else if tool == .bucketFill {
             stack.addArrangedSubview(popUp("Fill", ["Similar colors", "Whole selection"],
                                            selected: state.fillMode == .similarColors ? 0 : 1) { index in
@@ -979,6 +981,42 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     /// and opacity. The blend popup offers only Perceptual RGB and Lab —
     /// the backend refuses RGB Linear with UNSUPPORTED, so it is never
     /// offered.
+    /// The Line tool's options, as Photoshop's Line Options palette
+    /// offers them: weight, opacity, antialiasing and arrowheads at
+    /// either end with their shape.
+    private func addLineRows(_ settings: EngineSession.LineDrawSettings) {
+        typealias Line = EngineSession.LineDrawSettings
+        func update(_ change: @escaping (inout Line) -> Void) {
+            change(&ToolState.shared.lineSettings)
+        }
+        stack.addArrangedSubview(slider("Weight", Line.widthRange, settings.width, unit: "px", fractionDigits: 1) { value in
+            update { $0.width = value }
+        })
+        stack.addArrangedSubview(slider("Opacity", 0...100, settings.opacity * 100, unit: "%") { value in
+            update { $0.opacity = value / 100 }
+        })
+        stack.addArrangedSubview(checkbox("Anti-aliased", settings.antialias) { on in
+            update { $0.antialias = on }
+        })
+        stack.addArrangedSubview(checkbox("Arrowhead at start", settings.arrowheads.contains(.start)) { on in
+            update { if on { $0.arrowheads.insert(.start) } else { $0.arrowheads.remove(.start) } }
+        })
+        stack.addArrangedSubview(checkbox("Arrowhead at end", settings.arrowheads.contains(.end)) { on in
+            update { if on { $0.arrowheads.insert(.end) } else { $0.arrowheads.remove(.end) } }
+        })
+        stack.addArrangedSubview(slider("Arrow width", Line.arrowWidthRange, settings.arrowWidth, unit: "%") { value in
+            update { $0.arrowWidth = value }
+        })
+        stack.addArrangedSubview(slider("Arrow length", Line.arrowLengthRange, settings.arrowLength, unit: "%") { value in
+            update { $0.arrowLength = value }
+        })
+        stack.addArrangedSubview(slider("Concavity", Line.arrowConcavityRange, settings.arrowConcavity, unit: "%") { value in
+            update { $0.arrowConcavity = value }
+        })
+        stack.addArrangedSubview(hint("Drag to draw a line in the foreground color on the selected layer. "
+            + "Shift keeps it at multiples of 45 degrees. Arrow sizes are percentages of the weight."))
+    }
+
     private func addGradientRows(_ state: ToolState) {
         stack.addArrangedSubview(gradientRow(state))
         stack.addArrangedSubview(popUp("Shape", ["Linear", "Bi-Linear", "Radial"],

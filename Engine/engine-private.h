@@ -642,6 +642,9 @@ GlimsStatus glims_path_to_selection(GlimsEngine *e, GlimsImageID image, GlimsIte
 GlimsStatus glims_path_stroke      (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                                     GlimsItemID layer, const GlimsLineSettings *settings,
                                     char **error);
+GlimsStatus glims_layer_draw_line  (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                    GlimsPoint start, GlimsPoint end,
+                                    const GlimsLineDrawSettings *settings, char **error);
 GlimsStatus glims_path_fill        (GlimsEngine *e, GlimsImageID image, GlimsItemID path,
                                     GlimsItemID drawable, const GlimsPathFillSettings *settings,
                                     char **error);

@@ -41,6 +41,9 @@
 #include "core/gimpimage-undo.h"
 #include "core/gimpimage-undo-push.h"
 #include "core/gimpitem.h"
+#include "core/gimpscanconvert.h"
+#include "gegl/gimp-gegl-apply-operation.h"
+#include "operations/layer-modes/gimp-layer-modes.h"
 #include "core/gimplayer.h"
 #include "core/gimpstrokeoptions.h"
 
@@ -814,4 +817,299 @@ glims_path_to_vector_layer (GlimsEngine  *engine,
     *error = strdup ("This engine has no vector layers; they arrived in GIMP 3.2.");
   return GLIMS_STATUS_UNSUPPORTED;
 #endif
+}
+
+/* The Line tool (slot 244). The line and its arrowheads form one closed
+ * outline, filled once: GIMP's scan converter fills with the even-odd
+ * rule (app/core/gimpscanconvert.c), so separate overlapping shapes
+ * would cancel where they cross. */
+
+#define MAX_DRAW_LINE_WIDTH 1000.0
+
+typedef struct
+{
+  double length;  /* tip to base along the line, image pixels */
+  double half;    /* half the base width, at least half the line */
+  double joint;   /* tip to where the line's edges meet the base */
+  double reach;   /* tip to the arrowhead's farthest point along the line */
+} LineArrow;
+
+static LineArrow
+line_arrow (const GlimsLineDrawSettings *settings)
+{
+  double    half_line = settings->width / 2.0;
+  LineArrow arrow;
+
+  arrow.length = settings->arrow_length / 100.0 * settings->width;
+  arrow.half   = MAX (settings->arrow_width / 100.0 * settings->width / 2.0, half_line);
+  /* The base runs from each wing to the notch, which concavity moves
+   * toward the tip (positive) or away from it; the line's edge meets it
+   * where the base crosses the edge's offset from the axis. */
+  arrow.joint = arrow.length - settings->arrow_concavity / 100.0 * arrow.length *
+                (1.0 - half_line / arrow.half);
+  arrow.reach = MAX (arrow.length, arrow.joint);
+
+  return arrow;
+}
+
+static void
+line_arrow_scale (LineArrow *arrow,
+                  double     factor)
+{
+  arrow->length *= factor;
+  arrow->joint  *= factor;
+  arrow->reach  *= factor;
+}
+
+static gboolean
+line_settings_valid (const GlimsLineDrawSettings *s)
+{
+  const GlimsColor *c = &s->color;
+
+  return isfinite (s->width) && s->width > 0 && s->width <= MAX_DRAW_LINE_WIDTH &&
+         isfinite (c->red) && isfinite (c->green) && isfinite (c->blue) && isfinite (c->alpha) &&
+         isfinite (s->opacity) && s->opacity >= 0 && s->opacity <= 1 &&
+         (s->arrowheads & ~(uint32_t) (GLIMS_LINE_ARROW_START | GLIMS_LINE_ARROW_END)) == 0 &&
+         (s->arrowheads == 0 ||
+          (isfinite (s->arrow_width) && s->arrow_width >= 10 && s->arrow_width <= 1000 &&
+           isfinite (s->arrow_length) && s->arrow_length >= 10 && s->arrow_length <= 5000 &&
+           isfinite (s->arrow_concavity) && s->arrow_concavity >= -50 && s->arrow_concavity <= 50));
+}
+
+/* The outline: down the line's left edge from start to end, then back
+ * up its right edge. Returns the number of points (at most 10). */
+static guint
+line_outline (GlimsPoint                   start,
+              GlimsPoint                   end,
+              const GlimsLineDrawSettings *settings,
+              GimpVector2                 *points)
+{
+  double    dx = end.x - start.x, dy = end.y - start.y;
+  double    length = hypot (dx, dy);
+  double    ux = dx / length, uy = dy / length;
+  double    nx = -uy, ny = ux;
+  double    half = settings->width / 2.0;
+  gboolean  head = (settings->arrowheads & GLIMS_LINE_ARROW_START) != 0;
+  gboolean  tail = (settings->arrowheads & GLIMS_LINE_ARROW_END) != 0;
+  LineArrow arrow = line_arrow (settings);
+  LineArrow first = arrow, last = arrow;
+  double    reach = (head ? arrow.reach : 0) + (tail ? arrow.reach : 0);
+  guint     n = 0;
+
+  if (reach > length)
+    {
+      line_arrow_scale (&first, length / reach);
+      line_arrow_scale (&last, length / reach);
+    }
+
+#define AT(along, across) \
+  (points[n++] = (GimpVector2) { start.x + ux * (along) + nx * (across), \
+                                 start.y + uy * (along) + ny * (across) })
+
+  if (head)
+    {
+      AT (0, 0);
+      AT (first.length, first.half);
+      AT (first.joint, half);
+    }
+  else
+    AT (0, half);
+
+  if (tail)
+    {
+      AT (length - last.joint, half);
+      AT (length - last.length, last.half);
+      AT (length, 0);
+      AT (length - last.length, -last.half);
+      AT (length - last.joint, -half);
+    }
+  else
+    {
+      AT (length, half);
+      AT (length, -half);
+    }
+
+  if (head)
+    {
+      AT (first.joint, -half);
+      AT (first.length, -first.half);
+    }
+  else
+    AT (0, -half);
+
+#undef AT
+
+  return n;
+}
+
+/* The part of `drawable` the outline can touch, in drawable
+ * coordinates: its bounds widened by a pixel for antialiasing, within
+ * the selection. FALSE when that is empty. */
+static gboolean
+line_area (GimpDrawable      *drawable,
+           const GimpVector2 *points,
+           guint              count,
+           GeglRectangle     *area)
+{
+  double x1 = points[0].x, y1 = points[0].y, x2 = x1, y2 = y1;
+  gint   off_x, off_y, mx, my, mw, mh;
+
+  for (guint i = 1; i < count; i++)
+    {
+      x1 = MIN (x1, points[i].x);
+      y1 = MIN (y1, points[i].y);
+      x2 = MAX (x2, points[i].x);
+      y2 = MAX (y2, points[i].y);
+    }
+
+  if (! gimp_item_mask_intersect (GIMP_ITEM (drawable), &mx, &my, &mw, &mh))
+    return FALSE;
+
+  gimp_item_get_offset (GIMP_ITEM (drawable), &off_x, &off_y);
+  return gimp_rectangle_intersect (mx, my, mw, mh,
+                                   (gint) floor (x1) - 1 - off_x, (gint) floor (y1) - 1 - off_y,
+                                   (gint) (ceil (x2) - floor (x1)) + 2, (gint) (ceil (y2) - floor (y1)) + 2,
+                                   &area->x, &area->y, &area->width, &area->height);
+}
+
+/* gimp_drawable_fill_scan_convert (app/core/gimpdrawable-fill.c, the
+ * same in all four engine sets) limited to `area`, which it computes as
+ * the whole selection or layer: a short line on a large layer then
+ * composites and stores for undo only the pixels it can touch. */
+static void
+line_fill (GimpDrawable        *drawable,
+           GimpFillOptions     *options,
+           GimpScanConvert     *scan,
+           const GeglRectangle *area)
+{
+  GimpContext *context = GIMP_CONTEXT (options);
+  GeglBuffer  *mask, *buffer;
+  gint         off_x, off_y;
+
+  mask = gegl_buffer_new (GEGL_RECTANGLE (0, 0, area->width, area->height), babl_format ("Y u8"));
+  gimp_item_get_offset (GIMP_ITEM (drawable), &off_x, &off_y);
+  gimp_scan_convert_render (scan, mask, area->x + off_x, area->y + off_y,
+                            gimp_fill_options_get_antialias (options));
+
+  buffer = gimp_fill_options_create_buffer (options, drawable,
+                                            GEGL_RECTANGLE (0, 0, area->width, area->height),
+                                            -area->x, -area->y);
+  gimp_gegl_apply_opacity (buffer, NULL, NULL, buffer, mask, 0, 0, 1.0);
+  g_object_unref (mask);
+
+  gimp_drawable_apply_buffer (drawable, buffer, GEGL_RECTANGLE (0, 0, area->width, area->height),
+                              TRUE, C_("undo-type", "Line"),
+                              gimp_context_get_opacity (context),
+                              gimp_context_get_paint_mode (context),
+                              GIMP_LAYER_COLOR_SPACE_AUTO, GIMP_LAYER_COLOR_SPACE_AUTO,
+                              gimp_layer_mode_get_paint_composite_mode (gimp_context_get_paint_mode (context)),
+                              NULL, area->x, area->y);
+  g_object_unref (buffer);
+
+  gimp_drawable_update (drawable, area->x, area->y, area->width, area->height);
+}
+
+GlimsStatus
+glims_layer_draw_line (GlimsEngine                 *engine,
+                       GlimsImageID                 id,
+                       GlimsItemID                  layer_id,
+                       GlimsPoint                   start,
+                       GlimsPoint                   end,
+                       const GlimsLineDrawSettings *settings,
+                       char                       **error)
+{
+  GlimsOpenImage   *open = glims_lookup_image (engine, id);
+  GlimsStatus       status;
+  GimpImage        *image;
+  GimpItem         *layer;
+  GimpContext      *context;
+  GimpFillOptions  *options;
+  GeglColor        *color;
+  GimpScanConvert  *scan;
+  GimpVector2       points[10];
+  guint             count;
+  GeglRectangle     area;
+  GError           *gerror = NULL;
+  const GlimsColor *c;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (! settings || settings->struct_size < sizeof (GlimsLineDrawSettings) || ! line_settings_valid (settings))
+    {
+      glims_fail (error, NULL, "The line settings are not valid.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! isfinite (start.x) || ! isfinite (start.y) || ! isfinite (end.x) || ! isfinite (end.y) ||
+      fabs (start.x) > GIMP_MAX_IMAGE_SIZE * 4.0 || fabs (start.y) > GIMP_MAX_IMAGE_SIZE * 4.0 ||
+      fabs (end.x) > GIMP_MAX_IMAGE_SIZE * 4.0 || fabs (end.y) > GIMP_MAX_IMAGE_SIZE * 4.0 ||
+      hypot (end.x - start.x, end.y - start.y) < 1e-6)
+    {
+      glims_fail (error, NULL, "A line needs two different points.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  status = glims_edit_ready (engine, open, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  if (open->component_layout != GLIMS_COMPONENT_LAYOUT_ORDINARY)
+    {
+      glims_fail (error, NULL, "The Line tool is available for ordinary layered images only.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
+  image = open->image;
+  if (layer_id == 0)
+    {
+      GList *selected = gimp_image_get_selected_layers (image);
+
+      layer = selected ? selected->data : NULL;
+    }
+  else
+    {
+      layer = gimp_item_get_by_id (image->gimp, layer_id);
+      if (! GIMP_IS_LAYER (layer) || gimp_item_get_image (layer) != image || ! gimp_item_is_attached (layer))
+        layer = NULL;
+    }
+  if (! layer)
+    return glims_fail (error, NULL, "Select a layer first.");
+  if (gimp_viewable_get_children (GIMP_VIEWABLE (layer)))
+    return glims_fail (error, NULL, "A line cannot be drawn on a layer group.");
+  if (gimp_item_is_content_locked (layer, NULL))
+    return glims_fail (error, NULL, "The layer's pixels are locked.");
+
+  /* The user's settings with the color, opacity and mode pinned, as
+   * glims_path_stroke does. */
+  context = gimp_context_new (engine->gimp, "Glims line", gimp_get_user_context (engine->gimp));
+  color   = gegl_color_new (NULL);
+  c       = &settings->color;
+  gegl_color_set_rgba_with_space (color, CLAMP (c->red, 0.0, 1.0), CLAMP (c->green, 0.0, 1.0),
+                                  CLAMP (c->blue, 0.0, 1.0), CLAMP (c->alpha, 0.0, 1.0), NULL);
+  gimp_context_set_foreground (context, color);
+  g_object_unref (color);
+
+  options = gimp_fill_options_new (engine->gimp, NULL, FALSE);
+  gimp_context_set_opacity (GIMP_CONTEXT (options), settings->opacity);
+  gimp_context_set_paint_mode (GIMP_CONTEXT (options), GIMP_LAYER_MODE_NORMAL);
+  gimp_fill_options_set_antialias (options, settings->antialias);
+  if (! gimp_fill_options_set_by_fill_type (options, context, GIMP_FILL_FOREGROUND, &gerror))
+    {
+      g_object_unref (options);
+      g_object_unref (context);
+      return glims_fail (error, gerror, "The line could not be set up.");
+    }
+
+  count = line_outline (start, end, settings, points);
+  if (line_area (GIMP_DRAWABLE (layer), points, count, &area))
+    {
+      scan = gimp_scan_convert_new ();
+      gimp_scan_convert_add_polyline (scan, count, points, TRUE);
+      line_fill (GIMP_DRAWABLE (layer), options, scan, &area);
+      gimp_scan_convert_free (scan);
+      gimp_image_flush (image);
+    }
+
+  g_object_unref (options);
+  g_object_unref (context);
+
+  return GLIMS_STATUS_OK;
 }

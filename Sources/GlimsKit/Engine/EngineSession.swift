@@ -2384,6 +2384,58 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// The Line tool's settings (GlimsLineDrawSettings): a straight line
+    /// `width` image pixels wide with square ends, in Photoshop's ranges.
+    struct LineDrawSettings: Equatable {
+        struct Arrowheads: OptionSet, Equatable {
+            let rawValue: UInt32
+            static let start = Arrowheads(rawValue: GLIMS_LINE_ARROW_START.rawValue)
+            static let end = Arrowheads(rawValue: GLIMS_LINE_ARROW_END.rawValue)
+        }
+
+        static let widthRange = 1.0...1000.0
+        static let arrowWidthRange = 10.0...1000.0
+        static let arrowLengthRange = 10.0...5000.0
+        static let arrowConcavityRange = -50.0...50.0
+
+        var width: Double = 1
+        var color: NSColor = .black
+        var opacity: Double = 1
+        var antialias = true
+        var arrowheads: Arrowheads = []
+        /// Percent of the line width.
+        var arrowWidth: Double = 500
+        /// Percent of the line width.
+        var arrowLength: Double = 1000
+        /// Percent of the arrowhead length; positive bends the base toward the tip.
+        var arrowConcavity: Double = 0
+    }
+
+    var supportsDrawLine: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.layer_draw_line) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.layer_draw_line)
+            && api.layer_draw_line != nil
+    }
+
+    /// Draws a straight line from `from` to `to` (image pixels) on `layer`,
+    /// inside the selection, as one undo step named "Line". An adapter
+    /// without slot 244 is UNSUPPORTED.
+    func drawLine(image: Int32, layer: Int32, from: CGPoint, to: CGPoint, settings: LineDrawSettings) throws {
+        guard supportsDrawLine, let draw = api.layer_draw_line else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot draw lines.")
+        }
+        var values = GlimsLineDrawSettings(
+            struct_size: UInt32(MemoryLayout<GlimsLineDrawSettings>.size),
+            width: settings.width, color: try Self.color(settings.color), opacity: settings.opacity,
+            antialias: settings.antialias, arrowheads: settings.arrowheads.rawValue,
+            arrow_width: settings.arrowWidth, arrow_length: settings.arrowLength,
+            arrow_concavity: settings.arrowConcavity)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(draw(engine, image, layer, GlimsPoint(x: from.x, y: from.y), GlimsPoint(x: to.x, y: to.y),
+                       &values, &error), error)
+    }
+
     // MARK: Painting
 
     struct StrokeCaptureFacts: Equatable {

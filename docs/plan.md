@@ -6735,3 +6735,31 @@ bounds, and the auto-shrink offset is added on top), and its content
 test shrinks by border color rather than alpha. Nested layers
 of a listed group move with the group. Position locks refuse before any
 move. The Recorder does not record it.
+
+### Line tool (candidate)
+
+Photoshop 4's Line tool (shortcut N, its own Tools palette cell, tag 30
+in View ▸ Tools) drags a straight line in the foreground color on the
+selected layer, inside the selection; Shift keeps it at a multiple of 45
+degrees and a click without a drag draws nothing. Tool Options offer
+Photoshop's Line Options: weight (1 to 1000 px), opacity, antialiasing,
+and arrowheads at the start, the end or both, with width (10 to 1000% of
+the weight), length (10 to 5000%) and concavity (-50 to 50% of the
+arrowhead length). The options are not persisted between launches.
+
+Additive facade slot 244, `layer_draw_line`, builds the line and its
+arrowheads as one closed outline and fills it once: GIMP's scan
+converter fills with the even-odd rule, so separate overlapping shapes
+would cancel where they cross. An arrowhead narrower than the line is
+drawn as wide as the line, and arrowheads longer together than the line
+are shortened in proportion until they meet. The fill follows
+`gimp_drawable_fill_scan_convert` (the same in all four engine sets) but
+is limited to the outline's bounds within the selection, so a short line
+on a large layer composites and stores for undo only the pixels it can
+touch; it is one undo step named "Line", and a line that misses the
+layer or the selection adds none. `gimp_item_stroke` was not used: it
+requires an attached path, which would add path undo steps. Groups,
+pixel-locked layers, component layouts and older adapters refuse; the
+interface also refuses masks and channels, since the engine draws on
+layer pixels. While recording, each line adds an explicit unsupported
+Recorder row.

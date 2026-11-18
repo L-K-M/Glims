@@ -224,6 +224,9 @@ final class CanvasToolController {
     /// taken once at the press so later UI/tool/color changes cannot
     /// redirect the queued work; only the endpoints track the drag.
     private var gradientCapture: GradientGestureSnapshot?
+    /// The Line tool's settings and foreground color, captured at the
+    /// press like the gradient's; only the end point tracks the drag.
+    private var lineCapture: EngineSession.LineDrawSettings?
     private var handOrigin: (window: NSPoint, scroll: NSPoint)?
     /// Held temporary-tool modifiers: Space for the hand, Command for the
     /// move tool, Option for color sampling.
@@ -583,6 +586,12 @@ final class CanvasToolController {
             if tool == .gradient {
                 gradientCapture = ToolState.shared.gradientSnapshot(from: point, to: point)
             }
+        case .line:
+            dragStart = point
+            dragCurrent = point
+            var settings = ToolState.shared.lineSettings
+            settings.color = ToolState.shared.foreground
+            lineCapture = settings
         case .bucketFill:
             let state = ToolState.shared
             document.fill(at: point, mode: state.fillMode, color: state.foreground,
@@ -633,6 +642,10 @@ final class CanvasToolController {
             dragCurrent = point
             selectionDragFlags = event.modifierFlags
             canvas.needsDisplay = true
+        case .line:
+            guard let start = dragStart else { return }
+            dragCurrent = event.modifierFlags.contains(.shift) ? PolygonLassoGeometry.constrained(point, from: start) : point
+            canvas.needsDisplay = true
         case .move:
             dragCurrent = point
             if floatingMove != nil {
@@ -681,6 +694,7 @@ final class CanvasToolController {
             lassoPoints = []
             handOrigin = nil
             gradientCapture = nil
+            lineCapture = nil
             transformDragCurrent = nil
             moveSnap = nil
             moveSnapWasRequested = false
@@ -788,6 +802,12 @@ final class CanvasToolController {
             let snapshot = capture.withEndpoints(from: start, to: end)
             document.gradientResource(snapshot.identity, from: snapshot.from, to: snapshot.to,
                                       settings: snapshot.settings)
+        case .line:
+            guard let start = dragStart, let settings = lineCapture else { return }
+            let finish = event.modifierFlags.contains(.shift) ? PolygonLassoGeometry.constrained(end, from: start) : end
+            // A click without a drag draws nothing, as in Photoshop.
+            guard finish.x.isFinite, finish.y.isFinite, hypot(finish.x - start.x, finish.y - start.y) >= 1 else { return }
+            document.drawLine(from: start, to: finish, settings: settings)
         case .crop:
             guard let start = dragStart else { return }
             let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
@@ -1657,7 +1677,7 @@ final class CanvasToolController {
             if dragTool?.paintTool != nil, document.strokeIsActive { document.endStroke() }
             tabletStrokeCapture = nil
             dragTool = nil; dragStart = nil; dragCurrent = nil
-            lassoPoints = []; handOrigin = nil; gradientCapture = nil
+            lassoPoints = []; handOrigin = nil; gradientCapture = nil; lineCapture = nil
             selectionDragFlags = []; pendingCrop = nil
             cancelTransform(message: nil)
             canvas.needsDisplay = true
@@ -1723,7 +1743,7 @@ final class CanvasToolController {
             guard let start = dragStart, let end = dragCurrent else { return }
             path = NSBezierPath(rect: NSRect(x: min(start.x, end.x) * scale, y: min(start.y, end.y) * scale,
                                              width: abs(end.x - start.x) * scale, height: abs(end.y - start.y) * scale))
-        case .gradient?:
+        case .gradient?, .line?:
             guard let start = dragStart, let end = dragCurrent else { return }
             path = NSBezierPath()
             path.move(to: NSPoint(x: start.x * scale, y: start.y * scale))

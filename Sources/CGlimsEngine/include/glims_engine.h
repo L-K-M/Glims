@@ -414,6 +414,29 @@ typedef enum GlimsLayerAlignment {
   GLIMS_DISTRIBUTE_RIGHT             = 12
 } GlimsLayerAlignment;
 
+/* The Line tool's arrowheads (slot 244). */
+typedef enum GlimsLineArrowheads {
+  GLIMS_LINE_ARROW_START = 1u << 0,  /* a tip at the line's start point */
+  GLIMS_LINE_ARROW_END   = 1u << 1   /* a tip at the line's end point */
+} GlimsLineArrowheads;
+
+/* How layer_draw_line draws a straight line (slot 244), as Photoshop's
+ * Line tool does: `width` image pixels wide with square ends at the
+ * endpoints; an arrowhead's tip sits on its endpoint. Arrowhead width
+ * and length are percentages of the line width and concavity is a
+ * percentage of the arrowhead length, in Photoshop's ranges. */
+typedef struct GlimsLineDrawSettings {
+  uint32_t   struct_size;      /* sizeof (GlimsLineDrawSettings) */
+  double     width;            /* image pixels, > 0 and at most 1000 */
+  GlimsColor color;            /* sRGB, 0 ... 1; its alpha multiplies the line */
+  double     opacity;          /* 0 ... 1 */
+  bool       antialias;
+  uint32_t   arrowheads;       /* GlimsLineArrowheads; no unknown bits */
+  double     arrow_width;      /* 10 ... 1000 percent of the line width */
+  double     arrow_length;     /* 10 ... 5000 percent of the line width */
+  double     arrow_concavity;  /* -50 ... 50 percent of the arrowhead length */
+} GlimsLineDrawSettings;
+
 typedef enum GlimsFillMode {
   GLIMS_FILL_SIMILAR_COLORS = 1,  /* the area of similar color around the point */
   GLIMS_FILL_SELECTION      = 2   /* the selection, or the whole layer */
@@ -4546,6 +4569,20 @@ typedef struct GlimsEngineAPI {
                                      const GlimsItemID *layers, int32_t count,
                                      GlimsItemID reference, uint32_t alignment,
                                      char **error);
+  /* Slot 244: the Line tool. Draws a straight line from `start` to `end`
+   * (image pixels) on `layer` (0: the selected layer), inside the
+   * selection if there is one, with the paint mode Normal, as one undo
+   * step named "Line". An arrowhead narrower than the line is drawn as
+   * wide as the line; arrowheads longer together than the line are
+   * shortened in proportion until they meet. A line that misses the
+   * layer or the selection changes nothing and adds no undo step. Equal or non-finite points and
+   * settings out of range are INVALID_ARGUMENT; an unknown image is
+   * NOT_FOUND; a component layout is UNSUPPORTED; a group, a layer
+   * whose pixels are locked or no target layer refuses. Every refusal
+   * changes nothing. */
+  GlimsStatus (*layer_draw_line) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                  GlimsPoint start, GlimsPoint end,
+                                  const GlimsLineDrawSettings *settings, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
