@@ -952,6 +952,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let item = sender as? NSMenuItem { item.state = guidesViewState.menuState }
     }
 
+    /// View ▸ Lock Guides: flips this window's cached lock. Pure view
+    /// state; a locked guide is simply not grabbed by the Move tool, which
+    /// then moves the layer as usual.
+    @objc func toggleLockGuides(_ sender: Any?) {
+        guard !imageDocument.isClosing else { return }
+        canvas.guideDrag.cancel()
+        guidesViewState.toggleLock()
+        canvas.locksGuides = guidesViewState.locksGuides
+        if let item = sender as? NSMenuItem { item.state = guidesViewState.lockMenuState }
+    }
+
     // MARK: Grid
 
     /// Image ▸ Configure Grid…: opens this window's grid configuration
@@ -3189,6 +3200,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // engine; toggling is view-only, so it stays available
             // wherever navigation is.
             menuItem.state = guidesViewState.menuState
+            return !imageDocument.isClosing
+        case #selector(toggleLockGuides(_:)):
+            menuItem.state = guidesViewState.lockMenuState
             return !imageDocument.isClosing
         case #selector(configureGrid(_:)):
             // The sheet seeds only from cached state; it must not stack

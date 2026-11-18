@@ -203,7 +203,7 @@ final class GuideDragController {
     func beginMoveOfGuide(at event: NSEvent) -> Bool {
         guard !document.colorInfo.mode.usesNativeChannels,
               let window = canvas.window, !document.isClosing, document.acceptsEdits,
-              canvas.showsGuides else { return false }
+              canvas.showsGuides, !canvas.locksGuides else { return false }
         let viewPoint = canvas.convert(event.locationInWindow, from: nil)
         let image = canvas.imagePoint(at: viewPoint)
         guard let guide = GuideDragLogic.hitTest(guides: document.guides, guidesVisible: canvas.showsGuides,

@@ -272,6 +272,9 @@ enum MainMenu {
             item("Save Selection as Channel…", #selector(DocumentWindowController.saveSelectionAsChannel(_:))),
             item("Quick Mask", #selector(DocumentWindowController.toggleQuickMask(_:))),
         ])
+        // Photoshop's Lock Guides key, Option-Command-semicolon.
+        let lockGuides = item("Lock Guides", #selector(DocumentWindowController.toggleLockGuides(_:)), ";")
+        lockGuides.keyEquivalentModifierMask = [.command, .option]
         add(menu, "View", [
             submenu("Tools", ToolMenuCatalog.slotGroups.map { group in
                 if group.isMultiChoice {
@@ -345,6 +348,7 @@ enum MainMenu {
             }),
             item("Show Rulers", #selector(DocumentWindowController.toggleShowRulers(_:))),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
+            lockGuides,
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),
