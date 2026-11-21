@@ -110,6 +110,16 @@ func run() async throws {
     let shellLocale = arguments.first == "--shell-locale"
     if shellLocale { arguments.removeFirst() }
     guard arguments.count == 1 else { throw ProbeError("Usage: measure-first-edit.swift [--shell-locale] PATH/TO/Glims.app") }
+    // Launch Services can inherit the caller's environment in addition to
+    // OpenConfiguration.environment. Omission there does not remove an override.
+    let locale = ProcessInfo.processInfo.environment.filter {
+        $0.key == "LANG" || $0.key == "LANGUAGE" || $0.key.hasPrefix("LC_")
+    }
+    if !shellLocale {
+        for key in locale.keys {
+            guard unsetenv(key) == 0 else { throw ProbeError("Could not clear the probe's \(key) override.") }
+        }
+    }
     let bundle = URL(fileURLWithPath: arguments[0]).standardizedFileURL.resolvingSymlinksInPath()
     guard Bundle(url: bundle)?.bundleIdentifier == "ch.lkmc.Glims",
           FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Frameworks/libglimsengine.dylib").path)
@@ -125,9 +135,10 @@ func run() async throws {
     configuration.addsToRecentItems = false
     configuration.allowsRunningApplicationSubstitution = false
     configuration.promptsUserIfNeeded = false
-    var environment = shellLocale ? ProcessInfo.processInfo.environment.filter {
-        $0.key == "LANG" || $0.key == "LANGUAGE" || $0.key.hasPrefix("LC_")
-    } : [:]
+    var environment = shellLocale ? locale : [:]
+    // An inherited development adapter would time a different engine. An
+    // empty override selects the app's normal lookup in its fresh profile.
+    environment["GLIMS_ENGINE_LIBRARY"] = ""
     for (key, leaf) in [("HOME", "home"), ("CFFIXED_USER_HOME", "home"), ("XDG_CACHE_HOME", "cache"),
                         ("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"),
                         ("TMPDIR", "tmp")] {
