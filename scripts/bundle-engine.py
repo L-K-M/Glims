@@ -398,7 +398,9 @@ class Bundler:
         gir_dirs = [os.path.join(self.install, "share/gir-1.0"), os.path.join(self.prefix, "share/gir-1.0")]
         target = os.path.join(self.lib, "girepository-1.0")
         os.makedirs(target, exist_ok=True)
-        pending, done, libraries = ["Gimp-3.0", "GimpUi-3.0"], set(), set()
+        # GObject Introspection loads the Unix namespaces at runtime. Older
+        # GIMP GIRs do not declare all of them in their transitive includes.
+        pending, done, libraries = ["Gimp-3.0", "GimpUi-3.0", "GLibUnix-2.0", "GioUnix-2.0"], set(), set()
         compiler = os.path.join(self.prefix, "bin/g-ir-compiler")
         while pending:
             name = pending.pop()

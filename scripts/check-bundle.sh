@@ -69,7 +69,9 @@ import sys
 
 import gi
 gi.require_version("Gimp", "3.0")
-from gi.repository import Gimp
+gi.require_version("GLibUnix", "2.0")
+gi.require_version("GioUnix", "2.0")
+from gi.repository import Gimp, GLibUnix, GioUnix
 
 contents = Path(sys.argv[1]).resolve()
 caches = sorted(Path(sys.base_prefix).resolve().rglob("__pycache__/*.pyc"))
