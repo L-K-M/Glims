@@ -4334,7 +4334,21 @@ final class ImageDocument {
             return count >= 3 ? nil : "Select three or more layers to distribute."
         }
         if selectionBounds != nil { return count >= 1 ? nil : "Select a layer to align." }
-        return count >= 2 ? nil : "Select two or more layers, or make a selection, to align."
+        guard count >= 2 else { return "Select two or more layers, or make a selection, to align." }
+        if let reference = layers.firstIndex(where: { $0.id == activeLayer }) {
+            var parent = layers[reference].parent
+            // Engine rows are depth-first. Each parent precedes its children.
+            for layer in layers[..<reference].reversed() {
+                if parent == 0 { break }
+                if layer.id == parent {
+                    if selectedLayerIDs.contains(parent) {
+                        return "Deselect the group containing the reference layer before aligning."
+                    }
+                    parent = layer.parent
+                }
+            }
+        }
+        return nil
     }
 
     func alignLayers(_ alignment: EngineSession.LayerAlignment) {

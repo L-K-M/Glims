@@ -2070,6 +2070,9 @@ glims_image_align_layers (GlimsEngine        *engine,
       reference = find_layer (image, reference_id);
       if (! reference)
         return invalid_alignment (error, "The reference layer is not in this image.");
+      for (gint i = 0; i < count; i++)
+        if (gimp_viewable_is_ancestor (GIMP_VIEWABLE (layers[i]), GIMP_VIEWABLE (reference)))
+          return invalid_alignment (error, "Deselect the group containing the reference layer before aligning.");
       reference_bounds = layer_content_bounds (reference);
     }
   else

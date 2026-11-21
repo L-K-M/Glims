@@ -4561,8 +4561,8 @@ typedef struct GlimsEngineAPI {
    * or 0 for the selection's bounds. Distribute (GLIMS_DISTRIBUTE_*)
    * needs at least three layers and `reference` 0; the outermost two
    * stay put. One undo step. An unknown alignment, a count out of range,
-   * a repeated or foreign layer, a missing reference or an empty
-   * selection is INVALID_ARGUMENT; a position-locked layer is LOCKED; a
+   * a repeated or foreign layer, a missing reference, a listed ancestor
+   * of the reference or an empty selection is INVALID_ARGUMENT; a position-locked layer is LOCKED; a
    * component layout is UNSUPPORTED; a floating selection, strokes,
    * previews and plug-ins refuse. Every refusal changes nothing. */
   GlimsStatus (*image_align_layers) (GlimsEngine *engine, GlimsImageID image,

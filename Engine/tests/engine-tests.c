@@ -13480,6 +13480,18 @@ test_image_align_layers (void)
        align_layer_x (image, ids[1]) == 0 && undo_depth (image) == depth;
   CHECK (ok, "image_align_layers refuses bad alignments, counts, lists, references, an empty selection, "
              "two layers to distribute and a position lock, changing nothing");
+  GlimsItemID group = 0, subgroup = 0;
+  ok = api->create_group (engine, image, 0, 0, "Outer", &group, NULL) == GLIMS_STATUS_OK &&
+       api->create_group (engine, image, group, 0, "Inner", &subgroup, NULL) == GLIMS_STATUS_OK &&
+       api->reparent_layer (engine, image, ids[1], subgroup, 0, NULL) == GLIMS_STATUS_OK &&
+       api->reparent_layer (engine, image, ids[0], group, 0, NULL) == GLIMS_STATUS_OK &&
+       api->set_layer_locks (engine, image, ids[2], GLIMS_LOCK_POSITION, 0, NULL) == GLIMS_STATUS_OK;
+  CHECK (ok, "nest the reference at x 20 inside a group with content at x 5");
+  depth = undo_depth (image);
+  CHECK (ok && api->image_align_layers (engine, image, (GlimsItemID[]) { ids[2], group }, 2,
+                                        ids[1], GLIMS_ALIGN_LEFT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         undo_depth (image) == depth && align_layer_x (image, ids[1]) == 0 && align_layer_x (image, ids[2]) == 0,
+         "aligning a group to its nested reference refuses before moving any layer or adding undo");
   api->image_close (engine, image);
 }
 
