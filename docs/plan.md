@@ -5954,8 +5954,10 @@ The first launch uses a disposable profile. The second reuses its registry
 and caches. System disk caches can be warm in both runs. To reproduce an
 explicit locale override, run
 `LC_TIME=C scripts/measure-first-edit.swift --shell-locale dist/Glims.app`.
-That option passes the shell's LANG, LANGUAGE and LC_* values to Launch
-Services. Ordinary measurements use its default launch environment.
+By default the probe clears its own LANG, LANGUAGE and LC_* variables before
+launching Glims. Launch Services can otherwise inherit them even when the
+launch configuration omits them. The option preserves and passes those values
+so the override run exercises the same locale as the shell.
 
 ### Missing command-cache recovery (experimental)
 
