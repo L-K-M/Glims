@@ -136,6 +136,9 @@ func run() async throws {
     configuration.allowsRunningApplicationSubstitution = false
     configuration.promptsUserIfNeeded = false
     var environment = shellLocale ? locale : [:]
+    // An inherited development adapter would time a different engine. An
+    // empty override selects the app's normal lookup in its fresh profile.
+    environment["GLIMS_ENGINE_LIBRARY"] = ""
     for (key, leaf) in [("HOME", "home"), ("CFFIXED_USER_HOME", "home"), ("XDG_CACHE_HOME", "cache"),
                         ("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"),
                         ("TMPDIR", "tmp")] {

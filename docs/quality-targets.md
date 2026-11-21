@@ -26,7 +26,7 @@ Use `scripts/measure-first-edit.swift` for a timed Duplicate Layer followed by
 a verified Undo. Earlier versions of this probe inherited the calling shell's
 locale even on default runs. On the same signed 3.2.8 package, first edit with
 a fresh profile took 1.984 seconds with the shell locale cleared and 12.264
-seconds with an explicit override that required native plug-in discovery.
+seconds when the shell locale forced native plug-in discovery.
 Those two timings apply to this Mac and package.
 
 The current startup investigation identified plug-in discovery and font

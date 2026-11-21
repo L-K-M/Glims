@@ -5957,7 +5957,9 @@ explicit locale override, run
 By default the probe clears its own LANG, LANGUAGE and LC_* variables before
 launching Glims. Launch Services can otherwise inherit them even when the
 launch configuration omits them. The option preserves and passes those values
-so the override run exercises the same locale as the shell.
+so the override run exercises the same locale as the shell. Both modes clear
+the development adapter override, `GLIMS_ENGINE_LIBRARY`, to measure the
+packaged engine. Other shell settings can still affect the launch.
 
 ### Missing command-cache recovery (experimental)
 
