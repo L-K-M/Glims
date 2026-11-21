@@ -44,6 +44,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 import urllib.request
 
@@ -693,6 +694,18 @@ class Bundler:
                 if name.endswith(".app"):
                     run("codesign", "--force", "--sign", identity, os.path.join(root, name))
 
+    def compile_plugin_imports(self):
+        # Inner signing makes the relocated interpreter runnable. The outer
+        # bundle signature will cover its source-checked, read-only caches.
+        script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "compile-plugin-imports.py")
+        contents = os.path.realpath(self.contents)
+        with tempfile.TemporaryDirectory(prefix="glims-python-imports-") as temporary:
+            env = {"HOME": temporary, "CFFIXED_USER_HOME": temporary, "TMPDIR": temporary,
+                   "GI_TYPELIB_PATH": os.path.join(contents, "lib/girepository-1.0"),
+                   "XDG_DATA_DIRS": os.path.join(contents, "share")}
+            subprocess.run([os.path.join(contents, "MacOS/python3"), "-I", "-B", script, contents],
+                           cwd=temporary, env=env, check=True, timeout=60)
+
 
 def main():
     if len(sys.argv) != 6:
@@ -710,6 +723,7 @@ def main():
     bundler.check_no_build_paths()
     components = bundler.write_notices()
     bundler.sign()
+    bundler.compile_plugin_imports()
     print(f"-- {len(copied)} dependency libraries, {len(typelibs)} typelibs, "
           f"{components} components in Engine-Notices.txt")
     return 0

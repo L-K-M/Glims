@@ -57,6 +57,32 @@ mkdir -p "$WORK/psd-composite/home" "$WORK/psd-composite/cache"
 
 
 status=0
+echo "==> Python plug-in imports against the bundled runtime"
+if sandbox-exec -p "$PROFILE" env HOME="$WORK/home" CFFIXED_USER_HOME="$WORK/home" TMPDIR="$WORK" \
+     GI_TYPELIB_PATH="$APP/Contents/lib/girepository-1.0" XDG_DATA_DIRS="$APP/Contents/share" \
+     "$APP/Contents/MacOS/python3" -I -B - "$APP/Contents" <<'PY_IMPORT'
+import importlib.util
+import marshal
+from pathlib import Path
+import sys
+
+import gi
+gi.require_version("Gimp", "3.0")
+from gi.repository import Gimp
+
+source = Path(gi.__file__).resolve()
+cache = Path(gi.__cached__).read_bytes()
+header = importlib.util.MAGIC_NUMBER + (3).to_bytes(4, "little") + importlib.util.source_hash(source.read_bytes())
+assert cache[:16] == header, "GIMP binding bytecode must match its bundled source and interpreter"
+assert marshal.loads(cache[16:]).co_filename == str(source.relative_to(Path(sys.argv[1]).resolve()))
+PY_IMPORT
+then
+  echo "-- loaded GIMP bindings with relocatable source-checked bytecode"
+else
+  echo "!! bundled Python plug-in import check failed"
+  status=1
+fi
+
 echo "==> Conformance tests against the bundled adapter (build trees unreadable)"
 if sandbox-exec -p "$PROFILE" env HOME="$WORK/home" TMPDIR="$WORK" \
      "$WORK/glims-engine-tests" "$ADAPTER" "$WORK/tests" "$ROOT/Engine/tests/fixtures" > "$WORK/tests.log" 2>&1; then
