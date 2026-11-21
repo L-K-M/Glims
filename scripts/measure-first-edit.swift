@@ -50,20 +50,21 @@ func press(_ item: AXUIElement, named name: String) throws {
 
 @MainActor
 func measure(bundle: URL, configuration: NSWorkspace.OpenConfiguration, label: String) async throws {
-    let existingPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "ch.lkmc.Glims")
-        .map(\.processIdentifier))
+    let existingPIDs = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
     let start = now()
     let deadline = start + 60
     let app = try await NSWorkspace.shared.openApplication(at: bundle, configuration: configuration)
-    guard !existingPIDs.contains(app.processIdentifier),
-          app.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == bundle else {
-        throw ProbeError("Launch Services did not return a new instance of the requested bundle.")
+    guard !existingPIDs.contains(app.processIdentifier) else {
+        throw ProbeError("Launch Services returned an existing application.")
     }
     let ax = AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetMessagingTimeout(ax, 1)
 
     func title(_ window: AXUIElement) -> String? { attribute(window, kAXTitleAttribute as CFString) as? String }
     do {
+        guard app.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == bundle else {
+            throw ProbeError("Launch Services returned a different bundle.")
+        }
         let document = try await waitFor("the initial Untitled document", until: deadline) { () throws -> AXUIElement? in
             guard !app.isTerminated else { throw ProbeError("Glims exited during launch.") }
             guard let window = elementAttribute(ax, kAXMainWindowAttribute as CFString),
@@ -89,13 +90,17 @@ func measure(bundle: URL, configuration: NSWorkspace.OpenConfiguration, label: S
         app.terminate()
         _ = try await waitFor("Glims to quit", until: now() + 10) { app.isTerminated ? true : nil }
         print(String(format: "%@: document %.3f s, first edit %.3f s (Undo verified)", label, windowTime, editTime))
-    } catch {
+    } catch let failure {
         // This instance was created solely for the probe and owns only a disposable document.
         if !app.isTerminated {
             app.forceTerminate()
-            _ = try await waitFor("the probe instance to exit", until: now() + 10) { app.isTerminated ? true : nil }
+            do {
+                _ = try await waitFor("the probe instance to exit", until: now() + 10) { app.isTerminated ? true : nil }
+            } catch {
+                throw ProbeError("\(failure.localizedDescription) Cleanup also failed: \(error.localizedDescription)")
+            }
         }
-        throw error
+        throw failure
     }
 }
 
