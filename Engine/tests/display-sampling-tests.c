@@ -49,6 +49,29 @@ static void constant_checks(GlimsEngine *e,Fixture *f,guint pattern){Snapshot be
 if(pattern==0){CHECK(render(e,f,route,dest,1,(GlimsRect){3,3,1,1},out,4)==GLIMS_STATUS_OK,"unit-scale opaque source/profile baseline succeeds");pixel_expected(out,rgb,1);CHECK(render(e,f,route,dest,1.25,(GlimsRect){3,3,1,1},out,4)==GLIMS_STATUS_OK,"fractional corner render succeeds");pixel_expected(out,rgb,.09);}else{CHECK(render(e,f,route,dest,.5,(GlimsRect){0,0,1,1},out,4)==GLIMS_STATUS_OK,"dyadic transparent checker render succeeds");pixel_expected(out,rgb,.5);}
   if(pattern==1){guint8 reduced[3*3*4];memset(reduced,0,sizeof reduced);CHECK(render(e,f,route,dest,.75,(GlimsRect){0,0,3,3},reduced,12)==GLIMS_STATUS_OK,"non-dyadic reduction succeeds");guint partial=0;for(guint i=0;i<9;i++){double a=reduced[i*4+3]/255.;if(a>0&&a<1)partial++;for(guint c=0;c<3;c++)CHECK(abs((int)reduced[4*i+c]-byte(rgb[c]*a))<=2,"non-dyadic covered-color invariant has no nonlinear transparent fringe");}CHECK(partial>0,"non-dyadic test positively has fractional alpha");}}
  CHECK(snapshot(e,f,&after)&&equal_snap(&before,&after),"ordinary renders preserve source pixels/profile/mask/history/dirty");snap_free(&after);snap_free(&before);}
+static void wide_pan_checks(GlimsEngine *e){
+ const float color[3]={.8f,.2f,.1f};Fixture f;CHECK(fixture_new(e,&f,FALSE,&srgb,267,3,FALSE,1,color),"wide pan fixture creates");if(!f.id)return;
+ GlimsOpenImage *open=glims_lookup_image(e,f.id);guint8 seed[3*1040],actual[3*1047],fresh[3*1047];
+ memset(seed,0,sizeof seed);memset(actual,0xa5,sizeof actual);memset(fresh,0xa5,sizeof fresh);
+ CHECK(open&&render(e,&f,0,&srgb,1.3,(GlimsRect){0,0,260,3},seed,1040)==GLIMS_STATUS_OK,"wide pan seed renders");
+ CHECK(render(e,&f,0,&srgb,1.3,(GlimsRect){8,0,260,3},actual,1047)==GLIMS_STATUS_OK,"wide pan crosses sampling chunks");
+ if(open){glims_display_sample_free(open->display_sample);open->display_sample=NULL;}
+ CHECK(render(e,&f,0,&srgb,1.3,(GlimsRect){8,0,260,3},fresh,1047)==GLIMS_STATUS_OK&&!memcmp(actual,fresh,sizeof actual),
+       "wide cached pan matches fresh sampling across chunk boundaries");
+ CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"wide pan fixture closes");
+}
+static void legacy_pan_checks(GlimsEngine *e,Fixture *f){
+ const double scales[]={.5,.75,1.25};const GlimsRect moves[]={{1,0,4,4},{-1,0,4,4},{0,1,4,4},{0,-1,4,4},{1,1,4,4}};
+ GlimsOpenImage *open=glims_lookup_image(e,f->id);CHECK(open!=NULL,"pan source is open");if(!open)return;
+ for(guint s=0;s<G_N_ELEMENTS(scales);s++)for(guint m=0;m<G_N_ELEMENTS(moves);m++){
+  guint8 seed[4*16]={0},actual[4*19],fresh[4*19];memset(actual,0xa5,sizeof actual);memset(fresh,0xa5,sizeof fresh);
+  CHECK(render(e,f,0,&srgb,scales[s],(GlimsRect){0,0,4,4},seed,16)==GLIMS_STATUS_OK,"profiled fixture pan seed renders");
+  CHECK(render(e,f,0,&srgb,scales[s],moves[m],actual,19)==GLIMS_STATUS_OK,"profiled fixture pan renders");
+  glims_display_sample_free(open->display_sample);open->display_sample=NULL;
+  CHECK(render(e,f,0,&srgb,scales[s],moves[m],fresh,19)==GLIMS_STATUS_OK&&!memcmp(actual,fresh,sizeof actual),
+        "cached pan matches fresh output and preserves padding across profiles and alpha");
+ }
+}
 static void wide_checks(GlimsEngine *e){const float color[3]={.8f,.2f,.1f};Fixture f;CHECK(fixture_new(e,&f,FALSE,&srgb,267,3,FALSE,1,color),"odd-width RGB fixture creates");if(!f.id)return;double src[3]={color[0],color[1],color[2]},rgb[3];oracle_color(&f,&srgb,FALSE,src,rgb);Snapshot before,after;CHECK(snapshot(e,&f,&before),"wide source snapshot");guint width=348,height=4;guint8 *full=g_malloc0(width*height*4),*split=g_malloc0(width*height*4);CHECK(render(e,&f,1,&srgb,1.3,(GlimsRect){0,0,width,height},full,width*4)==GLIMS_STATUS_OK,"odd full-frame magnification succeeds");
  for(guint y=0;y<height;y++)for(guint x=0;x<width;x++)pixel_expected(full+4*(y*width+x),rgb,checker_alpha(f.w,f.h,x,y,1.3));
  CHECK(render(e,&f,1,&srgb,1.3,(GlimsRect){0,0,256,height},split,width*4)==GLIMS_STATUS_OK,"left partition succeeds");CHECK(render(e,&f,1,&srgb,1.3,(GlimsRect){256,0,width-256,height},split+256*4,width*4)==GLIMS_STATUS_OK,"offset right partition succeeds");CHECK(!memcmp(full,split,width*height*4),"global magnification is byte-identical across 256-pixel partition");CHECK(snapshot(e,&f,&after)&&equal_snap(&before,&after),"odd reads preserve exact source state");snap_free(&after);snap_free(&before);g_free(split);g_free(full);CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"odd fixture closes");}
@@ -244,5 +267,5 @@ static void deepest_scale_checks(void)
  }
 }
 
-static GlimsStatus worker(GlimsEngine *e,gpointer unused){(void)unused;const float rgb[3]={.8f,.2f,.1f},g[3]={.25f,0,0};for(guint kind=0;kind<3;kind++)for(guint pattern=0;pattern<2;pattern++){Fixture f;CHECK(fixture_new(e,&f,kind==2,kind==0?&srgb:kind==1?&linear:&gray,4,4,FALSE,pattern,kind==2?g:rgb),"RGB/Gray profile sampling fixture creates");if(f.id){constant_checks(e,&f,pattern);CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"profile fixture closes");}}wide_checks(e);hdr_checks(e);freshness_and_guards(e);private_tiny();persistent_checks();large_coordinate_checks();deepest_scale_checks();return GLIMS_STATUS_OK;}
+static GlimsStatus worker(GlimsEngine *e,gpointer unused){(void)unused;const float rgb[3]={.8f,.2f,.1f},g[3]={.25f,0,0};for(guint kind=0;kind<3;kind++)for(guint pattern=0;pattern<2;pattern++){Fixture f;CHECK(fixture_new(e,&f,kind==2,kind==0?&srgb:kind==1?&linear:&gray,4,4,FALSE,pattern,kind==2?g:rgb),"RGB/Gray profile sampling fixture creates");if(f.id){constant_checks(e,&f,pattern);legacy_pan_checks(e,&f);CHECK(api->image_close(e,f.id)==GLIMS_STATUS_OK,"profile fixture closes");}}wide_checks(e);wide_pan_checks(e);hdr_checks(e);freshness_and_guards(e);private_tiny();persistent_checks();large_coordinate_checks();deepest_scale_checks();return GLIMS_STATUS_OK;}
 int main(int argc,char **argv){if(argc!=2)return 2;const char *fixtures=g_getenv("GLIMS_DISPLAY_FIXTURES");if(!fixtures||!g_path_is_absolute(fixtures))return 2;if(!srgb_new()||!load_icc(fixtures,"linear-rgb.icc",&linear)||!load_icc(fixtures,"gray.icc",&gray)){icc_free(&gray);icc_free(&linear);icc_free(&srgb);return 2;}api=glims_engine_get_api(GLIMS_ENGINE_API_VERSION);if(!api||api->struct_size<offsetof(GlimsEngineAPI,image_render_proofed)+sizeof api->image_render_proofed||!api->image_render_proofed)return 2;gchar *user=g_build_filename(argv[1],"user",NULL),*cache=g_build_filename(argv[1],"cache",NULL);GlimsEngineConfig config={.struct_size=sizeof config,.user_directory=user,.cache_directory=cache};GlimsEngine *engine=NULL;char *error=NULL;GlimsStatus status=api->start(&config,&engine,&error);g_free(user);g_free(cache);if(status!=GLIMS_STATUS_OK||!engine){fprintf(stderr,"start %s\n",error?error:"");api->free_string(error);icc_free(&gray);icc_free(&linear);icc_free(&srgb);return 2;}api->free_string(error);status=glims_engine_call(engine,worker,NULL);api->stop(engine);icc_free(&gray);icc_free(&linear);icc_free(&srgb);printf("checks=%u failures=%u\n",checks,failures);return status==GLIMS_STATUS_OK&&!failures?0:1;}

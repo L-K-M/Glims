@@ -4,6 +4,7 @@
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "gegl/gimptilehandlervalidate.h"
 
@@ -39,6 +40,10 @@ struct GlimsDisplaySample {
   GMutex dirty_lock;
   gboolean dirty;
   GeglRectangle dirty_rect;
+  guint64 damage_generation;
+  guint8 *legacy_pixels;
+  GlimsRect legacy_area;
+  double legacy_scale;
 };
 
 static gboolean
@@ -62,6 +67,8 @@ source_damage (gpointer source, const GeglRectangle *rect, GlimsDisplaySample *s
   GeglRectangle damage;
   if (!clip_rect (rect ? rect : &sample->extent, &sample->extent, &damage)) return;
   g_mutex_lock (&sample->dirty_lock);
+  if (sample->damage_generation != G_MAXUINT64) sample->damage_generation++;
+  g_clear_pointer (&sample->legacy_pixels, g_free);
   if (sample->dirty)
     {
       gint64 left = MIN ((gint64) damage.x, (gint64) sample->dirty_rect.x);
@@ -235,8 +242,103 @@ glims_display_sample_free (GlimsDisplaySample *sample)
   g_clear_object (&sample->buffer);
   g_clear_object (&sample->validate);
   g_clear_object (&sample->source_validate);
+  g_free (sample->legacy_pixels);
   g_mutex_clear (&sample->dirty_lock);
   g_free (sample);
+}
+
+gboolean
+glims_display_sample_get_legacy (GlimsDisplaySample *sample, double scale, GlimsRect area,
+                                 void *pixels, size_t stride)
+{
+  gboolean hit = FALSE;
+  g_mutex_lock (&sample->dirty_lock);
+  if (!sample->dirty && sample->legacy_pixels && sample->legacy_scale == scale &&
+      sample->legacy_area.x == area.x && sample->legacy_area.y == area.y &&
+      sample->legacy_area.width == area.width && sample->legacy_area.height == area.height)
+    {
+      size_t row = (size_t) area.width * 4;
+      for (gint y = 0; y < area.height; y++)
+        memcpy ((guint8 *) pixels + (size_t) y * stride, sample->legacy_pixels + (size_t) y * row, row);
+      hit = TRUE;
+    }
+  g_mutex_unlock (&sample->dirty_lock);
+  return hit;
+}
+
+gboolean
+glims_display_sample_get_pan (GlimsDisplaySample *sample, double scale, GlimsRect area,
+                              void *pixels, size_t stride, GlimsRect *missing, guint64 *generation)
+{
+  gboolean hit = FALSE;
+  g_mutex_lock (&sample->dirty_lock);
+  GlimsRect old = sample->legacy_area;
+  gint64 dx = (gint64) area.x - old.x, dy = (gint64) area.y - old.y;
+  if (!sample->dirty && sample->damage_generation != G_MAXUINT64 && sample->legacy_pixels && sample->legacy_scale == scale &&
+      old.width == area.width && old.height == area.height)
+    {
+      size_t row = (size_t) area.width * 4;
+      if (dy == 0 && dx != 0 && llabs (dx) < area.width)
+        {
+          size_t count = (size_t) (area.width - llabs (dx)) * 4;
+          size_t source_x = dx > 0 ? (size_t) dx * 4 : 0;
+          size_t target_x = dx < 0 ? (size_t) -dx * 4 : 0;
+          for (gint y = 0; y < area.height; y++)
+            memcpy ((guint8 *) pixels + (size_t) y * stride + target_x,
+                    sample->legacy_pixels + (size_t) y * row + source_x, count);
+          *missing = (GlimsRect) { dx > 0 ? area.x + area.width - (gint) dx : area.x,
+                                   area.y, (gint) llabs (dx), area.height };
+          hit = TRUE;
+        }
+      else if (dx == 0 && dy != 0 && llabs (dy) < area.height)
+        {
+          gint count = area.height - (gint) llabs (dy);
+          gint source_y = dy > 0 ? (gint) dy : 0;
+          gint target_y = dy < 0 ? (gint) -dy : 0;
+          for (gint y = 0; y < count; y++)
+            memcpy ((guint8 *) pixels + (size_t) (target_y + y) * stride,
+                    sample->legacy_pixels + (size_t) (source_y + y) * row, row);
+          *missing = (GlimsRect) { area.x, dy > 0 ? area.y + area.height - (gint) dy : area.y,
+                                   area.width, (gint) llabs (dy) };
+          hit = TRUE;
+        }
+    }
+  if (hit) *generation = sample->damage_generation;
+  g_mutex_unlock (&sample->dirty_lock);
+  return hit;
+}
+
+gboolean
+glims_display_sample_generation_matches (GlimsDisplaySample *sample, guint64 generation)
+{
+  g_mutex_lock (&sample->dirty_lock);
+  gboolean matches = generation != G_MAXUINT64 && sample->damage_generation == generation && !sample->dirty;
+  g_mutex_unlock (&sample->dirty_lock);
+  return matches;
+}
+
+void
+glims_display_sample_put_legacy (GlimsDisplaySample *sample, double scale, GlimsRect area,
+                                 const void *pixels, size_t stride)
+{
+  size_t row = (size_t) area.width * 4;
+  if ((size_t) area.height > GLIMS_RENDER_TEMP_CHUNK_BYTES / row) return;
+  size_t bytes = row * (size_t) area.height;
+  guint8 *copy = g_try_malloc (bytes);
+  if (!copy) return;
+  for (gint y = 0; y < area.height; y++)
+    memcpy (copy + (size_t) y * row, (const guint8 *) pixels + (size_t) y * stride, row);
+  g_mutex_lock (&sample->dirty_lock);
+  if (!sample->dirty)
+    {
+      g_free (sample->legacy_pixels);
+      sample->legacy_pixels = copy;
+      sample->legacy_area = area;
+      sample->legacy_scale = scale;
+      copy = NULL;
+    }
+  g_mutex_unlock (&sample->dirty_lock);
+  g_free (copy);
 }
 
 GlimsDisplaySample *

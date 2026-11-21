@@ -760,11 +760,12 @@ validate_area (GeglBuffer *buffer,
 /* Shared by both renderers (glims_image_render, display-render.c):
  * validates `scale` and `area`, then prepares the projection buffer for
  * one synchronous read of `area` at `scale`. */
-GlimsStatus
-glims_projection_prepare_read (GlimsOpenImage  *open,
+static GlimsStatus
+projection_prepare (GlimsOpenImage  *open,
                                double           scale,
                                GlimsRect        area,
-                               GeglBuffer     **buffer_out)
+                               GeglBuffer     **buffer_out,
+                               gboolean         sampler_validates)
 {
   GimpProjection *projection;
   GeglBuffer     *buffer;
@@ -784,7 +785,7 @@ glims_projection_prepare_read (GlimsOpenImage  *open,
       GlimsStatus status = glims_plate_preview_prepare (open->image,
                                                        &open->component_preview, &buffer);
       if (status != GLIMS_STATUS_OK) return status;
-      if (scale != 1.0 || (area.width == 1 && area.height == 1))
+      if (!sampler_validates && (scale != 1.0 || (area.width == 1 && area.height == 1)))
         validate_area (buffer, scale, area);
       if (!glims_plate_preview_succeeded (open->component_preview)) return GLIMS_STATUS_FAILED;
       *buffer_out = buffer;
@@ -818,11 +819,23 @@ glims_projection_prepare_read (GlimsOpenImage  *open,
    * the validate handler, so it can return pixels from before a change.
    * Scaled reads also need level 0 current before GEGL builds its mipmaps.
    * No GEGL/GIMP source changes or private cache access are needed. */
-  if (scale != 1.0 || (area.width == 1 && area.height == 1))
+  if (!sampler_validates && (scale != 1.0 || (area.width == 1 && area.height == 1)))
     validate_area (buffer, scale, area);
 
   *buffer_out = buffer;
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_projection_prepare_read (GlimsOpenImage *open, double scale, GlimsRect area, GeglBuffer **buffer_out)
+{
+  return projection_prepare (open, scale, area, buffer_out, FALSE);
+}
+
+GlimsStatus
+glims_projection_prepare_sample (GlimsOpenImage *open, double scale, GlimsRect area, GeglBuffer **buffer_out)
+{
+  return projection_prepare (open, scale, area, buffer_out, TRUE);
 }
 
 /* Sample in the source's linear space before Babl converts to the legacy
@@ -869,30 +882,46 @@ render_legacy_scaled (GlimsEngine *engine, GlimsOpenImage *open, double scale,
   if (!fish) { status = GLIMS_STATUS_FAILED; goto out; }
   status = glims_display_sample_prepare (buffer, linear, &open->display_sample);
   if (status != GLIMS_STATUS_OK) goto out;
-  const guint columns = MIN (4096u, (guint) area.width);
+  if (glims_display_sample_get_legacy (open->display_sample, scale, area, pixels, stride))
+    goto out;
+  GlimsRect render_area = area;
+  guint64 generation = 0;
+  gboolean reused = glims_display_sample_get_pan (open->display_sample, scale, area, pixels, stride,
+                                                  &render_area, &generation);
+render_again: ;
+  const guint columns = MIN (4096u, (guint) render_area.width);
   const size_t sample_stride = (size_t) columns * (gray ? 2 : 4) * sizeof (gfloat);
   const guint rows = MIN (256u, (guint) (GLIMS_RENDER_TEMP_CHUNK_BYTES / sample_stride));
   samples = g_try_malloc ((size_t) rows * sample_stride);
   if (!samples) { status = GLIMS_STATUS_FAILED; goto out; }
-  for (gint x = 0; x < area.width; )
+  for (gint x = 0; x < render_area.width; )
     {
-      guint width = MIN (columns, (guint) (area.width - x));
-      for (gint y = 0; y < area.height; )
+      guint width = MIN (columns, (guint) (render_area.width - x));
+      for (gint y = 0; y < render_area.height; )
       {
-        guint height = MIN (rows, (guint) (area.height - y));
-        GlimsRect part = { area.x + x, area.y + y, (gint) width, (gint) height };
+        guint height = MIN (rows, (guint) (render_area.height - y));
+        GlimsRect part = { render_area.x + x, render_area.y + y, (gint) width, (gint) height };
         status = glims_display_sample_read (open->display_sample, scale, part,
                                             samples, sample_stride);
         if (status != GLIMS_STATUS_OK || !glims_plate_preview_succeeded (open->component_preview))
           { if (status == GLIMS_STATUS_OK) status = GLIMS_STATUS_FAILED; goto out; }
         for (guint row = 0; row < height; row++)
           babl_process (fish, (guint8 *) samples + row * sample_stride,
-                        pixels + (size_t) (y + row) * stride + (size_t) x * 4, width);
+                        pixels + (size_t) (render_area.y - area.y + y + row) * stride +
+                        (size_t) (render_area.x - area.x + x) * 4, width);
         y += height;
       }
       x += width;
     }
+  if (reused && !glims_display_sample_generation_matches (open->display_sample, generation))
+    {
+      g_clear_pointer (&samples, g_free);
+      render_area = area;
+      reused = FALSE;
+      goto render_again;
+    }
   status = GLIMS_STATUS_OK;
+  glims_display_sample_put_legacy (open->display_sample, scale, area, pixels, stride);
 out:
   g_free (samples);
   open->display_sample_active = FALSE;

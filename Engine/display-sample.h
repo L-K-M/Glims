@@ -43,4 +43,13 @@ void glims_display_sample_free (GlimsDisplaySample *sample);
  * may overflow and return FAILED. */
 GlimsStatus glims_display_sample_read (GlimsDisplaySample *sample, double scale,
                                       GlimsRect area, void *straight_linear, size_t stride);
+/* Experimental bounded cache of legacy premultiplied sRGB viewports. */
+gboolean glims_display_sample_get_legacy (GlimsDisplaySample *sample, double scale,
+                                          GlimsRect area, void *pixels, size_t stride);
+gboolean glims_display_sample_get_pan (GlimsDisplaySample *sample, double scale,
+                                       GlimsRect area, void *pixels, size_t stride,
+                                       GlimsRect *missing, guint64 *generation);
+gboolean glims_display_sample_generation_matches (GlimsDisplaySample *sample, guint64 generation);
+void glims_display_sample_put_legacy (GlimsDisplaySample *sample, double scale,
+                                      GlimsRect area, const void *pixels, size_t stride);
 #endif

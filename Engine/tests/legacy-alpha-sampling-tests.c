@@ -1,4 +1,5 @@
 #include "engine-private.h"
+#include "display-sample.h"
 #include <cairo.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,30 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
  GlimsOpenImage *open=glims_lookup_image(engine,id);
  CHECK(open!=NULL,"legacy image is available to the engine worker");
  if(open) {
+  const GlimsRect moves[]={{1,0,4,4},{-1,0,4,4},{0,1,4,4},{0,-1,4,4},{1,1,4,4}};
+  for(guint i=0;i<G_N_ELEMENTS(moves);i++){
+   guint8 seed[4*16]={0},reuse[4*19],actual[4*19],fresh[4*19];
+   memset(reuse,0xa5,sizeof reuse);memset(actual,0xa5,sizeof actual);memset(fresh,0xa5,sizeof fresh);
+   CHECK(glims_image_render(engine,id,1.25,(GlimsRect){0,0,4,4},seed,16)==GLIMS_STATUS_OK,
+         "pan cache seed renders");
+   GlimsRect missing={0};guint64 generation=0;
+   gboolean reused=glims_display_sample_get_pan(open->display_sample,1.25,moves[i],reuse,19,&missing,&generation);
+   CHECK(reused==(i<4),"axis-aligned pans reuse only the overlapping viewport");
+   CHECK(glims_image_render(engine,id,1.25,moves[i],actual,19)==GLIMS_STATUS_OK,"panned viewport renders");
+   glims_display_sample_free(open->display_sample);open->display_sample=NULL;
+   CHECK(glims_image_render(engine,id,1.25,moves[i],fresh,19)==GLIMS_STATUS_OK && !memcmp(actual,fresh,sizeof actual),
+         "panned viewport matches uncached rendering including row padding");
+  }
+  guint8 tight[16]={0},padded_hit[26];memset(padded_hit,0xa5,sizeof padded_hit);
+  CHECK(glims_image_render(engine,id,.5,(GlimsRect){0,0,2,2},tight,8)==GLIMS_STATUS_OK &&
+        glims_image_render(engine,id,.5,(GlimsRect){0,0,2,2},padded_hit,13)==GLIMS_STATUS_OK &&
+        !memcmp(tight,padded_hit,8) && !memcmp(tight+8,padded_hit+13,8) &&
+        padded_hit[8]==0xa5 && padded_hit[12]==0xa5 && padded_hit[21]==0xa5 && padded_hit[25]==0xa5,
+        "cached viewport supports a different output stride without touching padding");
+  guint8 cached[4]={0};
+  CHECK(glims_image_render(engine,id,.5,(GlimsRect){1,1,1,1},pixel,4)==GLIMS_STATUS_OK &&
+        glims_display_sample_get_legacy(open->display_sample,.5,(GlimsRect){1,1,1,1},cached,4) &&
+        !memcmp(pixel,cached,4),"unchanged viewport is cached exactly");
   int busy_before=engine->busy; engine->busy++;
   status=glims_image_render(engine,id,.5,(GlimsRect){1,1,1,1},pixel,4);
   CHECK(status==GLIMS_STATUS_OK && engine->busy==busy_before+1,"legacy view works during unrelated busy activity");
@@ -68,11 +93,22 @@ static GlimsStatus probe(GlimsEngine *engine, gpointer unused) {
         "legacy reentry refuses without disturbing the active read");
   open->display_sample_active=FALSE;
  }
+ /* Capture a pan epoch; a subsequent source write must invalidate it. */
+ guint64 old_generation=0;GlimsRect missing={0};guint8 overlap[3*12]={0};
+ gboolean captured_pan=open && glims_image_render(engine,id,.5,(GlimsRect){0,0,3,3},overlap,12)==GLIMS_STATUS_OK &&
+   glims_display_sample_get_pan(open->display_sample,.5,(GlimsRect){1,0,3,3},overlap,12,&missing,&old_generation);
+ CHECK(captured_pan,"pan captures a reusable source generation");
  /* The same cached source must reflect a later drawable write. */
  source[4*(3*4+3)]=0; source[4*(3*4+3)+2]=255;
  gegl_buffer_set(gimp_drawable_get_buffer(GIMP_DRAWABLE(layer)),GEGL_RECTANGLE(0,0,4,4),0,
                  babl_format("R'G'B'A u8"),source,GEGL_AUTO_ROWSTRIDE);
  gimp_drawable_update(GIMP_DRAWABLE(layer),0,0,4,4);
+ GeglBuffer *prepared=NULL;float other[4]={0};
+ CHECK(open && glims_projection_prepare_read(open,.75,(GlimsRect){0,0,1,1},&prepared)==GLIMS_STATUS_OK &&
+       glims_display_sample_read(open->display_sample,.75,(GlimsRect){0,0,1,1},other,sizeof other)==GLIMS_STATUS_OK,
+       "a separate sampling read can consume pending source damage without replacing the viewport cache");
+ CHECK(captured_pan && !glims_display_sample_generation_matches(open->display_sample,old_generation),
+       "a later write invalidates the captured pan generation");
  status=glims_image_render(engine,id,.5,(GlimsRect){1,1,1,1},pixel,4);
  CHECK(status==GLIMS_STATUS_OK && pixel[0]==0 && pixel[1]==0 &&
        abs((int)pixel[2]-64)<=1 && abs((int)pixel[3]-64)<=1,
