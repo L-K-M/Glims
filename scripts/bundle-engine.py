@@ -44,6 +44,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 import urllib.request
 
@@ -202,7 +203,10 @@ class Bundler:
             source = os.path.join(install, "lib/gimp/3.0", name)
             if os.path.isdir(source):
                 copy_tree(source, os.path.join(self.lib, "gimp/3.0", name))
-        copy_tree(os.path.join(install, "share/gimp/3.0"), self.path("share/gimp/3.0"), skip=("tool-presets",))
+        # Upstream's Script-Fu test data includes PDB.scm and pdb.scm.
+        # Shipping both breaks the sealed bundle on case-insensitive volumes.
+        copy_tree(os.path.join(install, "share/gimp/3.0"), self.path("share/gimp/3.0"),
+                  skip=("tool-presets", "tests"))
         copy_tree(os.path.join(install, "etc/gimp/3.0"), self.path("etc/gimp/3.0"))
         # No engine translations, but plug-ins complain when the catalog
         # folder they are pointed at (GIMP3_LOCALEDIR) is missing.
@@ -397,7 +401,9 @@ class Bundler:
         gir_dirs = [os.path.join(self.install, "share/gir-1.0"), os.path.join(self.prefix, "share/gir-1.0")]
         target = os.path.join(self.lib, "girepository-1.0")
         os.makedirs(target, exist_ok=True)
-        pending, done, libraries = ["Gimp-3.0", "GimpUi-3.0"], set(), set()
+        # GObject Introspection loads the Unix namespaces at runtime. Older
+        # GIMP GIRs do not declare all of them in their transitive includes.
+        pending, done, libraries = ["Gimp-3.0", "GimpUi-3.0", "GLibUnix-2.0", "GioUnix-2.0"], set(), set()
         compiler = os.path.join(self.prefix, "bin/g-ir-compiler")
         while pending:
             name = pending.pop()
@@ -693,6 +699,22 @@ class Bundler:
                 if name.endswith(".app"):
                     run("codesign", "--force", "--sign", identity, os.path.join(root, name))
 
+    def compile_plugin_imports(self):
+        # Inner signing makes the relocated interpreter runnable. The outer
+        # bundle signature will cover the resulting source-checked caches.
+        script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "compile-plugin-imports.py")
+        contents = os.path.realpath(self.contents)
+        with tempfile.TemporaryDirectory(prefix="glims-python-imports-") as temporary:
+            env = {"HOME": temporary, "CFFIXED_USER_HOME": temporary, "TMPDIR": temporary,
+                   "PYTHONHOME": os.path.realpath(self.bundled_framework),
+                   "GI_TYPELIB_PATH": os.path.join(contents, "lib/girepository-1.0"),
+                   "XDG_DATA_DIRS": os.path.join(contents, "share")}
+            # -I would ignore PYTHONHOME and find native extension modules in
+            # the build prefix. The explicit environment, -s and -P
+            # exclude external Python configuration, user packages and cwd.
+            subprocess.run([os.path.join(contents, "MacOS/python3"), "-s", "-P", "-B", script, contents],
+                           cwd=temporary, env=env, check=True, timeout=60)
+
 
 def main():
     if len(sys.argv) != 6:
@@ -710,6 +732,7 @@ def main():
     bundler.check_no_build_paths()
     components = bundler.write_notices()
     bundler.sign()
+    bundler.compile_plugin_imports()
     print(f"-- {len(copied)} dependency libraries, {len(typelibs)} typelibs, "
           f"{components} components in Engine-Notices.txt")
     return 0

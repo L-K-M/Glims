@@ -57,6 +57,39 @@ mkdir -p "$WORK/psd-composite/home" "$WORK/psd-composite/cache"
 
 
 status=0
+echo "==> Python plug-in imports against the bundled runtime"
+python_versions=("$APP"/Contents/lib/Python.framework/Versions/[0-9]*)
+if sandbox-exec -p "$PROFILE" env -i HOME="$WORK/home" CFFIXED_USER_HOME="$WORK/home" TMPDIR="$WORK" \
+     PYTHONHOME="${python_versions[0]}" GI_TYPELIB_PATH="$APP/Contents/lib/girepository-1.0" XDG_DATA_DIRS="$APP/Contents/share" \
+     "$APP/Contents/MacOS/python3" -s -P -B - "$APP/Contents" <<'PY_IMPORT'
+import importlib.util
+import marshal
+from pathlib import Path
+import sys
+
+import gi
+gi.require_version("Gimp", "3.0")
+gi.require_version("GLibUnix", "2.0")
+gi.require_version("GioUnix", "2.0")
+from gi.repository import Gimp, GLibUnix, GioUnix
+
+contents = Path(sys.argv[1]).resolve()
+caches = sorted(Path(sys.base_prefix).resolve().rglob("__pycache__/*.pyc"))
+assert Path(gi.__cached__).resolve() in caches, "Bundled gi bytecode missing"
+for path in caches:
+    source = Path(importlib.util.source_from_cache(str(path)))
+    cache = path.read_bytes()
+    header = importlib.util.MAGIC_NUMBER + (3).to_bytes(4, "little") + importlib.util.source_hash(source.read_bytes())
+    assert cache[:16] == header, f"Invalid source-checked bytecode in {path}"
+    assert marshal.loads(cache[16:]).co_filename == str(source.relative_to(contents)), path
+PY_IMPORT
+then
+  echo "-- loaded GIMP bindings with relocatable source-checked bytecode"
+else
+  echo "!! bundled Python plug-in import check failed"
+  status=1
+fi
+
 echo "==> Conformance tests against the bundled adapter (build trees unreadable)"
 if sandbox-exec -p "$PROFILE" env HOME="$WORK/home" TMPDIR="$WORK" \
      "$WORK/glims-engine-tests" "$ADAPTER" "$WORK/tests" "$ROOT/Engine/tests/fixtures" > "$WORK/tests.log" 2>&1; then
