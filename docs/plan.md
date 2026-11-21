@@ -6041,6 +6041,11 @@ locale spent 3.85 and 4.23 seconds querying 13 Python plug-ins. The same
 bundle with the compiled imports spent 2.02 and 2.41 seconds. Both variants
 listed the same commands, labels and fonts. The 107 caches added 2.54 MB.
 
+The packager omits upstream Script-Fu test data. GIMP master installs
+`PDB.scm` and `pdb.scm` into the same test directory. A copy of that signed
+bundle lost one file on a case-insensitive Mac volume. Runtime scripts stay
+in the bundle.
+
 ### Localized startup registries (candidate)
 
 The bundle can carry registries for several exact macOS language identities,

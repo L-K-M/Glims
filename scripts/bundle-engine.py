@@ -203,7 +203,10 @@ class Bundler:
             source = os.path.join(install, "lib/gimp/3.0", name)
             if os.path.isdir(source):
                 copy_tree(source, os.path.join(self.lib, "gimp/3.0", name))
-        copy_tree(os.path.join(install, "share/gimp/3.0"), self.path("share/gimp/3.0"), skip=("tool-presets",))
+        # Upstream's Script-Fu test data includes PDB.scm and pdb.scm.
+        # Shipping both breaks the sealed bundle on case-insensitive volumes.
+        copy_tree(os.path.join(install, "share/gimp/3.0"), self.path("share/gimp/3.0"),
+                  skip=("tool-presets", "tests"))
         copy_tree(os.path.join(install, "etc/gimp/3.0"), self.path("etc/gimp/3.0"))
         # No engine translations, but plug-ins complain when the catalog
         # folder they are pointed at (GIMP3_LOCALEDIR) is missing.

@@ -1,6 +1,7 @@
 """Exercise packaging argument/preflight behavior without compiling an engine."""
 import os
 from pathlib import Path
+import runpy
 import shutil
 import shlex
 import subprocess
@@ -77,6 +78,24 @@ class AppPackagingTests(unittest.TestCase):
         self.assertIn("absolute directory", result.stderr)
         self.assertNotIn("reached-swift", result.stderr)
         self.assertEqual(self.run_build("--shell-only").returncode, 42)
+
+    def test_engine_data_includes_runtime_scripts_and_omits_upstream_tests(self):
+        install = self.root / "install"
+        for directory in ("bin", "etc/gimp/3.0", "lib/babl-0.1", "lib/gegl-0.4",
+                          "lib/gimp/3.0/environ", "lib/gimp/3.0/interpreters",
+                          "share/gimp/3.0/scripts", "share/gimp/3.0/tests"):
+            (install / directory).mkdir(parents=True)
+        data = Path("share/gimp/3.0")
+        (install / data / "scripts/runtime.scm").write_text("runtime")
+        (install / data / "tests/pdb.scm").write_text("upstream test")
+        adapter = self.root / "libglimsengine.dylib"
+        adapter.touch()
+        app = self.root / "Glims.app"
+        bundler = runpy.run_path(str(ROOT / "scripts/bundle-engine.py"))["Bundler"]
+        bundler(app, install, self.root / "prefix", adapter, []).copy_engine()
+        packaged = app / "Contents" / data
+        self.assertEqual((packaged / "scripts/runtime.scm").read_text(), "runtime")
+        self.assertFalse((packaged / "tests").exists())
 
     def make_check_bundle(self):
         app = self.root / "dist/Glims.app"
