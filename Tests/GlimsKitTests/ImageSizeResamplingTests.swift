@@ -47,7 +47,7 @@ final class ImageSizeResamplingTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(#"{"tag":"scale","width":1,"height":1}"#)))) {
             XCTAssertTrue($0.localizedDescription.contains("Version 27 requires"), $0.localizedDescription)
         }
-        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(command(), version: 28))))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(command(), version: RecorderFileCodec.latestVersion + 1))))
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(command(),
             binding: #"{"kind":"layer","symbol":"66666666-6666-6666-6666-666666666666"}"#))))
     }

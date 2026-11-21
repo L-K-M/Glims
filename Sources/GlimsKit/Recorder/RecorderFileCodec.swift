@@ -30,6 +30,7 @@ enum RecorderFileCodec {
     static let blurFilterVersion = 26
     static let scaleInterpolationVersion = 27
     static let arbitraryRotationVersion = 28
+    static let latestVersion = arbitraryRotationVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -106,7 +107,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...arbitraryRotationVersion)
+        let fileVersion = try integer(root.get("version"), range: version...latestVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])

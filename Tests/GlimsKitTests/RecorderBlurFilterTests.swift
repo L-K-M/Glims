@@ -112,7 +112,7 @@ final class RecorderBlurFilterTests: XCTestCase {
         rejects(document(success(unsharp), version: 10), reason: "version 26")
         rejects(document(success(#"{"tag":"scale","width":1,"height":1}"#, binding: #"{"kind":"none"}"#), version: 26),
                 reason: "Version 26 requires a successful Gaussian Blur or Unsharp Mask command")
-        rejects(document(success(gaussian), version: RecorderFileCodec.scaleInterpolationVersion + 1), reason: "Invalid integer")
+        rejects(document(success(gaussian), version: RecorderFileCodec.latestVersion + 1), reason: "Invalid integer")
     }
 
     func testExplicitLayerBindingIsMandatoryAndMasksAreRefused() {
