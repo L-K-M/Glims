@@ -6038,8 +6038,8 @@ header and recorded filename.
 
 On an M4 Max with GIMP 3.2.8, two runs with a fresh profile and an unmatched
 locale spent 3.85 and 4.23 seconds querying 13 Python plug-ins. The same
-bundle with the compiled imports spent 2.12 and 2.48 seconds. Both variants
-listed the same commands, labels and fonts. The 108 caches added 2.55 MB.
+bundle with the compiled imports spent 2.02 and 2.41 seconds. Both variants
+listed the same commands, labels and fonts. The 107 caches added 2.54 MB.
 
 ### Localized startup registries (candidate)
 

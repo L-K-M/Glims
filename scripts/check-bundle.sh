@@ -58,9 +58,10 @@ mkdir -p "$WORK/psd-composite/home" "$WORK/psd-composite/cache"
 
 status=0
 echo "==> Python plug-in imports against the bundled runtime"
-if sandbox-exec -p "$PROFILE" env HOME="$WORK/home" CFFIXED_USER_HOME="$WORK/home" TMPDIR="$WORK" \
-     GI_TYPELIB_PATH="$APP/Contents/lib/girepository-1.0" XDG_DATA_DIRS="$APP/Contents/share" \
-     "$APP/Contents/MacOS/python3" -I -B - "$APP/Contents" <<'PY_IMPORT'
+python_versions=("$APP"/Contents/lib/Python.framework/Versions/[0-9]*)
+if sandbox-exec -p "$PROFILE" env -i HOME="$WORK/home" CFFIXED_USER_HOME="$WORK/home" TMPDIR="$WORK" \
+     PYTHONHOME="${python_versions[0]}" GI_TYPELIB_PATH="$APP/Contents/lib/girepository-1.0" XDG_DATA_DIRS="$APP/Contents/share" \
+     "$APP/Contents/MacOS/python3" -s -P -B - "$APP/Contents" <<'PY_IMPORT'
 import importlib.util
 import marshal
 from pathlib import Path

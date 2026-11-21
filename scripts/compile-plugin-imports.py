@@ -6,7 +6,7 @@ from pathlib import Path
 
 def main(contents):
     runtime = Path(sys.base_prefix).resolve()
-    if runtime.parent != contents / "lib/Python.framework/Versions":
+    if runtime.parent != contents / "lib/Python.framework/Versions" or Path(sys.base_exec_prefix).resolve() != runtime:
         raise RuntimeError("Plug-in imports must be compiled by the bundled Python")
 
     # Load the binding used by Python plug-ins during their native query.

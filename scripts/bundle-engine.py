@@ -701,9 +701,13 @@ class Bundler:
         contents = os.path.realpath(self.contents)
         with tempfile.TemporaryDirectory(prefix="glims-python-imports-") as temporary:
             env = {"HOME": temporary, "CFFIXED_USER_HOME": temporary, "TMPDIR": temporary,
+                   "PYTHONHOME": os.path.realpath(self.bundled_framework),
                    "GI_TYPELIB_PATH": os.path.join(contents, "lib/girepository-1.0"),
                    "XDG_DATA_DIRS": os.path.join(contents, "share")}
-            subprocess.run([os.path.join(contents, "MacOS/python3"), "-I", "-B", script, contents],
+            # -I would ignore PYTHONHOME and find native extension modules in
+            # the build prefix. The explicit environment, -s and -P
+            # exclude external Python configuration, user packages and cwd.
+            subprocess.run([os.path.join(contents, "MacOS/python3"), "-s", "-P", "-B", script, contents],
                            cwd=temporary, env=env, check=True, timeout=60)
 
 
