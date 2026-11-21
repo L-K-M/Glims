@@ -303,6 +303,7 @@ enum RecorderFileCommand: Equatable {
     /// value; the explicit source channel is the record's `channel` binding.
     case channelToSelection(Operation)
     case transformImage(Transform)
+    case rotateCanvas(degrees: Double, fill: RecorderColor)
     case scale(width: Int, height: Int)
     /// Image Size with an explicitly chosen resampling method.
     case scaleWithInterpolation(width: Int, height: Int, interpolation: LayerInterpolation)
@@ -365,7 +366,7 @@ enum RecorderFileCommand: Equatable {
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .selectionShape, .transformImage, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
         }
     }
 }

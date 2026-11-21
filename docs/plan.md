@@ -6780,8 +6780,9 @@ come back from the transform with alpha added; they are flattened onto
 the fill color (the tool background color) inside the same undo group,
 so a background stays opaque with the background color in its new
 corners, as in Photoshop. Component layouts (CMYK, duotone, Lab) and
-older adapters keep the command disabled. The Recorder does not record
-it.
+older adapters keep the command disabled. The Recorder captures the signed
+angle and resolved sRGB fill. Replay uses the destination engine's
+interpolation preference, just as a live arbitrary rotation does.
 
 ### Align and Distribute layers (candidate)
 

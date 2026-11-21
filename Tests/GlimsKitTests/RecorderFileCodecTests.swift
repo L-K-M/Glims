@@ -216,6 +216,35 @@ final class RecorderFileCodecTests: XCTestCase {
         XCTAssertEqual(try RecorderFileCodec.decode(RecorderFileCodec.encode(snapshot)), expected)
     }
 
+    func testArbitraryRotationFileKeepsTheAngleAndFill() throws {
+        let command = #"{"tag":"rotateCanvas","degrees":-12.375,"fill":{"space":"srgb","red":0.1,"green":0.2,"blue":0.3,"alpha":0.75}}"#
+        let fixture = replace(document(success(command)), #""version":1"#, #""version":28"#)
+        let value = try RecorderFileCodec.decode(bytes(fixture))
+        let encoded = try RecorderFileCodec.encode(value)
+        let prepared = try RecorderFileSemanticBridge.prepare(value)
+        guard case .success(.rotateCanvas(let degrees, let fill)) = prepared.log.records.first?.resolution else {
+            return XCTFail("The saved rotation was lost")
+        }
+        XCTAssertEqual(degrees, -12.375)
+        XCTAssertEqual(fill, try RecorderColor(red: 0.1, green: 0.2, blue: 0.3, alpha: 0.75))
+        let snapshot = try RecorderFileCodec.snapshot(prepared.log, recordingID: value.recordingID,
+            name: value.name, origin: value.origin, descriptions: .init(), bindings: [:])
+        XCTAssertEqual(snapshot, value)
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":28"#))
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
+
+        for degrees in ["-359.99", "359.99", "0.001"] {
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(replace(fixture, "-12.375", degrees))))
+        }
+        for (before, after) in [("-12.375", "0"), ("-12.375", "-360"), ("-12.375", "360"), ("-12.375", "1e999"),
+                                (#""alpha":0.75"#, #""alpha":2"#), (#""space":"srgb""#, #""space":"cmyk""#),
+                                (#""degrees":"#, #""extra":0,"degrees":"#), (#""version":28"#, #""version":27"#),
+                                (#""kind":"none""#, #""kind":"layer","symbol":"66666666-6666-6666-6666-666666666666""#),
+                                (command, #"{"tag":"transformImage","transform":"rotate90"}"#)] {
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(fixture, before, after))))
+        }
+    }
+
     func testLayerTransformKeepsExactCoefficientsAndNamedInterpolation() throws {
         let value = try RecorderFileCodec.decode(bytes(transformDocument()))
         let encoded = try RecorderFileCodec.encode(value)

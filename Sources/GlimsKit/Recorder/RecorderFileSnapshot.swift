@@ -126,6 +126,8 @@ extension RecorderFileCommand {
             case .flipVertical: transform = .flipVertical
             }
             self = .transformImage(transform)
+        case .rotateCanvas(let degrees, let fill):
+            self = .rotateCanvas(degrees: degrees, fill: fill)
         case .scale(let width, let height): self = .scale(width: width, height: height)
         case .scaleWithInterpolation(let width, let height, let interpolation):
             self = .scaleWithInterpolation(width: width, height: height, interpolation: .init(interpolation))

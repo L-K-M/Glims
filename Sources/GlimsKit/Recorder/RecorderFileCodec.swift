@@ -29,6 +29,7 @@ enum RecorderFileCodec {
     static let maskBrightnessContrastVersion = 25
     static let blurFilterVersion = 26
     static let scaleInterpolationVersion = 27
+    static let arbitraryRotationVersion = 28
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -105,7 +106,7 @@ enum RecorderFileCodec {
     private static func file(_ node: RecorderJSON) throws -> RecorderFileValue {
         let root = try Object(node, required: ["format", "version", "recordingID", "name", "origin", "symbols", "records"])
         guard try string(root.get("format")) == format else { throw RecorderFileError.invalid("Unsupported recording format/version.") }
-        let fileVersion = try integer(root.get("version"), range: version...scaleInterpolationVersion)
+        let fileVersion = try integer(root.get("version"), range: version...arbitraryRotationVersion)
         let name = try string(root.get("name"))
         guard !name.isEmpty else { throw RecorderFileError.invalid("A recording needs a name.") }
         let origin = try Object(root.get("origin"), required: ["imageLabel", "initialWidth", "initialHeight"])
@@ -148,6 +149,7 @@ enum RecorderFileCodec {
         var hasMaskBrightnessContrast = false
         var hasBlurFilter = false
         var hasScaleInterpolation = false
+        var hasArbitraryRotation = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -174,6 +176,7 @@ enum RecorderFileCodec {
                 if case .applyBrightnessContrast = command { hasBrightnessContrast = true }
                 if case .applyGaussianBlur = command { hasBlurFilter = true }
                 if case .applyUnsharpMask = command { hasBlurFilter = true }
+                if case .rotateCanvas = command { hasArbitraryRotation = true }
                 if case .scaleWithInterpolation = command { hasScaleInterpolation = true }
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
@@ -271,6 +274,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == blurFilterVersion, !hasBlurFilter {
             throw RecorderFileError.invalid("Version 26 requires a successful Gaussian Blur or Unsharp Mask command.")
+        }
+        if fileVersion == arbitraryRotationVersion, !hasArbitraryRotation {
+            throw RecorderFileError.invalid("Version 28 requires a successful arbitrary canvas rotation.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -675,6 +681,16 @@ enum RecorderFileCodec {
             return .scaleWithInterpolation(width: try integer(value.get("width"), range: 1...524288),
                                            height: try integer(value.get("height"), range: 1...524288),
                                            interpolation: interpolation)
+        case "rotateCanvas":
+            guard version >= arbitraryRotationVersion else {
+                throw RecorderFileError.invalid("An arbitrary canvas rotation needs recording version 28.")
+            }
+            let value = try Object(node, required: ["tag", "degrees", "fill"])
+            let degrees = try number(value.get("degrees"))
+            guard EngineSession.isValidCanvasRotation(degrees) else {
+                throw RecorderFileError.invalid("Invalid canvas rotation angle.")
+            }
+            return .rotateCanvas(degrees: degrees, fill: try color(value.get("fill")))
         case "resizeCanvas":
             let value = try Object(node, required: ["tag", "width", "height", "offset", "fill"])
             let offset = try point(value.get("offset"))
@@ -1170,7 +1186,7 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("A mask adjustment needs an editing layer mask.")
             }
         case (.labSelection, .none): return
-        case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.transformImage, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.resizeCanvas, .none), (.crop, .none):
+        case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.transformImage, .none), (.rotateCanvas, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.resizeCanvas, .none), (.crop, .none):
             if case .selectColor(_, let options) = command, !options.sampleMerged { throw RecorderFileError.invalid("Drawable color selection needs a context.") }
             if case .selectCommand(.fromAlpha, _) = command { throw RecorderFileError.invalid("Select Alpha needs a context.") }
             return

@@ -4,9 +4,6 @@ import AppKit
 /// degrees and its clockwise or counter-clockwise choice.
 @MainActor
 struct ArbitraryRotationForm {
-    /// The largest angle the engine accepts, as in Photoshop.
-    static let limit = 359.99
-
     let angle: NSTextField
     let clockwise: NSButton
     let counterclockwise: NSButton
@@ -42,7 +39,7 @@ struct ArbitraryRotationForm {
     static func clockwiseDegrees(_ text: String, clockwise: Bool) -> Double? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: ",", with: ".")
-        guard let value = Double(trimmed), value.isFinite, value != 0, abs(value) <= limit else { return nil }
+        guard let value = Double(trimmed), EngineSession.isValidCanvasRotation(value) else { return nil }
         return clockwise ? value : -value
     }
 }

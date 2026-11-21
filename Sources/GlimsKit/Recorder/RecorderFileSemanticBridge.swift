@@ -99,6 +99,8 @@ enum RecorderFileSemanticBridge {
             case .flipVertical: transform = .flipVertical
             }
             return .transformImage(transform)
+        case .rotateCanvas(let degrees, let fill):
+            return .rotateCanvas(degrees: degrees, fill: fill)
         case .scale(let width, let height): return .scale(width: width, height: height)
         case .scaleWithInterpolation(let width, let height, let interpolation):
             return .scaleWithInterpolation(width: width, height: height, interpolation: interpolation.engine)
