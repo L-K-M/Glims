@@ -78,11 +78,17 @@ class AppPackagingTests(unittest.TestCase):
         self.assertNotIn("reached-swift", result.stderr)
         self.assertEqual(self.run_build("--shell-only").returncode, 42)
 
-    def test_bundle_sandbox_denies_isolated_adapter_outputs(self):
+    def make_check_bundle(self):
         app = self.root / "dist/Glims.app"
         (app / "Contents/Frameworks").mkdir(parents=True)
         (app / "Contents/MacOS").mkdir()
         (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        # Each test supplies the executable that probes its sandbox.
+        (app / "Contents/MacOS/python3").symlink_to("Glims")
+        return app
+
+    def test_bundle_sandbox_denies_isolated_adapter_outputs(self):
+        app = self.make_check_bundle()
         outputs = self.root / "isolated-adapters"
         runner = outputs / "test-engine/glims-engine-tests"
         runner.parent.mkdir(parents=True)
@@ -112,10 +118,7 @@ class AppPackagingTests(unittest.TestCase):
         self.assertIn("1 checks passed", result.stdout)
 
     def test_bundle_check_propagates_duotone_failure(self):
-        app = self.root / "dist/Glims.app"
-        (app / "Contents/Frameworks").mkdir(parents=True)
-        (app / "Contents/MacOS").mkdir()
-        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        app = self.make_check_bundle()
         outputs = self.root / "isolated-adapters"
         outputs.mkdir()
         runners = outputs / "test-engine"
@@ -137,10 +140,7 @@ class AppPackagingTests(unittest.TestCase):
         self.assertIn("Duotone preservation checks failed", result.stdout)
 
     def test_bundle_check_propagates_duotone_export_failure(self):
-        app = self.root / "dist/Glims.app"
-        (app / "Contents/Frameworks").mkdir(parents=True)
-        (app / "Contents/MacOS").mkdir()
-        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        app = self.make_check_bundle()
         runners = self.root / "isolated-adapters/test-engine"
         runners.mkdir(parents=True)
         for name in ("glims-engine-tests", "glims-duotone-preservation-tests", "glims-duotone-export-tests", "glims-psd-composite-tests"):
@@ -157,10 +157,7 @@ class AppPackagingTests(unittest.TestCase):
         self.assertIn("Duotone export checks failed", result.stdout)
 
     def test_bundle_check_propagates_psd_composite_failure(self):
-        app = self.root / "dist/Glims.app"
-        (app / "Contents/Frameworks").mkdir(parents=True)
-        (app / "Contents/MacOS").mkdir()
-        (app / "Contents/Frameworks/libglimsengine.dylib").touch()
+        app = self.make_check_bundle()
         runners = self.root / "isolated-adapters/test-engine"
         runners.mkdir(parents=True)
         for name in ("glims-engine-tests", "glims-duotone-preservation-tests", "glims-duotone-export-tests", "glims-psd-composite-tests"):
