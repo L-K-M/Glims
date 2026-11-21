@@ -17,6 +17,10 @@ def main(contents):
     sources = {Path(loader.path).resolve() for module in tuple(sys.modules.values())
                if isinstance(loader := getattr(module, "__loader__", None), SourceFileLoader)}
 
+    binding = Path(gi.__file__).resolve()
+    if binding not in sources or not binding.is_relative_to(runtime):
+        raise RuntimeError("GIMP plug-ins need the gi source shipped in the bundled Python runtime")
+
     import py_compile
     for source in sorted(sources):
         if source.is_relative_to(runtime):

@@ -70,11 +70,15 @@ import gi
 gi.require_version("Gimp", "3.0")
 from gi.repository import Gimp
 
-source = Path(gi.__file__).resolve()
-cache = Path(gi.__cached__).read_bytes()
-header = importlib.util.MAGIC_NUMBER + (3).to_bytes(4, "little") + importlib.util.source_hash(source.read_bytes())
-assert cache[:16] == header, "GIMP binding bytecode must match its bundled source and interpreter"
-assert marshal.loads(cache[16:]).co_filename == str(source.relative_to(Path(sys.argv[1]).resolve()))
+contents = Path(sys.argv[1]).resolve()
+caches = sorted(Path(sys.base_prefix).resolve().rglob("__pycache__/*.pyc"))
+assert Path(gi.__cached__).resolve() in caches, "Bundled gi bytecode missing"
+for path in caches:
+    source = Path(importlib.util.source_from_cache(str(path)))
+    cache = path.read_bytes()
+    header = importlib.util.MAGIC_NUMBER + (3).to_bytes(4, "little") + importlib.util.source_hash(source.read_bytes())
+    assert cache[:16] == header, f"Invalid source-checked bytecode in {path}"
+    assert marshal.loads(cache[16:]).co_filename == str(source.relative_to(contents)), path
 PY_IMPORT
 then
   echo "-- loaded GIMP bindings with relocatable source-checked bytecode"

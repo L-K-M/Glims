@@ -696,7 +696,7 @@ class Bundler:
 
     def compile_plugin_imports(self):
         # Inner signing makes the relocated interpreter runnable. The outer
-        # bundle signature will cover its source-checked, read-only caches.
+        # bundle signature will cover the resulting source-checked caches.
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "compile-plugin-imports.py")
         contents = os.path.realpath(self.contents)
         with tempfile.TemporaryDirectory(prefix="glims-python-imports-") as temporary:
