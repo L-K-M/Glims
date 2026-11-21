@@ -6026,6 +6026,21 @@ changed user plug-in label observed on restart. An incompatible bundle keeps
 native discovery, which took about 10.5 seconds. Final package checks,
 review and CI remain open.
 
+### Python plug-in query time
+
+The packager uses the bundled Python to import the GIMP binding once, then
+compiles the Python sources loaded by that import. Each bytecode file carries
+a checked source hash and a bundle-relative filename. This saves parsing work
+across the separate Python processes GIMP starts during plug-in discovery.
+The signed app ships the original sources alongside these caches. The bundle
+check loads the binding with development trees blocked and validates its cache
+header and recorded filename.
+
+On an M4 Max with GIMP 3.2.8, two runs with a fresh profile and an unmatched
+locale spent 3.85 and 4.23 seconds querying 13 Python plug-ins. The same
+bundle with the compiled imports spent 2.02 and 2.41 seconds. Both variants
+listed the same commands, labels and fonts. The 107 caches added 2.54 MB.
+
 ### Localized startup registries (candidate)
 
 The bundle can carry registries for several exact macOS language identities,
