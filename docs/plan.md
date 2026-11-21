@@ -6765,8 +6765,9 @@ It does not call `gimp_image_arrange_objects`: read in
 mask's offset twice (the mask's item bounds are already the selection
 bounds, and the auto-shrink offset is added on top), and its content
 test shrinks by border color rather than alpha. Nested layers
-of a listed group move with the group. Position locks refuse before any
-move. The Recorder does not record it.
+of a listed group move with the group. Align refuses a selected group
+containing the reference layer before moving any layers or adding an undo
+step. Position locks also refuse before any move. The Recorder does not record it.
 
 ### Line tool (candidate)
 

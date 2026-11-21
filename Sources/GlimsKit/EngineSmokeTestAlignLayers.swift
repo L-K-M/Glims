@@ -112,5 +112,16 @@ extension EngineSmokeTest {
         controller.alignLayersFromMenu(item(.alignRight))
         settle()
         check(x(ids[2]) == 3 && x(ids[0]) == 0, "Align Right with a selection aligns to its right edge (\(String(describing: x(ids[2]))))")
+
+        let group = try session.createGroup(image: image, index: 0, name: "Reference group")
+        try session.reparentLayer(ids[1], image: image, toParent: group, index: 0)
+        try session.selectLayers([ids[1], group, ids[2]], image: image)
+        try document.reload()
+        check(document.activeLayer == ids[1] && controller.validateMenuItem(item(.alignRight)),
+              "a selected group containing the active layer can align to a pixel selection")
+        try session.select(.none, image: image)
+        document.refreshSelection()
+        check(!controller.validateMenuItem(item(.alignRight)),
+              "a selected group containing the reference disables layer-relative Align")
     }
 }
