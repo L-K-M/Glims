@@ -5941,6 +5941,22 @@ not improve the cached 24 MP viewport: nine-read means were 16.18 ms versus
 prototype was not adopted; pursue a faster color-correct path and measure it
 with interactive panning and alpha/profile regressions before claiming a fix.
 
+### Measuring startup through the first edit
+
+Run `scripts/measure-first-edit.swift dist/Glims.app` in a macOS GUI session
+with Accessibility access. It launches the packaged app through Launch
+Services, waits for the clean Untitled document, chooses Layer > Duplicate
+Layer and times the change to the edited window title. It verifies that Undo
+restores the clean title before quitting. Both reported times start at the
+launch request and include Accessibility polling.
+
+The first launch uses a disposable profile. The second reuses its registry
+and caches. System disk caches can be warm in both runs. To reproduce an
+explicit locale override, run
+`LC_TIME=C scripts/measure-first-edit.swift --shell-locale dist/Glims.app`.
+That option passes the shell's LANG, LANGUAGE and LC_* values to Launch
+Services. Ordinary measurements use its default launch environment.
+
 ### Missing command-cache recovery (experimental)
 
 When the default per-user command cache is missing and the language matches,
