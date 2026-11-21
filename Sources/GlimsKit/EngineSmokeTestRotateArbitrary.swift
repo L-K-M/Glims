@@ -61,9 +61,11 @@ extension EngineSmokeTest {
             check(!document.canRotateArbitrary && !controller.validateMenuItem(item),
                   "an older adapter keeps Rotate ▸ Arbitrary disabled")
             var refused = false
-            do { try session.rotateImageArbitrary(image, degrees: 30, fill: .blue) }
+            let replay = SemanticImageCommand.rotateCanvas(degrees: 30, fill: try EngineSession.recorderColor(.blue))
+            do { try replay.apply(session: session, image: image) }
             catch { refused = (error as? EngineSession.EngineError)?.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue) }
-            check(refused, "an older adapter's session refuses an arbitrary rotation as unsupported")
+            check(refused && (try? session.undoInfo(image))?.undoCount == document.undoInfo.undoCount,
+                  "an older adapter refuses recorded rotation without adding an Undo step")
             return
         }
 
@@ -82,8 +84,11 @@ extension EngineSmokeTest {
             wait { window.attachedSheet == nil }
         }
         let undoBefore = document.undoInfo.undoCount
+        try document.startRecording()
         document.rotateCanvas(degrees: -30, fill: .blue)
+        try document.stopRecording()
         settle()
+        check(document.recorder.records.count == 1, "an accepted arbitrary rotation records one command")
         let info = document.info
         check(info.width >= 44 && info.width <= 47 && info.height >= 37 && info.height <= 40
                 && document.undoInfo.undoCount == undoBefore + 1,
@@ -93,17 +98,44 @@ extension EngineSmokeTest {
         check(corner == [0, 0, 255, 255] && middle?[3] == 255,
               "the background's new corners take the fill color (\(String(describing: corner)))")
 
+        let rotated = try session.copyPixels(image, merged: true)
         document.undo()
         settle()
         check(document.info.width == 40 && document.info.height == 20 && document.undoInfo.undoCount == undoBefore,
               "Undo restores the 40x20 canvas")
 
+        let file = try RecorderFileCodec.snapshot(document.recorder, recordingID: UUID(), name: "Rotate",
+            origin: .init(imageLabel: "Turn", initialWidth: 40, initialHeight: 20), descriptions: .init(), bindings: [:])
+        let prepared = try RecorderFileSemanticBridge.prepare(RecorderFileCodec.decode(RecorderFileCodec.encode(file)))
+        let checkpoint = try document.recorderInstallCheckpoint()
+        var installed: Result<Void, Error>?
+        document.installRecording(prepared, checkpoint: checkpoint, choices: [:]) { installed = $0 }
+        wait { installed != nil }
+        guard let installed else { return check(false, "the saved rotation installs") }
+        try installed.get()
+        try document.startReplay()
+        wait { !document.recorder.isReplaying }
+        settle()
+        let replayed = try session.copyPixels(image, merged: true)
+        check(replayed.width == rotated.width && replayed.height == rotated.height && replayed.pixels == rotated.pixels
+                && document.undoInfo.undoCount == undoBefore + 1,
+              "the saved rotation replays the exact pixels and fill in one Undo step")
+        document.undo()
+        settle()
+
         var errors: [String] = []
         let previousError = document.onError
         document.onError = { errors.append($0) }
         defer { document.onError = previousError }
+        try document.startRecording()
         document.rotateCanvas(degrees: 0, fill: .blue)
+        try document.stopRecording()
         settle()
+        if case .failure? = document.recorder.records.last?.resolution {
+            check(true, "a refused angle leaves a failed recording row")
+        } else {
+            check(false, "a refused angle leaves a failed recording row")
+        }
         check(document.info.width == 40 && document.undoInfo.undoCount == undoBefore && errors.count == 1,
               "a zero angle is refused without an undo step (\(errors))")
     }

@@ -385,6 +385,7 @@ Image > Rotate > Arbitrary... turns the whole image by any angle up to
 the turned image. A background layer fills its new corners with the
 background color; other layers leave them transparent. It is offered
 for layered RGB, grayscale and indexed images and is one undo step.
+The Recorder saves the angle, direction and background color.
 
 Layer > Align moves the selected layers so the edges or centers of
 their visible pixels line up: Top Edges, Vertical Centers, Bottom

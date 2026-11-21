@@ -91,6 +91,8 @@ extension RecorderFileCodec {
                 } else {
                     fileVersion = max(fileVersion, brightnessContrastVersion)
                 }
+            case .success(.rotateCanvas, _):
+                fileVersion = max(fileVersion, arbitraryRotationVersion)
             case .success(.scaleWithInterpolation, _):
                 fileVersion = max(fileVersion, scaleInterpolationVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
@@ -330,6 +332,8 @@ extension RecorderFileCodec {
         case .channelToSelection(let operation):
             return .object(["tag": .string("channelToSelection"), "operation": .string(operation.rawValue)])
         case .transformImage(let transform): return .object(["tag": .string("transformImage"), "transform": .string(transform.rawValue)])
+        case .rotateCanvas(let degrees, let fill):
+            return .object(["tag": .string("rotateCanvas"), "degrees": try d(degrees), "fill": try colorJSON(fill)])
         case .scale(let width, let height): return .object(["tag": .string("scale"), "width": j(width), "height": j(height)])
         case .scaleWithInterpolation(let width, let height, let interpolation):
             return .object(["tag": .string("scaleWithInterpolation"), "width": j(width), "height": j(height),

@@ -15,7 +15,7 @@ Current capture covers these command families:
 - Selection commands, including Select Alpha and radius-based changes.
 - Channel ▸ To Selection, with its combination operation and the explicitly
   invoked source channel (which may differ from the active paint target).
-- Image rotation and flipping.
+- Image rotation and flipping, including arbitrary canvas rotation with its signed angle and background fill.
 - Image scaling, including an explicitly chosen resampling method.
 - Canvas resizing, with offset and fill color.
 - Image cropping.
@@ -102,7 +102,8 @@ version 15. Ink Brush uses 16, Lab Levels 17, layered Lab Brush 18, layered Lab
 Fill 19, Sponge strokes 20, and ordinary tablet strokes 21. Mixed recordings use
 the highest required version. Mask Levels, Curves and Brightness/Contrast require
 versions 23, 24 and 25 respectively; Gaussian Blur and Unsharp Mask require
-version 26, and Image Size with a chosen resampling method version 27. See
+version 26, Image Size with a chosen resampling method version 27, and arbitrary
+canvas rotation with its background fill version 28. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

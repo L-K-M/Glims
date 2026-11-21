@@ -4370,7 +4370,7 @@ final class ImageDocument {
 
     /// Turns the whole image `degrees` clockwise around its center; the
     /// canvas grows to fit and the background's new corners take `fill`,
-    /// as in classic editors. Not recorded.
+    /// as in classic editors. Replay uses the signed angle and the same sRGB fill.
     func rotateCanvas(degrees: Double, fill: NSColor) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
@@ -4379,7 +4379,11 @@ final class ImageDocument {
             return
         }
         let capturedFill = (fill.copy() as? NSColor) ?? fill
-        run { session, image in try session.rotateImageArbitrary(image, degrees: degrees, fill: capturedFill) }
+        runDeferredImageCommand { session, image in
+            let command = SemanticImageCommand.rotateCanvas(degrees: degrees, fill: try EngineSession.recorderColor(capturedFill))
+            try command.apply(session: session, image: image)
+            return command
+        }
     }
 
     func crop(to rect: CGRect) {

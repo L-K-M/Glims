@@ -41,6 +41,7 @@ enum SemanticImageCommand {
     /// from the active paint target.
     case channelToSelection(EngineSession.SelectOperation)
     case transformImage(EngineSession.Transform)
+    case rotateCanvas(degrees: Double, fill: RecorderColor)
     case scale(width: Int, height: Int)
     /// Image Size with an explicitly chosen resampling method.
     case scaleWithInterpolation(width: Int, height: Int, interpolation: EngineSession.Interpolation)
@@ -120,7 +121,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
         }
     }
@@ -157,6 +158,7 @@ enum SemanticImageCommand {
             case .flipVertical: return "Flip Image Vertically"
             }
         case .scale, .scaleWithInterpolation: return "Scale Image"
+        case .rotateCanvas: return "Rotate Canvas"
         case .resizeCanvas: return "Resize Canvas"
         case .crop: return "Crop Image"
         case .layerProperties: return "Layer Properties"
@@ -201,6 +203,8 @@ enum SemanticImageCommand {
             try session.scaleImage(image, width: width, height: height)
         case .scaleWithInterpolation(let width, let height, let interpolation):
             try session.scaleImage(image, width: width, height: height, interpolation: interpolation)
+        case .rotateCanvas(let degrees, let fill):
+            try session.rotateImageArbitrary(image, degrees: degrees, fill: fill)
         case .resizeCanvas(let width, let height, let offset, let fill):
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
