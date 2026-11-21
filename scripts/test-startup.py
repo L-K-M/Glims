@@ -424,6 +424,7 @@ def main():
             assert (profile_fonts, profile_commands - {'script-fu-glims-path-regression', 'plug-in-glims-meta-oracle'}) == baseline, \
                 'special profile changed unrelated fonts or commands'
             print(f'{label}: {stdout.strip()}', flush=True)
+            return stderr
 
         check_special_profile('special profile startup', 'scripts')
         custom_scripts = special_profile / 'user/custom-scripts'
@@ -435,6 +436,15 @@ def main():
         saved_rc = special_rc.read_text()
         assert custom_setting in saved_rc and 'GLIMS_SCRIPT_DOLLAR_' not in saved_rc and 'GLIMS_SCRIPT_TILDE_' not in saved_rc, \
             'custom script path was changed or the workaround leaked into preferences'
+        changed_profile_rc, replacements = re.subn(r'\(prev-language "(?:[^"\\]|\\.)*"\)',
+                                                   '(prev-language "glims-test-other-language")', saved_rc, count=1)
+        assert replacements == 1, 'special profile lacks a previous-language setting'
+        special_rc.write_text(changed_profile_rc)
+        stderr = check_special_profile('special profile after language change', 'custom-scripts')
+        assert 'Glims: using temporary bundled command cache' in stderr, \
+            'special profile language change did not use its private registry'
+        assert '(prev-language "glims-test-other-language")' in special_rc.read_text(), \
+            'special profile language change detached its original registry and language'
         # An incompatible packaged registry must use normal plug-in discovery.
         shutil.rmtree(work / 'user')
         (work / 'user').mkdir()
