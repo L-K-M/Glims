@@ -103,7 +103,9 @@ struct ImageSizeModel: Equatable {
     private let originalWidth: Int
     private let originalHeight: Int
     /// The pixel size before rounding. Every typed digit is an edit, so
-    /// scaling from the rounded size would add up the rounding.
+    /// scaling from the rounded size would add up the rounding. An edit
+    /// with the proportions free takes the other side as shown, so locking
+    /// them again keeps the shown shape.
     private var exactWidth: Double
     private var exactHeight: Double
     var width: Int { Self.pixel(exactWidth) }
@@ -193,8 +195,8 @@ struct ImageSizeModel: Equatable {
         guard inches > 0 else { return false }
         if resample {
             let newWidth = inches * resolutionX
-            let scale = constrainProportions ? newWidth / exactWidth : 1
-            return setExactPixels(width: newWidth, height: exactHeight * scale)
+            let newHeight = constrainProportions ? exactHeight * (newWidth / exactWidth) : Double(height)
+            return setExactPixels(width: newWidth, height: newHeight)
         }
         let newX = Double(width) / inches
         let newY = resolutionY * (newX / resolutionX)
@@ -212,8 +214,8 @@ struct ImageSizeModel: Equatable {
         guard inches > 0 else { return false }
         if resample {
             let newHeight = inches * resolutionY
-            let scale = constrainProportions ? newHeight / exactHeight : 1
-            return setExactPixels(width: exactWidth * scale, height: newHeight)
+            let newWidth = constrainProportions ? exactWidth * (newHeight / exactHeight) : Double(width)
+            return setExactPixels(width: newWidth, height: newHeight)
         }
         let newY = Double(height) / inches
         let newX = resolutionX * (newY / resolutionY)
@@ -228,16 +230,16 @@ struct ImageSizeModel: Equatable {
     @discardableResult
     mutating func setPixelWidth(_ newWidth: Int) -> Bool {
         guard Self.isValidPixelWidth(newWidth) else { return false }
-        let scale = constrainProportions ? Double(newWidth) / exactWidth : 1
-        return setExactPixels(width: Double(newWidth), height: exactHeight * scale)
+        let newHeight = constrainProportions ? exactHeight * (Double(newWidth) / exactWidth) : Double(height)
+        return setExactPixels(width: Double(newWidth), height: newHeight)
     }
 
     /// Sets the pixel height, the vertical counterpart of `setPixelWidth`.
     @discardableResult
     mutating func setPixelHeight(_ newHeight: Int) -> Bool {
         guard Self.isValidPixelWidth(newHeight) else { return false }
-        let scale = constrainProportions ? Double(newHeight) / exactHeight : 1
-        return setExactPixels(width: exactWidth * scale, height: Double(newHeight))
+        let newWidth = constrainProportions ? exactWidth * (Double(newHeight) / exactHeight) : Double(width)
+        return setExactPixels(width: newWidth, height: Double(newHeight))
     }
 
     /// Without resampling the image keeps its own pixels, so turning it off

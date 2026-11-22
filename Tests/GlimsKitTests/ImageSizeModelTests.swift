@@ -149,6 +149,34 @@ final class ImageSizeModelTests: XCTestCase {
         XCTAssertEqual(ImageSizeModel.maximumResolution, 1_048_576)
     }
 
+    func testLockingAgainKeepsTheShownShape() {
+        var pixels = model(width: 1000, height: 1, resolutionX: 300, resolutionY: 300, resample: true)
+        XCTAssertTrue(pixels.setResolution(0.005, unit: .pixelsPerInch))
+        pixels.setConstrainProportions(false)
+        XCTAssertTrue(pixels.setPixelHeight(100))
+        XCTAssertEqual([pixels.width, pixels.height], [1, 100])
+        pixels.setConstrainProportions(true)
+        XCTAssertTrue(pixels.setPixelWidth(2))
+        XCTAssertEqual([pixels.width, pixels.height], [2, 200])
+
+        var printed = model(width: 1000, height: 1, resolutionX: 100, resolutionY: 100, resample: true)
+        XCTAssertTrue(printed.setPixelWidth(100))
+        printed.setConstrainProportions(false)
+        XCTAssertTrue(printed.setPrintWidth(0.5, unit: .inches))
+        XCTAssertEqual([printed.width, printed.height], [50, 1])
+        printed.setConstrainProportions(true)
+        XCTAssertTrue(printed.setPrintHeight(0.02, unit: .inches))
+        XCTAssertEqual([printed.width, printed.height], [100, 2])
+    }
+
+    func testTypingThroughASubPixelSideKeepsTheProportions() {
+        var pixels = model(width: 1000, height: 1, resolutionX: 72, resolutionY: 72, resample: true)
+        for value in [1, 10, 100, 1000] { XCTAssertTrue(pixels.setPixelWidth(value)) }
+        XCTAssertEqual([pixels.width, pixels.height], [1000, 1])
+        XCTAssertTrue(pixels.setPixelHeight(2))
+        XCTAssertEqual(pixels.width, 2000)
+    }
+
     func testTypingDigitByDigitKeepsTheProportions() {
         var pixels = model(width: 1000, height: 333, resolutionX: 72, resolutionY: 72, resample: true)
         for value in [5, 50, 500] { XCTAssertTrue(pixels.setPixelWidth(value)) }
