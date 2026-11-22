@@ -4663,6 +4663,14 @@ typedef struct GlimsEngineAPI {
                                int32_t width, int32_t height,
                                double x_resolution, double y_resolution,
                                uint32_t interpolation, char **error);
+  /* Slot 249: View > Clear Guides. Removes every ordinary guide as ONE
+   * undo step named "Clear Guides". Custom tool-owned guides stay, as
+   * image_guides and guide_remove leave them. An image without ordinary
+   * guides succeeds with no undo step, also while busy. An unknown image
+   * is NOT_FOUND; a busy engine is BUSY. Every refusal changes nothing.
+   * GLIMS_EVENT_GUIDES follows each removed guide. */
+  GlimsStatus (*image_clear_guides) (GlimsEngine *engine, GlimsImageID image,
+                                     char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

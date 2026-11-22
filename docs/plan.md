@@ -6500,9 +6500,32 @@ does not grab a guide and moves the layer as usual; new guides still come
 out of the rulers, and the Guides sheet still edits guides. Toggling it
 cancels a guide drag in progress and touches no pixels, history or
 settings. The guide-dragging case covers the shortcut, the checkmark, a
-refused grab, a ruler drag while locked and the unlocked grab. Photoshop's
-View ▸ Clear Guides is not provided: removing every guide as one undo
-step needs a new facade call.
+refused grab, a ruler drag while locked and the unlocked grab.
+
+### Clear Guides and ruler units (candidate)
+
+View ▸ Clear Guides is facade slot 249, `image_clear_guides` (ORDINARY):
+every ordinary guide leaves in one "Clear Guides" undo group, and custom
+tool-owned guides stay. GIMP has no bulk call, and an empty undo group
+stays on the stack, so an image without ordinary guides returns before
+the group opens. The menu item needs a guide and no Lock Guides.
+
+View ▸ Ruler Units and either ruler's context menu choose pixels, inches,
+centimeters, millimeters, points, picas or percent. The choice is one
+preference for every window. Ticks stay in image pixels, so guide drags
+are unchanged; only the steps and labels follow the unit. A horizontal
+ruler measures at the X resolution and a vertical one at Y. In a turned
+view both measure the turned image's bounds and blend the two resolutions
+by the angle, as GIMP's dot-for-dot rulers do. Percent is of the extent
+the ruler spans. A length on an image without a usable resolution reads
+in pixels.
+
+Engine-version cost: none. The four qualified sets have the same guide
+and undo-group functions.
+
+`RulerUnitTests`, the native `scripts/test-guides-clear.py` (custom guide
+survival, run by `build-adapter.sh --test`) and the `guides-ruler-units`
+smoke case cover it.
 
 ### Reopen after Revert (candidate)
 

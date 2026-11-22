@@ -819,6 +819,7 @@ GlimsStatus glims_guide_put    (GlimsEngine *e, GlimsImageID image,
                                 const GlimsGuideInfo *guide, GlimsGuideID *result, char **error);
 GlimsStatus glims_guide_remove (GlimsEngine *e, GlimsImageID image,
                                 GlimsGuideID guide, char **error);
+GlimsStatus glims_image_clear_guides (GlimsEngine *e, GlimsImageID image, char **error);
 
 /* grid.c */
 GlimsStatus glims_image_grid     (GlimsEngine *e, GlimsImageID image, GlimsGrid *out, char **error);

@@ -227,6 +227,11 @@ if [[ "$MODE" == test ]]; then
       --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 180 || status=$?
   cat "$OUT/duotone-alternate-export-test.log"
   (( status == 0 )) || die "the Duotone alternate export tests failed (status $status)"
+  status=0
+  run_with_timeout 240 "$OUT/guides-clear-test.log" \
+    python3 "$ROOT/scripts/test-guides-clear.py" --producer "$OUT" --timeout 180 || status=$?
+  cat "$OUT/guides-clear-test.log"
+  (( status == 0 )) || die "the Clear Guides tests failed (status $status)"
 fi
 
 if [[ "$MODE" == perf ]]; then

@@ -2570,6 +2570,13 @@ final class ImageDocument {
         run(unsupported: "Remove Guide") { session, image in try session.removeGuide(guide, image: image) }
     }
 
+    /// View ▸ Clear Guides: removes every ordinary guide as one undo step.
+    /// The engine adds no step when there is none.
+    func clearGuides() {
+        guard !refuseWhileEditingUnavailable() else { return }
+        run { session, image in try session.clearGuides(image) }
+    }
+
     // MARK: Grid
 
     /// Applies `grid` to the image as one undo step; an identical grid

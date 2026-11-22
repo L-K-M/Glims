@@ -5,6 +5,11 @@ import AppKit
 /// order and selection preservation. No AppKit state, so the rules are
 /// unit-testable without an engine.
 enum GuidesSheetLogic {
+    /// View ▸ Clear Guides has ordinary guides to remove and no lock on them.
+    static func canClear(guideCount: Int, locksGuides: Bool) -> Bool {
+        guideCount > 0 && !locksGuides
+    }
+
     /// Strictly parses a decimal integer position: digits only, in
     /// canonical form — no whitespace, sign, decimal point, padding or
     /// any other decoration. Anything else is not a position.
