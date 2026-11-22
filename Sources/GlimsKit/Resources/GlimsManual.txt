@@ -486,11 +486,15 @@ Invert Selection are also recordable. These root-mask commands require a Lab
 destination but do not depend on its selected axis.
 
 Not every edit is recorded: other layer changes, other effects and file
-operations stay outside the capture. Editing an existing adjustment effect or
-applying a recorded adjustment to a mask/channel adds an explicit unsupported row;
-the live edit still works. A live recording belongs to one
-open image; to reuse a saved recording in another image, load it
-there.
+operations stay outside the capture. While a recording runs, such an edit
+still adds one explicit unsupported row that names it, so the recording
+never looks complete while leaving an edit out, and Replay refuses it. An
+edit refused before it starts, a preview and its Cancel, a cancelled file
+import, a target pick, a view change, a save, an export and a read add no
+row, and Replay adds no row of its own. A plug-in keeps its row even when
+you cancel it, because it may already have changed the image. A live
+recording belongs to one open image; to reuse a saved recording in another
+image, load it there.
 
 Save Recording… writes a .glimsrecording file with the commands,
 their settings, outcomes and original target descriptions. The file

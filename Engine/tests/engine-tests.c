@@ -5288,6 +5288,28 @@ test_channels (const char *work)
                rows[i].color.blue > 0.9;
     CHECK (attrs, "the row reports visibility, opacity and color");
   }
+  /* The attributes sheet sends only what was edited: an opacity alone
+   * has to reach the color's alpha, which is where GIMP keeps it. */
+  memset (&change, 0, sizeof change);
+  change.struct_size = sizeof change;
+  change.properties  = GLIMS_CHANNEL_OPACITY;
+  change.opacity     = 0.25;
+  before = undo_depth (image);
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "an opacity alone is one undo step");
+  {
+    bool faded = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      faded |= rows[i].id == saved &&
+               rows[i].opacity > 0.24 && rows[i].opacity < 0.26 &&
+               rows[i].color.alpha > 0.24 && rows[i].color.alpha < 0.26 &&
+               rows[i].color.blue > 0.9;
+    CHECK (faded, "an opacity alone moves the color's alpha and keeps the color");
+  }
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "the opacity step undoes");
   memset (&change, 0, sizeof change);
   change.struct_size = sizeof change;
   change.properties  = GLIMS_CHANNEL_VISIBLE;
