@@ -2447,9 +2447,8 @@ final class ImageDocument {
         endPendingUserEdits()
         if strokeIsActive { endStroke() }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        recordUnsupportedCommand("Saved Set Editing")
         pendingWork += 1
-        enqueueExclusive(label: "Editing a saved set", rejected: {
+        enqueueExclusive(label: "Editing a saved set", unsupported: "Saved Set Editing", rejected: {
             self.jobDidFinish(input: false)
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
@@ -2525,8 +2524,7 @@ final class ImageDocument {
     /// touched, and pixel locks do not refuse them.
     func addGuide(_ orientation: EngineSession.GuideOrientation, at position: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
-        recordUnsupportedCommand("Add Guide")
-        run { session, image in
+        run(unsupported: "Add Guide") { session, image in
             _ = try session.putGuide(EngineSession.Guide(id: 0, orientation: orientation,
                                                          position: position), image: image)
         }
@@ -2537,8 +2535,10 @@ final class ImageDocument {
     /// position it already holds is a no-op with no undo.
     func moveGuide(_ guide: EngineSession.Guide, to position: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
-        recordUnsupportedCommand("Move Guide")
-        run { session, image in
+        // Moving a guide to where it is adds no undo step and no row. The
+        // cached position proves that only with no edit still queued.
+        let unchanged = position == guide.position && pendingInput == 0
+        run(unsupported: unchanged ? nil : "Move Guide") { session, image in
             _ = try session.putGuide(EngineSession.Guide(id: guide.id,
                                                          orientation: guide.orientation,
                                                          position: position), image: image)
@@ -2549,8 +2549,7 @@ final class ImageDocument {
     /// tool-owned id is refused.
     func removeGuide(_ guide: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
-        recordUnsupportedCommand("Remove Guide")
-        run { session, image in try session.removeGuide(guide, image: image) }
+        run(unsupported: "Remove Guide") { session, image in try session.removeGuide(guide, image: image) }
     }
 
     // MARK: Grid
@@ -3317,9 +3316,8 @@ final class ImageDocument {
         endPendingUserEdits()
         if strokeIsActive { endStroke() }
         if let error = restoreLayerSourcesError(captured, request: .explicitCommand) { return refuse(error) }
-        recordUnsupportedCommand("Restore Layer Sources")
         var rejection: Error = DocumentError.busy
-        enqueueExclusive(label: "Restoring layer sources", admission: {
+        enqueueExclusive(label: "Restoring layer sources", unsupported: "Restore Layer Sources", admission: {
             if let error = self.restoreLayerSourcesError(captured, request: .explicitCommand) {
                 rejection = error
                 return false
@@ -3418,16 +3416,14 @@ final class ImageDocument {
                 _ = try session.layerCommand(command, image: image)
             }
         case .raise, .lower, .toTop, .toBottom:
-            recordUnsupportedCommand(LayerSelectionPolicy.actionTitle(for: command))
-            run { session, image in _ = try session.layerCommand(command, image: image) }
+            run(unsupported: LayerSelectionPolicy.actionTitle(for: command)) { session, image in _ = try session.layerCommand(command, image: image) }
         case .fitToImage, .trimToContent, .rasterize:
             // Pixel edits like the layer transforms: a mask or channel
             // paint target refuses them.
             guard !refuseWhileTargetPending() else { return }
             guard !isMaskTargetActive else { return refuseMaskEdit() }
             guard !isChannelTargetActive else { return refuseChannelTransform() }
-            recordUnsupportedCommand(LayerSelectionPolicy.actionTitle(for: command))
-            run { session, image in _ = try session.layerCommand(command, image: image) }
+            run(unsupported: LayerSelectionPolicy.actionTitle(for: command)) { session, image in _ = try session.layerCommand(command, image: image) }
         case .restoreSource:
             // Restoration can reload a linked file and must use the
             // confirmed engine-wide exclusive route. Ordinary input
@@ -3547,8 +3543,7 @@ final class ImageDocument {
             onError?(DocumentError.targetChanged.localizedDescription)
             return completion(.failure(DocumentError.targetChanged))
         }
-        recordUnsupportedCommand("Restore Layer Source")
-        enqueueExclusive(label: "Restoring the layer's source", rejected: {
+        enqueueExclusive(label: "Restoring the layer's source", unsupported: "Restore Layer Source", rejected: {
             self.onError?(DocumentError.busy.localizedDescription)
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
@@ -3660,8 +3655,7 @@ final class ImageDocument {
             return
         case .move(let parent, let index):
             endPendingUserEdits()
-            recordUnsupportedCommand("Move Layer")
-            run { session, image in try session.reparentLayer(item, image: image, toParent: parent, index: index) }
+            run(unsupported: "Move Layer") { session, image in try session.reparentLayer(item, image: image, toParent: parent, index: index) }
         }
     }
 
@@ -3669,8 +3663,7 @@ final class ImageDocument {
     func setLayerLocks(_ item: Int32, _ lock: EngineSession.LayerLocks, to locked: Bool) {
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Layer Locks")
-        run { session, image in
+        run(unsupported: "Layer Locks") { session, image in
             try session.setLayerLocks(item, image: image, mask: lock, values: locked ? lock : [])
         }
     }
@@ -3795,8 +3788,7 @@ final class ImageDocument {
         guard !refuseSingleLayerCommand("Move Layer") else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
-        recordUnsupportedCommand("Move Layer")
-        run { session, image in try session.moveLayer(layer, image: image, by: offset) }
+        run(unsupported: "Move Layer") { session, image in try session.moveLayer(layer, image: image, by: offset) }
     }
 
     /// Existing target-route versions identify the owner of a transient Move
@@ -3955,8 +3947,7 @@ final class ImageDocument {
             onError?(DocumentError.targetChanged.localizedDescription)
             return
         }
-        recordUnsupportedCommand("Move Layer")
-        run { session, image in
+        run(unsupported: "Move Layer") { session, image in
             guard try session.floatingSelection(image) == expected else {
                 throw DocumentError.targetChanged
             }
@@ -4040,8 +4031,7 @@ final class ImageDocument {
         guard !refuseSingleLayerCommand("Transform Layer", on: layer) else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
-        recordUnsupportedCommand("Transform Layer")
-        run { session, image in try session.transformLayer(layer, image: image, transform) }
+        run(unsupported: "Transform Layer") { session, image in try session.transformLayer(layer, image: image, transform) }
     }
 
     // MARK: Channels
@@ -4401,8 +4391,7 @@ final class ImageDocument {
         }
         let layers = selectedLayerIDs
         let reference: Int32? = alignment.isDistribute || selectionBounds != nil ? nil : activeLayer
-        recordUnsupportedCommand(alignment.isDistribute ? "Distribute Layers" : "Align Layers")
-        run { session, image in try session.alignLayers(layers, image: image, reference: reference, alignment) }
+        run(unsupported: alignment.isDistribute ? "Distribute Layers" : "Align Layers") { session, image in try session.alignLayers(layers, image: image, reference: reference, alignment) }
     }
 
     /// Image ▸ Rotate ▸ Arbitrary is offered for ordinary layered images
@@ -4470,8 +4459,7 @@ final class ImageDocument {
         guard !refuseFloatingForCompletion(completion) else { return }
         guard colorInfo.mode != mode else { return completion(.success(())) }
         endPendingUserEdits()
-        recordUnsupportedCommand("Color Mode")
-        enqueueExclusive(label: "Converting to \(mode.title)", rejected: {
+        enqueueExclusive(label: "Converting to \(mode.title)", unsupported: "Color Mode", rejected: {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.convertMode(image, to: mode) }
@@ -4500,8 +4488,7 @@ final class ImageDocument {
             return completion(.success(()))
         }
         endPendingUserEdits()
-        recordUnsupportedCommand("Precision")
-        enqueueExclusive(label: "Converting precision", rejected: {
+        enqueueExclusive(label: "Converting precision", unsupported: "Precision", rejected: {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.convertPrecision(image, component: component, trc: trc) }
@@ -4530,8 +4517,7 @@ final class ImageDocument {
         guard !refuseFloatingForCompletion(completion) else { return }
         guard colorInfo.mode != .indexed else { return completion(.success(())) }
         endPendingUserEdits()
-        recordUnsupportedCommand("Indexed Mode")
-        enqueueExclusive(label: "Converting to indexed", rejected: {
+        enqueueExclusive(label: "Converting to indexed", unsupported: "Indexed Mode", rejected: {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.convertToIndexed(image, settings: settings) }
@@ -4561,10 +4547,9 @@ final class ImageDocument {
               !filterPreviewIsOpen else { return completion(.failure(DocumentError.busy)) }
         guard !refuseFloatingForCompletion(completion) else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Assign Color Profile")
         let label = path.map { "Assigning \(URL(fileURLWithPath: $0).lastPathComponent)" }
             ?? "Discarding the color profile"
-        enqueueExclusive(label: label, rejected: {
+        enqueueExclusive(label: label, unsupported: "Assign Color Profile", rejected: {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result { try session.assignProfile(image, path: path) }
@@ -4596,10 +4581,9 @@ final class ImageDocument {
         }
         guard !refuseFloatingForCompletion(completion) else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Convert Color Profile")
         let label = path.map { "Converting to \(URL(fileURLWithPath: $0).lastPathComponent)" }
             ?? "Converting to the built-in profile"
-        enqueueExclusive(label: label, rejected: {
+        enqueueExclusive(label: label, unsupported: "Convert Color Profile", rejected: {
             completion(.failure(DocumentError.busy))
         }) { [session, image] in
             let result = Result {
@@ -4702,20 +4686,17 @@ final class ImageDocument {
 
     func renamePath(_ id: Int32, to name: String) {
         guard !name.isEmpty, !refuseWhileEditingUnavailable() else { return }
-        recordUnsupportedCommand("Rename Path")
-        run { session, image in try session.changePath(id, image: image, name: name) }
+        run(unsupported: "Rename Path") { session, image in try session.changePath(id, image: image, name: name) }
     }
 
     func setPathVisible(_ id: Int32, _ visible: Bool) {
         guard !refuseWhileEditingUnavailable() else { return }
-        recordUnsupportedCommand("Path Visibility")
-        run { session, image in try session.changePath(id, image: image, visible: visible) }
+        run(unsupported: "Path Visibility") { session, image in try session.changePath(id, image: image, visible: visible) }
     }
 
     func deletePath(_ id: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
-        recordUnsupportedCommand("Delete Path")
-        run { session, image in try session.deletePath(id, image: image) }
+        run(unsupported: "Delete Path") { session, image in try session.deletePath(id, image: image) }
     }
 
     /// Select ▸ From Path: the active path's area, combined by `operation`.
@@ -4723,8 +4704,7 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return }
         var options = EngineSession.SelectOptions()
         options.operation = operation
-        recordUnsupportedCommand("Select From Path")
-        run { session, image in try session.selectPath(id, image: image, options: options) }
+        run(unsupported: "Select From Path") { session, image in try session.selectPath(id, image: image, options: options) }
     }
 
     /// Layer ▸ Mask ▸ Add… on `layer` — the menus pass the active layer,
@@ -4947,8 +4927,7 @@ final class ImageDocument {
         }
         guard !change.properties.isEmpty else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Vector Layer Style")
-        run { session, image in try session.changeVectorLayerStyle(layer, image: image, change) }
+        run(unsupported: "Vector Layer Style") { session, image in try session.changeVectorLayerStyle(layer, image: image, change) }
     }
 
     /// Re-reads the outline; the engine caches it until the selection changes.
@@ -4975,8 +4954,7 @@ final class ImageDocument {
     func changeEffect(_ effect: Int32, on drawable: Int32, _ change: EngineSession.EffectChange) {
         guard canChangeEffect(effect, on: drawable), !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Effect Properties")
-        run { session, image in try session.changeEffect(effect, on: drawable, image: image, change) }
+        run(unsupported: "Effect Properties") { session, image in try session.changeEffect(effect, on: drawable, image: image, change) }
     }
 
     /// The filter Filter ▸ Fade can blend back: the newest new-filter
@@ -5100,8 +5078,7 @@ final class ImageDocument {
     func effectCommand(_ command: EngineSession.EffectCommand, effect: Int32, on drawable: Int32) {
         guard canChangeEffect(effect, on: drawable), !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Effect Stack")
-        run { session, image in try session.effectCommand(command, effect: effect, on: drawable, image: image) }
+        run(unsupported: "Effect Stack") { session, image in try session.effectCommand(command, effect: effect, on: drawable, image: image) }
     }
 
     // MARK: Undo
@@ -5371,14 +5348,25 @@ final class ImageDocument {
             return completion(.failure(DocumentError.multipleLayersSelected(reason)))
         }
         let action = procedure.label.trimmingCharacters(in: CharacterSet(charactersIn: "…"))
-        recordUnsupportedCommand(action.isEmpty ? "this plug-in" : action)
-        enqueueExclusive(label: procedure.label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+        let recorded = action.isEmpty ? "this plug-in" : action
+        let recording = UnsupportedAdmission()
+        let accepted = enqueueExclusive(label: procedure.label, didAdmit: {
+            recording.capture = self.reserveUnsupportedCommand(recorded)
+        }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             self.dispatchReadWhenReady {
+                if let capture = recording.capture {
+                    if case .success(.cancelled) = result, self.withdrawRecording(capture) {
+                        self.notifyRecorderChanged()
+                    } else {
+                        self.resolveUnsupportedCommand(capture, recorded)
+                    }
+                }
                 try? self.reload()
                 completion(result)
             }
         }
+        if accepted, recording.capture != nil { notifyRecorderChanged() }
     }
 
     enum DocumentError: LocalizedError {
@@ -6063,8 +6051,7 @@ final class ImageDocument {
             return completion(.failure(DocumentError.busy))
         }
         let label = asLink ? "Placing \(url.lastPathComponent)" : "Opening \(url.lastPathComponent) as layers"
-        recordUnsupportedCommand(asLink ? "Place" : "Open as Layers")
-        enqueueExclusive(label: label, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+        enqueueExclusive(label: label, unsupported: asLink ? "Place" : "Open as Layers", rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result<ImportOutcome, Error> {
                 if asLink {
                     _ = try session.placeLink(image: image, path: url.path)
@@ -7303,8 +7290,7 @@ final class ImageDocument {
         // The caller always names its command, so an admitted paint lands
         // in the recording as an explicit unsupported row rather than a
         // silent gap.
-        recordUnsupportedCommand(action)
-        return run { session, image in
+        return run(unsupported: action) { session, image in
             try self.requirePaintTarget()
             try self.requireRasterizedPaintTarget(target)
             try work(session, image)
@@ -8240,24 +8226,54 @@ final class ImageDocument {
         }
     }
 
-    /// Reserves the explicit unsupported Recorder row for one admitted
-    /// command this slice does not capture, and settles it as a failure that
-    /// names the command in plain language. Not recording adds nothing; a
-    /// command refused before this call never reaches it; replay is never
-    /// recording, so its own commands add no row. One call per admitted
-    /// command keeps the recording's acceptance order and makes replay
-    /// refuse a log that would otherwise omit an edit.
+    /// Reserves and settles the explicit unsupported Recorder row for one
+    /// admitted command this slice does not capture. One failed row makes
+    /// replay refuse the whole log, so this runs at admission, below every
+    /// check that can still refuse: inside `run`, at exclusive admission, or
+    /// just before an enqueue that refuses only a closing document.
+    ///
+    /// The command is not queued yet, and an observer may close the document
+    /// or restart recording, so observers hear of the row on the next turn.
     private func recordUnsupportedCommand(_ action: String) {
-        guard recorder.isRecording else { return }
-        let reason = "Recorder does not yet save \(action)."
+        guard let capture = reserveUnsupportedCommand(action) else { return }
+        resolveUnsupportedCommand(capture, action, notifies: false)
+        DispatchQueue.main.async { self.notifyRecorderChanged() }
+    }
+
+    private func reserveUnsupportedCommand(_ action: String) -> RecorderCapture? {
+        guard recorder.isRecording, !isClosing else { return nil }
         do {
-            let capture = try reserveRecording(context: .unavailable(reason))
-            resolveRecording(capture.reservation, with: .failure(reason),
-                             confirmed: .init(context: capture.context, binding: .unavailable(reason),
-                                              descriptions: [:]))
+            return try reserveRecording(context: .unavailable(Self.unsupportedReason(action)))
         } catch {
             assertionFailure("A recording log refused an admitted \(action): \(error)")
+            return nil
         }
+    }
+
+    private func resolveUnsupportedCommand(_ capture: RecorderCapture, _ action: String, notifies: Bool = true) {
+        let reason = Self.unsupportedReason(action)
+        resolveRecording(capture.reservation, with: .failure(reason),
+                         confirmed: .init(context: capture.context, binding: .unavailable(reason),
+                                          descriptions: [:]),
+                         notifies: notifies)
+    }
+
+    /// Takes back the row of a command that ended without changing anything.
+    /// False when a later row follows it or the recording was cleared.
+    private func withdrawRecording(_ capture: RecorderCapture) -> Bool {
+        guard (try? recorder.withdraw(capture.reservation)) == true else { return false }
+        recorderTargetContexts[capture.reservation.ordinal] = nil
+        recorderRevision = UUID()
+        return true
+    }
+
+    private static func unsupportedReason(_ action: String) -> String {
+        "Recorder does not yet save \(action)."
+    }
+
+    private final class UnsupportedAdmission: @unchecked Sendable {
+        // Written on main at exclusive admission, read on main at completion.
+        var capture: RecorderCapture?
     }
 
     private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil,
@@ -8508,6 +8524,7 @@ final class ImageDocument {
     func run(effect: CommandEffect = .changesImage, semantic: SemanticImageCommand? = nil, recorderLayer: Int32? = nil,
              recorderChannel: Int32? = nil,
              recordingFailure: String? = nil,
+             unsupported: String? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         guard colorInfo.mode != .lab || effect == .readsPixels else {
@@ -8517,6 +8534,7 @@ final class ImageDocument {
         if effect != .readsPixels && refuseWhileEditingUnavailable(forPreviewWork: effect == .changesPreview) {
             return false
         }
+        if let unsupported { recordUnsupportedCommand(unsupported) }
         let capture: RecorderCapture?
         do { capture = try reserveRecording(semantic, explicitLayer: recorderLayer, explicitChannel: recorderChannel) }
         catch {
@@ -8545,7 +8563,7 @@ final class ImageDocument {
 
     private func resolveRecording(_ reservation: RecorderLog<SemanticImageCommand>.Reservation,
                                   with resolution: RecorderLog<SemanticImageCommand>.Resolution,
-                                  confirmed: ConfirmedRecorderCapture) {
+                                  confirmed: ConfirmedRecorderCapture, notifies: Bool = true) {
         do {
             try recorder.resolve(reservation, with: resolution)
             // Resolve verifies the epoch first; stale callbacks must never
@@ -8554,7 +8572,7 @@ final class ImageDocument {
             recorderDescriptions.acceptFirst(confirmed.descriptions)
             recorderBindingDescriptions[reservation.ordinal] = confirmed.binding
             recorderRevision = UUID()
-            notifyRecorderChanged()
+            if notifies { notifyRecorderChanged() }
         } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {
             // Clear/start deliberately invalidate older callbacks.
         } catch {
@@ -8608,6 +8626,7 @@ final class ImageDocument {
     /// so a close cannot destroy the image while a file call is waiting.
     @discardableResult
     private func enqueueExclusive(effect: CommandEffect = .changesImage, label: String,
+                                  unsupported: String? = nil,
                                   admission: (() -> Bool)? = nil,
                                   didAdmit: (@MainActor () -> Void)? = nil,
                                   rejected: @escaping @MainActor () -> Void,
@@ -8627,8 +8646,12 @@ final class ImageDocument {
         // defer that read beyond the original exclusive completion.
         let changesImage = effect == .changesImage
         if changesImage { pendingInput += 1 }
+        let reserveAdmitted: @MainActor () -> Void = {
+            if let unsupported { self.recordUnsupportedCommand(unsupported) }
+            didAdmit?()
+        }
         let accepted = EngineActivity.shared.perform(label: label, document: self,
-                                                     didAdmit: didAdmit, work: work) {
+                                                     didAdmit: reserveAdmitted, work: work) {
             if changesImage {
                 EngineActivity.shared.whenReadyForSynchronousRead {
                     if !self.isClosing {

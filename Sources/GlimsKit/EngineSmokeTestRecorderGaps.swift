@@ -17,6 +17,7 @@ extension EngineSmokeTest {
         func wait(_ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(15)
             while !condition() && Date() < deadline { spin(0.01) }
+            if !condition() { check(false, "a fixture wait timed out after 15 seconds") }
         }
         func settle(_ document: ImageDocument) {
             document.inputQueue.sync {}
@@ -89,6 +90,28 @@ extension EngineSmokeTest {
                                                     isClosed: true)])
 
         try document.startRecording()
+        // A command the busy engine refuses changes nothing, so it must not
+        // leave the row that makes a recording refuse replay.
+        let hold = DispatchSemaphore(value: 0)
+        let held = EngineActivity.shared.perform(label: "Holding the engine",
+                                                 work: { _ = hold.wait(timeout: .now() + 20) },
+                                                 completion: {})
+        document.convertMode(to: .grayscale) { _ in }
+        document.openLayers(from: importURL) { _ in }
+        _ = document.runOnPaintTarget("Fill") { _, _ in }
+        hold.signal()
+        settle(document)
+        check(held, "the fixture holds the engine")
+        check(document.recorder.records.isEmpty, "commands the busy engine refuses add no row")
+        let beforeUnchangedMove = document.recorder.records.count
+        if let guide = document.guides.first {
+            document.moveGuide(guide, to: guide.position)
+            settle(document)
+            check(document.recorder.records.count == beforeUnchangedMove,
+                  "moving a guide to where it is adds no row")
+        } else {
+            check(false, "the fixture has a guide")
+        }
         perform("Add Guide") { document.addGuide(.vertical, at: 20) }
         verticalGuide = document.guides.first { $0.orientation == .vertical }
         perform("Move Guide") {
@@ -244,7 +267,7 @@ extension EngineSmokeTest {
         check(rows.count == expected.count,
               "every formerly silent command reserves exactly one row "
               + "(\(rows.count) rows for \(expected.count) commands)")
-        for (index, record) in rows.enumerated() {
+        for (index, record) in rows.enumerated() where index < expected.count {
             guard case .failure(let reason) = record.resolution else {
                 check(false, "row \(index + 1) is a failure row, not a silent gap")
                 continue
