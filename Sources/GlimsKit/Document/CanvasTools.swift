@@ -494,7 +494,11 @@ final class CanvasToolController {
                 return
             }
             tabletStrokeCapture = TabletEraserProximity.shared.strokeCapture(for: event)
-            let brush = ToolState.shared.brush(for: tool)
+            var brush = ToolState.shared.brush(for: tool)
+            let picked = paintTool == .clone || paintTool == .heal ? brush.source : nil
+            if let picked {
+                brush.source = ToolState.shared.cloneAlignment.source(picked, strokeAtX: point.x, y: point.y)
+            }
             if let capture = tabletStrokeCapture {
                 guard let sample = canvas.tabletStrokePoint(for: event, capture: capture) else {
                     tabletStrokeCapture = nil; dragTool = nil
@@ -506,6 +510,10 @@ final class CanvasToolController {
                     dragTool = nil; onStatus?("That pointer sample is invalid."); return
                 }
                 document.beginStroke(at: point, brush: brush)
+            }
+            // A refused press must not fix the alignment.
+            if let picked, document.strokeIsActive {
+                ToolState.shared.cloneAlignment.strokeStarted(picked, atX: point.x, y: point.y)
             }
             return
         }

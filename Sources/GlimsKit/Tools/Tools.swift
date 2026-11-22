@@ -306,7 +306,11 @@ final class ToolState {
     /// The Line tool's options; the color is the foreground at the press.
     var lineSettings = EngineSession.LineDrawSettings()
     /// Where clone and heal copy from; set with Option-click on the canvas.
-    var cloneSource: EngineSession.Brush.Source?
+    var cloneSource: EngineSession.Brush.Source? {
+        didSet { cloneAlignment.reset() }
+    }
+    /// Whether later Clone and Heal strokes keep their distance to the source.
+    var cloneAlignment = SourceAlignment()
 
     private var observers: [UUID: () -> Void] = [:]
 
