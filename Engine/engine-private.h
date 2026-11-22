@@ -622,6 +622,15 @@ GlimsStatus glims_selection_stroke (GlimsEngine *e, GlimsImageID image, GlimsIte
                                     GlimsResourceID brush, const GlimsBrushSettings *settings,
                                     char **error);
 GimpChannelOps glims_channel_op   (uint32_t operation);  /* a GlimsSelectOperation */
+/* The channel `id` of `image`'s channel list, the Quick Mask's included,
+ * or NULL: never the selection mask, a layer mask or a foreign item. */
+GimpChannel *glims_find_channel  (GimpImage *image, GlimsItemID id);
+GlimsStatus glims_channel_bounds (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                                  bool *empty, GlimsRect *bounds);
+GlimsStatus glims_channel_transform_matrix_captured (GlimsEngine *e, GlimsImageID image,
+                                                     GlimsItemID channel,
+                                                     const GlimsLayerTransformRequest *request,
+                                                     char **error);
 
 /* path.c */
 GlimsStatus glims_paths            (GlimsEngine *e, GlimsImageID image, GlimsPathInfo *rows,

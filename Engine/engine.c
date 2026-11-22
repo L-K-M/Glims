@@ -4399,6 +4399,53 @@ static GlimsStatus api_layer_draw_line (GlimsEngine *e, GlimsImageID image, Glim
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             layer_draw_line_on_engine, &a, error);
 }
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  bool *empty;
+  GlimsRect *bounds;
+} GlimsChannelBoundsArgs;
+static GlimsStatus channel_bounds_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsChannelBoundsArgs *a = data;
+  return glims_channel_bounds (e, a->image, a->channel, a->empty, a->bounds);
+}
+static GlimsStatus api_channel_bounds (GlimsEngine *e, GlimsImageID image, GlimsItemID channel,
+                                       bool *empty, GlimsRect *bounds)
+{
+  GlimsChannelBoundsArgs a = { image, channel, empty, bounds };
+  return glims_facade_call (e, GLIMS_FACADE_OP_channel_bounds,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            channel_bounds_on_engine, &a, NULL);
+}
+typedef struct {
+  GlimsImageID image;
+  GlimsItemID channel;
+  GlimsLayerTransformRequest request;
+  char **error;
+} GlimsChannelTransformArgs;
+static GlimsStatus channel_transform_matrix_captured_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsChannelTransformArgs *a = data;
+  return glims_channel_transform_matrix_captured (e, a->image, a->channel, &a->request, a->error);
+}
+static GlimsStatus api_channel_transform_matrix_captured (GlimsEngine *e, GlimsImageID image,
+                                                          GlimsItemID channel,
+                                                          const GlimsLayerTransformRequest *request,
+                                                          char **error)
+{
+  GlimsChannelTransformArgs a = { image, channel, { 0 }, error };
+  uint32_t size;
+  if (error) *error = NULL;
+  /* Copy the known prefix: the caller's struct may be larger or unaligned. */
+  if (! request) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&size, request, sizeof size);
+  if (size < sizeof a.request) return GLIMS_STATUS_INVALID_ARGUMENT;
+  memcpy (&a.request, request, sizeof a.request);
+  return glims_facade_call (e, GLIMS_FACADE_OP_channel_transform_matrix_captured,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            channel_transform_matrix_captured_on_engine, &a, error);
+}
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)
 {

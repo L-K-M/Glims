@@ -4583,6 +4583,31 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*layer_draw_line) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                                   GlimsPoint start, GlimsPoint end,
                                   const GlimsLineDrawSettings *settings, char **error);
+  /* Slot 245: the bounds of the pixels a channel of the channel list
+   * covers, the Quick Mask's included, in image pixels: the box a
+   * channel transform starts from. *empty is true, with zero bounds,
+   * when it covers nothing. NULL out is INVALID_ARGUMENT; an unknown
+   * image, a layer, a layer mask, the selection mask or a foreign id is
+   * NOT_FOUND; a component layout is UNSUPPORTED. A read: it changes
+   * nothing. */
+  GlimsStatus (*channel_bounds) (GlimsEngine *engine, GlimsImageID image, GlimsItemID channel,
+                                 bool *empty, GlimsRect *bounds);
+  /* Slot 246: transforms a channel of the channel list, the Quick Mask's
+   * included, by request.matrix (image pixels, forward, as for
+   * layer_transform_matrix_captured), only if its channel_bounds still
+   * equal request.expected_bounds. The channel keeps the canvas size:
+   * coverage moved past the canvas is lost. One undo step named
+   * "Transform Channel". A stale box or an empty channel is FAILED with
+   * an explanation; a non-finite matrix, one that flattens the box or
+   * crosses a perspective horizon over it, an unknown interpolation, a
+   * short request or a box without area is INVALID_ARGUMENT; ids are
+   * resolved as by channel_bounds; a component layout is UNSUPPORTED;
+   * BUSY during a stroke, preview or plug-in. Every refusal changes
+   * nothing. No request memory is retained. */
+  GlimsStatus (*channel_transform_matrix_captured) (GlimsEngine *engine, GlimsImageID image,
+                                                    GlimsItemID channel,
+                                                    const GlimsLayerTransformRequest *request,
+                                                    char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
