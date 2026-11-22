@@ -36,6 +36,7 @@ enum SemanticImageCommand {
     case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
     case selectColor(CGPoint, options: EngineSession.SelectOptions)
     case selectCommand(EngineSession.SelectCommand, radius: Double)
+    case smoothSelection(radius: Int)
     /// Channel ▸ To Selection: the explicit source channel lives in the
     /// document's runtime binding, never in this command, and may differ
     /// from the active paint target.
@@ -122,7 +123,7 @@ enum SemanticImageCommand {
     var requiresResolvedFloatingSelection: Bool {
         switch self {
         case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
-        case .labSelection, .selectionShape, .selectColor, .selectCommand, .channelToSelection, .layerProperties: return false
+        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties: return false
         }
     }
 
@@ -148,6 +149,7 @@ enum SemanticImageCommand {
             case .sharpen: return "Sharpen Selection"
             case .fromAlpha: return "Select Alpha"
             }
+        case .smoothSelection: return "Smooth Selection"
         case .channelToSelection: return "Channel to Selection"
         case .transformImage(let transform):
             switch transform {
@@ -197,6 +199,8 @@ enum SemanticImageCommand {
             try session.selectColor(at: point, image: image, options: options)
         case .selectCommand(let command, let radius):
             try session.select(command, image: image, radius: radius)
+        case .smoothSelection(let radius):
+            try session.smoothSelection(image, radius: radius)
         case .transformImage(let transform):
             try session.transformImage(image, transform)
         case .scale(let width, let height):

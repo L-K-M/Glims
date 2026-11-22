@@ -245,6 +245,51 @@ final class RecorderFileCodecTests: XCTestCase {
         }
     }
 
+    func testSmoothSelectionFileKeepsTheWholePixelRadius() throws {
+        let maximum = EngineSession.selectionSmoothMaxRadius
+        let command = #"{"tag":"smoothSelection","radius":7}"#
+        let fixture = replace(document(success(command)), #""version":1"#, #""version":29"#)
+        let value = try RecorderFileCodec.decode(bytes(fixture))
+        guard case .success(.smoothSelection(let radius), .none) = value.records[0].outcome else {
+            return XCTFail("The saved Smooth Selection was lost")
+        }
+        XCTAssertEqual(radius, 7)
+        let encoded = try RecorderFileCodec.encode(value)
+        let encodedText = String(decoding: encoded, as: UTF8.self)
+        XCTAssertTrue(encodedText.contains(#""version":29"#))
+        XCTAssertTrue(encodedText.contains(#""tag":"smoothSelection""#))
+        XCTAssertTrue(encodedText.contains(#""radius":7"#))
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
+        let callerInvalid = RecorderFileValue(recordingID: recordingID, name: "Named", origin: origin, symbols: [],
+            records: [.init(ordinal: 0, outcome: .success(.smoothSelection(radius: maximum + 1), .none))])
+        XCTAssertThrowsError(try RecorderFileCodec.encode(callerInvalid))
+        let prepared = try RecorderFileSemanticBridge.prepare(value)
+        guard case .success(.smoothSelection(let preparedRadius)) = prepared.log.records.first?.resolution else {
+            return XCTFail("The prepared Smooth Selection was lost")
+        }
+        XCTAssertEqual(preparedRadius, 7)
+        let snapshot = try RecorderFileCodec.snapshot(prepared.log, recordingID: value.recordingID,
+            name: value.name, origin: value.origin, descriptions: .init(), bindings: [:])
+        XCTAssertEqual(snapshot, value)
+
+        for radius in [1, maximum] {
+            let boundary = replace(fixture, #""radius":7"#, "\"radius\":" + String(radius))
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(boundary)), String(radius))
+        }
+        for radius in [0, maximum + 1, -1] {
+            rejects(replace(fixture, #""radius":7"#, "\"radius\":" + String(radius)), reason: "Invalid integer")
+        }
+        for malformed in [#""7""#, "null", "true", "1.5", "1e1", "01"] {
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(fixture, #""radius":7"#, "\"radius\":" + malformed))), malformed)
+        }
+
+        rejects(replace(fixture, #""version":29"#, #""version":28"#), reason: "version 29")
+        let bound = document(success(command, binding: transformBinding), symbols: transformSymbolJSON)
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(replace(bound, #""version":1"#, #""version":29"#))))
+        rejects(replace(fixture, command, #"{"tag":"scale","width":1,"height":1}"#), reason: "Version 29")
+        rejects(replace(fixture, #","radius":7"#, ""), reason: "Missing or unknown object fields")
+    }
+
     func testLayerTransformKeepsExactCoefficientsAndNamedInterpolation() throws {
         let value = try RecorderFileCodec.decode(bytes(transformDocument()))
         let encoded = try RecorderFileCodec.encode(value)

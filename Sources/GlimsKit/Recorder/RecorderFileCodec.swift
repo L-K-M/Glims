@@ -30,7 +30,8 @@ enum RecorderFileCodec {
     static let blurFilterVersion = 26
     static let scaleInterpolationVersion = 27
     static let arbitraryRotationVersion = 28
-    static let latestVersion = arbitraryRotationVersion
+    static let smoothSelectionVersion = 29
+    static let latestVersion = smoothSelectionVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -151,6 +152,7 @@ enum RecorderFileCodec {
         var hasBlurFilter = false
         var hasScaleInterpolation = false
         var hasArbitraryRotation = false
+        var hasSmoothSelection = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -178,6 +180,7 @@ enum RecorderFileCodec {
                 if case .applyGaussianBlur = command { hasBlurFilter = true }
                 if case .applyUnsharpMask = command { hasBlurFilter = true }
                 if case .rotateCanvas = command { hasArbitraryRotation = true }
+                if case .smoothSelection = command { hasSmoothSelection = true }
                 if case .scaleWithInterpolation = command { hasScaleInterpolation = true }
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
@@ -278,6 +281,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == arbitraryRotationVersion, !hasArbitraryRotation {
             throw RecorderFileError.invalid("Version 28 requires a successful arbitrary canvas rotation.")
+        }
+        if fileVersion == smoothSelectionVersion, !hasSmoothSelection {
+            throw RecorderFileError.invalid("Version 29 requires a successful Smooth Selection command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -664,6 +670,12 @@ enum RecorderFileCodec {
             case .all, .none, .invert, .sharpen, .fromAlpha: break
             }
             return .selectCommand(selection, radius: radius)
+        case "smoothSelection":
+            guard version >= smoothSelectionVersion else {
+                throw RecorderFileError.invalid("A Smooth Selection needs recording version 29.")
+            }
+            let value = try Object(node, required: ["tag", "radius"])
+            return .smoothSelection(radius: try integer(value.get("radius"), range: 1...EngineSession.selectionSmoothMaxRadius))
         case "transformImage":
             let value = try Object(node, required: ["tag", "transform"])
             guard let transform = RecorderFileCommand.Transform(rawValue: try string(value.get("transform"))) else { throw RecorderFileError.invalid("Unknown image transform.") }
@@ -1187,7 +1199,7 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("A mask adjustment needs an editing layer mask.")
             }
         case (.labSelection, .none): return
-        case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.transformImage, .none), (.rotateCanvas, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.resizeCanvas, .none), (.crop, .none):
+        case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.smoothSelection, .none), (.transformImage, .none), (.rotateCanvas, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.resizeCanvas, .none), (.crop, .none):
             if case .selectColor(_, let options) = command, !options.sampleMerged { throw RecorderFileError.invalid("Drawable color selection needs a context.") }
             if case .selectCommand(.fromAlpha, _) = command { throw RecorderFileError.invalid("Select Alpha needs a context.") }
             return

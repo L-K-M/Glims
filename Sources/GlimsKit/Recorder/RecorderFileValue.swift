@@ -299,6 +299,9 @@ enum RecorderFileCommand: Equatable {
     case selectionShape(Shape, Options)
     case selectColor(Point, Options)
     case selectCommand(Selection, radius: Double)
+    /// Select ▸ Smooth…: a whole-pixel sample radius. The command is
+    /// image-wide; the record carries no target binding.
+    case smoothSelection(radius: Int)
     /// Channel ▸ To Selection: only the combination operation is a command
     /// value; the explicit source channel is the record's `channel` binding.
     case channelToSelection(Operation)
@@ -366,7 +369,7 @@ enum RecorderFileCommand: Equatable {
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
         }
     }
 }

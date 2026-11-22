@@ -852,6 +852,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Align Layers)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "smooth-selection" {
+                try exerciseSmoothSelection(session, documents: documents)
+                print(failures == 0 ? "PASSED (Smooth Selection)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "rotate-arbitrary" {
                 try exerciseRotateArbitrary(session, documents: documents)
                 print(failures == 0 ? "PASSED (Rotate Arbitrary)" : "FAILED: \(failures) failure(s)")
@@ -1246,6 +1251,7 @@ enum EngineSmokeTest {
             try exerciseImageDuplicate(session, documents: documents)
             try exerciseRotateArbitrary(session, documents: documents)
             try exerciseAlignLayers(session, documents: documents)
+            try exerciseSmoothSelection(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseFade(session, documents: documents)
@@ -6078,7 +6084,6 @@ enum EngineSmokeTest {
         exerciseMergeVisible(document, controller: controller, session: session, image: image)
         exerciseLayerVia(document, controller: controller, session: session, image: image)
         exerciseHistogram(document, controller: controller, session: session, image: image)
-        exerciseSmoothSelection(document, controller: controller, session: session, image: image)
         exerciseSelectSimilar(document, controller: controller, session: session, image: image)
         exerciseRankFilters(document, controller: controller, session: session, image: image)
 
@@ -12347,19 +12352,41 @@ extension EngineSmokeTest {
         settle()
     }
 
-    static func exerciseSmoothSelection(_ document: ImageDocument, controller: DocumentWindowController,
-                                        session: EngineSession, image: Int32) {
+    static func exerciseSmoothSelection(_ session: EngineSession, documents: DocumentList) throws {
+        let image = try session.newImage(width: 80, height: 40)
+        let document: ImageDocument
+        do { document = try ImageDocument(session: session, image: image, name: "Smooth") }
+        catch { try? session.closeImage(image); throw error }
+        documents.items.append(document)
+        let controller = DocumentWindowController(document: document)
+        func wait(_ ready: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !ready() && Date() < deadline { spin() }
+        }
+        defer {
+            var stopped = false; controller.canvas.stopRendering { stopped = true }; wait { stopped }
+            var closed = false; document.closeImageWhenDrained { closed = true }; wait { closed }
+            documents.items.removeAll { $0 === document }
+        }
         func settle() {
             document.inputQueue.sync {}
             spin()
-            let deadline = Date().addingTimeInterval(10)
-            while (document.pendingWork > 0 || EngineActivity.shared.isBusy) && Date() < deadline { spin() }
+            wait { document.pendingWork == 0 && !document.recorder.isReplaying && !EngineActivity.shared.isBusy }
         }
         let item = NSMenuItem(title: "Smooth…", action: #selector(DocumentWindowController.smoothSelection(_:)),
                               keyEquivalent: "")
         guard session.supportsSelectionSmooth else {
             check(!controller.validateMenuItem(item) && document.smoothSelectionRefusal != nil,
                   "an older adapter keeps Smooth disabled")
+            let undo = try session.undoInfo(image).undoCount
+            do {
+                try SemanticImageCommand.smoothSelection(radius: 2).apply(session: session, image: image)
+                check(false, "playback requires an adapter with selection smoothing")
+            } catch let error as EngineSession.EngineError {
+                check(error.status == Int32(GLIMS_STATUS_UNSUPPORTED.rawValue)
+                        && (try? session.undoInfo(image).undoCount) == undo,
+                      "an older adapter refuses Smooth playback without changing Undo")
+            }
             return
         }
         guard let source = document.layers.last?.id else { return check(false, "Smooth has a source layer") }
@@ -12376,10 +12403,12 @@ extension EngineSmokeTest {
         check(controller.validateMenuItem(item) && document.selectionBounds == CGRect(x: 0, y: 0, width: 61, height: 20),
               "Smooth is enabled for the rectangle and speck (\(String(describing: document.selectionBounds)))")
         let undoBefore = (try? session.undoInfo(image).undoCount) ?? -1
+        let original = try session.selectionOutline(image: image)
         var outcome: Result<Void, Error>?
+        try document.startRecording()
         document.smoothSelection(radius: 2) { outcome = $0 }
-        let deadline = Date().addingTimeInterval(10)
-        while outcome == nil && Date() < deadline { spin() }
+        try document.stopRecording()
+        wait { outcome != nil }
         settle()
         if case .failure(let error)? = outcome { check(false, "Smooth runs (\(error))") }
         check((try? session.undoInfo(image).undoCount) == undoBefore + 1
@@ -12389,22 +12418,64 @@ extension EngineSmokeTest {
         // loses its three pixels: 800 - 3.
         var read: Result<EngineSession.InputHistogram, Error>?
         document.readHistogram { read = $0 }
-        let readBy = Date().addingTimeInterval(10)
-        while read == nil && Date() < readBy { spin() }
+        wait { read != nil }
         if case .success(let histogram)? = read {
             let pixels = histogram[.value].map { HistogramStatistics(bins: $0).pixels }
             check(pixels == 797, "Smooth rounds only the inner corner (\(String(describing: pixels)) pixels)")
         } else {
             check(false, "the smoothed selection's histogram reads (\(String(describing: read)))")
         }
+        let smoothed = try session.selectionOutline(image: image)
         document.undo()
         settle()
         check(document.selectionBounds == CGRect(x: 0, y: 0, width: 61, height: 20),
               "Undo restores the unsmoothed selection (\(String(describing: document.selectionBounds)))")
+        guard document.recorder.records.count == 1,
+              case .success(.smoothSelection(radius: 2))? = document.recorder.records.first?.resolution else {
+            return check(false, "Smooth records its radius even when Stop precedes completion")
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Smooth-\(UUID()).glimsrecording")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let saveCheckpoint = try document.recorderSaveCheckpoint()
+        var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+        document.saveRecording(to: url, checkpoint: saveCheckpoint) { saved = $0 }
+        settle()
+        guard let saved else { return check(false, "the Smooth recording finishes saving") }
+        _ = try saved.get()
+        let checkpoint = try document.recorderInstallCheckpoint()
+        var loaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
+        document.prepareRecordingFile(at: url, checkpoint: checkpoint) { loaded = $0 }
+        settle()
+        guard let loaded else { return check(false, "the saved Smooth command finishes loading") }
+        let prepared = try loaded.get()
+        check(prepared.file.symbols.isEmpty, "saved Smooth has no layer or channel bindings")
+        var installed: Result<Void, Error>?
+        document.installRecording(prepared, checkpoint: checkpoint, choices: [:]) { installed = $0 }
+        settle()
+        guard let installed else { return check(false, "the saved Smooth command installs") }
+        try installed.get()
+        try document.startReplay()
+        settle()
+        check(document.replayStatus == .finished(total: 1) && smoothed != original && document.selectionOutline == smoothed
+                && document.undoInfo.undoCount == undoBefore + 1,
+              "saved Smooth replays the selection outline in one Undo step")
+        document.undo()
+        settle()
+        check(document.selectionOutline == original && document.undoInfo.undoCount == undoBefore,
+              "Undo restores the original selection after Smooth replay")
         check(DocumentWindowController.smoothRadius("0") == nil && DocumentWindowController.smoothRadius("101") == nil
                 && DocumentWindowController.smoothRadius("1.5") == nil && DocumentWindowController.smoothRadius(" 16 ") == 16,
               "the Smooth sheet accepts whole radii 1 to 100 only")
         document.select(.none)
         settle()
+        let emptyUndo = document.undoInfo.undoCount
+        try document.startReplay()
+        settle()
+        if case .failed(index: 0, reason: _) = document.replayStatus {
+            check(document.selectionBounds == nil && document.undoInfo.undoCount == emptyUndo,
+                  "replaying Smooth on an empty selection preserves the mask and Undo")
+        } else {
+            check(false, "Smooth playback reports the empty selection at the recorded step")
+        }
     }
 }

@@ -6675,7 +6675,8 @@ result back with `gimp_channel_select_buffer` (REPLACE) as one "Smooth
 Selection" undo step. Clamping keeps a selection that reaches the canvas
 edge in place there. An empty selection, a radius outside 1–100, Lab and
 component layouts, and older adapters are refused before any change. The
-Recorder does not record Smooth.
+Recorder saves the radius and applies it to the destination selection as
+one undo step on replay.
 
 ### Select Similar (candidate)
 
