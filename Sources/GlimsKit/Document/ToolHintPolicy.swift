@@ -81,7 +81,7 @@ enum ToolHintPolicy {
                 ? "Constrained transform. Release Shift for a free transform."
                 : "Drag transform handles. Shift constrains."
         case .crop: return "Drag the area to keep."
-        case .eyedropper: return "Click or drag to sample the foreground color."
+        case .eyedropper: return "Click or drag to sample the foreground color. Option samples the background color."
         case .text: return "Click to add or edit text."
         case .path:
             if phase == .dragging { return "Drag an anchor or handle. Shift mirrors a dragged handle." }

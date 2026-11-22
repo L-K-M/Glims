@@ -208,6 +208,7 @@ What the tools do:
   corner and Escape drops the polygon. Magic Wand selects the similar colors around a
   click; Select by Color takes every similar pixel in the image.
   Eyedropper sets the foreground color from the pixel you click.
+  Option-click sets the background color instead.
 
   Line draws a straight line in the foreground color on the selected
   layer when you drag, inside the selection if there is one. Shift keeps
@@ -236,8 +237,8 @@ What the tools do:
   ordinary RGB layers, including opaque Background layers.
 
   Gradient drags out a gradient between the foreground and background
-  colors; Paint Bucket fills similar colors around the click, or the
-  whole selection.
+  colors (hold Shift to keep it at a multiple of 45 degrees); Paint
+  Bucket fills similar colors around the click, or the whole selection.
 
   Hand drags the view; Zoom clicks to zoom in and Option-clicks to zoom
   out.

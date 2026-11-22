@@ -14,7 +14,7 @@ final class ToolHintPolicyTests: XCTestCase {
             .polygonLasso: "Select straight-edged area. Shift adds; Option subtracts; Shift-Option intersects.",
             .magicWand: "Select connected colors. Shift adds; Option subtracts; Shift-Option intersects.",
             .selectByColor: "Select matching colors. Shift adds; Option subtracts; Shift-Option intersects.",
-            .eyedropper: "Click or drag to sample the foreground color.",
+            .eyedropper: "Click or drag to sample the foreground color. Option samples the background color.",
             .text: "Click to add or edit text.",
             .path: "Click to add an anchor; drag for handles. Shift-click selects or starts a subpath.",
             .paintbrush: "Drag to apply brush. Option samples color; [ ] changes size.",

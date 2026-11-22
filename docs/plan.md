@@ -6848,3 +6848,12 @@ now has Aligned, on by default: the first accepted stroke after a source
 is set fixes the distance in whole pixels, as in GIMP's
 `app/paint/gimpsourcecore.c`. The canvas regression failed on main at
 80cc28e2 and passes with the change on GIMP 3.2.8. No facade change.
+
+### Gradient and Eyedropper modifiers (2026-11-22)
+
+Gradient ignored Shift, and the Eyedropper ignored Option. Shift now
+holds the drag and the applied gradient to a multiple of 45 degrees with
+the Line tool's geometry. Option at the Eyedropper's press sets the
+background color for that whole drag. Option sampling from a paint tool
+still sets the foreground color. `GLIMS_SMOKE_CASE=tool-modifiers` drives
+both through real canvas events. No facade change.

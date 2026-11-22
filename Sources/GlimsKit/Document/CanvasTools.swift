@@ -246,6 +246,8 @@ final class CanvasToolController {
     private var transformMode: LayerTransformSession.Mode = .scaleRotate
     private(set) var transformCommitIsPending = false
     private var colorPickGeneration: UInt64 = 0
+    /// The color the current pick sets; its press decides for the whole drag.
+    private var colorPickTarget = ToolColorTarget.foreground
     private var textPickGeneration: UInt64 = 0
     /// The pointer's last image location during a Transform drag, so a
     /// modifier-only event recomputes the preview from the same point.
@@ -482,6 +484,7 @@ final class CanvasToolController {
                 } else {
                     // Option with any other paint tool temporarily samples
                     // the foreground color, as the Color Picker does.
+                    colorPickTarget = .foreground
                     pickColor(at: point)
                     dragTool = .eyedropper
                 }
@@ -540,6 +543,7 @@ final class CanvasToolController {
                 document.selectColor(at: point, options: options)
             }
         case .eyedropper:
+            colorPickTarget = event.modifierFlags.contains(.option) ? .background : .foreground
             pickColor(at: point)
         case .hand:
             if let clip = canvas.enclosingScrollView?.contentView {
@@ -646,9 +650,13 @@ final class CanvasToolController {
             return
         }
         switch tool {
-        case .rectangleSelect, .ellipseSelect, .gradient, .crop:
+        case .rectangleSelect, .ellipseSelect, .crop:
             dragCurrent = point
             selectionDragFlags = event.modifierFlags
+            canvas.needsDisplay = true
+        case .gradient:
+            guard let start = dragStart else { return }
+            dragCurrent = Self.gradientEnd(point, from: start, flags: event.modifierFlags)
             canvas.needsDisplay = true
         case .line:
             guard let start = dragStart else { return }
@@ -801,13 +809,14 @@ final class CanvasToolController {
             guard !moveSnapWasRequested else { return }
             document.moveActiveLayer(by: CGSize(width: (end.x - start.x).rounded(), height: (end.y - start.y).rounded()))
         case .gradient:
-            guard let start = dragStart, hypot(end.x - start.x, end.y - start.y) >= 1,
-                  let capture = gradientCapture else { return }
+            guard let start = dragStart, let capture = gradientCapture else { return }
+            let finish = Self.gradientEnd(end, from: start, flags: event.modifierFlags)
+            guard hypot(finish.x - start.x, finish.y - start.y) >= 1 else { return }
             // The gesture commits through the counted resource queue with
             // the values captured at the press; only the endpoints move
             // with the drag. The identity resolves on the engine worker
             // inside the queued job — never on main.
-            let snapshot = capture.withEndpoints(from: start, to: end)
+            let snapshot = capture.withEndpoints(from: start, to: finish)
             document.gradientResource(snapshot.identity, from: snapshot.from, to: snapshot.to,
                                       settings: snapshot.settings)
         case .line:
@@ -1392,6 +1401,12 @@ final class CanvasToolController {
         onStatus?("Source set at \(Int(point.x)), \(Int(point.y)).")
     }
 
+    /// Shift holds a gradient to multiples of 45 degrees, as it does a line.
+    private static func gradientEnd(_ point: CGPoint, from start: CGPoint,
+                                    flags: NSEvent.ModifierFlags) -> CGPoint {
+        flags.contains(.shift) ? PolygonLassoGeometry.constrained(point, from: start) : point
+    }
+
     private func pickColor(at point: CGPoint) {
         colorPickGeneration &+= 1
         guard point.x >= 0, point.y >= 0, point.x < Double(document.info.width),
@@ -1399,12 +1414,13 @@ final class CanvasToolController {
         if EngineActivity.shared.isRenderingTransformPreview {
             let generation = colorPickGeneration
             let revision = ToolState.shared.selectionRevision
-            let foreground = ToolState.shared.foreground
+            let target = colorPickTarget.keyPath
+            let previous = ToolState.shared[keyPath: target]
             EngineActivity.shared.whenReadyForSynchronousRead { [weak self] in
                 guard let self, !self.document.isClosing,
                       self.colorPickGeneration == generation,
                       ToolState.shared.selectionRevision == revision,
-                      ToolState.shared.foreground == foreground else { return }
+                      ToolState.shared[keyPath: target] == previous else { return }
                 self.pickColor(at: point)
             }
             return
@@ -1421,7 +1437,8 @@ final class CanvasToolController {
             // native fraction; clipping is separate from display quantization.
             let components = sample.alpha > 0 ? [sample.red, sample.green, sample.blue] : [0, 0, 0]
             let bounded = components.map { min(1, max(0, $0)) }
-            ToolState.shared.foreground = NSColor(srgbRed: bounded[0], green: bounded[1], blue: bounded[2], alpha: 1)
+            ToolState.shared[keyPath: colorPickTarget.keyPath] =
+                NSColor(srgbRed: bounded[0], green: bounded[1], blue: bounded[2], alpha: 1)
             ToolState.shared.notifyChange()
             if components != bounded {
                 onStatus?("The sampled color is outside sRGB; the tool color is clipped to 0–1.")
