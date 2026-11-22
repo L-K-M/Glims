@@ -37,6 +37,10 @@ enum SemanticImageCommand {
     case selectColor(CGPoint, options: EngineSession.SelectOptions)
     case selectCommand(EngineSession.SelectCommand, radius: Double)
     case smoothSelection(radius: Int)
+    /// Image > Adjust's one-click command: which adjustment and the exact
+    /// sRGB background Remove Alpha composites on. The target is the
+    /// record's captured paint target, never an active-layer fallback.
+    case adjustment(EngineSession.Adjustment, background: RecorderColor)
     /// Channel ▸ To Selection: the explicit source channel lives in the
     /// document's runtime binding, never in this command, and may differ
     /// from the active paint target.
@@ -124,6 +128,7 @@ enum SemanticImageCommand {
         switch self {
         case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties: return false
+        case .adjustment: return true
         }
     }
 
@@ -150,6 +155,7 @@ enum SemanticImageCommand {
             case .fromAlpha: return "Select Alpha"
             }
         case .smoothSelection: return "Smooth Selection"
+        case .adjustment(let adjustment, _): return adjustment.title
         case .channelToSelection: return "Channel to Selection"
         case .transformImage(let transform):
             switch transform {
@@ -201,6 +207,8 @@ enum SemanticImageCommand {
             try session.select(command, image: image, radius: radius)
         case .smoothSelection(let radius):
             try session.smoothSelection(image, radius: radius)
+        case .adjustment(let adjustment, let background):
+            try session.applyAdjustment(image, adjustment, background: background)
         case .transformImage(let transform):
             try session.transformImage(image, transform)
         case .scale(let width, let height):
@@ -237,9 +245,10 @@ enum SemanticImageCommand {
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
         switch self {
-        case .completeLabLayerStroke, .fillLabLayer:
+        case .completeLabLayerStroke, .fillLabLayer, .adjustment:
             // A logical Lab layer needs its captured UUID, not just a
-            // session-local layer number.
+            // session-local layer number. An adjustment binds the record's
+            // paint target, never an explicit layer fallback.
             throw MissingLayerBinding()
         case .layerProperties(let properties):
             guard layer > 0 else { throw MissingLayerBinding() }

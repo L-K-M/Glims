@@ -4393,6 +4393,130 @@ final class ImageDocument {
         run(semantic: command, command.apply)
     }
 
+    // MARK: One-click adjustments
+
+    /// Image > Adjust's one-click commands: why `adjustment` cannot run
+    /// now, or nil. Reads only cached state, so menu validation never
+    /// calls the engine. The engine revalidates the same gates and the
+    /// alpha-state and selection-intersection refusals, which the cache
+    /// cannot see.
+    func adjustmentRefusal(_ adjustment: EngineSession.Adjustment) -> String? {
+        guard session.supportsAdjustment else {
+            return "This image engine cannot apply \(adjustment.title)."
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "\(adjustment.title) is available for ordinary layered images only."
+        }
+        guard colorInfo.mode != .lab else {
+            return "\(adjustment.title) is unavailable for Lab documents."
+        }
+        guard !colorInfo.mode.usesInkChannels else {
+            return "\(adjustment.title) is unavailable for ink-channel documents."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        guard activeDrawable != nil else { return "Select a layer first." }
+
+        let layer: Int32?
+        switch paintTarget {
+        case .layer(let id): layer = id
+        case .mask(let id, _): layer = id
+        case .channel: layer = nil
+        case nil: layer = nil
+        }
+
+        switch adjustment {
+        case .autoLevels, .desaturate:
+            guard layer != nil else {
+                return "\(adjustment.title) works on a layer; return to Layers first."
+            }
+            guard !isMaskTargetActive else {
+                return "\(adjustment.title) works on a layer; stop editing its mask first."
+            }
+            guard colorInfo.mode == .rgb else {
+                return "\(adjustment.title) operates only on RGB color layers."
+            }
+        case .addAlpha, .removeAlpha:
+            guard let layer, !isMaskTargetActive, !isChannelTargetActive else {
+                return "\(adjustment.title) works on a layer; stop editing the mask or channel first."
+            }
+        case .equalize:
+            break
+        }
+
+        guard let layer else { return nil }
+        if let row = layers.first(where: { $0.id == layer }), row.kind == .group {
+            return "\(adjustment.title) works on a layer, not a group."
+        }
+        if let source = layerSources[layer], !source.isRasterized,
+           source.kind == .text || source.kind == .link || source.kind == .vector {
+            return "Rasterize the \(source.kind) layer before using \(adjustment.title)."
+        }
+        if layerLocks[layer]?.effective.contains(.pixels) == true {
+            return "Unlock the layer's pixels before using \(adjustment.title)."
+        }
+        return nil
+    }
+
+    /// Applies a one-click adjustment to the active paint target as one
+    /// queued command and one undo step. `background` is the tool
+    /// background color Remove Alpha composites on; the other commands
+    /// ignore it. Recorder captures the adjustment and the exact color.
+    func applyAdjustment(_ adjustment: EngineSession.Adjustment, background: NSColor,
+                         completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
+        if let reason = adjustmentRefusal(adjustment) {
+            onError?(reason)
+            NSSound.beep()
+            completion?(.failure(EngineSession.EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                                                            message: reason)))
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else {
+            completion?(.failure(DocumentError.busy))
+            return
+        }
+        guard !refuseWhileTargetPending() else {
+            completion?(.failure(DocumentError.busy))
+            return
+        }
+        endPendingUserEdits()
+        let captured = (background.copy() as? NSColor) ?? background
+        let recorderBackground: RecorderColor
+        do { recorderBackground = try EngineSession.recorderColor(captured) }
+        catch {
+            onError?(error.localizedDescription)
+            completion?(.failure(error))
+            return
+        }
+        let command = SemanticImageCommand.adjustment(adjustment, background: recorderBackground)
+        let capture: RecorderCapture?
+        do { capture = try reserveRecording(command) }
+        catch {
+            onError?(error.localizedDescription)
+            completion?(.failure(error))
+            return
+        }
+        enqueueTargetCommand({ session, image in
+            // The adjustment binds the record's captured paint target, so
+            // confirm that context on the input queue and settle with it.
+            // A `.none` binding would make the saved row unencodable and
+            // unreplayable (see RecorderFileCodec.snapshot).
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let answer = Result {
+                try session.applyAdjustment(image, adjustment,
+                                            background: GlimsColor(red: recorderBackground.red,
+                                                                   green: recorderBackground.green,
+                                                                   blue: recorderBackground.blue,
+                                                                   alpha: recorderBackground.alpha))
+            }
+            self.settleRecording(capture, result: answer.map { command }, confirmed: confirmed)
+        }, completion: { result in
+            completion?(result)
+        })
+        if capture != nil { notifyRecorderChanged() }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.
@@ -7967,7 +8091,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment: return true
         default: return false
         }
     }

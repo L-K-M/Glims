@@ -2440,6 +2440,52 @@ final class EngineSession: @unchecked Sendable {
                        &values, &error), error)
     }
 
+    // MARK: One-click adjustments
+
+    /// Image > Adjust's one-click commands (GlimsAdjustment). Each acts on
+    /// the active paint target, as its upstream action does.
+    enum Adjustment: UInt32, CaseIterable, Sendable {
+        case autoLevels = 1, equalize, desaturate, addAlpha, removeAlpha
+
+        var title: String {
+            switch self {
+            case .autoLevels: return "Auto Levels"
+            case .equalize: return "Equalize"
+            case .desaturate: return "Desaturate"
+            case .addAlpha: return "Add Transparency"
+            case .removeAlpha: return "Remove Transparency"
+            }
+        }
+    }
+
+    /// Whether the adapter has the one-click adjustments (slot 245).
+    var supportsAdjustment: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.adjustment_apply) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.adjustment_apply)
+            && api.adjustment_apply != nil
+    }
+
+    /// Applies a one-click adjustment to the active paint target as one
+    /// undo step. `background` is the tool background color Remove Alpha
+    /// composites on; the other commands ignore it. An adapter without
+    /// slot 245 is UNSUPPORTED.
+    func applyAdjustment(_ image: Int32, _ adjustment: Adjustment, background: GlimsColor) throws {
+        guard supportsAdjustment, let apply = api.adjustment_apply else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot apply that adjustment.")
+        }
+        var color = background
+        var error: UnsafeMutablePointer<CChar>?
+        try check(apply(engine, image, adjustment.rawValue, &color, &error), error)
+    }
+
+    /// The recorded sRGB background variant, for replay.
+    func applyAdjustment(_ image: Int32, _ adjustment: Adjustment, background: RecorderColor) throws {
+        try applyAdjustment(image, adjustment,
+                            background: GlimsColor(red: background.red, green: background.green,
+                                                   blue: background.blue, alpha: background.alpha))
+    }
+
     // MARK: Painting
 
     struct StrokeCaptureFacts: Equatable {

@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 29
+# Recorder file format, versions 1 to 30
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `29`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `30`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -21,12 +21,13 @@ The writer chooses the highest version required by a successful record:
 `fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
 an Eraser stroke with an explicit background color 22, mask Levels 23,
 mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
-`applyUnsharpMask` 26, `scaleWithInterpolation` 27, `rotateCanvas` 28, and `smoothSelection` 29.
+`applyUnsharpMask` 26, `scaleWithInterpolation` 27, `rotateCanvas` 28,
+`smoothSelection` 29, and `adjustment` 30.
 A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...29 refuse the file.
+version 1. Integers outside 1...30 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -69,6 +70,7 @@ Commands have an owned `tag` and the following exact fields:
 | `applyInkCurves` | `samples` (version 12) |
 | `scale` | integer `width`, `height` |
 | `smoothSelection` | integer `radius` from 1 through 100 (version 29) |
+| `adjustment` | `adjustment`, `background` (version 30) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -98,8 +100,8 @@ layer-kind description); Levels, Curves and Brightness/Contrast use a layer
 symbol for a layer adjustment or a context for an editing-mask adjustment.
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
-Select Alpha, color selection with `sampleMerged:false`, and mask Levels, Curves or Brightness/Contrast
-require context; other non-ink commands require none. Native ink commands require the `ink`
+Select Alpha, color selection with `sampleMerged:false`, mask Levels, Curves or Brightness/Contrast,
+and one-click adjustments require context; other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
 `quickMask`. Target kinds are layer/channel/quickMask with `symbol`, or mask with
@@ -627,3 +629,12 @@ their original encoding.
 `smoothSelection` uses a `none` binding. It smooths the destination image’s
 current selection with the saved radius in pixels. An empty selection, an
 unsupported image layout or an adapter without slot 238 refuses the edit.
+
+## One-click adjustments (version 30)
+
+`adjustment` stores the adjustment name (`autoLevels`, `equalize`,
+`desaturate`, `addAlpha` or `removeAlpha`) and the exact sRGB `background`
+Remove Alpha composites on; the other adjustments ignore it. It requires a
+context binding whose target is the captured paint target (a layer, its
+editing mask or a channel), never the `.none` binding. Version 30 requires
+at least one successful adjustment; earlier versions reject the tag.

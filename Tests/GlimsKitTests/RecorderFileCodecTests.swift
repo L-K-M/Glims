@@ -290,6 +290,71 @@ final class RecorderFileCodecTests: XCTestCase {
         rejects(replace(fixture, #","radius":7"#, ""), reason: "Missing or unknown object fields")
     }
 
+    private let adjustmentSymbolJSON = #"{"id":"77777777-7777-7777-7777-777777777777","description":{"name":"Adjust me","kind":"pixel","ancestors":[],"siblingIndex":0,"bounds":{"x":0,"y":0,"width":41,"height":29}}}"#
+    private let adjustmentBinding = #"{"kind":"context","context":{"layers":["77777777-7777-7777-7777-777777777777"],"channels":[],"target":{"kind":"layer","symbol":"77777777-7777-7777-7777-777777777777"},"masks":[{"owner":"77777777-7777-7777-7777-777777777777","isPresent":false,"enabled":false,"editing":false,"showing":false}],"quickMask":{"enabled":false,"inverted":false,"color":{"space":"srgb","red":1,"green":1,"blue":1,"alpha":1}}}}"#
+
+    func testAdjustmentFileKeepsTheKindAndBackground() throws {
+        let command = #"{"tag":"adjustment","adjustment":"removeAlpha","background":{"space":"srgb","red":0.2,"green":0.35,"blue":0.6,"alpha":0.8}}"#
+        let fixture = replace(document(success(command, binding: adjustmentBinding), symbols: adjustmentSymbolJSON),
+                              #""version":1"#, #""version":30"#)
+        let value = try RecorderFileCodec.decode(bytes(fixture))
+        guard case .success(.adjustment(let adjustment, let background), .context) = value.records[0].outcome else {
+            return XCTFail("The saved adjustment was lost")
+        }
+        XCTAssertEqual(adjustment, .removeAlpha)
+        XCTAssertEqual(background.red, 0.2)
+        let encoded = try RecorderFileCodec.encode(value)
+        let encodedText = String(decoding: encoded, as: UTF8.self)
+        XCTAssertTrue(encodedText.contains(#""version":30"#))
+        XCTAssertTrue(encodedText.contains(#""tag":"adjustment""#))
+        XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
+        let prepared = try RecorderFileSemanticBridge.prepare(value)
+        guard case .success(.adjustment(let preparedAdjustment, _)) = prepared.log.records.first?.resolution else {
+            return XCTFail("The prepared adjustment was lost")
+        }
+        XCTAssertEqual(preparedAdjustment, .removeAlpha)
+        guard case .success(_, let capturedBinding) = value.records[0].outcome else {
+            return XCTFail("The adjustment record has no capture-time binding")
+        }
+        let symbol = UUID(uuidString: "77777777-7777-7777-7777-777777777777")!
+        let description = RecorderTargetDescription(name: "Adjust me", kind: .pixel, ancestors: [],
+            siblingIndex: 0, bounds: .init(x: 0, y: 0, width: 41, height: 29))
+        var catalog = RecorderDescriptionCatalog()
+        catalog.acceptFirst([symbol: .available(description)])
+        let snapshot = try RecorderFileCodec.snapshot(prepared.log, recordingID: value.recordingID,
+            name: value.name, origin: value.origin, descriptions: catalog, bindings: [0: capturedBinding])
+        XCTAssertEqual(snapshot, value)
+
+        rejects(replace(fixture, #""version":30"#, #""version":29"#), reason: "version 30")
+        rejects(replace(fixture, "removeAlpha", "sepia"), reason: "Unknown one-click adjustment")
+        rejects(replace(replace(fixture, command, #"{"tag":"scale","width":1,"height":1}"#), adjustmentBinding, #"{"kind":"none"}"#),
+                reason: "Version 30")
+        rejects(replace(fixture, #","background":{"space":"srgb","red":0.2,"green":0.35,"blue":0.6,"alpha":0.8}"#, ""),
+                reason: "Missing or unknown object fields")
+    }
+
+    func testTargetDependentAdjustmentCannotSaveWithoutItsCapturedContext() throws {
+        let command = #"{"tag":"adjustment","adjustment":"desaturate","background":{"space":"srgb","red":0,"green":0,"blue":0,"alpha":1}}"#
+        let fixture = replace(document(success(command, binding: adjustmentBinding), symbols: adjustmentSymbolJSON),
+                              #""version":1"#, #""version":30"#)
+        let value = try RecorderFileCodec.decode(bytes(fixture))
+        let prepared = try RecorderFileSemanticBridge.prepare(value)
+        let symbol = UUID(uuidString: "77777777-7777-7777-7777-777777777777")!
+        let description = RecorderTargetDescription(name: "Adjust me", kind: .pixel, ancestors: [],
+            siblingIndex: 0, bounds: .init(x: 0, y: 0, width: 41, height: 29))
+        var catalog = RecorderDescriptionCatalog()
+        catalog.acceptFirst([symbol: .available(description)])
+        guard case .success(_, let capturedBinding) = value.records[0].outcome else {
+            return XCTFail("The adjustment record has no capture-time binding")
+        }
+        XCTAssertNoThrow(try RecorderFileCodec.snapshot(prepared.log, recordingID: value.recordingID,
+            name: value.name, origin: value.origin, descriptions: catalog, bindings: [0: capturedBinding]))
+        XCTAssertThrowsError(try RecorderFileCodec.snapshot(prepared.log, recordingID: value.recordingID,
+            name: value.name, origin: value.origin, descriptions: catalog, bindings: [0: .none])) {
+            XCTAssertTrue($0.localizedDescription.contains("Command and binding kinds disagree"), $0.localizedDescription)
+        }
+    }
+
     func testLayerTransformKeepsExactCoefficientsAndNamedInterpolation() throws {
         let value = try RecorderFileCodec.decode(bytes(transformDocument()))
         let encoded = try RecorderFileCodec.encode(value)
