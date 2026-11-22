@@ -837,6 +837,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (selection anchor)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-modifiers" {
+                try exerciseToolModifiers(session, documents: documents)
+                print(failures == 0 ? "PASSED (Tool Modifiers)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "clone-alignment" {
                 try exerciseCloneAlignment(session, documents: documents)
                 print(failures == 0 ? "PASSED (Clone Alignment)" : "FAILED: \(failures) failure(s)")
@@ -1258,6 +1263,7 @@ enum EngineSmokeTest {
             try exerciseAlignLayers(session, documents: documents)
             try exerciseSmoothSelection(session, documents: documents)
             try exerciseCloneAlignment(session, documents: documents)
+            try exerciseToolModifiers(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseFade(session, documents: documents)
@@ -4584,7 +4590,7 @@ enum EngineSmokeTest {
     /// refusals they cause, a queued creation losing to a later user
     /// pick, and the filter preview gating layer changes.
     private static func exercisePreferences(_ session: EngineSession, documents: DocumentList) throws {
-        let suite = "ch.lkmc.Glims.smoke.preferences.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-preferences")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = EditorPreferences(defaults: defaults)
@@ -9380,7 +9386,7 @@ enum EngineSmokeTest {
     }
 
     private static func exerciseBrushChooserSelection(_ session: EngineSession, documents: DocumentList) throws {
-        let suite = "ch.lkmc.Glims.smoke.brushchooser.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-brushchooser")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = BrushSelectionStore(defaults: defaults)
@@ -9506,7 +9512,7 @@ enum EngineSmokeTest {
     }
 
     private static func exerciseBrushChooserPresentation(_ session: EngineSession, documents: DocumentList) throws {
-        let suite = "ch.lkmc.Glims.smoke.brush-presentation.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-brush-presentation")
         let defaults = UserDefaults(suiteName: suite)!
         let state = ToolState.shared
         let previousStore = state.brushStore
@@ -11812,7 +11818,7 @@ enum EngineSmokeTest {
     /// search and lazy previews, missing-identity reporting, close/retarget
     /// invalidation, and the queued resource gradient with undo.
     private static func exerciseGradientChooser(_ session: EngineSession, documents: DocumentList) throws {
-        let suite = "ch.lkmc.Glims.smoke.gradientchooser.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-gradientchooser")
         let defaults = UserDefaults(suiteName: suite)!
         let store = GradientToolStore(defaults: defaults)
         let state = ToolState.shared

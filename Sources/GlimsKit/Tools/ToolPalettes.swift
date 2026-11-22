@@ -490,7 +490,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         } else {
             let hints: [ToolID: String] = [
                 .crop: "Drag the area to keep, then press Return to crop or Escape to cancel.",
-                .eyedropper: "Click the image to pick the foreground color.",
+                .eyedropper: "Click the image to pick the foreground color, or Option-click to pick the background color.",
                 .hand: "Drag to scroll. Hold Space with any tool for the hand.",
                 .zoom: "Click to zoom in; Option-click to zoom out.",
             ]

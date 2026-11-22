@@ -7,7 +7,7 @@ final class ResourceReferenceMigrationTests: XCTestCase {
     private let new = EngineSession.ResourceIdentity(name: "Renamed Ω", collection: "file:///owned", isInternal: false)
     private let other = EngineSession.ResourceIdentity(name: "Original", collection: "", isInternal: false)
     private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
-        let suite = "ch.lkmc.Glims.migration.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("migration")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         try body(defaults)
