@@ -17,6 +17,7 @@
 #include "core/gimpimage-convert-type.h"
 #include "core/gimpimage-duplicate.h"
 #include "core/gimpimage-undo.h"
+#include "core/gimpimage-merge.h"
 #include "core/gimplayer.h"
 #include "core/gimplayer-new.h"
 #include "core/gimppickable.h"
@@ -28,7 +29,7 @@
 static gboolean
 settings_valid (const GlimsExportSettings *s)
 {
-  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_TGA &&
+  return s->format >= GLIMS_EXPORT_PNG && s->format <= GLIMS_EXPORT_PDF &&
          isfinite (s->jpeg_quality) && s->jpeg_quality >= 0 && s->jpeg_quality <= 1 &&
          s->jpeg_progressive <= 1 && s->jpeg_optimize <= 1 &&
          s->jpeg_subsampling <= GLIMS_JPEG_BOTH &&
@@ -70,8 +71,49 @@ set_choice (GimpProcedure *p, GimpValueArray *a, const char *name, const char *v
 }
 
 static gboolean
-configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gboolean cmyk)
+set_double (GimpProcedure *p, GimpValueArray *a, const char *name, gdouble value)
 {
+  GValue *v = argument (p, a, name, G_TYPE_DOUBLE);
+  if (!v) return FALSE;
+  g_value_set_double (v, value);
+  return TRUE;
+}
+static gboolean
+set_int (GimpProcedure *p, GimpValueArray *a, const char *name, gint value)
+{
+  GValue *v = argument (p, a, name, G_TYPE_INT);
+  if (!v) return FALSE;
+  g_value_set_int (v, value);
+  return TRUE;
+}
+
+/* PCX, EPS and PDF get one opaque layer. The white comes from a context of
+ * our own: the user context's background is not this command's to change. */
+static gboolean
+flatten_on_white (GlimsEngine *engine, GimpImage *image, GError **error)
+{
+  GList       *layers = gimp_image_get_layer_iter (image);
+  GimpContext *context;
+  GeglColor   *white;
+  gboolean     flattened;
+
+  if (!layers || !gimp_drawable_has_alpha (GIMP_DRAWABLE (layers->data)))
+    return layers != NULL;
+  context = gimp_context_new (engine->gimp, "Glims export", gimp_get_user_context (engine->gimp));
+  white = gegl_color_new ("white");
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_BACKGROUND, TRUE);
+  gimp_context_set_background (context, white);
+  g_object_unref (white);
+  flattened = gimp_image_flatten (image, context, NULL, error) != NULL;
+  g_object_unref (context);
+  return flattened;
+}
+
+static gboolean
+configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gboolean cmyk,
+           GimpImage *image)
+{
+  gdouble xres, yres;
   static const char *jpeg_sampling[] = { "sub-sampling-1x1", "sub-sampling-2x1",
                                         "sub-sampling-1x2", "sub-sampling-2x2" };
   static const char *tiff_compression[] = { "none", "lzw", "adobe_deflate", "packbits" };
@@ -116,6 +158,32 @@ configure (GimpProcedure *p, GimpValueArray *a, const GlimsExportSettings *s, gb
        * reads babl's default (sRGB) pixel format; output is sRGB. */
       return set_bool (p, a, "rle", FALSE) &&
              set_choice (p, a, "origin", "top-left");
+    case GLIMS_EXPORT_PCX:
+      return TRUE; /* file-pcx-export has no arguments of its own. */
+    case GLIMS_EXPORT_EPS:
+      /* file-eps-export's defaults are a 287 x 200 mm box at a 5 mm offset
+       * (plug-ins/common/file-ps.c). The page is the image's print size. */
+      gimp_image_get_resolution (image, &xres, &yres);
+      return set_double (p, a, "width", gimp_image_get_width (image) / xres) &&
+             set_double (p, a, "height", gimp_image_get_height (image) / yres) &&
+             set_double (p, a, "x-offset", 0.0) &&
+             set_double (p, a, "y-offset", 0.0) &&
+             set_choice (p, a, "unit", "inch") &&
+             set_bool (p, a, "keep-ratio", FALSE) &&
+             set_int (p, a, "rotation", 0) &&
+             set_bool (p, a, "level", TRUE) &&
+             set_bool (p, a, "show-preview", FALSE) &&
+             set_int (p, a, "preview", 0);
+    case GLIMS_EXPORT_PDF:
+      /* One raster page. file-pdf-export.c sizes it from the resolution. */
+      return set_bool (p, a, "vectorize", FALSE) &&
+             set_bool (p, a, "ignore-hidden", TRUE) &&
+             set_bool (p, a, "apply-masks", TRUE) &&
+             set_bool (p, a, "layers-as-pages", FALSE) &&
+             set_bool (p, a, "reverse-order", FALSE) &&
+             set_bool (p, a, "root-layers-only", TRUE) &&
+             set_bool (p, a, "convert-text-layers", FALSE) &&
+             set_bool (p, a, "fill-background-color", FALSE);
     default:
       return FALSE;
     }
@@ -161,7 +229,7 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
                    GimpColorProfile *cmyk_profile, GimpColorRenderingIntent intent,
                    char **error)
 {
-  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export", "file-gif-export", "file-bmp-export", "file-tga-export" };
+  static const char *procedures[] = { NULL, "file-png-export", "file-jpeg-export", "file-tiff-export", "file-psd-export", "file-gif-export", "file-bmp-export", "file-tga-export", "file-pcx-export", "file-eps-export", "file-pdf-export" };
   GlimsOpenImage *open = glims_lookup_image (engine, id);
   GimpPlugInProcedure *file_proc;
   GimpProcedure *proc;
@@ -226,6 +294,33 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
     }
+  if (settings->format == GLIMS_EXPORT_PCX)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || (g_ascii_strcasecmp (extension, ".pcx") != 0 && g_ascii_strcasecmp (extension, ".pcc") != 0))
+        {
+          if (error) *error = g_strdup ("PCX export requires a .pcx or .pcc filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_EPS)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || g_ascii_strcasecmp (extension, ".eps") != 0)
+        {
+          if (error) *error = g_strdup ("EPS export requires a .eps filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
+  if (settings->format == GLIMS_EXPORT_PDF)
+    {
+      const char *extension = strrchr (path, '.');
+      if (!extension || g_ascii_strcasecmp (extension, ".pdf") != 0)
+        {
+          if (error) *error = g_strdup ("PDF export requires a .pdf filename.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
+    }
   if (settings->format == GLIMS_EXPORT_BMP)
     {
       /* The V5 file header is 138 bytes. Keep the whole uncompressed
@@ -245,6 +340,30 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
       /* Native TGA writes each dimension into an unsigned 16-bit field. */
       if (error) *error = g_strdup ("TGA export supports dimensions up to 65535 pixels. Reduce the image dimensions first.");
       return GLIMS_STATUS_UNSUPPORTED;
+    }
+  if (settings->format == GLIMS_EXPORT_PCX &&
+      (gimp_image_get_width (open->image) > 65534 || gimp_image_get_height (open->image) > 65536))
+    {
+      /* file-pcx.c stores the last row and the even bytes per line in 16
+       * bits without checking the latter: 65535 wide wraps around to zero. */
+      if (error) *error = g_strdup ("PCX export supports widths up to 65534 and heights up to 65536 pixels. Reduce the image dimensions first.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+  if (settings->format == GLIMS_EXPORT_EPS || settings->format == GLIMS_EXPORT_PDF)
+    {
+      /* PDF readers support pages up to 14400 points (200 inches) a side
+       * and PostScript interpreters commonly share that limit. */
+      gdouble xres, yres;
+
+      gimp_image_get_resolution (open->image, &xres, &yres);
+      if (gimp_image_get_width (open->image) * 72.0 / xres > 14400.0 ||
+          gimp_image_get_height (open->image) * 72.0 / yres > 14400.0)
+        {
+          if (error) *error = g_strdup (settings->format == GLIMS_EXPORT_EPS
+            ? "EPS export supports page dimensions up to 200 inches. Reduce the image size or increase its resolution."
+            : "PDF export supports page dimensions up to 200 inches. Reduce the image size or increase its resolution.");
+          return GLIMS_STATUS_UNSUPPORTED;
+        }
     }
   if (cmyk_profile && gimp_image_get_base_type (open->image) != GIMP_RGB)
     {
@@ -296,7 +415,7 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
   image_arg = argument (proc, args, "image", GIMP_TYPE_IMAGE);
   file_arg = argument (proc, args, "file", G_TYPE_FILE);
   options_arg = argument (proc, args, "options", GIMP_TYPE_EXPORT_OPTIONS);
-  if (!run || !image_arg || !file_arg || !options_arg || !configure (proc, args, settings, cmyk_profile != NULL))
+  if (!run || !image_arg || !file_arg || !options_arg || !configure (proc, args, settings, cmyk_profile != NULL, open->image))
     {
       gimp_value_array_unref (args);
       g_object_unref (file);
@@ -342,11 +461,17 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
   if ((settings->format == GLIMS_EXPORT_PSD && (settings->psd_layout == GLIMS_PSD_MERGED || cmyk_profile)) ||
       settings->format == GLIMS_EXPORT_GIF ||
       settings->format == GLIMS_EXPORT_BMP ||
-      settings->format == GLIMS_EXPORT_TGA)
+      settings->format == GLIMS_EXPORT_TGA ||
+      settings->format == GLIMS_EXPORT_PCX ||
+      settings->format == GLIMS_EXPORT_EPS ||
+      settings->format == GLIMS_EXPORT_PDF)
     {
       const gboolean need_merged = settings->format == GLIMS_EXPORT_GIF ||
                                    settings->format == GLIMS_EXPORT_BMP ||
                                    settings->format == GLIMS_EXPORT_TGA ||
+                                   settings->format == GLIMS_EXPORT_PCX ||
+                                   settings->format == GLIMS_EXPORT_EPS ||
+                                   settings->format == GLIMS_EXPORT_PDF ||
                                    (settings->format == GLIMS_EXPORT_PSD && settings->psd_layout == GLIMS_PSD_MERGED);
       private_image = need_merged ? glims_merged_image_copy (image, "Merged appearance") : gimp_image_duplicate (image);
       if (!private_image)
@@ -360,6 +485,12 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
             prepare_error = "The visible image could not be prepared for BMP export.";
           else if (settings->format == GLIMS_EXPORT_TGA)
             prepare_error = "The visible image could not be prepared for TGA export.";
+          else if (settings->format == GLIMS_EXPORT_PCX)
+            prepare_error = "The visible image could not be prepared for PCX export.";
+          else if (settings->format == GLIMS_EXPORT_EPS)
+            prepare_error = "The visible image could not be prepared for EPS export.";
+          else if (settings->format == GLIMS_EXPORT_PDF)
+            prepare_error = "The visible image could not be prepared for PDF export.";
           gimp_value_array_unref (args);
           g_object_unref (file);
           g_object_unref (image);
@@ -367,26 +498,42 @@ export_configured (GlimsEngine *engine, GlimsImageID id,
         }
       if (settings->format == GLIMS_EXPORT_GIF)
         gimp_image_parasite_detach (private_image, "gif/animated", FALSE);
-      if (settings->format == GLIMS_EXPORT_BMP || settings->format == GLIMS_EXPORT_TGA)
+      if (settings->format == GLIMS_EXPORT_BMP || settings->format == GLIMS_EXPORT_TGA ||
+          settings->format == GLIMS_EXPORT_PCX || settings->format == GLIMS_EXPORT_EPS ||
+          settings->format == GLIMS_EXPORT_PDF)
         {
           GimpImageBaseType base = gimp_image_get_base_type (private_image);
-          if (base == GIMP_GRAY || base == GIMP_INDEXED)
+          /* EPS and PDF write grayscale themselves. */
+          const gboolean gray_to_rgb = settings->format == GLIMS_EXPORT_BMP ||
+                                       settings->format == GLIMS_EXPORT_TGA ||
+                                       settings->format == GLIMS_EXPORT_PCX;
+          const char *failure = NULL;
+
+          gimp_image_undo_disable (private_image);
+          if (base == GIMP_INDEXED || (base == GIMP_GRAY && gray_to_rgb))
             {
               /* Convert the private merged image to RGB as the engine would for
                * an RGB-only export path. The native writers read babl's default
                * sRGB; output is sRGB rather than an embedded source profile. */
-              gimp_image_undo_disable (private_image);
               if (!gimp_image_convert_type (private_image, GIMP_RGB, NULL, NULL, &gerror))
-                {
-                  gimp_value_array_unref (args);
-                  g_object_unref (file);
-                  g_object_unref (image);
-                  g_object_unref (private_image);
-                  return glims_fail (error, gerror, settings->format == GLIMS_EXPORT_BMP
-                                       ? "The image could not be converted to RGB for BMP export."
-                                       : "The image could not be converted to RGB for TGA export.");
-                }
-              gimp_image_flush (private_image);
+                failure = settings->format == GLIMS_EXPORT_BMP ? "The image could not be converted to RGB for BMP export."
+                        : settings->format == GLIMS_EXPORT_TGA ? "The image could not be converted to RGB for TGA export."
+                        : "The image could not be converted to RGB for export.";
+              else
+                gimp_image_flush (private_image);
+            }
+          /* file-pcx.c and file-ps.c refuse alpha; PDF follows them, so the
+           * three flat formats look alike. */
+          if (!failure && settings->format != GLIMS_EXPORT_BMP && settings->format != GLIMS_EXPORT_TGA &&
+              !flatten_on_white (engine, private_image, &gerror))
+            failure = "The image could not be flattened for export.";
+          if (failure)
+            {
+              gimp_value_array_unref (args);
+              g_object_unref (file);
+              g_object_unref (image);
+              g_object_unref (private_image);
+              return glims_fail (error, gerror, failure);
             }
         }
       if (cmyk_profile)
