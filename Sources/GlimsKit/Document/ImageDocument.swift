@@ -337,6 +337,10 @@ final class ImageDocument {
         return selected[0]
     }
     private(set) var quickMaskState: EngineSession.QuickMaskState?
+    /// The box each selected channel's coverage fills, read with the state
+    /// when the engine can transform channels. An empty channel has none.
+    private(set) var channelBoxes: [Int32: CGRect] = [:]
+    var canTransformChannels: Bool { session.supportsChannelTransform }
     /// The image's color model, precision and effective profile, read
     /// with the rest of the state. The window title, the Mode checkmarks,
     /// the Precision form and the Image Information sheet all read this
@@ -736,6 +740,13 @@ final class ImageDocument {
                 ?? channels.filter(\.isSelected).map(\.id),
             existing: existingChannelIDs)
         channels = channels.map { channelRow($0, selected: selectedChannelIDs.contains($0.id)) }
+        var boxes: [Int32: CGRect] = [:]
+        if session.supportsChannelTransform {
+            for id in selectedChannelIDs {
+                if let box = try? session.channelBounds(id, image: image) { boxes[id] = box }
+            }
+        }
+        channelBoxes = boxes
         undoInfo = try session.undoInfo(image)
         history = try session.history(image)
         // The ordered selected layers, primary first. While a pick or a
@@ -4321,6 +4332,49 @@ final class ImageDocument {
             self.settleRecording(capture, result: answer.map { semantic }, confirmed: confirmed)
         }
         if capture != nil { notifyRecorderChanged() }
+    }
+
+    /// Free Transform on the one active channel, the Quick Mask's or a
+    /// saved selection's: `matrix` maps the box its coverage fills, which
+    /// the engine checks again in its own dispatch. This moves a selection
+    /// as Quick Mask > Free Transform > Quick Mask did in 1996. The
+    /// Recorder cannot save it yet, so a recording keeps a failed row.
+    func transformChannel(_ channel: Int32, matrix: ProjectiveTransform, expectedBounds: CGRect,
+                          interpolation: EngineSession.Interpolation,
+                          completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+        guard !refuseWhileEditingUnavailable(), !refuseWhileTargetPending() else {
+            return completion(.failure(isClosing ? DocumentError.closed : DocumentError.busy))
+        }
+        guard session.supportsChannelTransform, !refuseWhileFloatingActive(),
+              isChannelTargetActive, activeDrawable == channel,
+              channelBoxes[channel] == expectedBounds else {
+            return completion(.failure(DocumentError.targetChanged))
+        }
+        guard matrix.projectedBounds(forSource: expectedBounds) != nil else {
+            return completion(.failure(RecorderReplayError(message: "The channel transform exceeds its supported bounds.")))
+        }
+        let result = LayerChangeResult()
+        pendingWork += 1 // Cache reconciliation and completion also hold close.
+        recordUnsupportedCommand("Transform Channel")
+        enqueue(on: inputQueue, input: true, afterFinish: {
+            self.countedReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The transformed channel could not be refreshed: \(error)") }
+                }
+                self.jobDidFinish(input: false)
+                completion(result.value ?? .failure(DocumentError.busy))
+            }
+        }) { [session, image] in
+            let answer = Result {
+                guard try session.selectedItems(.channel, image: image) == [channel],
+                      try !session.floatingSelection(image).isActive else { throw DocumentError.targetChanged }
+                try session.transformChannel(channel, image: image, matrix: matrix,
+                                             expectedBounds: expectedBounds, interpolation: interpolation)
+            }
+            result.value = answer
+            if case .failure(let error) = answer { self.report(error) }
+        }
     }
 
     private nonisolated static func requireLayerTransformTarget(_ layer: Int32,

@@ -2424,6 +2424,40 @@ final class EngineSession: @unchecked Sendable {
         var arrowConcavity: Double = 0
     }
 
+    var supportsChannelTransform: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.channel_transform_matrix_captured) else {
+            return false
+        }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.channel_transform_matrix_captured)
+            && api.channel_bounds != nil && api.channel_transform_matrix_captured != nil
+    }
+
+    /// The box a channel's coverage fills, the Quick Mask's included; nil
+    /// when it covers nothing. An adapter without slot 245 is UNSUPPORTED.
+    func channelBounds(_ channel: Int32, image: Int32) throws -> CGRect? {
+        guard supportsChannelTransform, let read = api.channel_bounds else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot transform channels.")
+        }
+        var empty = true
+        var bounds = GlimsRect()
+        try check(read(engine, image, channel, &empty, &bounds), nil)
+        return empty ? nil : CGRect(x: Int(bounds.x), y: Int(bounds.y), width: Int(bounds.width), height: Int(bounds.height))
+    }
+
+    /// Free Transform on a channel, only while its box is still
+    /// `expectedBounds`: one undo step. The channel keeps the canvas size.
+    func transformChannel(_ channel: Int32, image: Int32, matrix: ProjectiveTransform,
+                          expectedBounds: CGRect, interpolation: Interpolation) throws {
+        guard supportsChannelTransform, let transform = api.channel_transform_matrix_captured else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot transform channels.")
+        }
+        var request = try Self.layerTransformRequest(matrix, bounds: expectedBounds, interpolation: interpolation)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(transform(engine, image, channel, &request, &error), error)
+    }
+
     var supportsDrawLine: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.layer_draw_line) else { return false }
         return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.layer_draw_line)

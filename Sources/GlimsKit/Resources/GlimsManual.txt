@@ -207,6 +207,12 @@ What the tools do:
   the pending transform. An accepted Apply finishes before another can
   begin. Editable text, links and vector sources require the explicit
   Layer > Rasterize Layer command before a destructive transform.
+  To transform a selection's shape, turn on Quick Mask (Select >
+  Quick Mask), transform, and turn Quick Mask off. While Quick Mask
+  or one saved selection is the target in the Channels palette,
+  Transform works on that channel, boxed by the area it covers. The
+  channel keeps the canvas size, so coverage moved past the canvas is
+  lost. The Recorder cannot save a channel transform yet.
 
   Rectangle Select and Ellipse Select drag out a selection; Lasso
   draws one freehand. Polygon Lasso places a corner at each click;
