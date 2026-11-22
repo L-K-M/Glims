@@ -6,7 +6,7 @@ import AppKit
 /// leading dot; an unknown or empty extension gets nil so the caller
 /// picks a fallback rather than guessing.
 enum ExportFormat: String, CaseIterable {
-    case png, jpeg, tiff, psd, gif, bmp, tga
+    case png, jpeg, tiff, psd, gif, bmp, tga, pcx, eps, pdf
 
     var title: String {
         switch self {
@@ -17,6 +17,9 @@ enum ExportFormat: String, CaseIterable {
         case .gif: return "GIF"
         case .bmp: return "BMP"
         case .tga: return "TGA"
+        case .pcx: return "PCX"
+        case .eps: return "EPS"
+        case .pdf: return "PDF"
         }
     }
 
@@ -31,6 +34,9 @@ enum ExportFormat: String, CaseIterable {
         case .gif: return "gif"
         case .bmp: return "bmp"
         case .tga: return "tga"
+        case .pcx: return "pcx"
+        case .eps: return "eps"
+        case .pdf: return "pdf"
         }
     }
 
@@ -44,6 +50,9 @@ enum ExportFormat: String, CaseIterable {
         case "gif": return .gif
         case "bmp": return .bmp
         case "tga": return .tga
+        case "pcx", "pcc": return .pcx
+        case "eps": return .eps
+        case "pdf": return .pdf
         default: return nil
         }
     }
@@ -392,6 +401,12 @@ final class ExportOptionsForm: NSView {
         "Exports the visible image as uncompressed 32-bit sRGB with transparency and top-left origin. No color profile is embedded. Save XCF to retain layers, profile and precision.")
     let gifExplanation = NSTextField(wrappingLabelWithString:
         "Exports the visible image with up to 256 colors. Pixels below 50% opacity become transparent; other pixels become opaque. One image, without animation. Save XCF to retain layers and precision.")
+    let pcxExplanation = NSTextField(wrappingLabelWithString:
+        "Exports the visible image as a flat PCX file. Transparency is composited on white before export. Width is limited to 65534 pixels and height to 65536. The colors are sRGB. Save XCF to retain layers, profile and precision.")
+    let epsExplanation = NSTextField(wrappingLabelWithString:
+        "Exports the visible image as a single-page EPS file at its print size. Transparency is composited on white and layers are flattened. Page size is limited to 200 inches per side. Save XCF to retain layers and full editing.")
+    let pdfExplanation = NSTextField(wrappingLabelWithString:
+        "Exports the visible image as a single-page PDF at its print size. Transparency is composited on white and layers are flattened. Page size is limited to 200 inches per side. Save XCF to retain layers and full editing.")
     let messageLabel = NSTextField(labelWithString: "")
     /// The last readable refusal shown inline; nil while clean.
     private(set) var lastError: String?
@@ -585,6 +600,9 @@ final class ExportOptionsForm: NSView {
             [NSGridCell.emptyContentView, gifExplanation],
             [NSGridCell.emptyContentView, bmpExplanation],
             [NSGridCell.emptyContentView, tgaExplanation],
+            [NSGridCell.emptyContentView, pcxExplanation],
+            [NSGridCell.emptyContentView, epsExplanation],
+            [NSGridCell.emptyContentView, pdfExplanation],
         ]
         let grid = NSGridView(views:
             [[NSTextField(labelWithString: "Format:"), formatPopup]] + jpegRows + pngRows + tiffRows + psdRows + bitmapRows)
@@ -604,6 +622,9 @@ final class ExportOptionsForm: NSView {
             .gif: [grid.row(at: psdStart + psdRows.count)],
             .bmp: [grid.row(at: psdStart + psdRows.count + 1)],
             .tga: [grid.row(at: psdStart + psdRows.count + 2)],
+            .pcx: [grid.row(at: psdStart + psdRows.count + 3)],
+            .eps: [grid.row(at: psdStart + psdRows.count + 4)],
+            .pdf: [grid.row(at: psdStart + psdRows.count + 5)],
         ]
         let fullWidth = ceil(grid.fittingSize.width)
 
@@ -933,7 +954,7 @@ final class ExportOptionsForm: NSView {
                 window?.makeFirstResponder(compressionRow.field)
                 return false
             }
-        case .tiff, .psd, .gif, .bmp, .tga:
+        case .tiff, .psd, .gif, .bmp, .tga, .pcx, .eps, .pdf:
             break
         }
         guard ExportSettings.validate(settings) else {

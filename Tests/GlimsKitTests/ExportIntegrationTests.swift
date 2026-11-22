@@ -28,6 +28,27 @@ final class ExportIntegrationTests: XCTestCase {
         XCTAssertTrue(export.form.tgaExplanation.stringValue.contains("No color profile"))
     }
 
+    func testPcxEpsPdfChoicesKeepFilenamePolicyAndNativeRequestTogether() throws {
+        let export = ExportSavePanel(baseName: "photo.version2", settings: ExportSettings())
+        for (format, native) in [(ExportFormat.pcx, GLIMS_EXPORT_PCX), (.eps, GLIMS_EXPORT_EPS), (.pdf, GLIMS_EXPORT_PDF)] {
+            export.form.selectFormat(format)
+            XCTAssertTrue(export.form.commitEditing(), "hidden drafts cannot block \(format) output")
+            XCTAssertEqual(export.panel.nameFieldStringValue, "photo.version2." + format.preferredExtension)
+            XCTAssertEqual(export.panel.allowedContentTypes, [format.contentType])
+            XCTAssertEqual(try export.form.settings.nativeValue().format, native.rawValue)
+            XCTAssertEqual(ExportFormat.forFileExtension("." + format.preferredExtension.uppercased()), format)
+            XCTAssertTrue(export.form.bmpExplanation.isHidden)
+            XCTAssertTrue(export.form.tgaExplanation.isHidden)
+            XCTAssertTrue(export.form.gifExplanation.isHidden)
+        }
+        export.form.selectFormat(.pcx)
+        XCTAssertFalse(export.form.pcxExplanation.isHidden)
+        export.form.selectFormat(.eps)
+        XCTAssertFalse(export.form.epsExplanation.isHidden)
+        export.form.selectFormat(.pdf)
+        XCTAssertFalse(export.form.pdfExplanation.isHidden)
+    }
+
     func testGifChoiceReachesNativeSettingsAndPanel() throws {
         var settings = ExportSettings()
         settings.format = .gif

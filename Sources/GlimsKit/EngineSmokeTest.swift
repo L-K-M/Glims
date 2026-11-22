@@ -826,6 +826,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (export options)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-formats" {
+                try exerciseExportFormats(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (export-formats)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "region-anchor" {
                 try exerciseSelectionAnchor(session, documents: documents, regionOnly: true)
                 print(failures == 0 ? "PASSED (Region anchor)" : "FAILED: \(failures) failure(s)")
@@ -1284,6 +1289,7 @@ enum EngineSmokeTest {
             try exerciseLine(session, documents: documents)
             try exerciseNewImageContents(session, documents: documents)
             try exerciseImageDuplicate(session, documents: documents)
+            try exerciseExportFormats(session, work: work, documents: documents)
             try exerciseRotateArbitrary(session, documents: documents)
             try exerciseAlignLayers(session, documents: documents)
             try exerciseSmoothSelection(session, documents: documents)
