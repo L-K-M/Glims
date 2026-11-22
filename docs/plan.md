@@ -6887,10 +6887,9 @@ The sheet (ImageSizeForm over the pure ImageSizeModel) covers pixels, print
 width/height in five units, resolution in two units, Constrain proportions
 and Resample; File > New takes a resolution unit and a size unit at a 72 ppi
 default; Image Information shows resolution and print size. The Recorder
-captures both commands at format version 31. Verified on GIMP_3_2_8 by
-`scripts/build-adapter.sh --test` (resolution read/set, one-undo grouping,
-undo/redo of size and resolution, refusals, XCF round trip, PNG export and
-import within the pixels-per-metre rounding) and by `swift test` on the
-ImageSizeModel and recorder codec suites; the `image-resolution` smoke case
-exercises the menu validation and document commands (not run here: GUI
-checks belong to the caller).
+captures both commands at format version 31. Verified on the four engine
+sets by `scripts/build-adapter.sh --test` (resolution read/set, one-undo
+grouping, undo/redo of size and resolution, refusals, XCF round trip, PNG
+export and import within the pixels-per-metre rounding) and by `swift test`
+on the ImageSizeModel and recorder codec suites. The `image-resolution`
+smoke case exercises the menu validation and document commands.

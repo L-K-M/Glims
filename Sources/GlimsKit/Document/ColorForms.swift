@@ -150,7 +150,7 @@ enum ColorForms {
 
     /// Image ▸ Image Information…: a read-only sheet of the mode,
     /// precision and effective profile the document last saw — the same
-    /// cache the window title and Mode checkmarks show — plus the
+    /// cache the window title and Mode checkmarks show, plus the
     /// resolution and print size when the adapter can read them.
     static func presentInformation(for document: ImageDocument, on window: NSWindow) {
         guard window.attachedSheet == nil else { return }

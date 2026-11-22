@@ -4647,7 +4647,7 @@ typedef struct GlimsEngineAPI {
   /* Slot 248: Image > Image Size. Sets the resolution and, when the pixel
    * dimensions also change, resamples to `width` x `height` with
    * `interpolation` (a GlimsInterpolation; DEFAULT uses the engine's
-   * preference), as ONE undo step named "Scale Image" — GIMP's own Image
+   * preference), as ONE undo step named "Scale Image", GIMP's own Image
    * Size callback groups the two. A change that leaves both the dimensions
    * and the resolution (within GIMP's 1e-5 comparison) untouched adds no
    * undo step. `width` and `height` are 1 ... GIMP_MAX_IMAGE_SIZE and the
