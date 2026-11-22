@@ -380,6 +380,19 @@ plug-in commands together, most recent first. Commands under Image >
 Adjust are adjustments, not filters, so applying one does not change
 Last Filter.
 
+Image > Adjust carries one-click commands that act on the active layer,
+its mask while you edit it, or the selected channel. Auto Levels
+(Shift-Command-L) stretches each RGB channel's range, Desaturate
+(Shift-Command-U) turns the layer into HSL lightness grays, and
+Equalize flattens its histogram; all three respect the selection and are
+one undo step. Desaturate needs an RGB layer. Layer > Add Transparency
+and Remove Transparency change the layer's format; Remove Transparency
+composites transparent pixels on the tool background color. Groups,
+editable text, link and vector layers, locked pixels, and Lab or
+ink-channel documents are refused with the reason in the menu's tool
+tip. Recorder saves the adjustment and its background color and replays
+it on the same target.
+
 # History and Snapshots
 
 The History palette lists every edit state the image keeps, with the

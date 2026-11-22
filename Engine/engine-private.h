@@ -658,6 +658,10 @@ GlimsStatus glims_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, Gl
 GlimsStatus glims_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                           const GlimsVectorStyleChange *change, char **error);
 
+/* adjust-command.c */
+GlimsStatus glims_adjustment_apply (GlimsEngine *e, GlimsImageID image, uint32_t adjustment,
+                                   const GlimsColor *background, char **error);
+
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,
                                     const GlimsFillSettings *settings, char **error);
