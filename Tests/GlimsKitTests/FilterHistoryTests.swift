@@ -38,6 +38,17 @@ final class FilterHistoryTests: XCTestCase {
         XCTAssertEqual(history.entries.map(\.title), ["Gaussian Blur", "plug-in-checkerboard"])
     }
 
+    func testReapplyingAPlugInDedupesByName() {
+        var history = FilterHistory()
+        history.record(plugIn("plug-in-checkerboard"), limit: 8)
+        history.record(native("gegl:gaussian-blur", title: "Gaussian Blur"), limit: 8)
+        // The engine's list can change a command's label or sensitivity.
+        history.record(.plugIn(EngineSession.Procedure(name: "plug-in-checkerboard", label: "Checkerboard…",
+                                                       menuPath: "", blurb: "", isSensitive: false)), limit: 8)
+        XCTAssertEqual(history.entries.map(\.title), ["Checkerboard", "Gaussian Blur"],
+                       "a plug-in is one entry per procedure name")
+    }
+
     func testSameOperationDifferentVariantStaysDistinct() {
         var history = FilterHistory()
         history.record(native("gegl:median-blur", variant: "maximum", title: "Maximum"), limit: 8)

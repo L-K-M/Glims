@@ -45,7 +45,7 @@ extension EngineSmokeTest {
                 controller.previewPanel?.cancel()
                 controller.window?.orderOut(nil)
                 var stopped = false; controller.canvas.stopRendering { stopped = true }
-                while !stopped { spin(0.01) }
+                try? wait { stopped }
             }
             for doc in owned { doc.closeImageWhenDrained() }
             try? wait { owned.allSatisfy { (try? session.info($0.image)) == nil } }
@@ -128,6 +128,7 @@ extension EngineSmokeTest {
         // runs after the begin, so the admitted commit cannot land under it.
         check(!controllerB.validateMenuItem(blurItem), "no other filter is offered while a repeat begins")
         let hold = DispatchSemaphore(value: 0)
+        defer { hold.signal() }
         docB.inputQueue.async { _ = hold.wait(timeout: .now() + 20) }
         try wait { docB.recorder.pendingCount > 0 }
         check(docB.filterPreviewIsOpen && !controllerB.validateMenuItem(blurItem),

@@ -6854,7 +6854,8 @@ is set fixes the distance in whole pixels, as in GIMP's
 2026-11-22: Filter ▸ Last Filter, Last Filter Settings and Recently Used
 tracked only plug-ins, so Command-F repeated an older plug-in or nothing
 after a native apply. A new app-wide FilterCommands history now records
-every Filter-menu apply, plug-in or native, newest first, deduplicated
+every native Filter-menu apply and every completed plug-in command,
+whichever menu ran it, newest first, deduplicated
 per filter and capped at eight; Image ▸ Adjust entries, effect edits,
 Lab and ink paths never record. A native apply snapshots its committed
 settings inside finishFilter's queued job, whole typed settings for the

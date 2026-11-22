@@ -98,7 +98,8 @@ struct AppliedNativeFilter: Equatable {
     }
 }
 
-/// A filter applied from the Filter menu, native or plug-in.
+/// A native filter applied from the Filter menu, or a completed plug-in
+/// command from any menu.
 enum AppliedFilter: Equatable {
     case plugIn(EngineSession.Procedure)
     case native(AppliedNativeFilter)
@@ -137,8 +138,9 @@ struct FilterHistory: Equatable {
     }
 }
 
-/// App-wide state of the filters applied from the Filter menu: the Last
-/// Filter that Command-F repeats and the Recently Used list. Only
+/// App-wide state of the native filters applied from the Filter menu and
+/// the plug-in commands completed from any menu: the Last Filter that
+/// Command-F repeats and the Recently Used list. Only
 /// completed applies record; Cancel, a refused Apply and previews never
 /// reach here.
 @MainActor
