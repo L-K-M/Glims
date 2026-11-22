@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class EditorPreferencesTests: XCTestCase {
     private func withDefaults(_ body: (UserDefaults, String) throws -> Void) rethrows {
-        let suite = "ch.lkmc.Glims.tests.preferences.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("tests-preferences")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         try body(defaults, suite)

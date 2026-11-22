@@ -7,7 +7,7 @@ extension EngineSmokeTest {
     /// which, outside changes reach the sliders, and none of it touches the
     /// image.
     static func exerciseColorPalette(_ session: EngineSession, documents: DocumentList) throws {
-        let suite = "ch.lkmc.Glims.smoke.color.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-color")
         guard let defaults = UserDefaults(suiteName: suite) else { return check(false, "a color palette defaults suite") }
         defer { defaults.removePersistentDomain(forName: suite) }
         let image = try session.newImage(width: 40, height: 30)

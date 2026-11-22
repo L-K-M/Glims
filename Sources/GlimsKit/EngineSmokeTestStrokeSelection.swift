@@ -42,7 +42,7 @@ extension EngineSmokeTest {
         }
 
         // A throwaway store so the scenario's brush choice never persists.
-        let suite = "ch.lkmc.Glims.smoke.stroke-selection.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-stroke-selection")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = BrushSelectionStore(defaults: defaults)

@@ -99,6 +99,21 @@ extension EngineSmokeTest {
                 && NSApp.windows.filter { ($0 is ClassicPaletteWindow) && $0.isVisible }.count == groupCount,
                "opening a document presents the automatic palette layout as \(groupCount) visible panels")
         EngineSmokeTestHost.pumpEvents(for: 0.2)
+        if previouslyPresented.isEmpty {
+            let panels = NSApp.windows.filter { ($0 is ClassicPaletteWindow) && $0.isVisible }
+            let expectedTitles = [ToolsPaletteController.definition, ToolOptionsPaletteController.definition,
+                                  LayersPaletteController.definition, ColorPaletteController.definition]
+                .map(\.title).sorted()
+            expect(panels.map(\.title).sorted() == expectedTitles,
+                   "each default group opens on its front tab")
+            let overlapping = panels.enumerated().contains { index, panel in
+                panels.dropFirst(index + 1).contains {
+                    let shared = panel.frame.intersection($0.frame)
+                    return shared.width > 0 && shared.height > 0
+                }
+            }
+            expect(!overlapping, "the default palette groups do not cover each other")
+        }
         expect(NSApp.keyWindow === docWindow && NSApp.mainWindow === docWindow,
                "the automatic palette layout does not steal the document's key focus")
         let documentResponder = docWindow.firstResponder
