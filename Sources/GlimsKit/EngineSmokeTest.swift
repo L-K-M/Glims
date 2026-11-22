@@ -902,6 +902,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Fade)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "last-filter" {
+                try exerciseLastFilter(session, documents: documents)
+                print(failures == 0 ? "PASSED (Last Filter)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "selection-drag" {
                 try exerciseSelectionDrag(session, documents: documents)
                 print(failures == 0 ? "PASSED (selection drag)" : "FAILED: \(failures) failure(s)")
@@ -1282,6 +1287,7 @@ enum EngineSmokeTest {
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseFade(session, documents: documents)
+            try exerciseLastFilter(session, documents: documents)
             try exerciseSnapping(session, work: work, documents: documents)
             try exerciseFloatingMove(session, work: work, documents: documents)
             try exerciseProjectiveTransform(session)
@@ -7742,7 +7748,9 @@ enum EngineSmokeTest {
         check(first != nil && first != second, "the image changed (\(first ?? []) vs \(second ?? []))")
         check(documents.progressEvents.count > progressBefore && documents.progressEvents.last == .some(nil),
               "progress events reached the app and ended (\(documents.progressEvents.count - progressBefore))")
-        check(PlugInCommands.last?.name == checkerboard.name &&
+        let lastIsCheckerboard = { if case .plugIn(let p)? = FilterCommands.last { return p.name == checkerboard.name }
+                                   return false }()
+        check(lastIsCheckerboard &&
               submenu(["Filter", MainMenu.recentlyUsedTitle])?.items.first?.title == checkerboard.label,
               "Last Filter and Recently Used remember the command")
         controller.window?.orderOut(nil)

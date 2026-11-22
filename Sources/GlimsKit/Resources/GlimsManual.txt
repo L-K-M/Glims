@@ -369,10 +369,16 @@ says why (for example "needs a second layer as its source").
 Glims also runs the engine's plug-in commands. They appear at the end
 of the Image, Layer, Select and Filter menus and open their own
 settings windows; one command runs at a time. Filter > Last Filter
-(Command-F) runs the last plug-in command again with the settings it
-last used, and Last Filter Settings… (Option-Command-F) opens its
-settings window. Recently Used lists the plug-in commands you ran,
-most recent first.
+(Command-F) runs the last native filter you applied from the Filter
+menu, or plug-in command from any menu, again with the settings it
+last committed, and Last Filter Settings… (Option-Command-F) opens
+that filter's own settings window at those settings. A filter that cannot
+run again without its settings window, such as one that reads a
+layer, mask or channel you choose as its source, is still named but
+Last Filter stays disabled. Recently Used lists native filters and
+plug-in commands together, most recent first. Commands under Image >
+Adjust are adjustments, not filters, so applying one does not change
+Last Filter.
 
 # History and Snapshots
 
