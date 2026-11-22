@@ -98,6 +98,7 @@ component_lab_operation_allowed (GlimsFacadeOperation operation)
     case GLIMS_FACADE_OP_image_color_info:
     case GLIMS_FACADE_OP_image_storage_info:
     case GLIMS_FACADE_OP_image_resolution:
+    case GLIMS_FACADE_OP_image_set_resolution:
     case GLIMS_FACADE_OP_image_lab_axes:
     case GLIMS_FACADE_OP_image_fill_lab:
     case GLIMS_FACADE_OP_image_curves_lab:

@@ -105,6 +105,12 @@ final class ImageSizeForm: NSGridView, NSTextFieldDelegate {
         Self.decimal.string(from: NSNumber(value: value)) ?? ""
     }
 
+    /// Shows the model again, which replaces any invalid entry.
+    private func refreshAll() {
+        refresh()
+        setValidity(true)
+    }
+
     private func refresh(except field: NSTextField? = nil) {
         if field !== widthField { widthField.stringValue = String(model.width) }
         if field !== heightField { heightField.stringValue = String(model.height) }
@@ -138,8 +144,7 @@ final class ImageSizeForm: NSGridView, NSTextFieldDelegate {
     }
 
     private func doubleText(_ field: NSTextField) -> Double? {
-        Double(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: ",", with: "."))
+        ImageSizeModel.number(field.stringValue)
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -166,13 +171,13 @@ final class ImageSizeForm: NSGridView, NSTextFieldDelegate {
     @objc private func printUnitChanged(_ sender: NSPopUpButton) {
         guard ImageSizeModel.LengthUnit.allCases.indices.contains(sender.indexOfSelectedItem) else { return }
         printUnit = ImageSizeModel.LengthUnit.allCases[sender.indexOfSelectedItem]
-        refresh()
+        refreshAll()
     }
 
     @objc private func resolutionUnitChanged(_ sender: NSPopUpButton) {
         guard ImageSizeModel.ResolutionUnit.allCases.indices.contains(sender.indexOfSelectedItem) else { return }
         resolutionUnit = ImageSizeModel.ResolutionUnit.allCases[sender.indexOfSelectedItem]
-        refresh()
+        refreshAll()
     }
 
     @objc private func constrainChanged(_ sender: NSButton) {
@@ -182,7 +187,7 @@ final class ImageSizeForm: NSGridView, NSTextFieldDelegate {
     @objc private func resampleChanged(_ sender: NSButton) {
         model.setResample(sender.state == .on)
         updateEnabled()
-        refresh()
+        refreshAll()
     }
 }
 

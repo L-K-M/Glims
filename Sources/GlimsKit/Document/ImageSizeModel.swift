@@ -100,8 +100,14 @@ struct ImageSizeModel: Equatable {
     /// File > New's default resolution.
     static let defaultResolution: Double = 72
 
-    var width: Int
-    var height: Int
+    private let originalWidth: Int
+    private let originalHeight: Int
+    /// The pixel size before rounding. Every typed digit is an edit, so
+    /// scaling from the rounded size would add up the rounding.
+    private var exactWidth: Double
+    private var exactHeight: Double
+    var width: Int { Self.pixel(exactWidth) }
+    var height: Int { Self.pixel(exactHeight) }
     var resolutionX: Double
     var resolutionY: Double
     var constrainProportions: Bool
@@ -111,8 +117,10 @@ struct ImageSizeModel: Equatable {
           constrainProportions: Bool = true, resample: Bool = true) {
         guard Self.isValidPixelWidth(width), Self.isValidPixelWidth(height),
               Self.isValidResolution(resolutionX), Self.isValidResolution(resolutionY) else { return nil }
-        self.width = width
-        self.height = height
+        originalWidth = width
+        originalHeight = height
+        exactWidth = Double(width)
+        exactHeight = Double(height)
         self.resolutionX = resolutionX
         self.resolutionY = resolutionY
         self.constrainProportions = constrainProportions
@@ -135,42 +143,40 @@ struct ImageSizeModel: Equatable {
     func resolutionX(in unit: ResolutionUnit) -> Double { resolutionX / unit.pixelsPerInchPerUnit }
     func resolutionY(in unit: ResolutionUnit) -> Double { resolutionY / unit.pixelsPerInchPerUnit }
 
+    /// A typed number, with either decimal separator.
+    static func number(_ text: String) -> Double? {
+        let plain = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(plain), value.isFinite else { return nil }
+        return value
+    }
+
     /// The pixel dimension a scaled value rounds to, clamped to the bounds.
     static func pixel(_ value: Double) -> Int {
         guard value.isFinite else { return minimumPixels }
-        return min(maximumPixels, max(minimumPixels, Int(value.rounded())))
+        return Int(min(Double(maximumPixels), max(Double(minimumPixels), value.rounded())))
     }
 
-    /// A scaled pixel dimension, or nil when the rounded value would exceed
-    /// the maximum; a shrink still rounds and clamps up to one pixel.
-    private static func scaledPixel(_ value: Double) -> Int? {
-        guard value.isFinite, value.rounded() <= Double(maximumPixels) else { return nil }
-        return pixel(value)
+    /// Takes an unrounded pixel size unless it exceeds the maximum; a
+    /// shrink still shows and applies at least one pixel.
+    private mutating func setExactPixels(width newWidth: Double, height newHeight: Double) -> Bool {
+        let maximum = Double(Self.maximumPixels)
+        guard newWidth.isFinite, newHeight.isFinite, newWidth > 0, newHeight > 0,
+              newWidth.rounded() <= maximum, newHeight.rounded() <= maximum else { return false }
+        exactWidth = newWidth
+        exactHeight = newHeight
+        return true
     }
 
     /// Sets both resolutions to `value` in `unit`. With resampling the print
-    /// size is fixed and the pixels follow; without it the pixels are fixed
-    /// and the print size follows. The two resolutions stay equal after an
-    /// edit; a differing pair is only ever changed here, never by a width or
-    /// height edit.
+    /// size is fixed and the pixels follow on each axis; without it the
+    /// pixels are fixed and the print size follows.
     @discardableResult
     mutating func setResolution(_ value: Double, unit: ResolutionUnit) -> Bool {
         let canonical = value * unit.pixelsPerInchPerUnit
         guard Self.isValidResolution(canonical) else { return false }
         if resample {
-            let scaleX = canonical / resolutionX
-            if constrainProportions {
-                guard let scaledWidth = Self.scaledPixel(Double(width) * scaleX),
-                      let scaledHeight = Self.scaledPixel(Double(height) * scaleX) else { return false }
-                width = scaledWidth
-                height = scaledHeight
-            } else {
-                let scaleY = canonical / resolutionY
-                guard let scaledWidth = Self.scaledPixel(Double(width) * scaleX),
-                      let scaledHeight = Self.scaledPixel(Double(height) * scaleY) else { return false }
-                width = scaledWidth
-                height = scaledHeight
-            }
+            guard setExactPixels(width: exactWidth * (canonical / resolutionX),
+                                 height: exactHeight * (canonical / resolutionY)) else { return false }
         }
         resolutionX = canonical
         resolutionY = canonical
@@ -178,26 +184,23 @@ struct ImageSizeModel: Equatable {
     }
 
     /// Sets the print width. With resampling the resolution is fixed and the
-    /// pixels follow; without it the pixels are fixed and the resolution
-    /// moves inversely.
+    /// pixels follow. Without it the pixels are fixed, so both resolutions
+    /// move by one factor: only that keeps the picture's shape.
     @discardableResult
     mutating func setPrintWidth(_ value: Double, unit: LengthUnit) -> Bool {
         guard value.isFinite, value > 0 else { return false }
         let inches = value / unit.perInch
         guard inches > 0 else { return false }
         if resample {
-            let oldWidth = width
-            guard let newWidth = Self.scaledPixel(inches * resolutionX) else { return false }
-            if constrainProportions, oldWidth > 0 {
-                guard let scaledHeight = Self.scaledPixel(Double(height) * Double(newWidth) / Double(oldWidth)) else { return false }
-                height = scaledHeight
-            }
-            width = newWidth
-        } else {
-            let newResolution = Double(width) / inches
-            guard Self.isValidResolution(newResolution) else { return false }
-            resolutionX = newResolution
+            let newWidth = inches * resolutionX
+            let scale = constrainProportions ? newWidth / exactWidth : 1
+            return setExactPixels(width: newWidth, height: exactHeight * scale)
         }
+        let newX = Double(width) / inches
+        let newY = resolutionY * (newX / resolutionX)
+        guard Self.isValidResolution(newX), Self.isValidResolution(newY) else { return false }
+        resolutionX = newX
+        resolutionY = newY
         return true
     }
 
@@ -208,18 +211,15 @@ struct ImageSizeModel: Equatable {
         let inches = value / unit.perInch
         guard inches > 0 else { return false }
         if resample {
-            let oldHeight = height
-            guard let newHeight = Self.scaledPixel(inches * resolutionY) else { return false }
-            if constrainProportions, oldHeight > 0 {
-                guard let scaledWidth = Self.scaledPixel(Double(width) * Double(newHeight) / Double(oldHeight)) else { return false }
-                width = scaledWidth
-            }
-            height = newHeight
-        } else {
-            let newResolution = Double(height) / inches
-            guard Self.isValidResolution(newResolution) else { return false }
-            resolutionY = newResolution
+            let newHeight = inches * resolutionY
+            let scale = constrainProportions ? newHeight / exactHeight : 1
+            return setExactPixels(width: exactWidth * scale, height: newHeight)
         }
+        let newY = Double(height) / inches
+        let newX = resolutionX * (newY / resolutionY)
+        guard Self.isValidResolution(newX), Self.isValidResolution(newY) else { return false }
+        resolutionX = newX
+        resolutionY = newY
         return true
     }
 
@@ -228,26 +228,26 @@ struct ImageSizeModel: Equatable {
     @discardableResult
     mutating func setPixelWidth(_ newWidth: Int) -> Bool {
         guard Self.isValidPixelWidth(newWidth) else { return false }
-        if constrainProportions, width > 0 {
-            guard let scaledHeight = Self.scaledPixel(Double(height) * Double(newWidth) / Double(width)) else { return false }
-            height = scaledHeight
-        }
-        width = newWidth
-        return true
+        let scale = constrainProportions ? Double(newWidth) / exactWidth : 1
+        return setExactPixels(width: Double(newWidth), height: exactHeight * scale)
     }
 
     /// Sets the pixel height, the vertical counterpart of `setPixelWidth`.
     @discardableResult
     mutating func setPixelHeight(_ newHeight: Int) -> Bool {
         guard Self.isValidPixelWidth(newHeight) else { return false }
-        if constrainProportions, height > 0 {
-            guard let scaledWidth = Self.scaledPixel(Double(width) * Double(newHeight) / Double(height)) else { return false }
-            width = scaledWidth
-        }
-        height = newHeight
-        return true
+        let scale = constrainProportions ? Double(newHeight) / exactHeight : 1
+        return setExactPixels(width: exactWidth * scale, height: Double(newHeight))
     }
 
-    mutating func setResample(_ value: Bool) { resample = value }
+    /// Without resampling the image keeps its own pixels, so turning it off
+    /// drops any pixel edit.
+    mutating func setResample(_ value: Bool) {
+        resample = value
+        guard !value else { return }
+        exactWidth = Double(originalWidth)
+        exactHeight = Double(originalHeight)
+    }
+
     mutating func setConstrainProportions(_ value: Bool) { constrainProportions = value }
 }

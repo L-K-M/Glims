@@ -44,10 +44,7 @@ extension EngineSmokeTest {
                   let resolutionPopup = views.first(where: { $0.accessibilityLabel() == "Resolution unit" }) as? NSPopUpButton,
                   let create = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Create" })
             else { return (nil, false) }
-            widthField.stringValue = width
-            heightField.stringValue = height
             let offered = !rowHidden(resolutionField)
-            if offered { resolutionField.stringValue = resolution }
             if let widthUnit {
                 sizeUnit.selectItem(withTitle: widthUnit)
                 _ = sizeUnit.sendAction(sizeUnit.action, to: sizeUnit.target)
@@ -56,6 +53,10 @@ extension EngineSmokeTest {
                 resolutionPopup.selectItem(withTitle: resolutionUnit)
                 _ = resolutionPopup.sendAction(resolutionPopup.action, to: resolutionPopup.target)
             }
+            // A unit change converts the numbers, so type them afterwards.
+            widthField.stringValue = width
+            heightField.stringValue = height
+            if offered { resolutionField.stringValue = resolution }
             var result: NewImageSettings?
             panel.onCreate = { result = $0 }
             create.performClick(nil)
@@ -109,6 +110,22 @@ extension EngineSmokeTest {
             let undo = try session.undoInfo(image).undoCount
             check(refused && undo == 0, "an older adapter refuses a resolution change without history")
             return
+        }
+
+        // File > New sets the resolution on every mode it can create.
+        func takesResolution(_ create: () throws -> Int32) -> Bool {
+            guard let created = try? create() else { return false }
+            defer { try? session.closeImage(created) }
+            do {
+                try session.setResolution(created, x: 144, y: 144, edit: .clean)
+                return try session.imageResolution(created).x == 144
+            } catch { return false }
+        }
+        check(takesResolution { try session.newMultichannelImage(width: 8, height: 8, component: .u8, channelCount: 4) },
+              "a new Multichannel image takes File > New's resolution")
+        if session.supportsLabCreation {
+            check(takesResolution { try session.newLabImage(width: 8, height: 8, component: .u8) },
+                  "a new Lab image takes File > New's resolution")
         }
 
         check(document.resolution != nil && controller.validateMenuItem(item),

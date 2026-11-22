@@ -3257,7 +3257,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             if imageDocument.session.supportsImageResolution, imageDocument.resolution != nil {
                 let refusal = imageDocument.imageSizeRefusal
                 menuItem.toolTip = refusal
-                return refusal == nil && window?.attachedSheet == nil
+                return refusal == nil && !editingBlocked && !previewBusy && window?.attachedSheet == nil
             }
             return !editingBlocked
         case #selector(imageInformation(_:)):

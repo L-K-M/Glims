@@ -6877,7 +6877,8 @@ conformance test expects each engine's own values.
 Additive facade slots 246-248: `image_resolution` reads the ppi pair,
 `image_set_resolution` sets it (UNDOABLE pushes GIMP's own "Change Image
 Resolution" step, CLEAN is the File > New path and refuses an image that
-already has history), and `image_resize` sets the resolution and resamples
+already has undo or redo history; component documents accept CLEAN only,
+so every mode of File > New takes a resolution), and `image_resize` sets the resolution and resamples
 to new pixel dimensions inside one "Scale Image" undo group, following
 GIMP's `image_scale_callback` in app/actions/image-commands.c. The bounds
 GIMP_MIN_RESOLUTION..GIMP_MAX_RESOLUTION are owned at the facade as

@@ -69,8 +69,7 @@ struct NewImageSettings: Equatable {
           sizeUnit: ImageSizeModel.SizeUnit = .pixels,
           resolution: String = "72",
           resolutionUnit: ImageSizeModel.ResolutionUnit = .pixelsPerInch) {
-        let resolutionValue = Double(resolution.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard let resolutionValue, resolutionValue.isFinite, resolutionValue > 0 else { return nil }
+        guard let resolutionValue = ImageSizeModel.number(resolution), resolutionValue > 0 else { return nil }
         let ppi = resolutionValue * resolutionUnit.pixelsPerInchPerUnit
         guard ImageSizeModel.isValidResolution(ppi) else { return nil }
         guard let w = Self.pixels(width, unit: sizeUnit, resolution: ppi),
@@ -115,7 +114,7 @@ struct NewImageSettings: Equatable {
             guard let value = Int(trimmed), (1...524_288).contains(value) else { return nil }
             return value
         }
-        guard let value = Double(trimmed) else { return nil }
+        guard let value = ImageSizeModel.number(trimmed) else { return nil }
         return unit.pixels(value, resolution: resolution)
     }
 
@@ -139,6 +138,9 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     private let sizeUnitPopup = NSPopUpButton()
     private let resolutionField = NSTextField(string: "72")
     private let resolutionUnitPopup = NSPopUpButton()
+    /// The units the fields' numbers are in, until a unit change converts them.
+    private var displayedSizeUnit = ImageSizeModel.SizeUnit.pixels
+    private var displayedResolutionUnit = ImageSizeModel.ResolutionUnit.pixelsPerInch
     private let modePopup = NSPopUpButton()
     private let precisionPopup = NSPopUpButton()
     private let channelField = NSTextField(string: "4")
@@ -272,8 +274,36 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         if kind == .cmyk { loadProfilesIfNeeded() }
         updateValidation()
     }
-    @objc private func sizeUnitChanged(_ sender: Any?) { updateValidation() }
-    @objc private func resolutionUnitChanged(_ sender: Any?) { updateValidation() }
+    /// A new unit describes the same image, so the numbers are converted.
+    @objc private func sizeUnitChanged(_ sender: Any?) {
+        let old = displayedSizeUnit, new = sizeUnit
+        displayedSizeUnit = new
+        let typed = ImageSizeModel.number(resolutionText).map { $0 * displayedResolutionUnit.pixelsPerInchPerUnit }
+        let ppi = typed.flatMap { ImageSizeModel.isValidResolution($0) ? $0 : nil } ?? ImageSizeModel.defaultResolution
+        for field in [widthField, heightField] {
+            guard let value = ImageSizeModel.number(field.stringValue) else { continue }
+            let inches = value / (old.perInch ?? ppi)
+            let converted = inches * (new.perInch ?? ppi)
+            field.stringValue = Self.text(new == .pixels ? converted.rounded() : converted)
+        }
+        updateValidation()
+    }
+
+    @objc private func resolutionUnitChanged(_ sender: Any?) {
+        let old = displayedResolutionUnit, new = resolutionUnit
+        displayedResolutionUnit = new
+        if let value = ImageSizeModel.number(resolutionField.stringValue) {
+            resolutionField.stringValue = Self.text(value * old.pixelsPerInchPerUnit / new.pixelsPerInchPerUnit)
+        }
+        updateValidation()
+    }
+
+    /// A converted number with at most six decimals and no grouping.
+    private static func text(_ value: Double) -> String {
+        let rounded = (value * 1_000_000).rounded() / 1_000_000
+        guard let whole = Int(exactly: rounded) else { return String(rounded) }
+        return String(whole)
+    }
     func windowWillClose(_ notification: Notification) { onClose?() }
     func controlTextDidChange(_ notification: Notification) { updateValidation() }
 

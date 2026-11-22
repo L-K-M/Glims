@@ -1460,15 +1460,16 @@ glims_image_resolution (GlimsEngine  *engine,
                         double       *y_resolution,
                         char        **error)
 {
-  GlimsStatus status;
-  GimpImage  *image = writable_image (engine, id, &status);
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
 
-  if (! image)
-    return status;
+  /* A read that every state refresh makes, so like image_info it doesn't
+   * need an idle engine. */
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
   if (! x_resolution || ! y_resolution)
     return GLIMS_STATUS_INVALID_ARGUMENT;
 
-  gimp_image_get_resolution (image, x_resolution, y_resolution);
+  gimp_image_get_resolution (open->image, x_resolution, y_resolution);
   return GLIMS_STATUS_OK;
 }
 
@@ -1513,13 +1514,22 @@ glims_image_set_resolution (GlimsEngine  *engine,
       y_resolution < GLIMS_MIN_RESOLUTION || y_resolution > GLIMS_MAX_RESOLUTION)
     return invalid_resolution (error);
 
+  /* Component documents take a resolution when they are created. Their
+   * editing operations are admitted one by one, and this isn't one. */
+  if (edit != GLIMS_RESOLUTION_CLEAN && glims_lookup_image (engine, id)->component_document)
+    {
+      if (error) *error = strdup ("This command is not available for component documents.");
+      return GLIMS_STATUS_UNSUPPORTED;
+    }
+
   if (edit == GLIMS_RESOLUTION_CLEAN)
     {
       /* File > New: the resolution is part of the image's initial state,
        * so it must not leave an undo step. Only a freshly created image
        * qualifies; one that already has history keeps that history. */
       undos = gimp_image_get_undo_stack (image);
-      if (! undos || gimp_undo_stack_get_depth (undos) != 0)
+      if (! undos || gimp_undo_stack_get_depth (undos) != 0 ||
+          gimp_undo_stack_get_depth (gimp_image_get_redo_stack (image)) != 0)
         return glims_fail (error, NULL, "The resolution can only be set without an undo step on a new image.");
       gimp_image_undo_disable (image);
       gimp_image_set_resolution (image, x_resolution, y_resolution);

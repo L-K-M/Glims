@@ -4626,7 +4626,7 @@ typedef struct GlimsEngineAPI {
   /* Slot 246: read the image resolution in pixels per inch. `x_resolution`
    * and `y_resolution` must both be non-NULL and receive finite values in
    * GLIMS_MIN_RESOLUTION ... GLIMS_MAX_RESOLUTION. An unknown image is
-   * NOT_FOUND, a busy engine is BUSY, a short output is INVALID_ARGUMENT
+   * NOT_FOUND, a NULL output is INVALID_ARGUMENT
    * and the image is unchanged. Component layouts may read it. */
   GlimsStatus (*image_resolution) (GlimsEngine *engine, GlimsImageID image,
                                    double *x_resolution, double *y_resolution,
@@ -4636,7 +4636,8 @@ typedef struct GlimsEngineAPI {
    * `edit` is a GlimsResolutionEdit: UNDOABLE pushes one undo step named
    * "Change Image Resolution" (a value already held, within GIMP's 1e-5
    * comparison, adds none); CLEAN is the creation path and leaves no undo
-   * step, and refuses unless the image has no undo history yet. Values
+   * step, and refuses unless the image has no undo or redo history yet.
+   * Component documents accept CLEAN only; UNDOABLE is UNSUPPORTED. Values
    * must be finite and within GLIMS_MIN_RESOLUTION ...
    * GLIMS_MAX_RESOLUTION, else INVALID_ARGUMENT; an unknown image is
    * NOT_FOUND; a busy engine is BUSY. Every refusal changes nothing. */

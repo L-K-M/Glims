@@ -148,4 +148,40 @@ final class ImageSizeModelTests: XCTestCase {
         XCTAssertEqual(ImageSizeModel.minimumResolution, 0.005)
         XCTAssertEqual(ImageSizeModel.maximumResolution, 1_048_576)
     }
+
+    func testTypingDigitByDigitKeepsTheProportions() {
+        var pixels = model(width: 1000, height: 333, resolutionX: 72, resolutionY: 72, resample: true)
+        for value in [5, 50, 500] { XCTAssertTrue(pixels.setPixelWidth(value)) }
+        XCTAssertEqual(pixels.height, 167)
+
+        var resolution = model(width: 1000, height: 333, resolutionX: 72, resolutionY: 72, resample: true)
+        for value in [1.0, 14, 144] { XCTAssertTrue(resolution.setResolution(value, unit: .pixelsPerInch)) }
+        XCTAssertEqual(resolution.width, 2000)
+        XCTAssertEqual(resolution.height, 666)
+    }
+
+    func testTurningResampleOffRestoresTheImagesPixels() {
+        var value = model(width: 1200, height: 900, resolutionX: 300, resolutionY: 300, resample: true)
+        XCTAssertTrue(value.setPixelWidth(600))
+        value.setResample(false)
+        XCTAssertEqual(value.width, 1200)
+        XCTAssertEqual(value.height, 900)
+    }
+
+    func testPrintEditWithoutResampleKeepsTheAspect() {
+        var wide = model(width: 1200, height: 900, resolutionX: 300, resolutionY: 300, resample: false)
+        XCTAssertTrue(wide.setPrintWidth(8, unit: .inches))
+        XCTAssertEqual(wide.resolutionY, 150)
+
+        var tall = model(width: 1200, height: 900, resolutionX: 300, resolutionY: 150, resample: false)
+        XCTAssertTrue(tall.setPrintHeight(3, unit: .inches))
+        XCTAssertEqual(tall.resolutionX, 600)
+    }
+
+    func testResamplingToAResolutionKeepsBothPrintDimensions() {
+        var value = model(width: 1200, height: 900, resolutionX: 300, resolutionY: 150, resample: true)
+        XCTAssertTrue(value.setResolution(300, unit: .pixelsPerInch))
+        XCTAssertEqual(value.width, 1200)
+        XCTAssertEqual(value.height, 1800)
+    }
 }

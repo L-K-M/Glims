@@ -13600,6 +13600,30 @@ test_image_resolution (const char *work)
          api->image_resolution (engine, image, NULL, &y, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "an unknown interpolation, an out-of-range resolution and a missing output are refused");
 
+  for (int lab = 0; lab < 2; lab++)
+    {
+      GlimsImageID component = 0;
+      GlimsStatus  made = lab
+        ? api->image_new_lab (engine, 8, 8, GLIMS_COLOR_COMPONENT_U8, &component, NULL)
+        : api->image_new_multichannel (engine, 8, 8, GLIMS_COLOR_COMPONENT_U8, 4, &component, NULL);
+      const char  *name = lab ? "Lab" : "Multichannel";
+
+      CHECK (made == GLIMS_STATUS_OK &&
+             api->image_set_resolution (engine, component, 144.0, 144.0,
+                                        GLIMS_RESOLUTION_CLEAN, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (component) == 0 &&
+             api->image_resolution (engine, component, &x, &y, NULL) == GLIMS_STATUS_OK &&
+             x == 144.0 && y == 144.0,
+             "a new %s document takes a resolution without an undo step", name);
+      CHECK (api->image_set_resolution (engine, component, 200.0, 200.0,
+                                        GLIMS_RESOLUTION_UNDOABLE, &error) == GLIMS_STATUS_UNSUPPORTED &&
+             undo_depth (component) == 0,
+             "an existing %s document refuses a resolution edit", name);
+      api->free_string (error);
+      error = NULL;
+      if (component) api->image_close (engine, component);
+    }
+
   snprintf (xcf, sizeof xcf, "%s/resolution.xcf", work);
   snprintf (png, sizeof png, "%s/resolution.png", work);
   CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
