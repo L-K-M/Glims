@@ -13214,8 +13214,9 @@ test_everyday_adjustments (void)
          api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_REMOVE_ALPHA, NULL, NULL) == GLIMS_STATUS_FAILED &&
          undo_depth (image) == before, "unknown image, unknown adjustment and a missing background refuse");
 
-  api->create_group (engine, image, 0, 0, "Group", &group, NULL);
-  api->layer_select (engine, image, group);
+  CHECK (api->create_group (engine, image, 0, 0, "Group", &group, NULL) == GLIMS_STATUS_OK && group != 0 &&
+         api->layer_select (engine, image, group) == GLIMS_STATUS_OK,
+         "a group becomes the adjustment target");
   before = undo_depth (image);
   CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_DESATURATE, &background, &error) == GLIMS_STATUS_FAILED &&
          undo_depth (image) == before, "a group refuses (%s)", error ? error : "");
@@ -13223,8 +13224,10 @@ test_everyday_adjustments (void)
   error = NULL;
   api->layer_select (engine, image, layer);
 
-  api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, NULL);
-  api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, GLIMS_MASK_EDITING, NULL);
+  /* Without the mask, Equalize below would pass on the layer instead. */
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, NULL) == GLIMS_STATUS_OK && mask != 0 &&
+         api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, GLIMS_MASK_EDITING, NULL) == GLIMS_STATUS_OK,
+         "an edited mask becomes the adjustment target");
   before = undo_depth (image);
   CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_AUTO_LEVELS, &background, &error) == GLIMS_STATUS_FAILED &&
          api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_ADD_ALPHA, &background, NULL) == GLIMS_STATUS_FAILED &&

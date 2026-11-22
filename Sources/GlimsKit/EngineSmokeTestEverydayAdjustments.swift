@@ -14,10 +14,6 @@ extension EngineSmokeTest {
             wait { document.pendingWork == 0 && !document.recorder.isReplaying && !EngineActivity.shared.isBusy }
             spin(0.03)
         }
-        func rgb(_ pixels: inout Data, x: Int, y: Int, width: Int, _ r: UInt8, _ g: UInt8, _ b: UInt8) {
-            let offset = (y * width + x) * 4
-            pixels[offset] = r; pixels[offset + 1] = g; pixels[offset + 2] = b; pixels[offset + 3] = 255
-        }
         var bytes = Data()
         for y in 0..<16 {
             for x in 0..<16 {
@@ -180,7 +176,7 @@ extension EngineSmokeTest {
         // validation, but Equalize still edits the mask itself, exactly as
         // upstream drawable_equalize_cmd_callback does.
         let mask = try session.addLayerMask(layer, image: image, source: .white, edit: true)
-        document.reload()
+        try document.reload()
         settle(document)
         check(mask > 0 && document.isMaskTargetActive, "the mask becomes the paint target")
         for (title, adjustment, _, _) in expected where adjustment != .equalize {
@@ -193,13 +189,13 @@ extension EngineSmokeTest {
                   "Equalize stays enabled on a mask")
         }
         try session.setLayerMask(layer, image: image, flags: .editing, values: [])
-        document.reload()
+        try document.reload()
         settle(document)
 
         // A group refuses in menu validation.
         let group = try session.createGroup(image: image, index: 0, name: "Everyday group")
         try session.selectLayer(group, image: image)
-        document.reload()
+        try document.reload()
         settle(document)
         check(document.activeLayer == group, "the group becomes the active layer")
         for (title, adjustment, _, _) in expected {
@@ -208,7 +204,7 @@ extension EngineSmokeTest {
                   "\(title) is disabled on a group")
         }
         try session.selectLayer(layer, image: image)
-        document.reload()
+        try document.reload()
         settle(document)
 
         // Grayscale refuses Auto Levels and Desaturate but equalizes.

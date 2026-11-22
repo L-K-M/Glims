@@ -634,7 +634,7 @@ unsupported image layout or an adapter without slot 238 refuses the edit.
 
 `adjustment` stores the adjustment name (`autoLevels`, `equalize`,
 `desaturate`, `addAlpha` or `removeAlpha`) and the exact sRGB `background`
-Remove Alpha composites on; the other adjustments ignore it. It requires a
+that Remove Alpha composites on; the other adjustments ignore it. It requires a
 context binding whose target is the captured paint target (a layer, its
 editing mask or a channel), never the `.none` binding. Version 30 requires
 at least one successful adjustment; earlier versions reject the tag.
