@@ -83,10 +83,12 @@ final class ImageSizeModelTests: XCTestCase {
 
     func testDifferingResolutionIsPreservedUntilEdited() {
         var value = model(resolutionX: 300, resolutionY: 150)
-        XCTAssertTrue(value.setPrintWidth(4, unit: .inches))
+        XCTAssertTrue(value.setPrintWidth(2, unit: .inches))
+        XCTAssertEqual([value.width, value.height], [600, 450])
         XCTAssertEqual(value.resolutionX, 300)
         XCTAssertEqual(value.resolutionY, 150)
         XCTAssertTrue(value.setPrintHeight(6, unit: .inches))
+        XCTAssertEqual([value.width, value.height], [1200, 900])
         XCTAssertEqual(value.resolutionY, 150)
         XCTAssertTrue(value.setResolution(200, unit: .pixelsPerInch))
         XCTAssertEqual(value.resolutionX, 200)

@@ -3257,9 +3257,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             if imageDocument.session.supportsImageResolution, imageDocument.resolution != nil {
                 let refusal = imageDocument.imageSizeRefusal
                 menuItem.toolTip = refusal
-                return refusal == nil && !editingBlocked && !previewBusy && window?.attachedSheet == nil
+                return refusal == nil && !closeStarted && !editingBlocked && !previewBusy
+                    && window?.attachedSheet == nil
             }
-            return !editingBlocked
+            return !closeStarted && !editingBlocked && !previewBusy && window?.attachedSheet == nil
         case #selector(imageInformation(_:)):
             // Read-only and cheap: the sheet shows the cached state,
             // so it works wherever another sheet does not already.

@@ -61,9 +61,9 @@ final class ImageResolutionRecorderTests: XCTestCase {
             #"{"tag":"resize","width":1,"height":1,"xResolution":150,"yResolution":150,"interpolation":"bicubic"}"#))))
     }
 
-    func testCommandIsTargetIndependentAndTitledLikeImageSize() {
+    func testCommandIsTargetIndependentAndTitledLikeItsUndoStep() {
         let resolution = SemanticImageCommand.setResolution(x: 150, y: 150)
-        XCTAssertEqual(resolution.title, "Scale Image")
+        XCTAssertEqual(resolution.title, "Change Image Resolution")
         XCTAssertTrue(resolution.requiresResolvedFloatingSelection)
         let combined = SemanticImageCommand.resize(width: 10, height: 20, xResolution: 150, yResolution: 150,
                                                   interpolation: .linear)

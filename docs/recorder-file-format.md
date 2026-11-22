@@ -72,7 +72,7 @@ Commands have an owned `tag` and the following exact fields:
 | `smoothSelection` | integer `radius` from 1 through 100 (version 29) |
 | `adjustment` | `adjustment`, `background` (version 30) |
 | `setResolution` | `x`, `y` (version 31) |
-| `resize` | `width`, `height`, `xResolution`, `yResolution`, `interpolation` (version 31) |
+| `resize` | integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 31) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |

@@ -151,6 +151,7 @@ extension EngineSmokeTest {
         // Resample off: the resolution changes, the pixels stay, one undo
         // step, one recorded command.
         let undoBefore = document.undoInfo.undoCount
+        let originalResolution = document.resolution
         try document.startRecording()
         document.setResolution(.init(x: 150, y: 150))
         try document.stopRecording()
@@ -196,7 +197,9 @@ extension EngineSmokeTest {
         document.undo()
         settle()
         check(document.info.width == 1200 && document.info.height == 900
-                && document.resolution?.x == 300 && document.undoInfo.undoCount == undoBefore,
+                && document.resolution?.x == originalResolution?.x
+                && document.resolution?.y == originalResolution?.y
+                && document.undoInfo.undoCount == undoBefore,
               "a second Undo restores the original resolution")
     }
 }

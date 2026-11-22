@@ -171,7 +171,8 @@ enum SemanticImageCommand {
             case .flipHorizontal: return "Flip Image Horizontally"
             case .flipVertical: return "Flip Image Vertically"
             }
-        case .scale, .scaleWithInterpolation, .setResolution, .resize: return "Scale Image"
+        case .scale, .scaleWithInterpolation, .resize: return "Scale Image"
+        case .setResolution: return "Change Image Resolution"
         case .rotateCanvas: return "Rotate Canvas"
         case .resizeCanvas: return "Resize Canvas"
         case .crop: return "Crop Image"
