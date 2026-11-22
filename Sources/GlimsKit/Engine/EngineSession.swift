@@ -2253,17 +2253,19 @@ final class EngineSession: @unchecked Sendable {
     /// reported before giving up.
     private static let historyReadAttempts = 4
 
-    /// The image's undo history as one consistent list (image_history).
-    /// The engine can grow the list between the size probe and the fill;
-    /// the read is retried a bounded number of times with the size it
-    /// last reported, never indexing past the rows allocated.
-    /// The revision alone: every undo push, undo and redo moves it.
+    /// The history revision alone. An undo event moves it; a change made
+    /// while undo is frozen has none, so an equal revision proves no change
+    /// only together with the state that could have changed.
     func historyRevision(_ image: Int32) throws -> UInt64 {
         var info = GlimsHistoryInfo()
         try check(api.image_history(engine, image, nil, 0, &info), nil)
         return info.revision
     }
 
+    /// The image's undo history as one consistent list (image_history).
+    /// The engine can grow the list between the size probe and the fill;
+    /// the read is retried a bounded number of times with the size it
+    /// last reported, never indexing past the rows allocated.
     func history(_ image: Int32) throws -> History {
         var info = GlimsHistoryInfo()
         try check(api.image_history(engine, image, nil, 0, &info), nil)

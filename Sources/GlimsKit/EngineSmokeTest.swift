@@ -138,6 +138,10 @@ enum EngineSmokeTest {
            !installLinkedCloseSlowLoader(work: work) {
             return 2
         }
+        if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-gaps",
+           !installRecorderGapPlugIn(work: work) {
+            return 2
+        }
 
         // A reference, so engine events delivered while the checks run can read it.
         let documents = DocumentList()
@@ -854,6 +858,7 @@ enum EngineSmokeTest {
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-gaps" {
                 try exerciseRecorderGaps(session, work: work, documents: documents)
+                try exerciseRecorderGapPlugIns(session, documents: documents)
                 print(failures == 0 ? "PASSED (Recorder gaps)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }

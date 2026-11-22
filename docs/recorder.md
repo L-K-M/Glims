@@ -42,9 +42,11 @@ Other layer changes, other effects (including edits to an existing effect)
 and file operations remain outside this capture scope. While recording, such
 an admitted command still reserves one explicit unsupported row that names
 the command, so a recording never looks complete while omitting an edit and
-replay refuses the log. A command refused before it is admitted, a preview,
-a cancel, a target pick, a view change, a save, an export and a read add no
-row, and replay's own commands add none. A live recording belongs to one
+replay refuses the log. A command refused before it is admitted, a preview
+and its Cancel, a cancelled file import, a target pick, a view change, a
+save, an export and a read add no row, and replay's own commands add none. A
+plug-in keeps its row even when cancelled, because it can change the image
+before it stops and nothing rolls that back. A live recording belongs to one
 open image. To use a saved recording in another image, load it in that
 image and choose its targets.
 

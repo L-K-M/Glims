@@ -6855,22 +6855,27 @@ Every public editing command on `ImageDocument` that changes pixels,
 structure, selection, channels, paths, image settings or history now either
 records a semantic command or, while recording, reserves one explicit failed
 row naming the command, so a recording cannot look complete while omitting
-an edit. A command refused before admission, a preview, a cancel, a target
-pick, a view change, a save, an export and a read add no row, and replay's
-own commands add none. The helper is `recordUnsupportedCommand`, called
+an edit. A command refused before admission, a preview or its Cancel, a
+target pick, a view change, a save, an export and a read add no row, and
+replay's own commands add none. The helper is `recordUnsupportedCommand`, called
 only at admission: inside `run`, at exclusive admission, or just before an
 enqueue that refuses only a closing document. Channel Attributes applied
-unchanged sends nothing. A cancelled plug-in, Open as Layers or Place
-withdraws the row it reserved, and so does a guide move or Grid change
-that left the engine's history revision alone; cached state proves
-neither, because it can be older than the engine's. Only the newest row
-can be withdrawn.
+unchanged sends nothing. A cancelled Open as Layers or Place withdraws
+the row it reserved, because the adapter inserts only after a complete
+load. So does a guide move or Grid change that left both the engine's
+history revision and the guides or grid read back on the worker alone.
+Cached state proves nothing, because it can be older than the engine's,
+and the revision alone proves nothing, because an image whose undo a
+plug-in left frozen changes without an undo step. A cancelled plug-in
+keeps its row: Cancel kills it without rolling back what it changed.
+Only the newest row can be withdrawn.
 
 Known limit: the row is reserved at admission, so any other command that
 finds nothing to change keeps it and replay refuses that recording.
 Examples are identical metadata, the current color profile, an alignment
-that moves nothing, Layer to Image Size at the image's bounds and a
-saved set that already matches. The row errs toward refusing replay: a
+that moves nothing, Layer to Image Size at the image's bounds, a saved
+set that already matches and a plug-in dialog closed with Cancel. The
+row errs toward refusing replay: a
 missing one would replay a different image without saying so.
 `EngineSmokeTestRecorderGaps` (`GLIMS_SMOKE_CASE=recorder-gaps`) drives the
 commands through one recording and checks the ordered failed rows, the
@@ -6878,9 +6883,10 @@ replay refusal, the refused and read-only commands, and one row for a whole
 Move drag.
 
 Verified: the `recorder-gaps` smoke case on GIMP 3.2.8, which failed before
-the change, and `RecorderLogTests` for withdrawal. A cancelled plug-in or
-loader dialog is not driven by the smoke. Counts and the full editor smoke
-per engine set are in the PR.
+the change, and `RecorderLogTests` for withdrawal. The focused case also
+installs a fixture plug-in that leaves undo frozen, and one that changes
+the image and is then cancelled. A cancelled loader is not driven by the
+smoke. Counts and the full editor smoke per engine set are in the PR.
 
 ### Default palette groups (2026-11-22)
 

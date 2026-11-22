@@ -399,3 +399,164 @@ extension EngineSmokeTest {
               "replay does not recursively record itself")
     }
 }
+
+// MARK: - Plug-ins that change the image without saying so
+
+@MainActor
+extension EngineSmokeTest {
+    /// Two plug-in commands: one leaves the image's undo disabled, which
+    /// GIMP does not clean up, and one changes the image and then waits
+    /// with a progress bar until it is cancelled. Only the focused case
+    /// installs them, so the full run's plug-in menus stay the engine's.
+    private static let recorderGapPlugIn = """
+        #!/usr/bin/env python3
+        import gi
+        gi.require_version('Gimp', '3.0')
+        from gi.repository import Gimp
+        from gi.repository import GLib
+        import sys, time
+
+        def run(procedure, run_mode, image, drawables, config, data):
+            if procedure.get_name() == 'plug-in-glims-freeze-undo':
+                image.undo_disable()
+            else:
+                image.add_hguide(12)
+                Gimp.progress_init('Waiting for Cancel')
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    Gimp.progress_pulse()
+                    time.sleep(0.05)
+            return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+
+        class GlimsRecorderGaps(Gimp.PlugIn):
+            def do_query_procedures(self):
+                return ['plug-in-glims-freeze-undo', 'plug-in-glims-change-then-wait']
+
+            def do_create_procedure(self, name):
+                procedure = Gimp.ImageProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, run, None)
+                procedure.set_image_types('*')
+                procedure.set_menu_label('Glims Freeze Undo' if name.endswith('undo')
+                                         else 'Glims Change Then Wait')
+                procedure.set_documentation('Recorder test fixture', 'Recorder test fixture', name)
+                procedure.add_menu_path('<Image>/Filters/Glims Tests')
+                return procedure
+
+        Gimp.main(GlimsRecorderGaps.__gtype__, sys.argv)
+        """
+
+    static func installRecorderGapPlugIn(work: URL) -> Bool {
+        let directory = work.appendingPathComponent("user/plug-ins/glims-recorder-gaps")
+        let file = directory.appendingPathComponent("glims-recorder-gaps.py")
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(recorderGapPlugIn.utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+            return true
+        } catch {
+            check(false, "the Recorder fixture plug-in installs (\(error))")
+            return false
+        }
+    }
+
+    /// An unchanged history revision and a cancelled status prove nothing:
+    /// GIMP changes an image whose undo is frozen without an undo step,
+    /// and Cancel kills a plug-in without rolling back what it changed.
+    static func exerciseRecorderGapPlugIns(_ session: EngineSession, documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(20)
+            while !condition() && Date() < deadline { spin(0.02) }
+            if !condition() { check(false, "a plug-in fixture wait timed out after 20 seconds") }
+        }
+        func settle(_ document: ImageDocument) {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 && document.recorder.pendingCount == 0
+                && !EngineActivity.shared.isBusy }
+            spin(0.02)
+        }
+        func failedRows(_ document: ImageDocument) -> [String] {
+            document.recorder.records.map {
+                if case .failure(let reason) = $0.resolution { return reason }
+                return "not a failed row"
+            }
+        }
+        func open(_ name: String) throws -> ImageDocument {
+            let document = try ImageDocument(session: session, image: session.newImage(width: 48, height: 48),
+                                             name: name)
+            documents.items.append(document)
+            try document.reload()
+            settle(document)
+            return document
+        }
+        func close(_ document: ImageDocument) {
+            document.onError = nil
+            document.closeImageWhenDrained()
+            wait { (try? session.info(document.image)) == nil }
+            documents.items.removeAll { $0 === document }
+        }
+
+        let frozen = try open("Recorder frozen undo")
+        defer { close(frozen) }
+        let procedures = try session.procedures(image: frozen.image)
+        guard let freeze = procedures.first(where: { $0.name == "plug-in-glims-freeze-undo" }),
+              let changeThenWait = procedures.first(where: { $0.name == "plug-in-glims-change-then-wait" }) else {
+            return check(false, "the engine lists the Recorder fixture plug-ins")
+        }
+        frozen.addGuide(.horizontal, at: 10)
+        settle(frozen)
+        var froze = false
+        var freezeEnded = false
+        frozen.run(freeze, mode: .withLastValues) {
+            if case .success(.completed) = $0 { froze = true }
+            freezeEnded = true
+        }
+        wait { freezeEnded }
+        settle(frozen)
+        check(froze, "the fixture plug-in leaves undo frozen")
+        guard let guide = try session.guides(frozen.image).first else {
+            return check(false, "the frozen image has a guide")
+        }
+        let revision = try session.historyRevision(frozen.image)
+        try frozen.startRecording()
+        frozen.moveGuide(guide, to: guide.position)
+        settle(frozen)
+        check(frozen.recorder.records.isEmpty, "with undo frozen, an unchanged guide still adds no row")
+        frozen.moveGuide(guide, to: 30)
+        settle(frozen)
+        check(try session.guides(frozen.image).first?.position == 30, "the guide moves while undo is frozen")
+        check(failedRows(frozen) == ["Recorder does not yet save Move Guide."],
+              "a guide moved while undo is frozen keeps its row")
+        let grid = EngineSession.Grid(style: .solid, spacingX: 5, spacingY: 5)
+        frozen.setGrid(grid) { _ in }
+        settle(frozen)
+        check(try session.grid(frozen.image).spacingX == 5, "the grid changes while undo is frozen")
+        check(failedRows(frozen) == ["Recorder does not yet save Move Guide.", "Recorder does not yet save Grid."],
+              "a grid changed while undo is frozen keeps its row")
+        check(try session.historyRevision(frozen.image) == revision,
+              "neither change moved the history revision")
+        try frozen.stopRecording()
+
+        let cancelled = try open("Recorder cancelled plug-in")
+        defer { close(cancelled) }
+        try cancelled.startRecording()
+        var wasCancelled = false
+        var cancelEnded = false
+        cancelled.run(changeThenWait, mode: .withLastValues) {
+            if case .success(.cancelled) = $0 { wasCancelled = true }
+            cancelEnded = true
+        }
+        wait {
+            if !cancelEnded, let guides = try? session.guides(cancelled.image), !guides.isEmpty {
+                _ = session.cancelProcedure()
+            }
+            return cancelEnded
+        }
+        settle(cancelled)
+        check(wasCancelled, "Cancel stops the fixture plug-in")
+        check(try session.guides(cancelled.image).count == 1, "the cancelled plug-in's change remains")
+        check(failedRows(cancelled) == ["Recorder does not yet save Glims Change Then Wait."],
+              "a cancelled plug-in that changed the image keeps its row")
+        try cancelled.stopRecording()
+        check(cancelled.recorder.replayRefusal == .unsuccessfulRecording,
+              "a recording with a cancelled plug-in's change refuses replay")
+    }
+}

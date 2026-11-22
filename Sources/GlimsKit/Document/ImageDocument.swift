@@ -2541,7 +2541,8 @@ final class ImageDocument {
         let accepted = run(didAdmit: {
             recording.capture = self.reserveUnsupportedCommand("Move Guide")
         }) { session, image in
-            try self.performUndoableCommand(recording, "Move Guide", session: session, image: image) {
+            try self.performUndoableCommand(recording, "Move Guide", session: session, image: image,
+                                            reading: { try session.guides(image) }) {
                 _ = try session.putGuide(EngineSession.Guide(id: guide.id,
                                                              orientation: guide.orientation,
                                                              position: position), image: image)
@@ -2579,7 +2580,8 @@ final class ImageDocument {
         pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
             let result = Result {
-                try self.performUndoableCommand(recording, "Grid", session: session, image: image) {
+                try self.performUndoableCommand(recording, "Grid", session: session, image: image,
+                                                reading: { try session.grid(image) }) {
                     try session.setGrid(grid, image: image)
                 }
             }
@@ -5360,21 +5362,16 @@ final class ImageDocument {
             return completion(.failure(DocumentError.multipleLayersSelected(reason)))
         }
         let action = procedure.label.trimmingCharacters(in: CharacterSet(charactersIn: "…"))
-        let recorded = action.isEmpty ? "this plug-in" : action
-        let recording = UnsupportedAdmission()
-        let accepted = enqueueExclusive(label: procedure.label, didAdmit: {
-            recording.capture = self.reserveUnsupportedCommand(recorded)
-        }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+        // A cancelled plug-in keeps its row: Cancel kills it where it is,
+        // and GIMP rolls back nothing it had already changed.
+        enqueueExclusive(label: procedure.label, unsupported: action.isEmpty ? "this plug-in" : action,
+                         rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             self.dispatchReadWhenReady {
-                var cancelled = false
-                if case .success(.cancelled) = result { cancelled = true }
-                self.settleUnsupportedCommand(recording, recorded, changedNothing: cancelled)
                 try? self.reload()
                 completion(result)
             }
         }
-        if accepted, recording.capture != nil { notifyRecorderChanged() }
     }
 
     enum DocumentError: LocalizedError {
@@ -8274,17 +8271,23 @@ final class ImageDocument {
                          notifies: notifies)
     }
 
-    /// Runs, on the worker, a command whose every change is an undo step,
-    /// and settles its row. A success that left the history revision alone
-    /// changed nothing. Anything unproven keeps the failed row.
-    private nonisolated func performUndoableCommand(_ admission: UnsupportedAdmission, _ action: String,
-                                                    session: EngineSession, image: Int32,
-                                                    _ work: () throws -> Void) throws {
-        let before = try? session.historyRevision(image)
+    /// Runs, on the worker, a command that can change only `state`, and
+    /// settles its row. A success changed nothing if it left both the
+    /// history revision and that state alone. The revision is not enough:
+    /// with undo frozen, as a plug-in can leave it, GIMP changes the image
+    /// without an undo step. The state is not enough either: a grid color
+    /// outside sRGB reads back clamped. Anything unproven keeps the row.
+    private nonisolated func performUndoableCommand<State: Equatable>(_ admission: UnsupportedAdmission, _ action: String,
+                                                                      session: EngineSession, image: Int32,
+                                                                      reading state: () throws -> State,
+                                                                      _ work: () throws -> Void) throws {
+        let revision = try? session.historyRevision(image)
+        let before = try? state()
         let result = Result { try work() }
         var changedNothing = false
-        if case .success = result, let before, let after = try? session.historyRevision(image) {
-            changedNothing = before == after
+        if case .success = result, let revision, let before,
+           let newRevision = try? session.historyRevision(image), let after = try? state() {
+            changedNothing = revision == newRevision && before == after
         }
         dispatchReadWhenReady { [changedNothing] in
             self.settleUnsupportedCommand(admission, action, changedNothing: changedNothing)
@@ -8292,8 +8295,8 @@ final class ImageDocument {
         try result.get()
     }
 
-    /// Settles a reserved row: a cancelled command or one that changed
-    /// nothing withdraws it, any other outcome keeps it as the failed row.
+    /// Settles a reserved row: proof that nothing changed withdraws it,
+    /// any other outcome keeps it as the failed row.
     private func settleUnsupportedCommand(_ admission: UnsupportedAdmission, _ action: String, changedNothing: Bool) {
         guard let capture = admission.capture else { return }
         if changedNothing, withdrawRecording(capture) {
