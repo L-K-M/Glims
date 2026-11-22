@@ -123,6 +123,14 @@ extension EngineSmokeTest {
             guard let guide = verticalGuide else { return check(false, "the vertical guide exists") }
             document.moveGuide(guide, to: 40)
         }
+        // A caller's copy can be older than the engine: this moves 40 back to 20.
+        let beforeStaleMove = document.recorder.records.count
+        perform("Move Guide") {
+            guard let guide = verticalGuide else { return check(false, "the vertical guide exists") }
+            document.moveGuide(guide, to: guide.position)
+        }
+        check(document.recorder.records.count == beforeStaleMove + 1,
+              "a real move from a stale copy of a guide adds a row")
         perform("Remove Guide") {
             guard let guide = verticalGuide else { return check(false, "the vertical guide exists") }
             document.removeGuide(guide.id)
@@ -130,6 +138,13 @@ extension EngineSmokeTest {
         perform("Grid") {
             document.setGrid(EngineSession.Grid(style: .solid, spacingX: 7, spacingY: 7)) { _ in }
         }
+        // So can the cached grid: the engine changes before the cache reloads.
+        let cachedGrid = document.grid
+        try session.setGrid(EngineSession.Grid(style: .solid, spacingX: 9, spacingY: 9), image: image)
+        let beforeStaleGrid = document.recorder.records.count
+        perform("Grid") { document.setGrid(cachedGrid) { _ in } }
+        check(document.recorder.records.count == beforeStaleGrid + 1,
+              "a real grid change over a stale cache adds a row")
         perform("Stroke Selection") { document.strokeSelection(EngineSession.Brush()) }
         perform("Fill") {
             document.fill(at: CGPoint(x: 60, y: 60), mode: .selection, color: .red,

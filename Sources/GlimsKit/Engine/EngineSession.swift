@@ -2257,6 +2257,13 @@ final class EngineSession: @unchecked Sendable {
     /// The engine can grow the list between the size probe and the fill;
     /// the read is retried a bounded number of times with the size it
     /// last reported, never indexing past the rows allocated.
+    /// The revision alone: every undo push, undo and redo moves it.
+    func historyRevision(_ image: Int32) throws -> UInt64 {
+        var info = GlimsHistoryInfo()
+        try check(api.image_history(engine, image, nil, 0, &info), nil)
+        return info.revision
+    }
+
     func history(_ image: Int32) throws -> History {
         var info = GlimsHistoryInfo()
         try check(api.image_history(engine, image, nil, 0, &info), nil)

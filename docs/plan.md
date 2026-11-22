@@ -6859,12 +6859,14 @@ an edit. A command refused before admission, a preview, a cancel, a target
 pick, a view change, a save, an export and a read add no row, and replay's
 own commands add none. The helper is `recordUnsupportedCommand`, called
 only at admission: inside `run`, at exclusive admission, or just before an
-enqueue that refuses only a closing document. A guide moved to where it is
-and a grid the image already has add no row, Channel Attributes applied
-unchanged sends nothing, and a cancelled plug-in, Open as Layers or Place
-withdraws the row it reserved.
+enqueue that refuses only a closing document. Channel Attributes applied
+unchanged sends nothing. A cancelled plug-in, Open as Layers or Place
+withdraws the row it reserved, and so does a guide move or Grid change
+that left the engine's history revision alone; cached state proves
+neither, because it can be older than the engine's. Only the newest row
+can be withdrawn.
 
-Known limit: the row is reserved at admission, so a command that then
+Known limit: the row is reserved at admission, so any other command that
 finds nothing to change keeps it and replay refuses that recording.
 Examples are identical metadata, the current color profile, an alignment
 that moves nothing, Layer to Image Size at the image's bounds and a

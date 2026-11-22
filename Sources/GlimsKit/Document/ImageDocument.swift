@@ -2535,14 +2535,19 @@ final class ImageDocument {
     /// position it already holds is a no-op with no undo.
     func moveGuide(_ guide: EngineSession.Guide, to position: Int32) {
         guard !refuseWhileEditingUnavailable() else { return }
-        // Moving a guide to where it is adds no undo step and no row. The
-        // cached position proves that only with no edit still queued.
-        let unchanged = position == guide.position && pendingInput == 0
-        run(unsupported: unchanged ? nil : "Move Guide") { session, image in
-            _ = try session.putGuide(EngineSession.Guide(id: guide.id,
-                                                         orientation: guide.orientation,
-                                                         position: position), image: image)
+        // The caller's copy can be older than the engine, so only the engine
+        // proves that a move changed nothing.
+        let recording = UnsupportedAdmission()
+        let accepted = run(didAdmit: {
+            recording.capture = self.reserveUnsupportedCommand("Move Guide")
+        }) { session, image in
+            try self.performUndoableCommand(recording, "Move Guide", session: session, image: image) {
+                _ = try session.putGuide(EngineSession.Guide(id: guide.id,
+                                                             orientation: guide.orientation,
+                                                             position: position), image: image)
+            }
         }
+        if accepted, recording.capture != nil { notifyRecorderChanged() }
     }
 
     /// Removes `guide` as one undo step; a stale, foreign or custom
@@ -2566,14 +2571,18 @@ final class ImageDocument {
         }
         endPendingUserEdits()
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        // As for guides: the grid the image already has adds no undo step
-        // and no row, and the cache proves that only with no edit queued.
-        if grid != self.grid || pendingInput != 0 { recordUnsupportedCommand("Grid") }
+        // As for guides, the cached grid can be older than the engine's.
+        let recording = UnsupportedAdmission()
+        recording.capture = reserveUnsupportedCommand("Grid")
         // Keep the deferred cache/completion stage alive through another
         // document's exclusive work as well as the native input job.
         pendingWork += 1
         enqueue(on: inputQueue, input: true) { [session, image] in
-            let result = Result { try session.setGrid(grid, image: image) }
+            let result = Result {
+                try self.performUndoableCommand(recording, "Grid", session: session, image: image) {
+                    try session.setGrid(grid, image: image)
+                }
+            }
             self.dispatchReadWhenReady {
                 EngineActivity.shared.whenIdle {
                     defer { self.jobDidFinish(input: false) }
@@ -2585,6 +2594,7 @@ final class ImageDocument {
                 }
             }
         }
+        if recording.capture != nil { notifyRecorderChanged() }
     }
 
     // MARK: Image metadata
@@ -5359,7 +5369,7 @@ final class ImageDocument {
             self.dispatchReadWhenReady {
                 var cancelled = false
                 if case .success(.cancelled) = result { cancelled = true }
-                self.settleUnsupportedCommand(recording, recorded, cancelled: cancelled)
+                self.settleUnsupportedCommand(recording, recorded, changedNothing: cancelled)
                 try? self.reload()
                 completion(result)
             }
@@ -6076,7 +6086,7 @@ final class ImageDocument {
             self.dispatchReadWhenReady {
                 var cancelled = false
                 if case .failure(let error) = result { cancelled = Self.isLoaderCancellation(error) }
-                self.settleUnsupportedCommand(recording, recorded, cancelled: cancelled)
+                self.settleUnsupportedCommand(recording, recorded, changedNothing: cancelled)
                 if case .success = result { self.rejectedTargetPick = false }
                 // The reload mirrors the engine's native selection — the
                 // imported top layer or the placed link — as the target.
@@ -8264,11 +8274,29 @@ final class ImageDocument {
                          notifies: notifies)
     }
 
-    /// Settles the row of a command whose dialog can cancel it: a cancel
-    /// withdraws the row, any other outcome keeps it as the failed row.
-    private func settleUnsupportedCommand(_ admission: UnsupportedAdmission, _ action: String, cancelled: Bool) {
+    /// Runs, on the worker, a command whose every change is an undo step,
+    /// and settles its row. A success that left the history revision alone
+    /// changed nothing. Anything unproven keeps the failed row.
+    private nonisolated func performUndoableCommand(_ admission: UnsupportedAdmission, _ action: String,
+                                                    session: EngineSession, image: Int32,
+                                                    _ work: () throws -> Void) throws {
+        let before = try? session.historyRevision(image)
+        let result = Result { try work() }
+        var changedNothing = false
+        if case .success = result, let before, let after = try? session.historyRevision(image) {
+            changedNothing = before == after
+        }
+        dispatchReadWhenReady { [changedNothing] in
+            self.settleUnsupportedCommand(admission, action, changedNothing: changedNothing)
+        }
+        try result.get()
+    }
+
+    /// Settles a reserved row: a cancelled command or one that changed
+    /// nothing withdraws it, any other outcome keeps it as the failed row.
+    private func settleUnsupportedCommand(_ admission: UnsupportedAdmission, _ action: String, changedNothing: Bool) {
         guard let capture = admission.capture else { return }
-        if cancelled, withdrawRecording(capture) {
+        if changedNothing, withdrawRecording(capture) {
             notifyRecorderChanged()
         } else {
             resolveUnsupportedCommand(capture, action)
@@ -8289,7 +8317,7 @@ final class ImageDocument {
     }
 
     private final class UnsupportedAdmission: @unchecked Sendable {
-        // Written on main at exclusive admission, read on main at completion.
+        // Written on main at admission, read on main at completion.
         var capture: RecorderCapture?
     }
 
@@ -8542,6 +8570,7 @@ final class ImageDocument {
              recorderChannel: Int32? = nil,
              recordingFailure: String? = nil,
              unsupported: String? = nil,
+             didAdmit: (@MainActor () -> Void)? = nil,
              _ work: @escaping (EngineSession, Int32) throws -> Void) -> Bool {
         guard !isClosing else { return false }
         guard colorInfo.mode != .lab || effect == .readsPixels else {
@@ -8552,6 +8581,7 @@ final class ImageDocument {
             return false
         }
         if let unsupported { recordUnsupportedCommand(unsupported) }
+        didAdmit?()
         let capture: RecorderCapture?
         do { capture = try reserveRecording(semantic, explicitLayer: recorderLayer, explicitChannel: recorderChannel) }
         catch {
