@@ -6860,13 +6860,22 @@ pick, a view change, a save, an export and a read add no row, and replay's
 own commands add none. The helper is `recordUnsupportedCommand`, called
 only at admission: inside `run`, at exclusive admission, or just before an
 enqueue that refuses only a closing document. A guide moved to where it is
-adds no row, and a cancelled plug-in withdraws the row it reserved.
+and a grid the image already has add no row, Channel Attributes applied
+unchanged sends nothing, and a cancelled plug-in, Open as Layers or Place
+withdraws the row it reserved.
+
+Known limit: the row is reserved at admission, so a command that then
+finds nothing to change keeps it and replay refuses that recording.
+Examples are identical metadata, the current color profile, an alignment
+that moves nothing, Layer to Image Size at the image's bounds and a
+saved set that already matches. The row errs toward refusing replay: a
+missing one would replay a different image without saying so.
 `EngineSmokeTestRecorderGaps` (`GLIMS_SMOKE_CASE=recorder-gaps`) drives the
 commands through one recording and checks the ordered failed rows, the
 replay refusal, the refused and read-only commands, and one row for a whole
 Move drag.
 
 Verified: the `recorder-gaps` smoke case on GIMP 3.2.8, which failed before
-the change, and `RecorderLogTests` for withdrawal. A cancelled plug-in
-dialog is not driven by the smoke. Counts and the full editor smoke per
-engine set are in the PR.
+the change, and `RecorderLogTests` for withdrawal. A cancelled plug-in or
+loader dialog is not driven by the smoke. Counts and the full editor smoke
+per engine set are in the PR.

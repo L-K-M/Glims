@@ -2566,7 +2566,9 @@ final class ImageDocument {
         }
         endPendingUserEdits()
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        recordUnsupportedCommand("Grid")
+        // As for guides: the grid the image already has adds no undo step
+        // and no row, and the cache proves that only with no edit queued.
+        if grid != self.grid || pendingInput != 0 { recordUnsupportedCommand("Grid") }
         // Keep the deferred cache/completion stage alive through another
         // document's exclusive work as well as the native input job.
         pendingWork += 1
@@ -5355,13 +5357,9 @@ final class ImageDocument {
         }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.runProcedure(procedure.name, image: image, mode: mode) }
             self.dispatchReadWhenReady {
-                if let capture = recording.capture {
-                    if case .success(.cancelled) = result, self.withdrawRecording(capture) {
-                        self.notifyRecorderChanged()
-                    } else {
-                        self.resolveUnsupportedCommand(capture, recorded)
-                    }
-                }
+                var cancelled = false
+                if case .success(.cancelled) = result { cancelled = true }
+                self.settleUnsupportedCommand(recording, recorded, cancelled: cancelled)
                 try? self.reload()
                 completion(result)
             }
@@ -6051,7 +6049,11 @@ final class ImageDocument {
             return completion(.failure(DocumentError.busy))
         }
         let label = asLink ? "Placing \(url.lastPathComponent)" : "Opening \(url.lastPathComponent) as layers"
-        enqueueExclusive(label: label, unsupported: asLink ? "Place" : "Open as Layers", rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+        let recorded = asLink ? "Place" : "Open as Layers"
+        let recording = UnsupportedAdmission()
+        let accepted = enqueueExclusive(label: label, didAdmit: {
+            recording.capture = self.reserveUnsupportedCommand(recorded)
+        }, rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result<ImportOutcome, Error> {
                 if asLink {
                     _ = try session.placeLink(image: image, path: url.path)
@@ -6072,6 +6074,9 @@ final class ImageDocument {
                 self.inputQueue.sync { self.paintTargetIsValid = true }
             }
             self.dispatchReadWhenReady {
+                var cancelled = false
+                if case .failure(let error) = result { cancelled = Self.isLoaderCancellation(error) }
+                self.settleUnsupportedCommand(recording, recorded, cancelled: cancelled)
                 if case .success = result { self.rejectedTargetPick = false }
                 // The reload mirrors the engine's native selection — the
                 // imported top layer or the placed link — as the target.
@@ -6089,6 +6094,7 @@ final class ImageDocument {
                 }
             }
         }
+        if accepted, recording.capture != nil { notifyRecorderChanged() }
     }
 
     /// The facade reports a loader's cancel as CANCELLED with no engine
@@ -8256,6 +8262,17 @@ final class ImageDocument {
                          confirmed: .init(context: capture.context, binding: .unavailable(reason),
                                           descriptions: [:]),
                          notifies: notifies)
+    }
+
+    /// Settles the row of a command whose dialog can cancel it: a cancel
+    /// withdraws the row, any other outcome keeps it as the failed row.
+    private func settleUnsupportedCommand(_ admission: UnsupportedAdmission, _ action: String, cancelled: Bool) {
+        guard let capture = admission.capture else { return }
+        if cancelled, withdrawRecording(capture) {
+            notifyRecorderChanged()
+        } else {
+            resolveUnsupportedCommand(capture, action)
+        }
     }
 
     /// Takes back the row of a command that ended without changing anything.

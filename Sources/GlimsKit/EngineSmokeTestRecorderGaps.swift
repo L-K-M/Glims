@@ -112,6 +112,11 @@ extension EngineSmokeTest {
         } else {
             check(false, "the fixture has a guide")
         }
+        let beforeUnchangedGrid = document.recorder.records.count
+        document.setGrid(document.grid) { _ in }
+        settle(document)
+        check(document.recorder.records.count == beforeUnchangedGrid,
+              "applying the grid the image already has adds no row")
         perform("Add Guide") { document.addGuide(.vertical, at: 20) }
         verticalGuide = document.guides.first { $0.orientation == .vertical }
         perform("Move Guide") {
