@@ -6849,6 +6849,18 @@ is set fixes the distance in whole pixels, as in GIMP's
 `app/paint/gimpsourcecore.c`. The canvas regression failed on main at
 80cc28e2 and passes with the change on GIMP 3.2.8. No facade change.
 
+### Default palette groups (2026-11-22)
+
+The first-launch layout put nine palettes in one 330 pt group, which cut
+every tab to 32 pt, about two letters. It is now one column of two
+groups: Layers, Channels, Paths, History and Recorder, with Color,
+Swatches, Navigator and Info docked under them. Navigator opens 330 pt
+wide like the Recorder, because Rigi aligns docked groups on their left
+edges. `PaletteLayoutTests` computes the real tab rectangles and the
+column's width and height; `palette-keyboard-focus` checks the front tabs
+and that the groups do not cover each other. An arrangement saved by an
+earlier build keeps its groups until Window > Reset Palettes.
+
 ### Gradient and Eyedropper modifiers (2026-11-22)
 
 Gradient ignored Shift, and the Eyedropper ignored Option. Shift now

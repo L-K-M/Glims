@@ -36,6 +36,14 @@ These palettes hold the controls:
   Recorder     the recorded commands and their replay.
   Color        sliders and a color bar for the foreground and background.
   Swatches     saved colors for the foreground and background.
+  Navigator    a small view of the image that pans and zooms the window.
+  Info         readings for the pointer and the current selection.
+
+The default layout has Tool Options under Tools at the left, and two
+groups of tabs at the right: Layers, Channels, Paths, History and
+Recorder, with Color, Swatches, Navigator and Info under them. An
+arrangement you already have is kept; Window > Reset Palettes gives
+you the default one.
 
 In Swatches, click a swatch to make it the foreground color and
 Option-click one for the background color. Click the empty space after
