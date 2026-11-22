@@ -54,7 +54,13 @@ extension EngineSmokeTest {
             }
             settle()
         }
-        func red(_ x: Int, _ y: Int) -> Int { Int(pixel(session, image, x: x, y: y)?.first ?? 128) }
+        func red(_ x: Int, _ y: Int) -> Int {
+            guard let value = pixel(session, image, x: x, y: y)?.first else {
+                check(false, "the tool modifier fixture reads (\(x), \(y))")
+                return 0
+            }
+            return Int(value)
+        }
 
         func brightness(_ color: NSColor) -> Double {
             Double(color.usingColorSpace(.sRGB)?.redComponent ?? -1)

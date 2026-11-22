@@ -237,8 +237,8 @@ What the tools do:
   ordinary RGB layers, including opaque Background layers.
 
   Gradient drags out a gradient between the foreground and background
-  colors (hold Shift to keep it at a multiple of 45 degrees); Paint Bucket fills similar colors around the click, or the
-  whole selection.
+  colors (hold Shift to keep it at a multiple of 45 degrees); Paint
+  Bucket fills similar colors around the click, or the whole selection.
 
   Hand drags the view; Zoom clicks to zoom in and Option-clicks to zoom
   out.
