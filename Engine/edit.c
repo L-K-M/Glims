@@ -1643,14 +1643,11 @@ admit_transform_storage (GimpDrawable *drawable, gint64 left, gint64 top,
  * representation so equivalent H, 2H and -3H use the same near plane.
  * Keep affine W=1 unchanged, including its existing rounding behavior. */
 static GlimsStatus
-normalize_transform (GimpLayer *layer, GimpMatrix3 *matrix, char **error)
+normalize_transform_at (gdouble cx, gdouble cy, GimpMatrix3 *matrix,
+                        const char *flattened, char **error)
 {
-  gint x, y;
-  gdouble cx, cy, w, determinant;
+  gdouble w, determinant;
   GimpMatrix3 inverse;
-  gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
-  cx = x + gimp_item_get_width (GIMP_ITEM (layer)) / 2.0;
-  cy = y + gimp_item_get_height (GIMP_ITEM (layer)) / 2.0;
   w = matrix->coeff[2][0] * cx + matrix->coeff[2][1] * cy + matrix->coeff[2][2];
   if (! isfinite (w) || w == 0)
     return invalid_transform (error, "The transform crosses a perspective horizon. Move its corners closer together.");
@@ -1663,7 +1660,7 @@ normalize_transform (GimpLayer *layer, GimpMatrix3 *matrix, char **error)
       }
   determinant = gimp_matrix3_determinant (matrix);
   if (! isfinite (determinant) || fabs (determinant) < 1e-9)
-    return invalid_transform (error, "The transform would flatten the layer or exceed its numeric range.");
+    return invalid_transform (error, flattened);
   inverse = *matrix;
   gimp_matrix3_invert (&inverse);
   for (gint row = 0; row < 3; row++)
@@ -1671,6 +1668,17 @@ normalize_transform (GimpLayer *layer, GimpMatrix3 *matrix, char **error)
       if (! isfinite (inverse.coeff[row][column]))
         return invalid_transform (error, "The inverse transform is not finite.");
   return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+normalize_transform (GimpLayer *layer, GimpMatrix3 *matrix, char **error)
+{
+  gint x, y;
+  gimp_item_get_offset (GIMP_ITEM (layer), &x, &y);
+  return normalize_transform_at (x + gimp_item_get_width (GIMP_ITEM (layer)) / 2.0,
+                                 y + gimp_item_get_height (GIMP_ITEM (layer)) / 2.0, matrix,
+                                 "The transform would flatten the layer or exceed its numeric range.",
+                                 error);
 }
 
 /* Bound every destination before native integer casts or mutation. The
@@ -1854,6 +1862,35 @@ preview_transform_raster (GimpLayer *layer, const GimpMatrix3 *matrix,
 }
 
 static GlimsStatus
+transform_from_matrix (const GlimsMatrix *matrix, GimpMatrix3 *transform, char **error)
+{
+  for (gint row = 0; row < 3; row++)
+    for (gint column = 0; column < 3; column++)
+      {
+        if (! isfinite (matrix->m[row][column]))
+          return invalid_transform (error, "The transform is not a finite matrix.");
+        transform->coeff[row][column] = matrix->m[row][column];
+      }
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
+transform_interpolation (GlimsEngine *engine, uint32_t interpolation, GimpInterpolationType *type)
+{
+  switch (interpolation)
+    {
+    case GLIMS_INTERPOLATION_DEFAULT: *type = engine->gimp->config->interpolation_type; break;
+    case GLIMS_INTERPOLATION_NONE:    *type = GIMP_INTERPOLATION_NONE;   break;
+    case GLIMS_INTERPOLATION_LINEAR:  *type = GIMP_INTERPOLATION_LINEAR; break;
+    case GLIMS_INTERPOLATION_CUBIC:   *type = GIMP_INTERPOLATION_CUBIC;  break;
+    case GLIMS_INTERPOLATION_NOHALO:  *type = GIMP_INTERPOLATION_NOHALO; break;
+    case GLIMS_INTERPOLATION_LOHALO:  *type = GIMP_INTERPOLATION_LOHALO; break;
+    default:                          return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  return GLIMS_STATUS_OK;
+}
+
+static GlimsStatus
 transform_layer_matrix (GlimsEngine       *engine,
                               GlimsImageID       id,
                               GlimsItemID        layer_id,
@@ -1868,34 +1905,17 @@ transform_layer_matrix (GlimsEngine       *engine,
   GimpLayer             *layer;
   GimpMatrix3            transform;
   GimpInterpolationType  type;
-  gint                   row, column;
 
   if (! image)
     return status;
   if (! matrix)
     return GLIMS_STATUS_INVALID_ARGUMENT;
-
-  for (row = 0; row < 3; row++)
-    for (column = 0; column < 3; column++)
-      {
-        if (! isfinite (matrix->m[row][column]))
-          {
-            glims_fail (error, NULL, "The transform is not a finite matrix.");
-            return GLIMS_STATUS_INVALID_ARGUMENT;
-          }
-        transform.coeff[row][column] = matrix->m[row][column];
-      }
-
-  switch (interpolation)
-    {
-    case GLIMS_INTERPOLATION_DEFAULT: type = engine->gimp->config->interpolation_type; break;
-    case GLIMS_INTERPOLATION_NONE:    type = GIMP_INTERPOLATION_NONE;   break;
-    case GLIMS_INTERPOLATION_LINEAR:  type = GIMP_INTERPOLATION_LINEAR; break;
-    case GLIMS_INTERPOLATION_CUBIC:   type = GIMP_INTERPOLATION_CUBIC;  break;
-    case GLIMS_INTERPOLATION_NOHALO:  type = GIMP_INTERPOLATION_NOHALO; break;
-    case GLIMS_INTERPOLATION_LOHALO:  type = GIMP_INTERPOLATION_LOHALO; break;
-    default:                          return GLIMS_STATUS_INVALID_ARGUMENT;
-    }
+  status = transform_from_matrix (matrix, &transform, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  status = transform_interpolation (engine, interpolation, &type);
+  if (status != GLIMS_STATUS_OK)
+    return status;
 
   layer = find_layer (image, layer_id);
   if (! layer)
@@ -1969,6 +1989,79 @@ glims_layer_transform_matrix_captured (GlimsEngine *engine, GlimsImageID image, 
     return GLIMS_STATUS_INVALID_ARGUMENT;
   return transform_layer_matrix (engine, image, layer, &request->matrix, request->interpolation,
                                   &request->expected_bounds, TRANSFORM_COMMIT, error);
+}
+
+/* Quick Mask > Free Transform > Quick Mask, and a saved selection: the
+ * native transform tool's channel commit. GIMP clips every channel to
+ * its canvas-sized buffer (gimp_channel_get_clip), so pass CLIP: the
+ * layer path's ADJUST would grow and shift it. */
+GlimsStatus
+glims_channel_transform_matrix_captured (GlimsEngine *engine, GlimsImageID id, GlimsItemID channel_id,
+                                         const GlimsLayerTransformRequest *request, char **error)
+{
+  GlimsStatus            status;
+  GimpImage             *image;
+  GimpChannel           *channel;
+  GimpMatrix3            transform;
+  GimpInterpolationType  type;
+  gint                   x, y, width, height, offset_x, offset_y;
+  const gdouble          coordinate_limit = 2.0 * GIMP_MAX_IMAGE_SIZE;
+
+  if (! request || request->struct_size < sizeof *request || channel_id <= 0 ||
+      request->expected_bounds.width < 1 || request->expected_bounds.height < 1)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  image = writable_image (engine, id, &status);
+  if (! image)
+    return status;
+  status = transform_from_matrix (&request->matrix, &transform, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  status = transform_interpolation (engine, request->interpolation, &type);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  channel = glims_find_channel (image, channel_id);
+  if (! channel)
+    return GLIMS_STATUS_NOT_FOUND;
+  if (gimp_channel_is_empty (channel) ||
+      ! gimp_item_bounds (GIMP_ITEM (channel), &x, &y, &width, &height))
+    return glims_fail (error, NULL, "The channel is empty, so there is nothing to transform.");
+  gimp_item_get_offset (GIMP_ITEM (channel), &offset_x, &offset_y);
+  x += offset_x;
+  y += offset_y;
+  if (x != request->expected_bounds.x || y != request->expected_bounds.y ||
+      width != request->expected_bounds.width || height != request->expected_bounds.height)
+    return glims_fail (error, NULL, "The channel changed while the transform was pending. Start the transform again.");
+
+  status = glims_check_item_locks (GIMP_ITEM (channel), GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = check_transform_effect_bounds (GIMP_DRAWABLE (channel), error);
+  if (status != GLIMS_STATUS_OK) return status;
+  status = normalize_transform_at (x + width / 2.0, y + height / 2.0, &transform,
+                                   "The transform would flatten the channel or exceed its numeric range.",
+                                   error);
+  if (status != GLIMS_STATUS_OK) return status;
+  /* The box's corners must stay in front of the horizon and within the
+   * coordinates native sampling handles, as for a layer. */
+  for (gint corner = 0; corner < 4; corner++)
+    {
+      const gdouble px = (gdouble) x + (corner & 1 ? width : 0);
+      const gdouble py = (gdouble) y + (corner & 2 ? height : 0);
+      const gdouble w = transform.coeff[2][0] * px + transform.coeff[2][1] * py + transform.coeff[2][2];
+      gdouble out_x, out_y;
+      if (! isfinite (w) || w <= GIMP_TRANSFORM_NEAR_Z + 1e-9)
+        return invalid_transform (error, "The transform crosses a perspective horizon. Move its corners closer together.");
+      out_x = (transform.coeff[0][0] * px + transform.coeff[0][1] * py + transform.coeff[0][2]) / w;
+      out_y = (transform.coeff[1][0] * px + transform.coeff[1][1] * py + transform.coeff[1][2]) / w;
+      if (! isfinite (out_x) || ! isfinite (out_y) ||
+          fabs (out_x) > coordinate_limit || fabs (out_y) > coordinate_limit)
+        return invalid_transform (error, "The transformed channel would exceed the supported coordinates.");
+    }
+
+  gimp_item_transform (GIMP_ITEM (channel), gimp_get_user_context (engine->gimp), &transform,
+                       GIMP_TRANSFORM_FORWARD, type, GIMP_TRANSFORM_RESIZE_CLIP, NULL);
+  gimp_image_flush (image);
+  return GLIMS_STATUS_OK;
 }
 
 GlimsStatus

@@ -7073,3 +7073,25 @@ grouping, undo/redo of size and resolution, refusals, XCF round trip, PNG
 export and import within the pixels-per-metre rounding) and by `swift test`
 on the ImageSizeModel and recorder codec suites. The `image-resolution`
 smoke case exercises the menu validation and document commands.
+
+### Transform on Quick Mask and saved selections (2026-11-22)
+
+Classic editors transform a selection's shape through a quick mask: turn
+it on, transform the mask, turn it off. The Transform tool now works on
+the one active channel, the Quick Mask's or a saved selection, with its
+handles, modes, numeric fields, Apply and Cancel unchanged. Its box is the
+area the channel covers. Two facade slots serve it: `channel_bounds` reads
+that box and `channel_transform_matrix_captured` transforms the channel
+with GIMP's own channel commit (`gimp_item_transform`, clipped to the
+canvas as `gimp_channel_get_clip` requires), as one undo step named
+"Transform Channel", refusing a box that changed since the session began.
+The canvas shows the handles over the mask's overlay; there is no pixel
+preview for channels. Layer transforms, their Recorder commands and
+`requireLayerTransformTarget` are unchanged. The Recorder keeps a failed
+row for a channel transform.
+
+Engine tests cover both slots on all four engine sets: a saved channel,
+the Quick Mask round trip, canvas clipping, scale, a stale box, an empty
+channel and every refusal. The `channel-transform` editor smoke case
+(`GLIMS_SMOKE_CASE=channel-transform`) drives the whole route with canvas
+events; its runs are recorded in the PR.
