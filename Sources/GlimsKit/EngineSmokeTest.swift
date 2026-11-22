@@ -847,6 +847,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Clone Alignment)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "palette-controls" {
+                try exercisePaletteControls(session, documents: documents)
+                print(failures == 0 ? "PASSED (palette controls)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "line" {
                 try exerciseLine(session, documents: documents)
                 print(failures == 0 ? "PASSED (Line)" : "FAILED: \(failures) failure(s)")
@@ -6239,8 +6244,25 @@ enum EngineSmokeTest {
         check(strokeItem.map { paths.validateMenuItem($0) } == false, "its menu disables Stroke Path without a path")
 
         // A pending transform whose layer an undo moved is not applied with
-        // the old box: Return refuses it.
+        // the old box: Return refuses it, both before the document reloads
+        // that undo and after.
         if let window = controller.window {
+            // The reload can wait for the transform preview's render, so one
+            // turn of the run loop does not show that it has landed.
+            func drain(_ what: String) {
+                let deadline = Date().addingTimeInterval(15)
+                while document.pendingWork > 0 && Date() < deadline { spin(0.02) }
+                check(document.pendingWork == 0, "\(what) drains")
+            }
+            func pressReturn() {
+                guard let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                   windowNumber: window.windowNumber, context: nil, characters: "\r",
+                                                   charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) else {
+                    check(false, "a Return key event can be made")
+                    return
+                }
+                controller.canvas.keyDown(with: enter)
+            }
             func send(_ type: NSEvent.EventType, _ point: CGPoint) {
                 guard let event = NSEvent.mouseEvent(
                     with: type, location: controller.canvas.convert(CGPoint(x: point.x * controller.canvas.scale,
@@ -6253,26 +6275,47 @@ enum EngineSmokeTest {
                 default: controller.canvas.mouseUp(with: event)
                 }
             }
-            document.moveActiveLayer(by: CGSize(width: 10, height: 5))
-            settle()
+            drain("the layer commands before the move")
+            let target = document.activeLayer
+            func engineBox() throws -> CGRect? { try session.layers(image).first { $0.id == target }?.bounds }
+            let original = try engineBox()
+            let originalSteps = try session.undoInfo(image).undoCount
             let toolBefore = ToolState.shared.current
-            ToolState.shared.select(.transform)
-            send(.leftMouseDown, CGPoint(x: 60, y: 40))
-            send(.leftMouseDragged, CGPoint(x: 70, y: 40))
-            send(.leftMouseUp, CGPoint(x: 70, y: 40))
-            document.undo()
-            settle()
-            let undone = document.layers.first { $0.id == document.activeLayer }?.bounds
-            let steps = document.undoInfo.undoCount
-            if let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                                            windowNumber: window.windowNumber, context: nil, characters: "\r",
-                                            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
-                controller.canvas.keyDown(with: enter)
+            let tools = controller.canvas.tools
+            for reloaded in [false, true] {
+                let when = reloaded ? "after" : "before"
+                document.moveActiveLayer(by: CGSize(width: 10, height: 5))
+                drain("the move")
+                check(try engineBox() != original, "the move changes the layer's box")
+                ToolState.shared.select(.transform)
+                send(.leftMouseDown, CGPoint(x: 60, y: 40))
+                send(.leftMouseDragged, CGPoint(x: 70, y: 40))
+                send(.leftMouseUp, CGPoint(x: 70, y: 40))
+                check(tools.transformIsApplicable, "a transform of the moved layer waits for Return")
+                document.undo()
+                // The engine has undone and the main thread has not yet run,
+                // so the document still holds the moved box and no target.
+                document.inputQueue.sync {}
+                check(try engineBox() == original && document.targetCommandIsPending,
+                      "Return can come between an undo and its reload")
+                if reloaded {
+                    drain("the undo and its reload")
+                    check(tools.transformSession != nil && document.undoInfo.undoCount == originalSteps
+                            && document.layers.first { $0.id == target }?.bounds == original,
+                          "the document shows the undone layer under the waiting transform")
+                }
+                pressReturn()
+                // The document and the engine refuse the old box too. Only
+                // the canvas's own refusal says this and sends no transform.
+                check(!tools.transformCommitIsPending && tools.transformSession == nil
+                        && controller.statusBar.message == "The layer changed, so the transform was not applied.",
+                      "Return \(when) an undo's reload discards the stale transform")
+                drain("Return \(when) the reload")
+                check(try document.undoInfo.undoCount == originalSteps
+                        && document.layers.first { $0.id == target }?.bounds == original
+                        && engineBox() == original && session.undoInfo(image).undoCount == originalSteps,
+                      "a transform whose layer an undo changed is not applied, Return \(when) the reload")
             }
-            settle()
-            check(document.undoInfo.undoCount == steps
-                    && document.layers.first { $0.id == document.activeLayer }?.bounds == undone,
-                  "a transform whose layer an undo changed is not applied")
             ToolState.shared.select(toolBefore)
         }
 
