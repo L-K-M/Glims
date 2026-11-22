@@ -122,6 +122,11 @@ xcrun clang @"$OUT/compile.rsp" -I"$ROOT/Engine" -std=c11 -O2 -Wall -Wextra \
 xcrun clang++ -o "$OUT/glims-xcf-compressed-tests" "$OUT/xcf-compressed-tests.o" \
   "$OUT/obj/xcf-compressed.o" "$OUT/obj/xcf-gzip.o" @"$OUT/link.rsp"
 
+# Seed babl's fish cache with lossy paths for the export reruns below.
+xcrun clang @"$OUT/compile.rsp" -std=c11 -O2 -Wall -Wextra \
+  -c "$ROOT/Engine/tests/babl-path-seed.c" -o "$OUT/babl-path-seed.o"
+xcrun clang++ -o "$OUT/glims-babl-path-seed" "$OUT/babl-path-seed.o" @"$OUT/link.rsp"
+
 # Exercise TIFF chain filtering and malformed-file admission without GIMP.
 xcrun clang @"$OUT/compile.rsp" -I"$ROOT/Engine" -std=c11 -O2 -Wall -Wextra \
   -c "$ROOT/Engine/tests/tiff-import-tests.c" -o "$OUT/tiff-import-tests.o"
@@ -173,6 +178,23 @@ if [[ "$MODE" == test ]]; then
         "$OUT/glims-duotone-export-tests" "$OUT/libglimsengine.dylib" "$EXPORT_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/duotone-export-test.log"
   (( status == 0 )) || die "the Duotone export tests failed (status $status)"
+  # Babl takes any conversion path within its tolerance, picks one by
+  # timing and caches the choice where GIMP shares it. Rerun the exports
+  # against cached lossy paths so their pixel checks cannot depend on it.
+  for program in bitmap-psd-engine-tests duotone-export-tests; do
+    SEEDED_WORK="$WORK/$program-seeded"
+    mkdir -p "$SEEDED_WORK/home" "$SEEDED_WORK/cache"
+    seeded=(env HOME="$SEEDED_WORK/home" XDG_CACHE_HOME="$SEEDED_WORK/cache")
+    "${seeded[@]}" "$OUT/glims-babl-path-seed" seed || die "seeding babl's cache for $program failed"
+    "${seeded[@]}" "$OUT/glims-babl-path-seed" check || die "babl ignored the seeded paths for $program"
+    arguments=("$OUT/libglimsengine.dylib" "$SEEDED_WORK")
+    [[ "$program" == bitmap-psd-engine-tests ]] || arguments+=("$ROOT/Engine/tests/fixtures")
+    status=0
+    run_with_timeout 180 "$OUT/$program-seeded.log" \
+      "${seeded[@]}" "$OUT/glims-$program" "${arguments[@]}" || status=$?
+    cat "$OUT/$program-seeded.log"
+    (( status == 0 )) || die "$program failed with lossy babl paths cached (status $status)"
+  done
   COMPOSITE_WORK="$WORK/psd-composite"
   mkdir -p "$COMPOSITE_WORK/home" "$COMPOSITE_WORK/cache"
   status=0
