@@ -251,6 +251,10 @@ final class ImageDocument {
     }
 
     private(set) var info: EngineSession.ImageInfo
+    /// The image resolution last read with the rest of the state, or nil
+    /// when the adapter has no resolution slot. Image Information shows it;
+    /// Image Size needs it.
+    private(set) var resolution: EngineSession.ImageResolution?
     private(set) var layers: [EngineSession.Layer] = []
     /// Identities captured in the same native read as the displayed Lab rows.
     private(set) var labLayerIdentities: [Int32: UUID] = [:]
@@ -657,6 +661,7 @@ final class ImageDocument {
         procedureSensitivity = nil
         stateVersion += 1
         info = try session.info(image)
+        resolution = session.supportsImageResolution ? try session.imageResolution(image) : nil
         fileState.syncDirty(info.isDirty)
         colorInfo = try session.colorInfo(image)
         storage = try session.imageStorage(image)
@@ -4360,6 +4365,37 @@ final class ImageDocument {
     private func scale(_ command: SemanticImageCommand) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
+        run(semantic: command, command.apply)
+    }
+
+    /// Image > Image Size: why the resolution-aware sheet cannot run now, or
+    /// nil. The pixel-only fallback for older adapters does not use this.
+    var imageSizeRefusal: String? {
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Image Size is available for ordinary layered images only."
+        }
+        guard !isClosing, acceptsEdits else { return "Wait for the current operation to finish." }
+        return nil
+    }
+
+    /// Image > Image Size with Resample off: a new resolution, the pixel
+    /// dimensions unchanged, as one queued command and one undo step.
+    func setResolution(_ resolution: EngineSession.ImageResolution) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
+        let command = SemanticImageCommand.setResolution(x: resolution.x, y: resolution.y)
+        run(semantic: command, command.apply)
+    }
+
+    /// Image > Image Size with Resample on: a new resolution and pixel
+    /// size as one queued command and one undo step, using `interpolation`.
+    func resize(toWidth width: Int, height: Int, resolution: EngineSession.ImageResolution,
+                interpolation: EngineSession.Interpolation) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
+        let command = SemanticImageCommand.resize(width: width, height: height,
+                                                  xResolution: resolution.x, yResolution: resolution.y,
+                                                  interpolation: interpolation)
         run(semantic: command, command.apply)
     }
 

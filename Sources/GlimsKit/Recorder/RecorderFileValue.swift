@@ -315,6 +315,12 @@ enum RecorderFileCommand: Equatable {
     case scale(width: Int, height: Int)
     /// Image Size with an explicitly chosen resampling method.
     case scaleWithInterpolation(width: Int, height: Int, interpolation: LayerInterpolation)
+    /// Image Size with Resample off: a new resolution, the pixels fixed.
+    case setResolution(x: Double, y: Double)
+    /// Image Size with Resample on: a new resolution and pixel size as one
+    /// undo step.
+    case resize(width: Int, height: Int, xResolution: Double, yResolution: Double,
+                interpolation: LayerInterpolation)
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
     case crop(Rect)
     case layerProperties(LayerProperties)
@@ -374,7 +380,7 @@ enum RecorderFileCommand: Equatable {
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop: return true
         case .adjustment: return false
         }
     }

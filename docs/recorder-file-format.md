@@ -71,6 +71,8 @@ Commands have an owned `tag` and the following exact fields:
 | `scale` | integer `width`, `height` |
 | `smoothSelection` | integer `radius` from 1 through 100 (version 29) |
 | `adjustment` | `adjustment`, `background` (version 30) |
+| `setResolution` | `x`, `y` (version 31) |
+| `resize` | integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 31) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -638,3 +640,12 @@ that Remove Alpha composites on; the other adjustments ignore it. It requires a
 context binding whose target is the captured paint target (a layer, its
 editing mask or a channel), never the `.none` binding. Version 30 requires
 at least one successful adjustment; earlier versions reject the tag.
+
+## Image Size with a resolution (version 31)
+
+`setResolution` stores `x` and `y` in pixels per inch and keeps the pixels.
+`resize` stores `width`, `height`, `xResolution`, `yResolution` and the
+`interpolation` name, and replays as one Scale Image step. Both are target
+independent and need the `none` binding. Version 31 requires at least one
+of them; earlier versions reject the tags. Replay refuses on an adapter
+without facade slots 246-248.
