@@ -5139,7 +5139,8 @@ test_channels (const char *work)
                rows[i].color.blue > 0.9;
     CHECK (faded, "an opacity alone moves the color's alpha and keeps the color");
   }
-  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK, "the opacity step undoes");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "the opacity step undoes");
   memset (&change, 0, sizeof change);
   change.struct_size = sizeof change;
   change.properties  = GLIMS_CHANNEL_VISIBLE;

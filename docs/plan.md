@@ -6873,10 +6873,12 @@ Only the newest row can be withdrawn.
 Known limit: the row is reserved at admission, so any other command that
 finds nothing to change keeps it and replay refuses that recording.
 Examples are identical metadata, the current color profile, an alignment
-that moves nothing, Layer to Image Size at the image's bounds, a saved
-set that already matches and a plug-in dialog closed with Cancel. The
-row errs toward refusing replay: a
-missing one would replay a different image without saying so.
+that moves nothing, Layer to Image Size at the image's bounds and a
+saved set that already matches. A plug-in dialog closed with Cancel
+keeps its row too, even when the plug-in changed nothing, because
+nothing tells the app what a killed plug-in did. The row errs toward
+refusing replay: a missing one would replay a different image without
+saying so.
 `EngineSmokeTestRecorderGaps` (`GLIMS_SMOKE_CASE=recorder-gaps`) drives the
 commands through one recording and checks the ordered failed rows, the
 replay refusal, the refused and read-only commands, and one row for a whole
