@@ -6708,8 +6708,8 @@ opens and a changed history refuses rather than redirects it. While
 recording, Fade adds an explicit unsupported Recorder row.
 
 Not provided: Photoshop's Fade mode (the facade has no effect blend-mode
-setter yet), a live preview, and Fade after plug-in filters, adjustments
-merged into masks or channels, or Last Filter, which repeats plug-ins.
+setter yet), a live preview, and Fade after plug-in filters, plug-in
+repeats, or adjustments merged into masks or channels.
 
 ### Filter Maximum and Minimum (candidate)
 
@@ -6721,8 +6721,8 @@ edges and high precision so high-bit values are not binned. Only the
 radius, 1 to 100 whole pixels, is editable. No facade change: the panel
 uses the existing filter preview session and commits as one undo step
 like every other filter. The static "Other" submenu takes the catalog's
-and plug-ins' "Other" entries below the two dedicated items. The
-Recorder does not record them, and Last Filter does not repeat them.
+and plug-ins' "Other" entries below the two dedicated items. Each apply
+adds an explicit unsupported Recorder row; Last Filter repeats them.
 
 ### Polygon Lasso (candidate)
 
@@ -6848,3 +6848,21 @@ now has Aligned, on by default: the first accepted stroke after a source
 is set fixes the distance in whole pixels, as in GIMP's
 `app/paint/gimpsourcecore.c`. The canvas regression failed on main at
 80cc28e2 and passes with the change on GIMP 3.2.8. No facade change.
+
+### Last Filter repeats native filters (candidate)
+
+2026-11-22: Filter ▸ Last Filter, Last Filter Settings and Recently Used
+tracked only plug-ins, so Command-F repeated an older plug-in or nothing
+after a native apply. A new app-wide FilterCommands history now records
+every Filter-menu apply, plug-in or native, newest first, deduplicated
+per filter and capped at eight; Image ▸ Adjust entries, effect edits,
+Lab and ink paths never record. A native apply snapshots its committed
+settings inside finishFilter's queued job, whole typed settings for the
+closed-schema editors and editable properties by name for the rest.
+Command-F begins a preview with them as a preset and commits at once,
+with no panel, as one undo step through the usual begin and finish path;
+Fade and the Recorder treat it as a normal Apply. Option-Command-F
+reopens the filter's own editor seeded with the preset; a refused preset
+write aborts the session it began. Applies that chose a source drawable
+of the document through a source chooser stay recorded and named, with
+Last Filter disabled rather than replayed or replaced. No facade change.
