@@ -847,6 +847,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Line)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-gaps" {
+                try exerciseRecorderGaps(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder gaps)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "polygon-lasso" {
                 try exercisePolygonLasso(session, documents: documents)
                 print(failures == 0 ? "PASSED (Polygon Lasso)" : "FAILED: \(failures) failure(s)")
@@ -1278,6 +1283,7 @@ enum EngineSmokeTest {
             try exercisePendingEditScope(session, documents: documents)
             try exerciseHistoryAndSnapshots(session, work: work, documents: documents)
             try exerciseRecorderCapture(session, documents: documents)
+            try exerciseRecorderGaps(session, work: work, documents: documents)
             try exerciseRecorderReplay(session, work: work, documents: documents)
             try exerciseRecorderChannelSelection(session, work: work, documents: documents)
             try exerciseRecorderPalette(session, documents: documents)

@@ -6848,3 +6848,23 @@ now has Aligned, on by default: the first accepted stroke after a source
 is set fixes the distance in whole pixels, as in GIMP's
 `app/paint/gimpsourcecore.c`. The canvas regression failed on main at
 80cc28e2 and passes with the change on GIMP 3.2.8. No facade change.
+
+### Recorder silent gaps (2026-11-22)
+
+Every public editing command on `ImageDocument` that changes pixels,
+structure, selection, channels, paths, image settings or history now either
+records a semantic command or, while recording, reserves one explicit failed
+row naming the command, so a recording cannot look complete while omitting
+an edit. A command refused before admission, a preview, a cancel, a target
+pick, a view change, a save, an export and a read add no row, and replay's
+own commands add none. The helper is `recordUnsupportedCommand`;
+`runOnPaintTarget` and the two mask runners take the command's name so the
+row is reserved only after their own admission gates.
+`EngineSmokeTestRecorderGaps` (`GLIMS_SMOKE_CASE=recorder-gaps`) drives the
+commands through one recording and checks the ordered failed rows, the
+replay refusal, the refused and read-only commands, and one row for a whole
+Move drag.
+
+Verified: the `recorder-gaps` smoke case on GIMP 3.2.8 (61 checks, 0
+failures), which failed before the change, and `swift test` (1910 tests, 0
+failures). The full editor smoke is qualified per engine set in the PR.

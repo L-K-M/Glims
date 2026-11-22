@@ -39,9 +39,14 @@ Current capture covers these command families:
   an explicitly bound ink. See [native ink recording](ink-recorder.md).
 
 Other layer changes, other effects (including edits to an existing effect)
-and file operations remain outside this capture scope. A live recording
-belongs to one open image. To use a saved recording in another image, load
-it in that image and choose its targets.
+and file operations remain outside this capture scope. While recording, such
+an admitted command still reserves one explicit unsupported row that names
+the command, so a recording never looks complete while omitting an edit and
+replay refuses the log. A command refused before it is admitted, a preview,
+a cancel, a target pick, a view change, a save, an export and a read add no
+row, and replay's own commands add none. A live recording belongs to one
+open image. To use a saved recording in another image, load it in that
+image and choose its targets.
 
 Levels, Curves, Color Balance, Hue/Saturation, Brightness/Contrast, Gaussian
 Blur and Unsharp Mask record the final native settings when Apply is
