@@ -6514,10 +6514,11 @@ View ▸ Ruler Units and either ruler's context menu choose pixels, inches,
 centimeters, millimeters, points, picas or percent. The choice is one
 preference for every window. Ticks stay in image pixels, so guide drags
 are unchanged; only the steps and labels follow the unit. A horizontal
-ruler measures at the X resolution and a vertical one at Y, exchanged in
-a view turned by a quarter; at other angles each ruler keeps its own
-axis, as in GIMP. Percent is of the extent the ruler spans. A length on
-an image without a usable resolution reads in pixels.
+ruler measures at the X resolution and a vertical one at Y. In a turned
+view both measure the turned image's bounds and blend the two resolutions
+by the angle, as GIMP's dot-for-dot rulers do. Percent is of the extent
+the ruler spans. A length on an image without a usable resolution reads
+in pixels.
 
 Engine-version cost: none. The four qualified sets have the same guide
 and undo-group functions.

@@ -136,20 +136,23 @@ final class PixelRulerView: NSRulerView {
         return menu
     }
 
-    /// Whether a horizontal and vertical ruler measure each other's image
-    /// axis: the view is turned by a quarter.
-    static func axesSwap(rotationDegrees: Double) -> Bool {
-        abs(abs(rotationDegrees.truncatingRemainder(dividingBy: 180)) - 90) < 1e-6
+    /// Pixels per inch along a ruler of a view turned by `rotationDegrees`,
+    /// as GIMP's dot-for-dot rulers measure: the axes blend with the angle
+    /// and change places at a quarter turn.
+    static func resolution(x: Double, y: Double, horizontal: Bool, rotationDegrees: Double) -> Double {
+        let (along, across) = horizontal ? (x, y) : (y, x)
+        guard rotationDegrees != 0, x != y else { return along }
+        let radians = rotationDegrees * .pi / 180
+        return 1 / hypot(cos(radians) / along, sin(radians) / across)
     }
 
-    /// Pixels per inch along the image axis this ruler measures, from the
-    /// document's cached resolution. Like GIMP's rulers, a view turned by
-    /// another angle keeps the ruler's own axis.
+    /// Pixels per inch along this ruler, from the document's cached
+    /// resolution and the view's angle.
     private var axisResolution: Double? {
         guard let canvas, let resolution = canvas.document.resolution else { return nil }
         let degrees = (rulerSpace as? CanvasRotationView)?.rotationDegrees ?? 0
-        let measuresX = (orientation == .horizontalRuler) != Self.axesSwap(rotationDegrees: Double(degrees))
-        return measuresX ? resolution.x : resolution.y
+        return Self.resolution(x: resolution.x, y: resolution.y,
+                               horizontal: orientation == .horizontalRuler, rotationDegrees: degrees)
     }
 
     /// The image's extent along this ruler's axis, in pixels, from the

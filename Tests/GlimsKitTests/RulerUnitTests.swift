@@ -120,13 +120,24 @@ final class RulerUnitTests: XCTestCase {
     }
 
     @MainActor
-    func testTheAxesSwapOnlyAtQuarterTurns() {
+    func testATurnedViewMeasuresAtTheResolutionAlongEachRuler() {
+        func along(_ degrees: Double, horizontal: Bool, x: Double = 300, y: Double = 150) -> Double {
+            PixelRulerView.resolution(x: x, y: y, horizontal: horizontal, rotationDegrees: degrees)
+        }
+        for degrees in [0.0, 180, 360] {
+            XCTAssertEqual(along(degrees, horizontal: true), 300, accuracy: 1e-9, "\(degrees)")
+            XCTAssertEqual(along(degrees, horizontal: false), 150, accuracy: 1e-9, "\(degrees)")
+        }
         for degrees in [90.0, -90, 270, 450] {
-            XCTAssertTrue(PixelRulerView.axesSwap(rotationDegrees: degrees), "\(degrees)")
+            XCTAssertEqual(along(degrees, horizontal: true), 150, accuracy: 1e-9, "\(degrees)")
+            XCTAssertEqual(along(degrees, horizontal: false), 300, accuracy: 1e-9, "\(degrees)")
         }
-        for degrees in [0.0, 45, 89, 180, 360] {
-            XCTAssertFalse(PixelRulerView.axesSwap(rotationDegrees: degrees), "\(degrees)")
-        }
+        // GIMP's dot-for-dot rulers: 1 / sqrt((cos a / x)^2 + (sin a / y)^2).
+        XCTAssertEqual(along(45, horizontal: true), 189.7366596, accuracy: 1e-6)
+        XCTAssertEqual(along(45, horizontal: false), 189.7366596, accuracy: 1e-6)
+        XCTAssertEqual(along(30, horizontal: true), 226.7786838, accuracy: 1e-6)
+        XCTAssertEqual(along(30, horizontal: false), 166.4100589, accuracy: 1e-6)
+        XCTAssertEqual(along(33, horizontal: true, x: 72, y: 72), 72)
     }
 
     func testMenuTagsRoundTrip() {

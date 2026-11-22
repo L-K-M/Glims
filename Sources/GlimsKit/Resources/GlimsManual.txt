@@ -578,7 +578,8 @@ The rulers label in the unit chosen in View > Ruler Units or from a
 ruler's own menu (right-click or Control-click). Inches, centimeters,
 millimeters, points and picas follow the image's resolution, across on
 the top ruler and down on the side one; Percent is of the image's
-width or height. Drag out of a ruler to add a guide. View > Clear
+width or height. In a rotated view the rulers measure the rotated
+image's bounds. Drag out of a ruler to add a guide. View > Clear
 Guides removes all guides as one undo step; Lock Guides turns it off.
 
 Image > Histogram… shows the tonal distribution of the active layer,
