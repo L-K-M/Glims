@@ -93,7 +93,7 @@ final class ColorPaletteTests: XCTestCase {
 
     @MainActor
     func testPaletteEditsTheActiveToolColorAndFollowsOutsideChanges() throws {
-        let suite = "ColorPaletteTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("ColorPaletteTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let tools = ToolState()
@@ -136,7 +136,7 @@ final class ColorPaletteTests: XCTestCase {
 
     @MainActor
     func testAColorChangedBeforeTheViewLoadsReachesTheSliders() throws {
-        let suite = "ColorPaletteTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("ColorPaletteTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let tools = ToolState()
@@ -154,7 +154,7 @@ final class ColorPaletteTests: XCTestCase {
 
     @MainActor
     func testAFocusedFieldStillFollowsTheSliders() throws {
-        let suite = "ColorPaletteTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("ColorPaletteTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let tools = ToolState()
@@ -178,7 +178,7 @@ final class ColorPaletteTests: XCTestCase {
 
     @MainActor
     func testColorBarClicksPickTheActiveOrTheOtherColor() throws {
-        let suite = "ColorPaletteTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("ColorPaletteTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let tools = ToolState()
