@@ -6881,3 +6881,24 @@ Verified: the `recorder-gaps` smoke case on GIMP 3.2.8, which failed before
 the change, and `RecorderLogTests` for withdrawal. A cancelled plug-in or
 loader dialog is not driven by the smoke. Counts and the full editor smoke
 per engine set are in the PR.
+
+### Default palette groups (2026-11-22)
+
+The first-launch layout put nine palettes in one 330 pt group, which cut
+every tab to 32 pt, about two letters. It is now one column of two
+groups: Layers, Channels, Paths, History and Recorder, with Color,
+Swatches, Navigator and Info docked under them. Navigator opens 330 pt
+wide like the Recorder, because Rigi aligns docked groups on their left
+edges. `PaletteLayoutTests` computes the real tab rectangles and the
+column's width and height; `palette-keyboard-focus` checks the front tabs
+and that the groups do not cover each other. An arrangement saved by an
+earlier build keeps its groups until Window > Reset Palettes.
+
+### Gradient and Eyedropper modifiers (2026-11-22)
+
+Gradient ignored Shift, and the Eyedropper ignored Option. Shift now
+holds the drag and the applied gradient to a multiple of 45 degrees with
+the Line tool's geometry. Option at the Eyedropper's press sets the
+background color for that whole drag. Option sampling from a paint tool
+still sets the foreground color. `GLIMS_SMOKE_CASE=tool-modifiers` drives
+both through real canvas events. No facade change.

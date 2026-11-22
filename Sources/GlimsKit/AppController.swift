@@ -149,19 +149,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     /// The first-launch layout (docs/design.md, section 2): Tools at the
     /// top left with Tool Options docked under it as one column, Layers at
-    /// the top right. History and Recorder share Layers' and Paths' group rather than
-    /// adding a column. Rigi keeps whatever the person arranges since, and
-    /// a frame saved by an earlier build still places its palette once.
+    /// the top right with Color docked under it. The right column is two
+    /// groups because nine tabs in one left two letters of each title. Both
+    /// are 330 pt wide, the Recorder's and the Navigator's width, since
+    /// docked groups align on their left edges. Rigi keeps whatever the
+    /// person arranges since, and a frame saved by an earlier build still
+    /// places its palette once.
     static let defaultPaletteLayout = [
         PaletteGroupDefault([ToolsPaletteController.definition.kind], placement: .topLeading),
         PaletteGroupDefault([ToolOptionsPaletteController.definition.kind],
                             placement: .docked(below: ToolsPaletteController.definition.kind)),
         PaletteGroupDefault([LayersPaletteController.definition.kind, ChannelsPaletteController.definition.kind,
                              PathsPaletteController.definition.kind,
-                             HistoryPaletteController.definition.kind, RecorderPaletteController.definition.kind,
-                             InfoPaletteController.definition.kind, NavigatorPaletteController.definition.kind,
-                             ColorPaletteController.definition.kind, SwatchesPaletteController.definition.kind],
+                             HistoryPaletteController.definition.kind, RecorderPaletteController.definition.kind],
                             placement: .topTrailing),
+        PaletteGroupDefault([ColorPaletteController.definition.kind, SwatchesPaletteController.definition.kind,
+                             NavigatorPaletteController.definition.kind, InfoPaletteController.definition.kind],
+                            placement: .docked(below: LayersPaletteController.definition.kind)),
     ]
 
     /// Tab hides every palette and Shift-Tab every palette but Tools; either
@@ -493,9 +497,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         // new document's frame. Fitting before this point used the old
         // viewport and could leave the canvas underneath palette columns.
         PaletteCenter.shared.setDefaultLayout(Self.defaultPaletteLayout)
-        // Paths, History and Recorder before Layers, so Layers is the tab their
-        // shared group shows.
-        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, recorderPalette, infoPalette, navigatorPalette, colorPalette, swatchesPalette, layersPalette]
+        // A group shows the palette presented last: Color and Layers come
+        // after the tabs they share a group with.
+        for palette in [toolsPalette, toolOptionsPalette, channelsPalette, pathsPalette, historyPalette, recorderPalette, infoPalette, navigatorPalette, swatchesPalette, colorPalette, layersPalette]
         where !palette.isPresented {
             palette.showPanel()
         }

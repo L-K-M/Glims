@@ -62,7 +62,7 @@ final class EngineLibraryTests: XCTestCase {
                           environment: [String: String] = [:],
                           defaults: UserDefaults? = nil,
                           bundle: Bundle? = nil) -> String? {
-        let suite = "glims-engine-tests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("glims-engine-tests")
         let resolved = defaults ?? UserDefaults(suiteName: suite)!
         defer { resolved.removePersistentDomain(forName: suite) }
         return EngineLibrary.configuredPath(environment: environment,
@@ -128,7 +128,7 @@ final class EngineLibraryTests: XCTestCase {
     func testUserDefaultBeatsSourceDiscovery() throws {
         let root = try makeCheckout()
         try makeFile(".build/debug/Glims", in: root)
-        let suite = "glims-engine-tests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("glims-engine-tests")
         let defaults = UserDefaults(suiteName: suite)!
         defaults.set("/tmp/from-defaults.dylib", forKey: EngineLibrary.defaultsKey)
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -138,7 +138,7 @@ final class EngineLibraryTests: XCTestCase {
     }
 
     func testEnvironmentBeatsUserDefault() throws {
-        let suite = "glims-engine-tests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("glims-engine-tests")
         let defaults = UserDefaults(suiteName: suite)!
         defaults.set("/tmp/from-defaults.dylib", forKey: EngineLibrary.defaultsKey)
         defer { defaults.removePersistentDomain(forName: suite) }

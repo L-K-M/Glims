@@ -16,7 +16,7 @@ extension EngineSmokeTest {
                                       documents: DocumentList) throws {
         _ = session
         _ = documents
-        let suite = "ch.lkmc.Glims.smoke.menuShortcuts.\(ProcessInfo.processInfo.processIdentifier)"
+        let suite = ScratchDefaults.suiteName("smoke-menuShortcuts")
         guard let defaults = UserDefaults(suiteName: suite) else {
             check(false, "private UserDefaults suite for the smoke test")
             return
