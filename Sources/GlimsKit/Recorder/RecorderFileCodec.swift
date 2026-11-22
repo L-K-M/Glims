@@ -718,7 +718,7 @@ enum RecorderFileCodec {
                                            interpolation: interpolation)
         case "setResolution":
             guard version >= imageResolutionVersion else {
-                throw RecorderFileError.invalid("Image Size with a resolution needs recording version 30.")
+                throw RecorderFileError.invalid("Image Size with a resolution needs recording version 31.")
             }
             let value = try Object(node, required: ["tag", "x", "y"])
             let x = try number(value.get("x")), y = try number(value.get("y"))
@@ -728,7 +728,7 @@ enum RecorderFileCodec {
             return .setResolution(x: x, y: y)
         case "resize":
             guard version >= imageResolutionVersion else {
-                throw RecorderFileError.invalid("Image Size with a resolution needs recording version 30.")
+                throw RecorderFileError.invalid("Image Size with a resolution needs recording version 31.")
             }
             let value = try Object(node, required: ["tag", "width", "height", "xResolution", "yResolution", "interpolation"])
             guard let interpolation = RecorderFileCommand.LayerInterpolation(rawValue: try string(value.get("interpolation"))) else {

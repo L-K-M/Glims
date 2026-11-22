@@ -1804,7 +1804,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         ImageSizeForm.present(for: imageDocument, on: window)
     }
 
-    /// The pixel-only Image Size sheet for adapters without slots 245-247.
+    /// The pixel-only Image Size sheet for adapters without slots 246-248.
     private func askSizeFallback() {
         guard imageDocument.session.supportsScaleInterpolation else {
             return askSize("Image Size", constrain: true) { [weak self] width, height in

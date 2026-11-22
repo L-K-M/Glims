@@ -1,11 +1,11 @@
 import XCTest
 @testable import GlimsKit
 
-/// Recording version 30: Image Size's resolution-only and combined
+/// Recording version 31: Image Size's resolution-only and combined
 /// commands round trip through the codec and prepare for replay.
 final class ImageResolutionRecorderTests: XCTestCase {
     private func bytes(_ text: String) -> Data { Data(text.utf8) }
-    private func document(_ command: String, version: Int = 30,
+    private func document(_ command: String, version: Int = 31,
                           binding: String = #"{"kind":"none"}"#) -> String {
         #"{"format":"ch.lkmc.Glims.recording","version":"# + String(version)
             + #","recordingID":"11111111-1111-1111-1111-111111111111","name":"Resolution","origin":{"imageLabel":"A","initialWidth":1200,"initialHeight":900},"symbols":[],"records":[{"ordinal":0,"outcome":"success","command":"#
@@ -19,7 +19,7 @@ final class ImageResolutionRecorderTests: XCTestCase {
             return XCTFail("The resolution-only command was lost")
         }
         let encoded = try RecorderFileCodec.encode(value)
-        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":30"#))
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":31"#))
         XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
         let prepared = try RecorderFileSemanticBridge.prepare(value)
         guard case .success(.setResolution(150, 150)) = prepared.log.records[0].resolution else {
@@ -42,10 +42,10 @@ final class ImageResolutionRecorderTests: XCTestCase {
 
     func testVersionsAndBindingsReject() {
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
-            #"{"tag":"setResolution","x":150,"y":150}"#, version: 29))))
+            #"{"tag":"setResolution","x":150,"y":150}"#, version: 30))))
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"resize","width":1,"height":1,"xResolution":150,"yResolution":150,"interpolation":"cubic"}"#,
-            version: 29))))
+            version: 30))))
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"scale","width":1,"height":1}"#))))
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(

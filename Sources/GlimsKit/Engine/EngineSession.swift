@@ -5272,7 +5272,7 @@ final class EngineSession: @unchecked Sendable {
         case clean = 1
     }
 
-    /// Whether this adapter has the image resolution slots (245-247).
+    /// Whether this adapter has the image resolution slots (246-248).
     /// Older adapters keep the pixel-only Image Size sheet and refuse the
     /// resolution commands cleanly.
     var supportsImageResolution: Bool {
@@ -5287,7 +5287,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     /// Reads the image resolution in pixels per inch. Refuses on adapters
-    /// without slot 245.
+    /// without slot 246.
     func imageResolution(_ image: Int32) throws -> ImageResolution {
         guard supportsImageResolution, let read = api.image_resolution else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),

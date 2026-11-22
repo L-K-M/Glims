@@ -3,7 +3,7 @@ import CGlimsEngine
 
 @MainActor
 extension EngineSmokeTest {
-    /// Image > Image Size with the resolution slots (245-247): the menu
+    /// Image > Image Size with the resolution slots (246-248): the menu
     /// item validates for an ordinary image, File > New's panel reads a
     /// resolution with a unit and a width/height unit, and the document's
     /// commands change the resolution alone or the size and resolution

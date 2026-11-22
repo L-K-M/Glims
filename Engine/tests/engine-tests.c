@@ -13488,7 +13488,7 @@ test_image_new_filled (void)
          "image_new_filled refuses a missing or non-finite color, unknown contents, a bad size and no output");
 }
 
-/* Slots 245-247: Image > Image Size. A new image carries the engine's
+/* Slots 246-248: Image > Image Size. A new image carries the engine's
  * 300 ppi template default. Setting the resolution is one undo step and
  * leaves the pixels alone; a clean set leaves no step; the combined
  * resize is one step and undo restores both the size and the resolution. */
@@ -13505,7 +13505,7 @@ test_image_resolution (const char *work)
   if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_resize) + sizeof api->image_resize ||
       ! api->image_resolution || ! api->image_set_resolution || ! api->image_resize)
     {
-      CHECK (false, "the adapter exports slots 245-247 image resolution");
+      CHECK (false, "the adapter exports slots 246-248 image resolution");
       return;
     }
 
