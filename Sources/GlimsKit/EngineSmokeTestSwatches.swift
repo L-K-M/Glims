@@ -7,7 +7,7 @@ extension EngineSmokeTest {
     /// space adds the foreground color, Shift-click replaces and
     /// Command-click deletes a swatch, and none of it touches the image.
     static func exerciseSwatches(_ session: EngineSession, documents: DocumentList) throws {
-        let suite = "ch.lkmc.Glims.smoke.swatches.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-swatches")
         guard let defaults = UserDefaults(suiteName: suite) else { return check(false, "a swatch defaults suite") }
         defer { defaults.removePersistentDomain(forName: suite) }
         let image = try session.newImage(width: 40, height: 30)

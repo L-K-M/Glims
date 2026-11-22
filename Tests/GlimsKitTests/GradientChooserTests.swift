@@ -19,7 +19,7 @@ final class GradientChooserTests: XCTestCase {
     }
 
     private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
-        let suite = "ch.lkmc.Glims.tests.gradientchooser.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("tests-gradientchooser")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         try body(defaults)
