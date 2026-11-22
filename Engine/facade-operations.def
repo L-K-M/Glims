@@ -245,3 +245,6 @@ GLIMS_FACADE(image_rotate_arbitrary, api_image_rotate_arbitrary, IMAGE, ORDINARY
 GLIMS_FACADE(image_align_layers, api_image_align_layers, IMAGE, ORDINARY)
 GLIMS_FACADE(layer_draw_line, api_layer_draw_line, IMAGE, ORDINARY)
 GLIMS_FACADE(adjustment_apply, api_adjustment_apply, IMAGE, ORDINARY)
+GLIMS_FACADE(image_resolution, api_image_resolution, IMAGE, COMPONENT)
+GLIMS_FACADE(image_set_resolution, api_image_set_resolution, IMAGE, ORDINARY)
+GLIMS_FACADE(image_resize, api_image_resize, IMAGE, ORDINARY)

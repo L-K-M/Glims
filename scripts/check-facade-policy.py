@@ -37,6 +37,7 @@ def check(root=ROOT):
     component.add('image_ink_channel_identity')
     component.add('image_lab_axes')
     component.add('image_storage_info')
+    component.add('image_resolution')
     component.update({'image_lab_layer_identity', 'image_fill_lab_layer', 'image_fill_lab_layer_srgb',
                       'image_sample_layered_lab', 'image_fill_lab_layer_srgb_empty_selection',
                       'image_change_lab_layer_properties', 'image_lab_layer_snapshot'})

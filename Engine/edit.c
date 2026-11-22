@@ -43,6 +43,7 @@
 #include "core/gimpimage-transform.h"
 #include "core/gimpimage-merge.h"
 #include "core/gimpimage-undo.h"
+#include "core/gimpundostack.h"
 #include "core/gimpitem.h"
 #include "core/gimplayer.h"
 #include "core/gimplayermask.h"
@@ -1448,6 +1449,139 @@ glims_image_scale (GlimsEngine  *engine,
   /* With the interpolation the engine's preferences name. */
   return glims_image_scale_with_interpolation (engine, id, width, height,
                                                GLIMS_INTERPOLATION_DEFAULT, error);
+}
+
+/* The image resolution, in pixels per inch. GIMP's own bounds live in
+ * libgimpbase/gimplimits.h; the facade owns the published copies. */
+GlimsStatus
+glims_image_resolution (GlimsEngine  *engine,
+                        GlimsImageID  id,
+                        double       *x_resolution,
+                        double       *y_resolution,
+                        char        **error)
+{
+  GlimsStatus status;
+  GimpImage  *image = writable_image (engine, id, &status);
+
+  if (! image)
+    return status;
+  if (! x_resolution || ! y_resolution)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+
+  gimp_image_get_resolution (image, x_resolution, y_resolution);
+  return GLIMS_STATUS_OK;
+}
+
+/* True when `a` and `b` are the same resolution for GIMP's own change
+ * test (core/gimpimage.c gimp_image_set_resolution). */
+static gboolean
+same_resolution (double a, double b)
+{
+  return ABS (a - b) < 1e-5;
+}
+
+static GlimsStatus
+invalid_resolution (char **error)
+{
+  if (error)
+    *error = strdup ("The resolution must be between 0.005 and 1048576 pixels per inch.");
+  return GLIMS_STATUS_INVALID_ARGUMENT;
+}
+
+GlimsStatus
+glims_image_set_resolution (GlimsEngine  *engine,
+                               GlimsImageID  id,
+                               double        x_resolution,
+                               double        y_resolution,
+                               uint32_t      edit,
+                               char        **error)
+{
+  GlimsStatus    status;
+  GimpImage     *image = writable_image (engine, id, &status);
+  GimpUndoStack *undos;
+  double         current_x, current_y;
+
+  if (! image)
+    return status;
+  if (edit != GLIMS_RESOLUTION_UNDOABLE && edit != GLIMS_RESOLUTION_CLEAN)
+    {
+      if (error) *error = strdup ("Unknown resolution edit mode.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! isfinite (x_resolution) || ! isfinite (y_resolution) ||
+      x_resolution < GLIMS_MIN_RESOLUTION || x_resolution > GLIMS_MAX_RESOLUTION ||
+      y_resolution < GLIMS_MIN_RESOLUTION || y_resolution > GLIMS_MAX_RESOLUTION)
+    return invalid_resolution (error);
+
+  if (edit == GLIMS_RESOLUTION_CLEAN)
+    {
+      /* File > New: the resolution is part of the image's initial state,
+       * so it must not leave an undo step. Only a freshly created image
+       * qualifies; one that already has history keeps that history. */
+      undos = gimp_image_get_undo_stack (image);
+      if (! undos || gimp_undo_stack_get_depth (undos) != 0)
+        return glims_fail (error, NULL, "The resolution can only be set without an undo step on a new image.");
+      gimp_image_undo_disable (image);
+      gimp_image_set_resolution (image, x_resolution, y_resolution);
+      gimp_image_undo_enable (image);
+      gimp_image_clean_all (image);
+      return GLIMS_STATUS_OK;
+    }
+
+  gimp_image_get_resolution (image, &current_x, &current_y);
+  if (same_resolution (x_resolution, current_x) && same_resolution (y_resolution, current_y))
+    return GLIMS_STATUS_OK;
+
+  gimp_image_set_resolution (image, x_resolution, y_resolution);
+  gimp_image_flush (image);
+  return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_resize (GlimsEngine  *engine,
+                      GlimsImageID  id,
+                      int32_t       width,
+                      int32_t       height,
+                      double        x_resolution,
+                      double        y_resolution,
+                      uint32_t      interpolation,
+                      char        **error)
+{
+  GlimsStatus           status;
+  GimpImage            *image = writable_image (engine, id, &status);
+  GimpInterpolationType type;
+  double                current_x, current_y;
+
+  if (! image)
+    return status;
+  if (! native_interpolation (engine, interpolation, &type))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
+    {
+      if (error) *error = strdup ("The new size must be between 1 and 524288 pixels.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! isfinite (x_resolution) || ! isfinite (y_resolution) ||
+      x_resolution < GLIMS_MIN_RESOLUTION || x_resolution > GLIMS_MAX_RESOLUTION ||
+      y_resolution < GLIMS_MIN_RESOLUTION || y_resolution > GLIMS_MAX_RESOLUTION)
+    return invalid_resolution (error);
+
+  gimp_image_get_resolution (image, &current_x, &current_y);
+  if (width == gimp_image_get_width (image) && height == gimp_image_get_height (image) &&
+      same_resolution (x_resolution, current_x) && same_resolution (y_resolution, current_y))
+    return GLIMS_STATUS_OK;
+
+  /* GIMP's Image Size callback (app/actions/image-commands.c
+   * image_scale_callback) opens one Scale Image undo group, sets the
+   * resolution, then scales only when the dimensions change. */
+  if (! gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_IMAGE_SCALE, "Scale Image"))
+    return glims_fail (error, NULL, "The image history could not group the size change.");
+  gimp_image_set_resolution (image, x_resolution, y_resolution);
+  if (width != gimp_image_get_width (image) || height != gimp_image_get_height (image))
+    gimp_image_scale (image, width, height, type, NULL);
+  gimp_image_undo_group_end (image);
+  gimp_image_flush (image);
+  return GLIMS_STATUS_OK;
 }
 
 static GlimsStatus

@@ -1788,7 +1788,24 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Image Size offers Photoshop's resampling choice when the adapter
     /// can honor it; older adapters keep the engine's preferred method.
+    /// An adapter with the resolution slots gets the full sheet: pixels,
+    /// print size, resolution and the Resample choice.
     @objc func imageSize(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy else { return }
+        endPendingEdits()
+        guard imageDocument.session.supportsImageResolution, imageDocument.resolution != nil else {
+            return askSizeFallback()
+        }
+        if let reason = imageDocument.imageSizeRefusal {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        ImageSizeForm.present(for: imageDocument, on: window)
+    }
+
+    /// The pixel-only Image Size sheet for adapters without slots 245-247.
+    private func askSizeFallback() {
         guard imageDocument.session.supportsScaleInterpolation else {
             return askSize("Image Size", constrain: true) { [weak self] width, height in
                 self?.imageDocument.scale(toWidth: width, height: height)
@@ -3233,6 +3250,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let refusal = imageDocument.histogramRefusal
             menuItem.toolTip = refusal
             return refusal == nil && window?.attachedSheet == nil
+        case #selector(imageSize(_:)):
+            // The resolution-aware sheet needs the resolution slots and an
+            // editable ordinary image; older adapters keep the pixel-only
+            // sheet and its usual gate.
+            if imageDocument.session.supportsImageResolution, imageDocument.resolution != nil {
+                let refusal = imageDocument.imageSizeRefusal
+                menuItem.toolTip = refusal
+                return refusal == nil && window?.attachedSheet == nil
+            }
+            return !editingBlocked
         case #selector(imageInformation(_:)):
             // Read-only and cheap: the sheet shows the cached state,
             // so it works wherever another sheet does not already.

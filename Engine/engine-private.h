@@ -731,6 +731,13 @@ GlimsStatus glims_image_scale      (GlimsEngine *e, GlimsImageID image, int32_t 
                                     char **error);
 GlimsStatus glims_image_scale_with_interpolation (GlimsEngine *e, GlimsImageID image, int32_t width,
                                                   int32_t height, uint32_t interpolation, char **error);
+GlimsStatus glims_image_resolution (GlimsEngine *e, GlimsImageID image, double *x_resolution,
+                                     double *y_resolution, char **error);
+GlimsStatus glims_image_set_resolution (GlimsEngine *e, GlimsImageID image, double x_resolution,
+                                        double y_resolution, uint32_t edit, char **error);
+GlimsStatus glims_image_resize (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
+                                 double x_resolution, double y_resolution,
+                                 uint32_t interpolation, char **error);
 GlimsStatus glims_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
                                       int32_t count, GlimsItemID reference, uint32_t alignment,
                                       char **error);

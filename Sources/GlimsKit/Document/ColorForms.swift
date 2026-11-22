@@ -131,12 +131,34 @@ enum ColorForms {
         return rows
     }
 
+    /// The resolution and print size rows, when the adapter can read the
+    /// resolution. The print size uses inches; the sheet is read-only.
+    static func resolutionRows(width: Int, height: Int, resolution: EngineSession.ImageResolution)
+    -> [(label: String, value: String)] {
+        let model = ImageSizeModel(width: width, height: height,
+                                   resolutionX: resolution.x, resolutionY: resolution.y)
+        guard let model else {
+            return [("Resolution", String(format: "%.2f x %.2f ppi", resolution.x, resolution.y))]
+        }
+        let printWidth = model.printWidth(in: .inches)
+        let printHeight = model.printHeight(in: .inches)
+        return [
+            (label: "Resolution", value: String(format: "%.2f x %.2f ppi", resolution.x, resolution.y)),
+            (label: "Print size", value: String(format: "%.2f x %.2f in", printWidth, printHeight)),
+        ]
+    }
+
     /// Image ▸ Image Information…: a read-only sheet of the mode,
     /// precision and effective profile the document last saw — the same
-    /// cache the window title and Mode checkmarks show.
+    /// cache the window title and Mode checkmarks show — plus the
+    /// resolution and print size when the adapter can read them.
     static func presentInformation(for document: ImageDocument, on window: NSWindow) {
         guard window.attachedSheet == nil else { return }
-        let rows = informationRows(colorInfo: document.colorInfo)
+        var rows = informationRows(colorInfo: document.colorInfo)
+        if let resolution = document.resolution {
+            rows.append(contentsOf: resolutionRows(width: document.info.width, height: document.info.height,
+                                                   resolution: resolution))
+        }
         let grid = NSGridView(views: rows.map {
             [NSTextField(labelWithString: "\($0.label):"), NSTextField(labelWithString: $0.value)]
         })

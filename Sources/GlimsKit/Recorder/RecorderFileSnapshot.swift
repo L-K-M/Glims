@@ -143,6 +143,11 @@ extension RecorderFileCommand {
         case .scale(let width, let height): self = .scale(width: width, height: height)
         case .scaleWithInterpolation(let width, let height, let interpolation):
             self = .scaleWithInterpolation(width: width, height: height, interpolation: .init(interpolation))
+        case .setResolution(let x, let y):
+            self = .setResolution(x: x, y: y)
+        case .resize(let width, let height, let xResolution, let yResolution, let interpolation):
+            self = .resize(width: width, height: height, xResolution: xResolution,
+                           yResolution: yResolution, interpolation: .init(interpolation))
         case .resizeCanvas(let width, let height, let offset, let fill): self = .resizeCanvas(width: width, height: height, offset: point(offset), fill: fill)
         case .crop(let value): self = .crop(rect(value))
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,

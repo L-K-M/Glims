@@ -6871,3 +6871,25 @@ catalog and plug-in merges leave them in place across rebuilds.
 GIMP 3.0.8 equalizes in linear light and 3.2 in non-linear values
 (upstream #14486), so Equalize gives different pixels on 3.0.8; the
 conformance test expects each engine's own values.
+
+### Image resolution and print size (2026-11-22)
+
+Additive facade slots 246-248: `image_resolution` reads the ppi pair,
+`image_set_resolution` sets it (UNDOABLE pushes GIMP's own "Change Image
+Resolution" step, CLEAN is the File > New path and refuses an image that
+already has history), and `image_resize` sets the resolution and resamples
+to new pixel dimensions inside one "Scale Image" undo group, following
+GIMP's `image_scale_callback` in app/actions/image-commands.c. The bounds
+GIMP_MIN_RESOLUTION..GIMP_MAX_RESOLUTION are owned at the facade as
+GLIMS_MIN_RESOLUTION/GLIMS_MAX_RESOLUTION; no-op changes add no undo step.
+The sheet (ImageSizeForm over the pure ImageSizeModel) covers pixels, print
+width/height in five units, resolution in two units, Constrain proportions
+and Resample; File > New takes a resolution unit and a size unit at a 72 ppi
+default; Image Information shows resolution and print size. The Recorder
+captures both commands at format version 31. Verified on GIMP_3_2_8 by
+`scripts/build-adapter.sh --test` (resolution read/set, one-undo grouping,
+undo/redo of size and resolution, refusals, XCF round trip, PNG export and
+import within the pixels-per-metre rounding) and by `swift test` on the
+ImageSizeModel and recorder codec suites; the `image-resolution` smoke case
+exercises the menu validation and document commands (not run here: GUI
+checks belong to the caller).

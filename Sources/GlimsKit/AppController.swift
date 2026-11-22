@@ -397,7 +397,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             workspace?.close()
             workspace = nil
             if pendingOpenURLs.isEmpty {
-                createDocument(width: Self.defaultImageSize.width, height: Self.defaultImageSize.height)
+                createDocument(width: Self.defaultImageSize.width, height: Self.defaultImageSize.height,
+                               resolution: .init(x: ImageSizeModel.defaultResolution,
+                                                y: ImageSizeModel.defaultResolution))
             } else {
                 let urls = pendingOpenURLs
                 pendingOpenURLs.removeAll()
@@ -537,7 +539,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         if let newImagePanel { newImagePanel.showWindow(nil); return }
         let panel = NewImagePanel(supportsLab: session.supportsLabCreation
                                   && session.supportsLabAxes && session.supportsLabFill,
-                                  supportsContents: session.supportsImageNewFilled)
+                                  supportsContents: session.supportsImageNewFilled,
+                                  supportsResolution: session.supportsImageResolution)
         panel.onCreate = { [weak self] settings in
             // The background color at Create, like Photoshop; later changes do not apply.
             let contents: EngineSession.NewImageContents
@@ -548,7 +551,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             self?.createDocument(width: settings.width, height: settings.height,
                                  kind: settings.kind, component: settings.component,
                                  channelCount: settings.channelCount, profileICC: settings.profileICC,
-                                 contents: contents)
+                                 contents: contents,
+                                 resolution: .init(x: settings.resolutionX, y: settings.resolutionY))
         }
         panel.onClose = { [weak self] in self?.newImagePanel = nil }
         newImagePanel = panel
@@ -557,25 +561,38 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
 
     private func createDocument(width: Int, height: Int, kind: NewImageSettings.Kind = .rgb,
                                 component: EngineSession.ColorComponent = .u8, channelCount: Int = 4,
-                                profileICC: Data? = nil, contents: EngineSession.NewImageContents = .white) {
+                                profileICC: Data? = nil, contents: EngineSession.NewImageContents = .white,
+                                resolution: EngineSession.ImageResolution? = nil) {
         guard let session, !terminationRequested else { return }
         pendingFileOperations += 1
         EngineActivity.shared.performWhenReady(label: "Creating an image", work: {
             let result = Result<Int32, Error> {
+                let image: Int32
                 switch kind {
-                case .rgb: return try session.newImage(width: width, height: height, contents: contents)
+                case .rgb: image = try session.newImage(width: width, height: height, contents: contents)
                 case .multichannel:
-                    return try session.newMultichannelImage(width: width, height: height,
+                    image = try session.newMultichannelImage(width: width, height: height,
                                                             component: component, channelCount: channelCount)
                 case .cmyk:
                     guard let profileICC else {
                         throw EngineSession.EngineError(status: 1, message: "Choose a CMYK source profile before creating the image.")
                     }
-                    return try session.newCmykImage(width: width, height: height,
+                    image = try session.newCmykImage(width: width, height: height,
                                                    component: component, profileICC: profileICC)
                 case .lab:
-                    return try session.newLabImage(width: width, height: height, component: component)
+                    image = try session.newLabImage(width: width, height: height, component: component)
                 }
+                // The resolution is part of a new image's initial state, so
+                // it is set cleanly: no undo step, like the pixels.
+                if let resolution, session.supportsImageResolution {
+                    do {
+                        try session.setResolution(image, x: resolution.x, y: resolution.y, edit: .clean)
+                    } catch {
+                        try? session.closeImage(image)
+                        throw error
+                    }
+                }
+                return image
             }
             DispatchQueue.main.async {
                 self.pendingFileOperations -= 1

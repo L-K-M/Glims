@@ -99,6 +99,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, adjustmentVersion)
             case .success(.scaleWithInterpolation, _):
                 fileVersion = max(fileVersion, scaleInterpolationVersion)
+            case .success(.setResolution, _), .success(.resize, _):
+                fileVersion = max(fileVersion, imageResolutionVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -346,6 +348,12 @@ extension RecorderFileCodec {
         case .scale(let width, let height): return .object(["tag": .string("scale"), "width": j(width), "height": j(height)])
         case .scaleWithInterpolation(let width, let height, let interpolation):
             return .object(["tag": .string("scaleWithInterpolation"), "width": j(width), "height": j(height),
+                            "interpolation": .string(interpolation.rawValue)])
+        case .setResolution(let x, let y):
+            return .object(["tag": .string("setResolution"), "x": try d(x), "y": try d(y)])
+        case .resize(let width, let height, let xResolution, let yResolution, let interpolation):
+            return .object(["tag": .string("resize"), "width": j(width), "height": j(height),
+                            "xResolution": try d(xResolution), "yResolution": try d(yResolution),
                             "interpolation": .string(interpolation.rawValue)])
         case .resizeCanvas(let width, let height, let offset, let color):
             return .object(["tag": .string("resizeCanvas"), "width": j(width), "height": j(height), "offset": try pointJSON(offset), "fill": try colorJSON(color)])

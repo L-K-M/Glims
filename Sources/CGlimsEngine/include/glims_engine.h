@@ -324,6 +324,17 @@ typedef enum GlimsSelectCommand {
 /* Select > Modify > Smooth accepts radii 1 ... 100, as Photoshop does. */
 #define GLIMS_SELECTION_SMOOTH_MAX_RADIUS 100
 
+/* The image resolution bounds, owned here from GIMP's
+ * libgimpbase/gimplimits.h. The canonical unit is pixels per inch. */
+#define GLIMS_MIN_RESOLUTION 5e-3
+#define GLIMS_MAX_RESOLUTION 1048576.0
+
+/* How image_set_resolution records its change. */
+typedef enum GlimsResolutionEdit {
+  GLIMS_RESOLUTION_UNDOABLE = 0,
+  GLIMS_RESOLUTION_CLEAN = 1
+} GlimsResolutionEdit;
+
 typedef struct GlimsSelectOptions {
   uint32_t struct_size;    /* sizeof (GlimsSelectOptions) */
   uint32_t operation;      /* GlimsSelectOperation */
@@ -4612,6 +4623,41 @@ typedef struct GlimsEngineAPI {
    * nothing: no undo step, no dirty mark, no selection change. */
   GlimsStatus (*adjustment_apply) (GlimsEngine *engine, GlimsImageID image, uint32_t adjustment,
                                    const GlimsColor *background, char **error);
+  /* Slot 246: read the image resolution in pixels per inch. `x_resolution`
+   * and `y_resolution` must both be non-NULL and receive finite values in
+   * GLIMS_MIN_RESOLUTION ... GLIMS_MAX_RESOLUTION. An unknown image is
+   * NOT_FOUND, a busy engine is BUSY, a short output is INVALID_ARGUMENT
+   * and the image is unchanged. Component layouts may read it. */
+  GlimsStatus (*image_resolution) (GlimsEngine *engine, GlimsImageID image,
+                                   double *x_resolution, double *y_resolution,
+                                   char **error);
+  /* Slot 247: set the image resolution in pixels per inch without changing
+   * the pixel dimensions, as Image > Image Size does with Resample off.
+   * `edit` is a GlimsResolutionEdit: UNDOABLE pushes one undo step named
+   * "Change Image Resolution" (a value already held, within GIMP's 1e-5
+   * comparison, adds none); CLEAN is the creation path and leaves no undo
+   * step, and refuses unless the image has no undo history yet. Values
+   * must be finite and within GLIMS_MIN_RESOLUTION ...
+   * GLIMS_MAX_RESOLUTION, else INVALID_ARGUMENT; an unknown image is
+   * NOT_FOUND; a busy engine is BUSY. Every refusal changes nothing. */
+  GlimsStatus (*image_set_resolution) (GlimsEngine *engine, GlimsImageID image,
+                                       double x_resolution, double y_resolution,
+                                       uint32_t edit, char **error);
+  /* Slot 248: Image > Image Size. Sets the resolution and, when the pixel
+   * dimensions also change, resamples to `width` x `height` with
+   * `interpolation` (a GlimsInterpolation; DEFAULT uses the engine's
+   * preference), as ONE undo step named "Scale Image" — GIMP's own Image
+   * Size callback groups the two. A change that leaves both the dimensions
+   * and the resolution (within GIMP's 1e-5 comparison) untouched adds no
+   * undo step. `width` and `height` are 1 ... GIMP_MAX_IMAGE_SIZE and the
+   * resolutions are finite and within GLIMS_MIN_RESOLUTION ...
+   * GLIMS_MAX_RESOLUTION, else INVALID_ARGUMENT; an unknown interpolation
+   * is INVALID_ARGUMENT; an unknown image is NOT_FOUND; a busy engine is
+   * BUSY. Every refusal changes nothing. */
+  GlimsStatus (*image_resize) (GlimsEngine *engine, GlimsImageID image,
+                               int32_t width, int32_t height,
+                               double x_resolution, double y_resolution,
+                               uint32_t interpolation, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */
