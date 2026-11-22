@@ -80,6 +80,8 @@ enum RecorderFileSemanticBridge {
             case .fromAlpha: selection = .fromAlpha
             }
             return .selectCommand(selection, radius: radius)
+        case .smoothSelection(let radius):
+            return .smoothSelection(radius: radius)
         case .channelToSelection(let value):
             let operation: EngineSession.SelectOperation
             switch value {

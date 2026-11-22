@@ -107,6 +107,8 @@ extension RecorderFileCommand {
             case .fromAlpha: command = .fromAlpha
             }
             self = .selectCommand(command, radius: radius)
+        case .smoothSelection(let radius):
+            self = .smoothSelection(radius: radius)
         case .channelToSelection(let operation):
             let value: Operation
             switch operation {

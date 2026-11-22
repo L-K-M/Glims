@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 28
+# Recorder file format, versions 1 to 29
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `28`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `29`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -21,11 +21,12 @@ The writer chooses the highest version required by a successful record:
 `fillLabLayer` 19, a Sponge `completeStroke` 20, `completeTabletStroke` 21,
 an Eraser stroke with an explicit background color 22, mask Levels 23,
 mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
-`applyUnsharpMask` 26, `scaleWithInterpolation` 27, and `rotateCanvas` 28. A file declaring one of those versions must contain at least one
+`applyUnsharpMask` 26, `scaleWithInterpolation` 27, `rotateCanvas` 28, and `smoothSelection` 29.
+A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...28 refuse the file.
+version 1. Integers outside 1...29 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -67,6 +68,7 @@ Commands have an owned `tag` and the following exact fields:
 | `applyInkLevels` | `lowInput`, `highInput`, `gamma`, `lowOutput`, `highOutput`, `clampInput`, `clampOutput` (version 11) |
 | `applyInkCurves` | `samples` (version 12) |
 | `scale` | integer `width`, `height` |
+| `smoothSelection` | integer `radius` from 1 through 100 (version 29) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -619,3 +621,9 @@ cannot choose the method instead of resampling differently.
 Replay rotates around the destination image's center using its engine's
 interpolation preference. Quarter turns recorded as `transformImage` keep
 their original encoding.
+
+## Smooth Selection (version 29)
+
+`smoothSelection` uses a `none` binding. It smooths the destination image’s
+current selection with the saved radius in pixels. An empty selection, an
+unsupported image layout or an adapter without slot 238 refuses the edit.

@@ -5736,7 +5736,7 @@ final class ImageDocument {
     }
 
     /// Smooths the selection with `radius` (1 ... 100) as one queued
-    /// command and one undo step; pending edits end first. Not recorded.
+    /// command and one undo step. Recorder captures the radius at admission.
     func smoothSelection(radius: Int, completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         if let reason = smoothSelectionRefusal {
             onError?(reason)
@@ -5745,9 +5745,27 @@ final class ImageDocument {
         }
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        enqueueTargetCommand({ session, image in
-            try session.smoothSelection(image, radius: radius)
-        }, completion: completion)
+        let command = SemanticImageCommand.smoothSelection(radius: radius)
+        let capture: RecorderCapture?
+        do { capture = try reserveRecording(command) }
+        catch {
+            onError?(error.localizedDescription)
+            completion?(.failure(error))
+            return
+        }
+        enqueueTargetCommand(command.apply) { result in
+            if let capture {
+                let resolution: RecorderLog<SemanticImageCommand>.Resolution
+                switch result {
+                case .success: resolution = .success(command)
+                case .failure(let error): resolution = .failure(String(describing: error))
+                }
+                self.resolveRecording(capture.reservation, with: resolution,
+                                      confirmed: .init(context: nil, binding: .none, descriptions: [:]))
+            }
+            completion?(result)
+        }
+        if capture != nil { notifyRecorderChanged() }
     }
 
     // MARK: Select Similar
