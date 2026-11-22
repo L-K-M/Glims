@@ -6838,3 +6838,13 @@ pixel-locked layers, component layouts and older adapters refuse; the
 interface also refuses masks and channels, since the engine draws on
 layer pixels. While recording, each line adds an explicit unsupported
 Recorder row.
+
+### Aligned Clone and Heal (candidate)
+
+2026-11-22: the adapter starts every Clone and Heal stroke at the source
+it is given and left alignment between strokes to the app, which never
+applied it, so each stroke restarted at the source point. Tool Options
+now has Aligned, on by default: the first accepted stroke after a source
+is set fixes the distance in whole pixels, as in GIMP's
+`app/paint/gimpsourcecore.c`. The canvas regression failed on main at
+80cc28e2 and passes with the change on GIMP 3.2.8. No facade change.

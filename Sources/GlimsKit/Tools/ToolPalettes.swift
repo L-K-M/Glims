@@ -893,6 +893,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                 ToolState.shared.update(tool) { $0.antiErase = on }
             })
         case .clone, .heal:
+            stack.addArrangedSubview(checkbox("Aligned", ToolState.shared.cloneAlignment.isAligned) { on in
+                ToolState.shared.cloneAlignment.isAligned = on
+            })
             stack.addArrangedSubview(hint("Option-click the image to set the source."))
         default:
             break

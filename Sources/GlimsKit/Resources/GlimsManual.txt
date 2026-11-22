@@ -221,8 +221,11 @@ What the tools do:
   removes pixels on layers with transparency; on an opaque layer it
   paints with the background color selected when the stroke begins.
   Clone and Heal copy from another spot: Option-click
-  to set the source, then paint. Smudge, Blur and Sharpen retouch what
-  is already painted, and Dodge and Burn lighten and darken it.
+  to set the source, then paint. With Aligned on in Tool Options, later
+  strokes keep the first stroke's distance to the source; with it off,
+  every stroke restarts at the source. Setting a new source starts a new
+  alignment. Smudge, Blur and Sharpen retouch what is already painted,
+  and Dodge and Burn lighten and darken it.
   Sponge Desaturate and Sponge Saturate reduce or increase saturation under
   the brush, preserving hue and transparency. Choose either from the O tool
   group or View > Tools. Opacity sets strength; the foreground color is ignored.
