@@ -45,7 +45,7 @@ extension EngineSmokeTest {
                 controller.previewPanel?.cancel()
                 controller.window?.orderOut(nil)
                 var stopped = false; controller.canvas.stopRendering { stopped = true }
-                try? wait { stopped }
+                check((try? wait { stopped }) != nil, "last-filter stops rendering before it closes")
             }
             for doc in owned { doc.closeImageWhenDrained() }
             try? wait { owned.allSatisfy { (try? session.info($0.image)) == nil } }
