@@ -3261,6 +3261,7 @@ api_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID laye
 MARSHAL (image_guides, return glims_image_guides (e, a->image, a->out, a->capacity, a->count);)
 MARSHAL (guide_put, return glims_guide_put (e, a->image, a->in, a->out, a->error);)
 MARSHAL (guide_remove, return glims_guide_remove (e, a->image, a->width, a->error);)
+MARSHAL (image_clear_guides, return glims_image_clear_guides (e, a->image, a->error);)
 MARSHAL (layer_source_info, return glims_layer_source_info (e, a->image, a->item, a->out, a->error);)
 MARSHAL (image_pick_layer, { const GlimsPoint *point = a->in; return glims_image_pick_layer (e, a->image, *point, a->out); })
 MARSHAL (image_convert_indexed, return glims_image_convert_indexed (e, a->image, a->in,
@@ -3328,6 +3329,15 @@ api_guide_remove (GlimsEngine *e, GlimsImageID image, GlimsGuideID guide, char *
   return glims_facade_call (e, GLIMS_FACADE_OP_guide_remove,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             guide_remove_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_clear_guides (GlimsEngine *e, GlimsImageID image, char **error)
+{
+  GlimsArgs a = { .image = image, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_clear_guides,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_clear_guides_on_engine, &a, error);
 }
 
 static GlimsStatus

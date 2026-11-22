@@ -20,6 +20,7 @@
 #include "core/gimp.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-guides.h"
+#include "core/gimpimage-undo.h"
 #include "core/gimpguide.h"
 #include "core/gimpauxitem.h"
 
@@ -199,4 +200,44 @@ glims_guide_remove (GlimsEngine  *engine,
   gimp_image_remove_guide (open->image, guide, TRUE);
 
   return GLIMS_STATUS_OK;
+}
+
+GlimsStatus
+glims_image_clear_guides (GlimsEngine  *engine,
+                          GlimsImageID  id,
+                          char        **error)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GList          *ordinary = NULL, *iter;
+  GlimsStatus     status;
+
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  /* A copy: removing a guide edits the image's own list. */
+  for (iter = gimp_image_get_guides (open->image); iter; iter = iter->next)
+    if (! gimp_guide_is_custom (iter->data))
+      ordinary = g_list_prepend (ordinary, iter->data);
+
+  /* group_end keeps an empty group as an undo step, so never open one. */
+  if (! ordinary)
+    return GLIMS_STATUS_OK;
+
+  status = glims_edit_ready (engine, open, error);
+  if (status == GLIMS_STATUS_OK)
+    {
+      if (gimp_image_undo_group_start (open->image, GIMP_UNDO_GROUP_GUIDE, "Clear Guides"))
+        {
+          for (iter = ordinary; iter; iter = iter->next)
+            gimp_image_remove_guide (open->image, iter->data, TRUE);
+          gimp_image_undo_group_end (open->image);
+        }
+      else
+        {
+          status = glims_fail (error, NULL, "The image history could not group the guide removal.");
+        }
+    }
+  g_list_free (ordinary);
+
+  return status;
 }
