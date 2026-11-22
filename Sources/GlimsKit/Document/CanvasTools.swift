@@ -1988,7 +1988,9 @@ final class CanvasToolController {
             return
         }
         guard document.activeDrawable != nil else {
-            onStatus?("Select a layer to transform after the target change finishes.")
+            onStatus?(document.hasMultipleSelectedChannels
+                      ? "Select only one channel to transform."
+                      : "Select a layer to transform after the target change finishes.")
             dragTool = nil
             return
         }
