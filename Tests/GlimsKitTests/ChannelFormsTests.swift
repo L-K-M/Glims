@@ -12,6 +12,13 @@ final class ChannelFormsTests: XCTestCase {
             return ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 128.0 / 255)
         }
         XCTAssertNil(change { _ in })
+        XCTAssertNil(change { $0.name = " Mask " })
+        XCTAssertNil(change { $0.opacity = "50.1960" })
+        let padded = ChannelForms.AttributeFields(name: " Mask", opacity: "50", color: .red)
+        var trimmed = padded
+        trimmed.name = "Mask"
+        XCTAssertEqual(ChannelForms.attributesChange(from: padded, to: trimmed, storedOpacity: 0.5),
+                       .init(name: "Mask"), "removing a stored space is a real rename")
         XCTAssertEqual(change { $0.name = " Edges " }, .init(name: "Edges"))
         XCTAssertEqual(change { $0.opacity = "25" }, .init(opacity: 0.25))
         XCTAssertEqual(change { $0.color = .blue },

@@ -161,7 +161,7 @@ extension EngineSmokeTest {
         doc.beginStroke(at: .init(x: 8, y: 8, pressure: 1))
         check(!doc.strokeIsActive, "Paint refuses under a 2-channel selection")
         doc.fill(at: CGPoint(x: 8, y: 8), mode: .similarColors, color: .red, threshold: 0, sampleMerged: false)
-        check(doc.runOnPaintTarget("Paint") { _, _ in } == false, "Clear refuses under a 2-channel selection")
+        check(doc.runOnPaintTarget("Clear") { _, _ in } == false, "Clear refuses under a 2-channel selection")
         var copyError: Error?
         doc.copyPixels(.layer, background: .white, consume: { _ in }) { copyError = $0 }
         wait { copyError != nil }

@@ -89,8 +89,11 @@ enum ChannelForms {
 
     static func attributesChange(from shown: AttributeFields, to entered: AttributeFields,
                                  storedOpacity: Double) -> EngineSession.ChannelChange? {
-        let name = entered.name == shown.name ? nil : validName(entered.name)
-        let opacity = entered.opacity == shown.opacity ? nil : opacityValue(entered.opacity)
+        // A value typed again in another spelling is no change either.
+        let typedName = validName(entered.name)
+        let name = entered.name == shown.name || typedName == shown.name ? nil : typedName
+        let typedOpacity = opacityValue(entered.opacity)
+        let opacity = typedOpacity == opacityValue(shown.opacity) ? nil : typedOpacity
         // The untouched percent text is rounded, so it never becomes the opacity.
         let alpha = CGFloat(opacity ?? storedOpacity)
         let color = entered.color == shown.color ? nil : entered.color.withAlphaComponent(alpha)
