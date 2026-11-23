@@ -228,6 +228,76 @@ final class PaintToolPresetControlsTests: XCTestCase {
         }
     }
 
+    // MARK: Paint options
+
+    /// Capture copies the paint mode, spacing and fade from the brush, and
+    /// Apply writes all three back to another tool.
+    func testCaptureAndApplyRestorePaintModeSpacingAndFade() throws {
+        try withDefaults { defaults in
+            let state = makeState(defaults)
+            state.select(.airbrush)
+            state.update(.airbrush) { brush in
+                brush.paintMode = "screen"
+                brush.spacing = 0.35
+                brush.fade = EngineSession.Brush.Fade(steps: 7, target: .background)
+            }
+            let captured = PaintToolPresetControls.captureSettings(from: state.brush(for: .airbrush))
+            XCTAssertEqual(captured.paintMode, "screen")
+            XCTAssertEqual(captured.spacing, 0.35)
+            XCTAssertEqual(captured.fade, PaintToolPreset.Fade(steps: 7, target: .background))
+            XCTAssertTrue(captured.hasPaintOptions)
+
+            let other = makeState(defaults)
+            other.select(.pencil)
+            let preset = try PaintToolPreset(tool: .pencil, name: "Faded", settings: captured)
+            PaintToolPresetControls.apply(preset, to: other)
+            let brush = other.brush(for: .pencil)
+            XCTAssertEqual(brush.paintMode, "screen")
+            XCTAssertEqual(brush.spacing, 0.35)
+            XCTAssertEqual(brush.fade, EngineSession.Brush.Fade(steps: 7, target: .background))
+        }
+    }
+
+    /// A preset without options returns the tool to Normal at the default
+    /// spacing with no fade.
+    func testApplyingAPresetWithoutOptionsClearsThePaintOptions() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            let state = makeState(defaults)
+            state.select(.paintbrush)
+            state.update(.paintbrush) { brush in
+                brush.paintMode = "multiply"
+                brush.spacing = 2.5
+                brush.fade = EngineSession.Brush.Fade(steps: 9, target: .transparent)
+            }
+            let preset = try store.create(tool: .paintbrush, name: "Plain", settings: Self.fullSettings())
+
+            PaintToolPresetControls.apply(preset, to: state)
+
+            let brush = state.brush(for: .paintbrush)
+            XCTAssertEqual(brush.paintMode, EngineSession.PaintModes.normal)
+            XCTAssertNil(brush.spacing)
+            XCTAssertNil(brush.fade)
+        }
+    }
+
+    /// Apply never touches cloneSource or the Clone Image/Pattern choice.
+    func testApplyNeverTouchesCloneSourceOrCloneFrom() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            let state = makeState(defaults)
+            let source = EngineSession.Brush.Source(drawable: 42, x: 5, y: 6)
+            state.cloneSource = source
+            state.cloneFrom = .pattern
+            let preset = try store.create(tool: .clone, name: "Clone", settings: Self.fullSettings())
+
+            PaintToolPresetControls.apply(preset, to: state)
+
+            XCTAssertEqual(state.cloneSource, source)
+            XCTAssertEqual(state.cloneFrom, .pattern)
+        }
+    }
+
     // MARK: Selection by UUID
 
     /// The selection helper follows the UUID across reloads and reorders, and
