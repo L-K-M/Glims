@@ -6910,3 +6910,50 @@ the Line tool's geometry. Option at the Eyedropper's press sets the
 background color for that whole drag. Option sampling from a paint tool
 still sets the foreground color. `GLIMS_SMOKE_CASE=tool-modifiers` drives
 both through real canvas events. No facade change.
+
+### Return between an Undo and its reload (2026-11-22)
+
+The editor smoke's stale-transform check failed now and then on main. It
+settled with one turn of the run loop, but Undo's reload can wait for the
+transform preview's render, so its baseline was the box from before the
+Undo. A forced-order run showed that the app left the layer and the undo
+count alone. The check now presses Return both before and after the reload,
+waits for counted work with a deadline, and reads the engine as well as the
+document. It fails without the canvas's stale check, and without that
+check's test of the paint target, which a pending Undo clears.
+`GLIMS_SMOKE_CASE=palette-controls` runs it alone. No product change.
+
+The tool-modifiers smoke's Option-click check started the background at
+green, whose red component is as low as the sampled black's, so it passed
+when nothing was sampled. It starts at white now and fails with Option
+sampling disabled.
+
+### Stored-sample checks in Bitmap and Duotone export (2026-11-22)
+
+About one loaded run in 70 refused valid 16-bit pixels in the Bitmap
+threshold export. The exports judged floats from a babl conversion, and
+babl may take any path within its error tolerance, chooses one by timing
+and caches the choice under the user's home, where GIMP shares it. The
+legal path Y'A u16 to Y'A u32 to Y'A float reads opaque white as
+0.9999998 and reproduces the refusal exactly; once cached, it would
+refuse every later export. Both exports now read the projection in its
+own format and check the stored samples (`Engine/stored-pixels.c`).
+GIMP composites in single-precision float, so an image stored above 16
+bits per sample holds white a float step from 1 (u32 4294966784, double
+1 + 2^-23). The endpoint checks allow four float steps, the margin
+Selective Color uses; no u8 or u16 sample lies that close to an endpoint.
+Gray stored in another encoding still converts to Y' for the threshold,
+clamped to [0,1] after the stored check.
+
+`build-adapter.sh --test` reruns the Bitmap and Duotone export tests
+against a babl cache seeded with such paths
+(`Engine/tests/babl-path-seed.c`, which first checks that babl takes
+them). Before the fix those runs failed 10 of 44 Bitmap and 7 of 23
+Duotone checks. New cases cover u32, half, float, double, linear float
+and perceptual 16-bit storage; main's adapter fails four of them (both
+double cases and the linear-float and perceptual thresholds). A check
+that a millionth of transparency still refuses fails when the allowance
+is widened to 1e-5. Lab Copy also requires exactly opaque floats from an
+RGB read; in babl 0.1.124 no three-step path from R'G'B'A u8 or u16 to
+RGBA float passes through u32, and it is unchanged. Other kinds of lossy
+paths were not searched.
