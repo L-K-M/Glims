@@ -115,7 +115,9 @@ final class CropTargetTests: XCTestCase {
         target.fillFromImage(width: 200, height: 150, resolution: .init(x: 300, y: 150))
         XCTAssertEqual(target.resolution, "")
         target.enabled = true
-        XCTAssertNil(target.resolved(imageResolution: .init(x: 300, y: 150))?.resolution)
+        let kept = target.resolved(imageResolution: .init(x: 300, y: 150))
+        XCTAssertNotNil(kept, "The target still resolves without a resolution")
+        XCTAssertNil(kept?.resolution)
     }
 
     func testCropResizeRoundTrips() throws {
