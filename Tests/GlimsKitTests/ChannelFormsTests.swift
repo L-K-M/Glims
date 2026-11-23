@@ -25,6 +25,28 @@ final class ChannelFormsTests: XCTestCase {
                        .init(color: NSColor.blue.withAlphaComponent(128.0 / 255)))
     }
 
+    @MainActor
+    func testApplyOmitsAttributesTheChannelKindCannotChange() {
+        let shown = ChannelForms.AttributeFields(name: "Cyan", opacity: "100", color: .cyan)
+        var entered = shown
+        entered.name = "Plate"
+        entered.opacity = "40"
+        entered.color = .blue
+        // A CMYK channel: a changed disabled color well is not sent.
+        XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
+                                                     editable: .init(opacity: false, color: false)),
+                       .init(name: "Plate"))
+        // A Quick Mask keeps its name.
+        XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
+                                                     editable: .init(name: false, opacity: true, color: true)),
+                       .init(opacity: 0.4, color: NSColor.blue.withAlphaComponent(0.4)))
+        // Nothing editable changed: no change at all.
+        var colorOnly = shown
+        colorOnly.color = .blue
+        XCTAssertNil(ChannelForms.attributesChange(from: shown, to: colorOnly, storedOpacity: 1,
+                                                   editable: .init(color: false)))
+    }
+
     func testNamesPreserveWholeUTF8Characters() async {
         await MainActor.run {
             XCTAssertEqual(ChannelForms.validName("  Saved area\n"), "Saved area")
