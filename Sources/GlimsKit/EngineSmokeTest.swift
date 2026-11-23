@@ -1217,6 +1217,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (palette keyboard focus)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "guides-ruler-units" {
+                try exerciseGuidesRulerUnits(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (guides and ruler units)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if let selected = ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] {
                 check(false, "unknown engine smoke case: \(selected)")
 
@@ -1256,6 +1261,7 @@ enum EngineSmokeTest {
             try exerciseGuidesControls(session, work: work, documents: documents)
             try exerciseGridControls(session, work: work, documents: documents)
             try exercisePixelRulers(session, work: work, documents: documents)
+            try exerciseGuidesRulerUnits(session, work: work, documents: documents)
             try exerciseGuideDragging(session, work: work, documents: documents)
             try exerciseToolPresetControls(session, work: work, documents: documents)
             try exerciseBrushPaletteSync(session, documents: documents)

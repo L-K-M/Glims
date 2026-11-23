@@ -10930,6 +10930,66 @@ find_guide (GlimsImageID image, GlimsGuideID id, GlimsGuideInfo *out)
 }
 
 static void
+test_guides_clear (void)
+{
+  GlimsImageID       image = 0;
+  GlimsGuideID       a = 0, b = 0, c = 0;
+  GlimsGuideInfo     row;
+  GlimsStrokeID      stroke = 0;
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 9.0);
+  GlimsStrokePoint   first = { 5, 5, 1.0, 0.0, 0.0, 0 };
+  char              *error = NULL;
+  int32_t            before;
+
+  api->image_new (engine, 100, 80, &image, NULL);
+
+  before = undo_depth (image);
+  CHECK (api->image_clear_guides (engine, image, NULL) == GLIMS_STATUS_OK &&
+         guide_count (image) == 0 && undo_depth (image) == before,
+         "clearing no guides adds no undo step");
+
+  CHECK (api->guide_put (engine, image, &(GlimsGuideInfo) { 0, GLIMS_GUIDE_HORIZONTAL, 10 },
+                         &a, NULL) == GLIMS_STATUS_OK &&
+         api->guide_put (engine, image, &(GlimsGuideInfo) { 0, GLIMS_GUIDE_VERTICAL, 20 },
+                         &b, NULL) == GLIMS_STATUS_OK &&
+         api->guide_put (engine, image, &(GlimsGuideInfo) { 0, GLIMS_GUIDE_VERTICAL, 100 },
+                         &c, NULL) == GLIMS_STATUS_OK && guide_count (image) == 3,
+         "three guides are placed to clear");
+
+  CHECK (api->stroke_begin (engine, image, first_layer (image), &brush, &first, &stroke,
+                            NULL) == GLIMS_STATUS_OK, "a stroke opens before the clear");
+  CHECK (api->image_clear_guides (engine, image, &error) == GLIMS_STATUS_BUSY && error &&
+         guide_count (image) == 3,
+         "clearing during a stroke is BUSY and removes nothing");
+  api->free_string (error);
+  CHECK (api->stroke_end (engine, stroke) == GLIMS_STATUS_OK, "the stroke ends");
+
+  before = undo_depth (image);
+  CHECK (api->image_clear_guides (engine, image, NULL) == GLIMS_STATUS_OK &&
+         guide_count (image) == 0 && undo_depth (image) == before + 1,
+         "clearing three guides is one undo step");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && guide_count (image) == 3 &&
+         find_guide (image, a, &row) && row.position == 10 &&
+         row.orientation == GLIMS_GUIDE_HORIZONTAL &&
+         find_guide (image, b, &row) && row.position == 20 &&
+         row.orientation == GLIMS_GUIDE_VERTICAL &&
+         find_guide (image, c, &row) && row.position == 100 &&
+         row.orientation == GLIMS_GUIDE_VERTICAL,
+         "one undo restores all three guides");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK && guide_count (image) == 0,
+         "one redo clears them again");
+  CHECK (api->stroke_begin (engine, image, first_layer (image), &brush, &first, &stroke,
+                            NULL) == GLIMS_STATUS_OK &&
+         api->image_clear_guides (engine, image, NULL) == GLIMS_STATUS_OK &&
+         api->stroke_end (engine, stroke) == GLIMS_STATUS_OK,
+         "clearing no guides during a stroke is still a no-op");
+  CHECK (api->image_clear_guides (engine, 424242, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "clearing an unknown image is NOT_FOUND");
+
+  api->image_close (engine, image);
+}
+
+static void
 test_guides (const char *work)
 {
   GlimsImageID       image = 0, other = 0, reopened = 0;
@@ -16177,6 +16237,7 @@ main (int argc, char **argv)
 
   test_resource_gradient ();
   test_guides (argv[2]);
+  test_guides_clear ();
   test_grid (argv[2]);
   test_image_metadata (argv[2]);
   test_image_metadata_tag_info (argv[2]);

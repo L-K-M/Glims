@@ -145,6 +145,12 @@ extension EngineSmokeTest {
             guard let guide = verticalGuide else { return check(false, "the vertical guide exists") }
             document.removeGuide(guide.id)
         }
+        perform("Clear Guides") { document.clearGuides() }
+        let beforeEmptyClear = document.recorder.records.count
+        document.clearGuides()
+        settle(document)
+        check(document.guides.isEmpty && document.recorder.records.count == beforeEmptyClear,
+              "clearing guides when there are none adds no row")
         perform("Grid") {
             document.setGrid(EngineSession.Grid(style: .solid, spacingX: 7, spacingY: 7)) { _ in }
         }

@@ -360,8 +360,14 @@ enum MainMenu {
                 return entry
             }),
             item("Show Rulers", #selector(DocumentWindowController.toggleShowRulers(_:))),
+            submenu("Ruler Units", RulerUnit.allCases.map { unit in
+                let entry = item(unit.title, #selector(DocumentWindowController.chooseRulerUnit(_:)))
+                entry.tag = unit.tag
+                return entry
+            }),
             item("Show Guides", #selector(DocumentWindowController.toggleShowGuides(_:))),
             lockGuides,
+            item("Clear Guides", #selector(DocumentWindowController.clearGuides(_:))),
             item("Show Grid", #selector(DocumentWindowController.toggleShowGrid(_:))),
             item("Show Layer Boundary", #selector(DocumentWindowController.toggleLayerBoundary(_:))),
             item("Show Selection Edges", #selector(DocumentWindowController.toggleSelectionEdges(_:))),

@@ -2580,6 +2580,23 @@ final class ImageDocument {
         run(unsupported: "Remove Guide") { session, image in try session.removeGuide(guide, image: image) }
     }
 
+    /// View ▸ Clear Guides: removes every ordinary guide as one undo step.
+    /// The engine adds no step when there is none, and the Recorder then
+    /// keeps no row.
+    func clearGuides() {
+        guard !refuseWhileEditingUnavailable() else { return }
+        let recording = UnsupportedAdmission()
+        let accepted = run(didAdmit: {
+            recording.capture = self.reserveUnsupportedCommand("Clear Guides")
+        }) { session, image in
+            try self.performUndoableCommand(recording, "Clear Guides", session: session, image: image,
+                                            reading: { try session.guides(image) }) {
+                try session.clearGuides(image)
+            }
+        }
+        if accepted, recording.capture != nil { notifyRecorderChanged() }
+    }
+
     // MARK: Grid
 
     /// Applies `grid` to the image as one undo step; an identical grid

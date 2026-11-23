@@ -6323,6 +6323,24 @@ final class EngineSession: @unchecked Sendable {
         try check(api.guide_remove(engine, image, guide, &error), error)
     }
 
+    /// Whether this adapter has Clear Guides (slot 249).
+    var supportsClearGuides: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_clear_guides) else { return false }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_clear_guides)
+            && api.image_clear_guides != nil
+    }
+
+    /// Removes every ordinary guide as one undo step; custom tool-owned
+    /// guides stay, and an image without ordinary guides is left unchanged.
+    func clearGuides(_ image: Int32) throws {
+        guard supportsClearGuides, let clear = api.image_clear_guides else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot clear guides.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(clear(engine, image, &error), error)
+    }
+
     // MARK: Grid
 
     /// How the image's display grid renders its lines (GlimsGridStyle).

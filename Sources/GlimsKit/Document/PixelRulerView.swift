@@ -23,8 +23,8 @@ enum RulerMenuLogic {
     }
 }
 
-/// One pixel ruler in an NSScrollView ruler slot, drawing ticks and numeric
-/// labels in image pixels aligned with the image origin inside the canvas.
+/// One ruler in an NSScrollView ruler slot, drawing ticks aligned with the
+/// image origin inside the canvas and labels in the chosen `RulerUnit`.
 ///
 /// The ruler reads the canvas's live geometry at draw time and maps image
 /// coordinates through `NSView.convert(_:from:)` from the canvas — never
@@ -48,6 +48,17 @@ final class PixelRulerView: NSRulerView {
     /// dangling geometry source behind.
     weak var canvas: EngineCanvasView?
 
+    /// What the labels read in: View ▸ Ruler Units or this ruler's own
+    /// context menu.
+    var unit: RulerUnit = .pixels {
+        didSet {
+            guard unit != oldValue else { return }
+            invalidateHashMarks()
+            needsDisplay = true
+            setAccessibilityValue(unit.title)
+        }
+    }
+
     override init(scrollView: NSScrollView?, orientation: NSRulerView.Orientation) {
         super.init(scrollView: scrollView, orientation: orientation)
         ruleThickness = Self.ruleThicknessValue
@@ -55,6 +66,7 @@ final class PixelRulerView: NSRulerView {
         measurementUnits = .points
         originOffset = 0
         setAccessibilityLabel(orientation == .horizontalRuler ? "Horizontal ruler" : "Vertical ruler")
+        setAccessibilityValue(unit.title)
         setAccessibilityHelp(orientation == .horizontalRuler
             ? "Drag down into the image to create a horizontal guide at that position. Press Escape while dragging to cancel."
             : "Drag right into the image to create a vertical guide at that position. Press Escape while dragging to cancel.")
@@ -81,6 +93,10 @@ final class PixelRulerView: NSRulerView {
     /// gesture itself lives on the canvas (per window), view-only until
     /// the release commits it.
     override func mouseDown(with event: NSEvent) {
+        // Control-click asks for the context menu, not for a guide.
+        if event.modifierFlags.contains(.control), let menu = menu(for: event) {
+            return NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
         guard let canvas, !isHidden, let scrollView, scrollView.rulersVisible else { return }
         window?.makeFirstResponder(self)
         _ = canvas.guideDrag.beginFromRuler(orientation: guideOrientation, event: event, ruler: self)
@@ -99,6 +115,44 @@ final class PixelRulerView: NSRulerView {
     override func keyDown(with event: NSEvent) {
         if canvas?.guideDrag.keyDown(with: event) == true { return }
         super.keyDown(with: event)
+    }
+
+    // MARK: Units
+
+    /// Either ruler's context menu chooses the unit.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard canvas != nil else { return nil }
+        let menu = NSMenu(title: "Ruler Units")
+        for choice in RulerUnit.allCases {
+            let entry = NSMenuItem(title: choice.title,
+                                   action: #selector(DocumentWindowController.chooseRulerUnit(_:)),
+                                   keyEquivalent: "")
+            entry.tag = choice.tag
+            // The clicked window, which need not be the key one.
+            entry.target = window?.windowController
+            entry.state = choice == unit ? .on : .off
+            menu.addItem(entry)
+        }
+        return menu
+    }
+
+    /// Pixels per inch along a ruler of a view turned by `rotationDegrees`,
+    /// as GIMP's dot-for-dot rulers measure: the axes blend with the angle
+    /// and change places at a quarter turn.
+    static func resolution(x: Double, y: Double, horizontal: Bool, rotationDegrees: Double) -> Double {
+        let (along, across) = horizontal ? (x, y) : (y, x)
+        guard rotationDegrees != 0, x != y else { return along }
+        let radians = rotationDegrees * .pi / 180
+        return 1 / hypot(cos(radians) / along, sin(radians) / across)
+    }
+
+    /// Pixels per inch along this ruler, from the document's cached
+    /// resolution and the view's angle.
+    private var axisResolution: Double? {
+        guard let canvas, let resolution = canvas.document.resolution else { return nil }
+        let degrees = (rulerSpace as? CanvasRotationView)?.rotationDegrees ?? 0
+        return Self.resolution(x: resolution.x, y: resolution.y,
+                               horizontal: orientation == .horizontalRuler, rotationDegrees: degrees)
     }
 
     /// The image's extent along this ruler's axis, in pixels, from the
@@ -137,7 +191,8 @@ final class PixelRulerView: NSRulerView {
             extent = Double(orientation == .horizontalRuler ? space.bounds.width / scale : space.bounds.height / scale)
         } else { extent = imageExtent }
         return PixelRulerPlan.plan(visibleStart: start, visibleEnd: end,
-                                   pointsPerPixel: scale, imageExtent: extent)
+                                   pointsPerPixel: scale, imageExtent: extent,
+                                   unit: unit, resolution: axisResolution)
     }
 
     private func axisMapping() -> (origin: Double, perPixel: Double)? {

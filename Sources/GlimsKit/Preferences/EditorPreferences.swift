@@ -49,6 +49,7 @@ final class EditorPreferences {
         static let initialView = "editor.initialView"
         static let recoveryCopies = "editor.recoveryCopies"
         static let recoveryInterval = "editor.recoveryInterval"
+        static let rulerUnit = "editor.rulerUnit"
     }
 
     private let defaults: UserDefaults
@@ -112,9 +113,18 @@ final class EditorPreferences {
         }
     }
 
+    var rulerUnit: RulerUnit {
+        get { defaults.string(forKey: Key.rulerUnit).flatMap(RulerUnit.init(rawValue:)) ?? .pixels }
+        set {
+            guard newValue != rulerUnit else { return }
+            defaults.set(newValue.rawValue, forKey: Key.rulerUnit)
+            notify()
+        }
+    }
+
     func reset() {
         for key in [Key.appearance, Key.surround, Key.initialView,
-                    Key.recoveryCopies, Key.recoveryInterval] {
+                    Key.recoveryCopies, Key.recoveryInterval, Key.rulerUnit] {
             defaults.removeObject(forKey: key)
         }
         notify()

@@ -621,6 +621,14 @@ a standard display, but every image pixel is shown crisply, one to
 one. Use Fit Image for an overview and Actual Pixels when the exact
 pixels matter.
 
+The rulers label in the unit chosen in View > Ruler Units or from a
+ruler's own menu (right-click or Control-click). Inches, centimeters,
+millimeters, points and picas follow the image's resolution, across on
+the top ruler and down on the side one; Percent is of the image's
+width or height. In a rotated view the rulers measure the rotated
+image's bounds. Drag out of a ruler to add a guide. View > Clear
+Guides removes all guides as one undo step; Lock Guides turns it off.
+
 Image > Histogram… shows the tonal distribution of the active layer,
 mask or channel, limited to the selection when there is one. Choose a
 channel from the popup; Mean, Std Dev, Median and Pixels describe it,

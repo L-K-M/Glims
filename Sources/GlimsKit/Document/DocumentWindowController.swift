@@ -282,6 +282,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.surroundColor = color
         rotationView.surroundColor = color
         scrollView.backgroundColor = color
+        horizontalRuler.unit = preferences.rulerUnit
+        verticalRuler.unit = preferences.rulerUnit
     }
 
     /// How far each new document window steps from the previous one.
@@ -996,6 +998,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if let item = sender as? NSMenuItem { item.state = guidesViewState.lockMenuState }
     }
 
+    /// View ▸ Clear Guides: one undoable edit, refused by Lock Guides.
+    @objc func clearGuides(_ sender: Any?) {
+        guard !closeStarted, !previewBusy,
+              GuidesSheetLogic.canClear(guideCount: imageDocument.guides.count,
+                                        locksGuides: guidesViewState.locksGuides) else { return }
+        canvas.guideDrag.cancel()
+        imageDocument.clearGuides()
+    }
+
     // MARK: Grid
 
     /// Image ▸ Configure Grid…: opens this window's grid configuration
@@ -1072,6 +1083,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         scrollView.tile()
         invalidateRulers()
         if let item = sender as? NSMenuItem { item.state = rulerViewState.menuState }
+    }
+
+    /// View ▸ Ruler Units and either ruler's context menu. One preference:
+    /// every open window follows it.
+    @objc func chooseRulerUnit(_ sender: Any?) {
+        guard !imageDocument.isClosing, let item = sender as? NSMenuItem,
+              let unit = RulerUnit(tag: item.tag) else { return }
+        preferences.rulerUnit = unit
 
     }
 
@@ -2906,7 +2925,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
              #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
              #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
              #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
-             #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+             #selector(toggleShowRulers(_:)), #selector(chooseRulerUnit(_:)), #selector(toggleSelectionEdges(_:)),
              #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
              #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
              #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
@@ -2942,7 +2961,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
              #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
              #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
              #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
-             #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+             #selector(toggleShowRulers(_:)), #selector(chooseRulerUnit(_:)), #selector(toggleSelectionEdges(_:)),
              #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
              #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
              #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
@@ -2975,7 +2994,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                  #selector(rotateViewClockwise(_:)), #selector(rotateViewCounterclockwise(_:)),
                  #selector(setViewAngle(_:)), #selector(resetViewRotation(_:)),
                  #selector(chooseScreenMode(_:)), #selector(cycleScreenMode(_:)),
-                 #selector(toggleShowRulers(_:)), #selector(toggleSelectionEdges(_:)),
+                 #selector(toggleShowRulers(_:)), #selector(chooseRulerUnit(_:)), #selector(toggleSelectionEdges(_:)),
                  #selector(toggleShowGuides(_:)), #selector(toggleShowGrid(_:)),
                  #selector(toggleSnapToGuides(_:)), #selector(toggleSnapToGrid(_:)),
                  #selector(toggleSnapToCanvas(_:)), #selector(toggleSnapToLayerBounds(_:)):
@@ -3400,6 +3419,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(toggleLockGuides(_:)):
             menuItem.state = guidesViewState.lockMenuState
             return !imageDocument.isClosing
+        case #selector(clearGuides(_:)):
+            return GuidesSheetLogic.canClear(guideCount: imageDocument.guides.count,
+                                             locksGuides: guidesViewState.locksGuides)
+                && imageDocument.session.supportsClearGuides
+                && !closeStarted && !editingBlocked && !previewBusy
         case #selector(configureGrid(_:)):
             // The sheet seeds only from cached state; it must not stack
             // on another sheet of this window. Grid configuration is
@@ -3437,6 +3461,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                                      engineIsBusy: EngineActivity.shared.isBusy)
             menuItem.state = rulerCheck.state
             return rulerCheck.enabled
+        case #selector(chooseRulerUnit(_:)):
+            guard let unit = RulerUnit(tag: menuItem.tag) else { return false }
+            menuItem.state = unit == preferences.rulerUnit ? .on : .off
+            return !imageDocument.isClosing
 
 
         case #selector(toggleLayerBoundary(_:)):
