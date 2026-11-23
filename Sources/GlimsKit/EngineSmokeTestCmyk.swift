@@ -70,8 +70,8 @@ extension EngineSmokeTest {
             let views = descendants(of: content)
             guard let mode = views.first(where: { $0.accessibilityLabel() == "Image mode" }) as? NSPopUpButton,
                   let precision = views.first(where: { $0.accessibilityLabel() == "Precision" }) as? NSPopUpButton,
-                  let width = views.first(where: { $0.accessibilityLabel() == "Width in pixels" }) as? NSTextField,
-                  let height = views.first(where: { $0.accessibilityLabel() == "Height in pixels" }) as? NSTextField,
+                  let width = views.first(where: { $0.accessibilityLabel() == "Width" }) as? NSTextField,
+                  let height = views.first(where: { $0.accessibilityLabel() == "Height" }) as? NSTextField,
                   let channels = views.first(where: { $0.accessibilityLabel() == "Ink channels" }) as? NSTextField,
                   let profilePopup = views.first(where: { $0.accessibilityLabel() == "CMYK source profile" }) as? NSPopUpButton,
                   let create = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Create" })
