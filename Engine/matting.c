@@ -81,14 +81,16 @@ continue_matting (MattingProgress *state)
   return !state->cancelled && !engine_stopping (state->engine);
 }
 
-/* Grow the damage box over one changed pixel. */
+/* Grow the layer-wide damage box over one changed pixel. `any` is the
+ * whole command's changed flag, so the first band's box is never reset by
+ * a later band. */
 static void
-include_pixel (GeglRectangle *damage, gboolean *changed, gint x, gint y)
+include_pixel (GeglRectangle *damage, gboolean *any, gint x, gint y)
 {
-  if (!*changed)
+  if (!*any)
     {
       *damage = (GeglRectangle) { x, y, 1, 1 };
-      *changed = TRUE;
+      *any = TRUE;
     }
   else
     {
@@ -409,7 +411,10 @@ glims_layer_matting (GlimsEngine  *engine,
                       pixel_changed = TRUE;
                     }
                 if (pixel_changed)
-                  include_pixel (&damage, &band_changed, x, region_y + row);
+                  {
+                    include_pixel (&damage, &changed, x, region_y + row);
+                    band_changed = TRUE;
+                  }
               }
         }
       else
@@ -439,7 +444,10 @@ glims_layer_matting (GlimsEngine  *engine,
                       }
                   }
                 if (pixel_changed)
-                  include_pixel (&damage, &band_changed, x, region_y + row);
+                  {
+                    include_pixel (&damage, &changed, x, region_y + row);
+                    band_changed = TRUE;
+                  }
               }
         }
 
@@ -447,7 +455,6 @@ glims_layer_matting (GlimsEngine  *engine,
         {
           GeglRectangle band = { 0, band_y, layer_width, band_height };
           float       *start = pixels + (size_t) (band_y - region_y) * layer_width * n_components;
-          changed = TRUE;
           gegl_buffer_set (candidate, &band, 0, format, start, GEGL_AUTO_ROWSTRIDE);
         }
 
@@ -509,7 +516,15 @@ glims_layer_matting (GlimsEngine  *engine,
   /* Pixels have already been published, even if a native callback prevented
    * the Undo group from closing. Report and redraw that partial failure. */
   gimp_image_flush (image);
-  glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &damage, NULL);
+  {
+    /* The damage box is in layer coordinates; the event takes image
+     * pixels, so an offset layer's redraw lands where it changed. */
+    gint          offset_x = 0, offset_y = 0;
+    gimp_item_get_offset (GIMP_ITEM (layer), &offset_x, &offset_y);
+    GeglRectangle image_damage = { damage.x + offset_x, damage.y + offset_y,
+                                   damage.width, damage.height };
+    glims_emit (engine, GLIMS_EVENT_PROJECTION_CHANGED, image, &image_damage, NULL);
+  }
   if (! group_closed)
     {
       if (error) *error = strdup ("The matting could not finish its Undo group; pixels changed.");

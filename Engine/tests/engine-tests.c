@@ -14442,6 +14442,36 @@ test_layer_matting (void)
       }
   }
 
+  /* Changes in several 64-row bands all land: a 1 x 200 layer with
+   * partial pixels in rows 0 and 150 (bands 0 and 2), opaque elsewhere. */
+  {
+    GlimsImageID tall_image = 0;
+    uint8_t     *tall = calloc (200 * 4, 1);
+    for (int y = 0; tall && y < 200; y++)
+      {
+        uint8_t *p = tall + y * 4;
+        p[0] = 100; p[1] = 50; p[2] = 0; p[3] = (y == 0 || y == 150) ? 128 : 255;
+      }
+    CHECK (tall && api->image_from_pixels (engine, 1, 200, tall, 200 * 4, &tall_image, NULL) ==
+           GLIMS_STATUS_OK && tall_image != 0, "the tall matting fixture exists");
+    if (tall_image)
+      {
+        CHECK (api->layer_matting (engine, tall_image, first_layer (tall_image),
+                                   GLIMS_MATTING_REMOVE_BLACK_MATTE, 0, NULL) == GLIMS_STATUS_OK,
+               "Remove Black Matte runs on a layer taller than one band");
+        bytes = matting_bytes (tall_image, &count);
+        CHECK (bytes && count == 200 * 4 &&
+               matting_close (bytes + 0 * 4, (uint8_t[]) { 199, 100, 0, 128 }, 1) &&
+               matting_close (bytes + 150 * 4, (uint8_t[]) { 199, 100, 0, 128 }, 1) &&
+               matting_close (bytes + 75 * 4, (uint8_t[]) { 100, 50, 0, 255 }, 0),
+               "matting changes in every band land, not only the last band's");
+        free (bytes);
+        bytes = NULL;
+        api->image_close (engine, tall_image);
+      }
+    free (tall);
+  }
+
   /* A selection that excludes the partial pixels does not bound the
    * command: the halo is a layer-wide edge property. The selection is
    * cleared before reading, because a layer copy honors it. */
