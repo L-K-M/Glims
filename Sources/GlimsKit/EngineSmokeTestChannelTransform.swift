@@ -17,7 +17,12 @@ extension EngineSmokeTest {
         documents.items.append(document)
         let controller = DocumentWindowController(document: document)
         let toolBefore = ToolState.shared.current
+        // Nearest Neighbor keeps the scaled coverage's box exact; a
+        // smoothing method spreads partial coverage past its edges.
+        let interpolationBefore = ToolState.shared.transformInterpolation
+        ToolState.shared.transformInterpolation = .none
         defer {
+            ToolState.shared.transformInterpolation = interpolationBefore
             ToolState.shared.select(toolBefore)
             controller.window?.orderOut(nil)
             document.closeImageWhenDrained()
@@ -105,7 +110,8 @@ extension EngineSmokeTest {
         drain("the saved channel's transform")
         check(box() == CGRect(x: moved.minX, y: moved.minY, width: moved.width + 30, height: moved.height + 20)
                 && document.undoInfo.undoCount == before + 1,
-              "channel transform: dragging a corner scales the saved channel's coverage")
+              "channel transform: dragging a corner scales the saved channel's coverage "
+              + "(\(String(describing: box())))")
         document.undo()
         drain("Undo")
         check(box() == moved, "channel transform: Undo restores the saved channel")
