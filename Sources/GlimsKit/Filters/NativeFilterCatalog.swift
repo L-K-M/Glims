@@ -71,12 +71,16 @@ final class NativeFilterCatalog {
 }
 
 /// A Native menu item's operation; `NSMenuItem.representedObject` needs
-/// an object.
+/// an object. `countsAsFilter` is false for the Image ▸ Adjust entries:
+/// adjustments applied from there are not filters and never become Last
+/// Filter, while the same operation applied from the Filter menu counts.
 final class NativeFilterCommand: NSObject {
     let operation: EngineSession.FilterOperation
+    let countsAsFilter: Bool
 
-    init(_ operation: EngineSession.FilterOperation) {
+    init(_ operation: EngineSession.FilterOperation, countsAsFilter: Bool = true) {
         self.operation = operation
+        self.countsAsFilter = countsAsFilter
     }
 }
 
@@ -285,7 +289,7 @@ enum NativeFilterMenus {
         let items = adjustOperations.compactMap { entry -> NSMenuItem? in
             guard let operation = operations.first(where: { $0.name == entry.name }),
                   NativeFilterMenuLayout.supportsParameterEditor(operation) else { return nil }
-            return tagged(commandItem(operation, title: "\(entry.title)…"))
+            return tagged(commandItem(operation, title: "\(entry.title)…", countsAsFilter: false))
         }
         merge(items, into: adjust)
     }
@@ -325,11 +329,11 @@ enum NativeFilterMenus {
     }
 
     private static func commandItem(_ operation: EngineSession.FilterOperation,
-                                    title: String? = nil) -> NSMenuItem {
+                                    title: String? = nil, countsAsFilter: Bool = true) -> NSMenuItem {
         let item = NSMenuItem(title: title ?? NativeFilterMenuLayout.itemTitle(operation),
                               action: #selector(DocumentWindowController.runNativeFilter(_:)),
                               keyEquivalent: "")
-        item.representedObject = NativeFilterCommand(operation)
+        item.representedObject = NativeFilterCommand(operation, countsAsFilter: countsAsFilter)
         if !NativeFilterMenuLayout.supportsParameterEditor(operation),
            !NativeFilterMenuLayout.usesSourceChooser(operation),
            let reason = NativeFilterMenuLayout.unavailableReason(operation.support) {

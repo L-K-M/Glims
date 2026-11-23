@@ -61,6 +61,7 @@ enum ChannelForms {
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = row.isQuickMask ? opacity : name
+        let shown = AttributeFields(name: name.stringValue, opacity: opacity.stringValue, color: color.color)
         alert.beginSheetModal(for: window) { response in
             color.deactivate()
             guard response == .alertFirstButtonReturn, document.acceptsEdits else { return }
@@ -68,15 +69,50 @@ enum ChannelForms {
                 document.onError?("The channel was removed. Choose another channel.")
                 return
             }
-            guard let value = validName(name.stringValue),
-                  let alpha = isInk ? 1.0 : opacityValue(opacity.stringValue) else {
+            guard validName(name.stringValue) != nil, isInk || opacityValue(opacity.stringValue) != nil else {
                 document.onError?("Enter a channel name and an opacity from 0 to 100%; shorten very long names.")
                 return
             }
-            document.changeChannel(id, .init(name: row.isQuickMask ? nil : value,
-                                             opacity: isInk ? nil : alpha,
-                                             color: isCmyk ? nil : color.color.withAlphaComponent(alpha)))
+            let entered = AttributeFields(name: name.stringValue, opacity: opacity.stringValue, color: color.color)
+            // Unchanged attributes add no undo step and no Recorder row, and
+            // a field the channel kind cannot change never reaches the
+            // engine, even if its disabled control was changed.
+            let editable = EditableAttributes(name: !row.isQuickMask, opacity: !isInk, color: !isCmyk)
+            guard let change = attributesChange(from: shown, to: entered,
+                                                storedOpacity: isInk ? 1 : row.opacity,
+                                                editable: editable) else { return }
+            document.changeChannel(id, change)
         }
+    }
+
+    struct AttributeFields {
+        var name: String
+        var opacity: String
+        var color: NSColor
+    }
+
+    /// Which attributes a channel kind lets the sheet change: a Quick Mask
+    /// keeps its name, ink channels keep full opacity and CMYK channels
+    /// take their color from the source profile.
+    struct EditableAttributes {
+        var name = true
+        var opacity = true
+        var color = true
+    }
+
+    static func attributesChange(from shown: AttributeFields, to entered: AttributeFields,
+                                 storedOpacity: Double,
+                                 editable: EditableAttributes = .init()) -> EngineSession.ChannelChange? {
+        // A value typed again in another spelling is no change either.
+        let typedName = validName(entered.name)
+        let name = (!editable.name || entered.name == shown.name || typedName == shown.name) ? nil : typedName
+        let typedOpacity = opacityValue(entered.opacity)
+        let opacity = (!editable.opacity || typedOpacity == opacityValue(shown.opacity)) ? nil : typedOpacity
+        // The untouched percent text is rounded, so it never becomes the opacity.
+        let alpha = CGFloat(opacity ?? storedOpacity)
+        let color = (!editable.color || entered.color == shown.color) ? nil : entered.color.withAlphaComponent(alpha)
+        guard name != nil || opacity != nil || color != nil else { return nil }
+        return .init(name: name, opacity: opacity, color: color)
     }
 
     static func validName(_ text: String) -> String? {
