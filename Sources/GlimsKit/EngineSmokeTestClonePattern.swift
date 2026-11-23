@@ -96,7 +96,7 @@ extension EngineSmokeTest {
         // With no pattern chosen a press is refused before any paint.
         let steps = try session.undoInfo(image).undoCount
         gesture(line(20))
-        check(changed(20) == 0 && (try session.undoInfo(image).undoCount) == steps,
+        check(try changed(20) == 0 && (try session.undoInfo(image).undoCount) == steps,
               "clone pattern: a press with no pattern paints nothing and adds no step")
 
         // The chooser lists the catalog; Cancel writes nothing.
@@ -137,7 +137,7 @@ extension EngineSmokeTest {
         // A stroke needs no Option-click and is one step.
         gesture(line(30))
         let painted = changed(30)
-        check(painted > 100 && (try session.undoInfo(image).undoCount) == steps + 1,
+        check(try painted > 100 && (try session.undoInfo(image).undoCount) == steps + 1,
               "clone pattern: a pattern stroke paints without a source point as one step (\(painted) columns)")
         state.cloneAlignment.isAligned = false
         check(state.brush(for: .clone).clonePattern?.aligned == false,
@@ -149,7 +149,7 @@ extension EngineSmokeTest {
             menu.sendAction(menu.action, to: menu.target)
         }
         gesture(line(60))
-        check(state.cloneFrom == .image && patternButton() == nil && changed(60) == 0
+        check(try state.cloneFrom == .image && patternButton() == nil && changed(60) == 0
                 && (try session.undoInfo(image).undoCount) == steps + 1,
               "clone pattern: the Image source still needs an Option-click before it paints")
         check(errors.isEmpty, "clone pattern: no errors (\(errors))")
