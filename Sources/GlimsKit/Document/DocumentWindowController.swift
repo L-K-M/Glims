@@ -137,7 +137,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var filterSourceChooser: FilterSourceChooserController?
     private var filterSourceRequest = 0
     /// An open panel or a start still queued on the input queue.
-    private var previewBusy: Bool { previewPanel != nil || inkLevelsPanel != nil || inkCurvesPanel != nil || labCurvesPanel != nil || labLevelsPanel != nil || previewStartIsPending }
+    private var previewBusy: Bool { previewPanel != nil || inkLevelsPanel != nil || inkCurvesPanel != nil || labCurvesPanel != nil || labLevelsPanel != nil || previewStartIsPending || repeatIsCommitting }
+    /// A Last Filter repeat between its begin and the end of its commit,
+    /// when it has neither a panel nor a pending start.
+    private var repeatIsCommitting = false
     /// A print job anywhere between Print… and the end of the run: a
     /// second Print is refused, and a close asked for during the engine
     /// render drops the snapshot instead of attaching a sheet.
@@ -718,9 +721,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     private func startFilterPreview(title: String, operation: String,
                                     properties: [EngineSession.FilterProperty] = [],
+                                    preset: CommittedFilterSettings? = nil,
+                                    lastFilter: LastFilterSpec? = nil,
                                     buildPanel: @escaping @MainActor (Int32, [String: EngineSession.FilterValue]) -> FilterPreviewPanel?) {
         startPreview(title: title, begin: { [imageDocument] completion in
             imageDocument.beginFilterPreview(operation: operation, properties: properties,
+                                             preset: preset, lastFilter: lastFilter,
                                              completion: completion)
         }, buildPanel: { buildPanel($0.filter, $0.values) })
     }
@@ -873,12 +879,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         center(on: CGPoint(x: Double(imageDocument.info.width) / 2, y: Double(imageDocument.info.height) / 2))
     }
 
-    @objc func gaussianBlur(_ sender: Any?) {
+    @objc func gaussianBlur(_ sender: Any?) { openGaussianBlur() }
+
+    private func openGaussianBlur(initialDeviation: Double? = nil, preset: CommittedFilterSettings? = nil) {
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         endPendingEdits()
-        startFilterPreview(title: "Gaussian Blur", operation: GaussianBlurPanel.operation) { [imageDocument] filter, _ in
-            GaussianBlurPanel(document: imageDocument, filter: filter)
+        let spec = LastFilterSpec(title: "Gaussian Blur", variant: nil, isRepeatable: true, capture: .whole)
+        startFilterPreview(title: "Gaussian Blur", operation: GaussianBlurPanel.operation,
+                           preset: preset, lastFilter: spec) { [imageDocument] filter, _ in
+            GaussianBlurPanel(document: imageDocument, filter: filter, initialDeviation: initialDeviation)
         }
     }
 
@@ -890,12 +900,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// around it, spreading dark areas.
     @objc func minimumFilter(_ sender: Any?) { openRankFilter(.minimum) }
 
-    private func openRankFilter(_ rank: RankFilterPanel.Rank) {
+    private func openRankFilter(_ rank: RankFilterPanel.Rank,
+                                initialRadius: Int? = nil, preset: CommittedFilterSettings? = nil) {
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         endPendingEdits()
-        startFilterPreview(title: rank.title, operation: RankFilterPanel.operation) { [imageDocument] filter, _ in
-            RankFilterPanel(document: imageDocument, filter: filter, rank: rank)
+        let spec = LastFilterSpec(title: rank.title, variant: rank.variantTitle, isRepeatable: true,
+                                  capture: .names(RankFilterPanel.captureNames))
+        startFilterPreview(title: rank.title, operation: RankFilterPanel.operation,
+                           preset: preset, lastFilter: spec) { [imageDocument] filter, _ in
+            RankFilterPanel(document: imageDocument, filter: filter, rank: rank, initialRadius: initialRadius)
         }
     }
 
@@ -1143,7 +1157,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// A catalog item in a Filter category: opens its generic form.
     @objc func runNativeFilter(_ sender: Any?) {
         guard let command = (sender as? NSMenuItem)?.representedObject as? NativeFilterCommand else { return }
-        openNativeFilter(command.operation)
+        openNativeFilter(command.operation, asFilter: command.countsAsFilter)
     }
 
     /// Opens the operation's form after committing in-flight edits, so
@@ -1151,7 +1165,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// load off the main queue through the catalog; the shared preview
     /// start then queues the session's begin and initial reads behind
     /// pending input, and the panel builds when they land.
-    func openNativeFilter(_ operation: EngineSession.FilterOperation) {
+    ///
+    /// `asFilter` is true only when the apply came from the Filter menu:
+    /// an Image ▸ Adjust apply of the same operation is an adjustment and
+    /// never becomes Last Filter. `preset` writes committed settings into
+    /// the new session before its values are read, so Last Filter
+    /// Settings reopens the editor at what Apply committed.
+    func openNativeFilter(_ operation: EngineSession.FilterOperation,
+                          asFilter: Bool = true, preset: CommittedFilterSettings? = nil) {
         if imageDocument.colorInfo.mode == .lab {
             if operation.name == "gimp:curves" { openLabAdjustment(.curves) }
             else if operation.name == "gimp:levels" { openLabAdjustment(.levels) }
@@ -1170,20 +1191,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        /// What an Apply records for Last Filter; nil when the entry was
+        /// an adjustment (Image ▸ Adjust) rather than a Filter-menu apply.
+        let spec: (LastFilterSpec.Capture) -> LastFilterSpec? = { capture in
+            asFilter ? LastFilterSpec(title: NativeFilterMenuLayout.displayTitle(operation),
+                                      variant: nil, isRepeatable: true, capture: capture) : nil
+        }
         if operation.name == SourceFilterOperation.oilify.rawValue {
             guard imageDocument.session.supportsOilifySources, NativeFilterMenuLayout.usesSourceChooser(operation) else {
                 statusBar.message = "Oilify is not available in this image engine."
                 return
             }
-            return openFilterSourceChooser(operation)
+            return openFilterSourceChooser(operation, preset: preset)
         }
         if NativeFilterMenuLayout.usesSourceChooser(operation) {
-            return openFilterSourceChooser(operation)
+            return openFilterSourceChooser(operation, preset: preset)
         }
         if NativeFilterMenuLayout.usesCurvesEditor(operation) {
             endPendingEdits()
             startPreview(title: operation.title, begin: { [imageDocument] reply in
-                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [],
+                                                 preset: preset, lastFilter: spec(.whole), completion: reply)
             }) { [imageDocument] start in
                 guard let settings = start.curves else { return nil }
                 return CurvesPanel(document: imageDocument, filter: start.filter, settings: settings)
@@ -1193,7 +1221,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if NativeFilterMenuLayout.usesLevelsEditor(operation) {
             endPendingEdits()
             startPreview(title: operation.title, begin: { [imageDocument] reply in
-                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [],
+                                                 preset: preset, lastFilter: spec(.whole), completion: reply)
             }) { [imageDocument] start in
                 guard let settings = start.levels else { return nil }
                 return LevelsPanel(document: imageDocument, filter: start.filter, settings: settings)
@@ -1203,7 +1232,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if NativeFilterMenuLayout.usesHueSaturationEditor(operation) {
             endPendingEdits()
             startPreview(title: operation.title, begin: { [imageDocument] reply in
-                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [],
+                                                 preset: preset, lastFilter: spec(.whole), completion: reply)
             }) { [imageDocument] start in
                 guard let settings = start.hueSaturation else { return nil }
                 return HueSaturationPanel(document: imageDocument, filter: start.filter, settings: settings)
@@ -1213,7 +1243,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if NativeFilterMenuLayout.usesColorBalanceEditor(operation) {
             endPendingEdits()
             startPreview(title: operation.title, begin: { [imageDocument] reply in
-                imageDocument.beginFilterPreview(operation: operation.name, properties: [], completion: reply)
+                imageDocument.beginFilterPreview(operation: operation.name, properties: [],
+                                                 preset: preset, lastFilter: spec(.whole), completion: reply)
             }) { [imageDocument] start in
                 guard let settings = start.colorBalance else { return nil }
                 return ColorBalancePanel(document: imageDocument, filter: start.filter, settings: settings)
@@ -1222,7 +1253,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
         if NativeFilterMenuLayout.usesBrightnessContrastEditor(operation) {
             endPendingEdits()
-            startFilterPreview(title: operation.title, operation: operation.name) { [imageDocument] filter, values in
+            startFilterPreview(title: operation.title, operation: operation.name,
+                               preset: preset, lastFilter: spec(.whole)) { [imageDocument] filter, values in
                 BrightnessContrastPanel(document: imageDocument, filter: filter, initialValues: values)
             }
             return
@@ -1248,8 +1280,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 self.statusBar.message = "Apply or cancel the current filter first."
                 return
             }
+            let lastFilter = spec(.names(properties.filter { $0.kind.isEditable }.map(\.name)))
             self.startFilterPreview(title: operation.title, operation: operation.name,
-                                    properties: properties) { [imageDocument] filter, values in
+                                    properties: properties, preset: preset,
+                                    lastFilter: lastFilter) { [imageDocument] filter, values in
                 NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
                                                  properties: properties, filter: filter, initialValues: values)
             }
@@ -1258,12 +1292,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     // MARK: Layer menu
 
-    private func openFilterSourceChooser(_ operation: EngineSession.FilterOperation) {
+    private func openFilterSourceChooser(_ operation: EngineSession.FilterOperation,
+                                         preset: CommittedFilterSettings? = nil) {
         guard let target = imageDocument.activeLayer,
               let sourceOperation = SourceFilterOperation(rawValue: operation.name),
               NativeFilterMenuLayout.usesSourceChooser(operation) else { return }
         if sourceOperation == .displace || sourceOperation == .oilify {
-            return openPairedSourceChooser(operation, sourceOperation: sourceOperation, target: target)
+            return openPairedSourceChooser(operation, sourceOperation: sourceOperation, target: target, preset: preset)
         }
         guard imageDocument.sourceFilterRefusal(target: target) == nil else {
             statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
@@ -1308,9 +1343,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                     guard !self.previewBusy, self.imageDocument.sourceFilterRefusal(target: target) == nil else {
                         completion(.failure(ImageDocument.DocumentError.busy)); return
                     }
+                    // A captured source names a drawable of this document,
+                    // so the apply is recorded but Last Filter stays off.
+                    let lastFilter = LastFilterSpec(title: NativeFilterMenuLayout.displayTitle(operation),
+                        variant: nil, isRepeatable: false,
+                        capture: .names(properties.filter { $0.kind.isEditable }.map(\.name)))
                     self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
                         imageDocument.beginFilterPreview(operation: operation.name, properties: properties,
-                                                         target: target, source: source, completion: reply)
+                                                         target: target, source: source, preset: preset,
+                                                         lastFilter: lastFilter, completion: reply)
                     }, started: completion) { [imageDocument = self.imageDocument] start in
                         NativeFilterPanel(document: imageDocument, operation: operation, properties: properties,
                                           filter: start.filter, initialValues: start.values, mergesPixels: true)
@@ -1337,7 +1378,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Owns its original document, target and explicit map choices. A
     /// parameter-catalog reply never follows the front window or selection.
     private func openPairedSourceChooser(_ operation: EngineSession.FilterOperation,
-                                         sourceOperation: SourceFilterOperation, target: Int32) {
+                                         sourceOperation: SourceFilterOperation, target: Int32,
+                                         preset: CommittedFilterSettings? = nil) {
         guard imageDocument.sourceFilterRefusal(target: target) == nil else {
             statusBar.message = imageDocument.sourceFilterRefusal(target: target) ?? "Choose a pixel layer first."
             return
@@ -1381,13 +1423,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                     guard !self.previewBusy, self.imageDocument.sourceFilterRefusal(target: target) == nil else {
                         completion(.failure(ImageDocument.DocumentError.busy)); return
                     }
+                    let lastFilter = LastFilterSpec(title: NativeFilterMenuLayout.displayTitle(operation),
+                        variant: nil, isRepeatable: false,
+                        capture: .names(properties.filter { $0.kind.isEditable }.map(\.name)))
                     self.startPreview(title: operation.title, begin: { [imageDocument = self.imageDocument] reply in
                         if sourceOperation == .oilify {
                             imageDocument.beginOilifyPreview(properties: properties, target: target,
-                                                             radiusSource: first, exponentSource: second, completion: reply)
+                                                             radiusSource: first, exponentSource: second,
+                                                             preset: preset, lastFilter: lastFilter,
+                                                             completion: reply)
                         } else if let first, let second {
                             imageDocument.beginDisplacePreview(properties: properties, target: target,
-                                                               xSource: first, ySource: second, completion: reply)
+                                                               xSource: first, ySource: second,
+                                                               preset: preset, lastFilter: lastFilter,
+                                                               completion: reply)
                         } else {
                             reply(.failure(ImageDocument.DocumentError.busy))
                         }
@@ -1972,8 +2021,58 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func repeatLastFilter(_ sender: Any?) {
-        guard let last = PlugInCommands.last else { return }
-        run(last, mode: .withLastValues)
+        guard let last = FilterCommands.last else { return }
+        switch last {
+        case .plugIn(let procedure): run(procedure, mode: .withLastValues)
+        case .native(let applied): repeatNativeFilter(applied)
+        }
+    }
+
+    /// Filter ▸ Last Filter on a native apply: reruns the operation with
+    /// its committed settings on the current target, with no editor, as
+    /// one undo step through the usual preview begin and commit.
+    private func repeatNativeFilter(_ applied: AppliedNativeFilter) {
+        guard applied.isRepeatable, let settings = applied.settings, !closeStarted,
+              !previewBusy, !imageDocument.isClosing, !imageDocument.filterPreviewIsOpen,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        endPendingEdits()
+        // No panel reads FilterStart.values on a repeat, so the begin
+        // fetches no property list. The pending marks mirror startPreview,
+        // request generation included: other filters and edits refuse
+        // until the commit lands, and Escape or close still unwinds a
+        // begun session instead of committing it.
+        previewRequest += 1
+        let request = previewRequest
+        previewStartIsPending = true
+        imageDocument.filterPreviewIsOpen = true
+        imageDocument.beginFilterPreview(operation: applied.operation, properties: [],
+                                         preset: settings, lastFilter: applied.spec) { [weak self, imageDocument] result in
+            guard let self, self.previewStartIsPending, self.previewRequest == request else {
+                if case .success(let start) = result {
+                    imageDocument.finishFilter(start.filter, commit: false) { _ in }
+                }
+                return
+            }
+            self.previewStartIsPending = false
+            switch result {
+            case .failure(let error):
+                self.imageDocument.filterPreviewIsOpen = false
+                self.statusBar.message = "\(applied.title): \(error)"
+            case .success(let start):
+                self.repeatIsCommitting = true
+                imageDocument.finishFilter(start.filter, commit: true) { [weak self] success in
+                    self?.repeatIsCommitting = false
+                    imageDocument.filterPreviewIsOpen = false
+                    // A refused commit leaves the session open, and a
+                    // repeat has no panel to keep it for: abort it, even
+                    // if the window has gone meanwhile.
+                    if !success {
+                        imageDocument.finishFilter(start.filter, commit: false) { _ in }
+                    }
+                }
+            }
+        }
     }
 
     /// Filter ▸ Fade: blends the newest filter Apply with the layer as
@@ -1985,8 +2084,31 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func reshowLastFilter(_ sender: Any?) {
-        guard let last = PlugInCommands.last else { return }
-        run(last, mode: .interactive)
+        guard let last = FilterCommands.last else { return }
+        switch last {
+        case .plugIn(let procedure): run(procedure, mode: .interactive)
+        case .native(let applied): reshowNativeFilter(applied)
+        }
+    }
+
+    /// Filter ▸ Last Filter Settings on a native apply: reopens the
+    /// filter's own editor seeded with what Apply committed.
+    private func reshowNativeFilter(_ applied: AppliedNativeFilter) {
+        guard !previewBusy, !imageDocument.isClosing else { return }
+        if applied.operation == GaussianBlurPanel.operation && applied.variant == nil {
+            openGaussianBlur(initialDeviation: applied.gaussianDeviation, preset: applied.settings)
+            return
+        }
+        if applied.operation == RankFilterPanel.operation, let variant = applied.variant,
+           let rank = RankFilterPanel.Rank(variantTitle: variant) {
+            openRankFilter(rank, initialRadius: applied.rankRadius, preset: applied.settings)
+            return
+        }
+        guard let operation = NativeFilterCatalog.shared.operation(named: applied.operation) else {
+            statusBar.message = "\(applied.title) is not available."
+            return
+        }
+        openNativeFilter(operation, preset: applied.settings)
     }
 
     /// Runs a plug-in command on this document, as its menu item does.
@@ -3358,16 +3480,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             // A plug-in would run on every selected layer: a batch operation.
             return singleLayerItemAllowed(menuItem, action: command.procedure.label)
         case #selector(repeatLastFilter(_:)), #selector(reshowLastFilter(_:)):
-            let base = menuItem.action == #selector(repeatLastFilter(_:)) ? "Last Filter" : "Last Filter Settings…"
-            guard let last = PlugInCommands.last else {
-                menuItem.title = base
+            let isRepeat = menuItem.action == #selector(repeatLastFilter(_:))
+            guard let last = FilterCommands.last else {
+                menuItem.title = isRepeat ? "Last Filter" : "Last Filter Settings…"
                 return false
             }
-            let title = last.label.replacingOccurrences(of: "…", with: "")
-            menuItem.title = menuItem.action == #selector(repeatLastFilter(_:))
-                ? "Last Filter: \(title)" : "Last Filter Settings: \(title)…"
-            guard !editingBlocked && !previewBusy && imageDocument.canRun(last) else { return false }
-            return singleLayerItemAllowed(menuItem, action: last.label)
+            // A filter that cannot safely repeat stays named but disabled,
+            // never falling back to an older apply.
+            menuItem.title = isRepeat ? "Last Filter: \(last.title)" : "Last Filter Settings: \(last.title)…"
+            switch last {
+            case .plugIn(let procedure):
+                guard !editingBlocked && !previewBusy && imageDocument.canRun(procedure) else { return false }
+                return singleLayerItemAllowed(menuItem, action: procedure.label)
+            case .native(let applied):
+                return validateNativeLastFilter(menuItem, applied: applied,
+                                                isRepeat: isRepeat, editingBlocked: editingBlocked)
+            }
         case #selector(fadeLastFilter(_:)):
             guard let target = imageDocument.fadeTarget else {
                 menuItem.title = "Fade…"
@@ -3384,6 +3512,32 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         default:
             return !editingBlocked
         }
+    }
+
+    /// The cached rules a Last Filter item reuses from the applied
+    /// filter's own menu command: the dedicated panels' checks, or the
+    /// catalog item's support, oilify, target and multi-selection gates.
+    /// Validation makes no engine call.
+    private func validateNativeLastFilter(_ menuItem: NSMenuItem, applied: AppliedNativeFilter,
+                                          isRepeat: Bool, editingBlocked: Bool) -> Bool {
+        guard !editingBlocked, !previewBusy else { return false }
+        if isRepeat { guard applied.isRepeatable, applied.settings != nil else { return false } }
+        if applied.operation == GaussianBlurPanel.operation && applied.variant == nil {
+            return singleLayerItemAllowed(menuItem, action: "Gaussian Blur")
+        }
+        if applied.operation == RankFilterPanel.operation, applied.variant != nil {
+            return singleLayerItemAllowed(menuItem, action: applied.title)
+        }
+        guard let operation = NativeFilterCatalog.shared.operation(named: applied.operation),
+              NativeFilterMenuLayout.supportsParameterEditor(operation)
+                || NativeFilterMenuLayout.usesSourceChooser(operation) else { return false }
+        if operation.name == SourceFilterOperation.oilify.rawValue,
+           !imageDocument.session.supportsOilifySources { return false }
+        guard let target = imageDocument.activeLayer else { return false }
+        if NativeFilterMenuLayout.usesSourceChooser(operation) {
+            return imageDocument.sourceFilterRefusal(target: target) == nil
+        }
+        return singleLayerItemAllowed(menuItem, action: operation.title)
     }
 
     // MARK: Printing

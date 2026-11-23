@@ -58,11 +58,18 @@ final class ImageDocument {
     private struct FilterPreviewRecord {
         let operation: String?
         let coverage: Coverage
+        /// How a Filter-menu apply joins Last Filter and Recently Used;
+        /// nil for previews that are not filter applies (Adjust entries,
+        /// existing-effect edits, any engine-level begin without a menu).
+        let lastFilter: LastFilterSpec?
         enum Coverage {
             /// A new filter on an ordinary layer: semantic capture coverage.
             case layer(Int32)
             /// A supported adjustment bound to the settled mask at session start.
             case mask(RecorderTargetContext)
+            /// A captured-source filter: its Apply records the same explicit
+            /// unsupported row a record-less session always produced.
+            case capturedSource
             /// An existing-effect edit or an unsupported drawable:
             /// recorded as an explicit unsupported row, never a layer adjustment.
             case unsupported(String)
@@ -6662,6 +6669,8 @@ final class ImageDocument {
     /// startPreview has already reserved the document's preview gate.
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
                             target: Int32, source: Int32?,
+                            preset: CommittedFilterSettings? = nil,
+                            lastFilter: LastFilterSpec? = nil,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
@@ -6675,6 +6684,7 @@ final class ImageDocument {
             let result = Result<FilterPreviewStart, Error> {
                 try self.requirePaintTarget()
                 let filter = try session.beginFilter(image: image, drawable: target, operation: operation, source: source)
+                try Self.applyPreset(preset, to: filter, session: session)
                 var values: [String: EngineSession.FilterValue] = [:]
                 for property in properties where property.kind.isEditable {
                     values[property.name] = try? session.filterProperty(filter, property.name)
@@ -6683,6 +6693,10 @@ final class ImageDocument {
             }
             DispatchQueue.main.async {
                 defer { self.jobDidFinish(input: false) }
+                if case .success(let start) = result {
+                    self.filterPreviewRecords[start.filter] = .init(operation: operation,
+                                                                   coverage: .capturedSource, lastFilter: lastFilter)
+                }
                 completion(result)
             }
         }
@@ -6692,6 +6706,8 @@ final class ImageDocument {
     /// single-source filters. Native169 freshly validates all three identities.
     func beginDisplacePreview(properties: [EngineSession.FilterProperty], target: Int32,
                               xSource: Int32, ySource: Int32,
+                              preset: CommittedFilterSettings? = nil,
+                              lastFilter: LastFilterSpec? = nil,
                               completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
@@ -6705,6 +6721,7 @@ final class ImageDocument {
             let result = Result<FilterPreviewStart, Error> {
                 try self.requirePaintTarget()
                 let filter = try session.beginDisplace(image: image, drawable: target, xSource: xSource, ySource: ySource)
+                try Self.applyPreset(preset, to: filter, session: session)
                 var values: [String: EngineSession.FilterValue] = [:]
                 for property in properties where property.kind.isEditable {
                     values[property.name] = try? session.filterProperty(filter, property.name)
@@ -6713,6 +6730,10 @@ final class ImageDocument {
             }
             DispatchQueue.main.async {
                 defer { self.jobDidFinish(input: false) }
+                if case .success(let start) = result {
+                    self.filterPreviewRecords[start.filter] = .init(operation: "gegl:displace",
+                                                                   coverage: .capturedSource, lastFilter: lastFilter)
+                }
                 completion(result)
             }
         }
@@ -6722,6 +6743,8 @@ final class ImageDocument {
     /// Native Oilify validates and snapshots the supplied maps before attaching.
     func beginOilifyPreview(properties: [EngineSession.FilterProperty], target: Int32,
                             radiusSource: Int32?, exponentSource: Int32?,
+                            preset: CommittedFilterSettings? = nil,
+                            lastFilter: LastFilterSpec? = nil,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
@@ -6736,10 +6759,15 @@ final class ImageDocument {
                 try self.requirePaintTarget()
                 let filter = try session.beginOilify(image: image, drawable: target,
                                                      radiusSource: radiusSource, exponentSource: exponentSource)
+                try Self.applyPreset(preset, to: filter, session: session)
                 return try Self.previewStart(filter, operation: "gegl:oilify", properties: properties, session: session)
             }
             DispatchQueue.main.async {
                 defer { self.jobDidFinish(input: false) }
+                if case .success(let start) = result {
+                    self.filterPreviewRecords[start.filter] = .init(operation: "gegl:oilify",
+                                                                   coverage: .capturedSource, lastFilter: lastFilter)
+                }
                 completion(result)
             }
         }
@@ -6813,6 +6841,8 @@ final class ImageDocument {
     /// job counts down, so a stale completion that aborts the session it
     /// just created still keeps the close drain waiting.
     func beginFilterPreview(operation: String, properties: [EngineSession.FilterProperty],
+                            preset: CommittedFilterSettings? = nil,
+                            lastFilter: LastFilterSpec? = nil,
                             completion: @escaping @MainActor (Result<FilterPreviewStart, Error>) -> Void) {
         guard !recorder.isReplaying else { return completion(.failure(DocumentError.busy)) }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
@@ -6850,11 +6880,13 @@ final class ImageDocument {
             let result = Result<FilterPreviewStart, Error> {
                 try self.requirePaintTarget()
                 let filter = try session.beginFilter(image: image, drawable: drawable, operation: operation)
+                try Self.applyPreset(preset, to: filter, session: session)
                 return try Self.previewStart(filter, operation: operation, properties: properties, session: session)
             }
             DispatchQueue.main.async {
                 if case .success(let start) = result {
-                    self.filterPreviewRecords[start.filter] = .init(operation: operation, coverage: coverage)
+                    self.filterPreviewRecords[start.filter] = .init(operation: operation, coverage: coverage,
+                                                                   lastFilter: lastFilter)
                 }
                 completion(result)
                 self.jobDidFinish(input: false)
@@ -6888,7 +6920,8 @@ final class ImageDocument {
             DispatchQueue.main.async {
                 if case .success(let start) = result {
                     self.filterPreviewRecords[start.filter] = .init(operation: operation,
-                        coverage: .unsupported("Recorder does not yet save an edit to an existing effect."))
+                        coverage: .unsupported("Recorder does not yet save an edit to an existing effect."),
+                        lastFilter: nil)
                 }
                 completion(result)
                 self.jobDidFinish(input: false)
@@ -6919,6 +6952,9 @@ final class ImageDocument {
             if recorder.isRecording {
                 let context: RecorderContext?
                 switch record?.coverage {
+                case .capturedSource?:
+                    let title = record?.operation.flatMap { NativeFilterCatalog.shared.operation(named: $0)?.title }
+                    context = .unavailable("Recorder does not yet save \(title ?? "this filter") with a captured source.")
                 case .unsupported(let reason)?: context = .unavailable(reason)
                 case _ where !Self.recordedFilterOperations.contains(record?.operation ?? ""):
                     let title = record?.operation.flatMap { NativeFilterCatalog.shared.operation(named: $0)?.title }
@@ -6966,6 +7002,18 @@ final class ImageDocument {
                 }
                 catch { settingsFailure = error }
             }
+            // The committed settings of a Filter-menu apply, read behind
+            // every queued preview write, so Last Filter and Last Filter
+            // Settings replay exactly what Apply committed.
+            var lastFilterEntry: AppliedNativeFilter?
+            if commit, let operation = record?.operation, let spec = record?.lastFilter {
+                let settings = Self.committedSettings(spec: spec, operation: operation,
+                                                      filter: filter, session: session)
+                lastFilterEntry = AppliedNativeFilter(operation: operation, variant: spec.variant,
+                                                      title: spec.title, capture: spec.capture,
+                                                      isRepeatable: spec.isRepeatable && settings != nil,
+                                                      settings: settings)
+            }
             var success = false
             var commitError: Error?
             do {
@@ -7001,12 +7049,64 @@ final class ImageDocument {
             }
             DispatchQueue.main.async {
                 if success { self.filterPreviewRecords[filter] = nil }
-                if success && commit { self.fadeCandidate = fade }
+                if success && commit {
+                    self.fadeCandidate = fade
+                    if let lastFilterEntry { FilterCommands.record(.native(lastFilterEntry)) }
+                }
                 completion(success)
             }
         }
         // Notify only after queue admission/counting, like every reservation.
         if capture != nil { notifyRecorderChanged() }
+    }
+
+    /// Writes committed settings into the session a begin just opened. The
+    /// caller never learns that session's id when this throws, so a refused
+    /// write aborts it here.
+    private nonisolated static func applyPreset(_ preset: CommittedFilterSettings?, to filter: Int32,
+                                                session: EngineSession) throws {
+        guard let preset else { return }
+        do { try preset.apply(to: session, filter: filter) }
+        catch {
+            try? session.abortFilter(filter)
+            throw error
+        }
+    }
+
+    /// The committed settings a `LastFilterSpec` asks for: the operation's
+    /// whole-settings read for the closed-schema editors, or every named
+    /// property's current value. `.names` is all-or-nothing, a partial
+    /// snapshot would replay a different filter than the one applied.
+    private nonisolated static func committedSettings(spec: LastFilterSpec, operation: String,
+                                                      filter: Int32, session: EngineSession) -> CommittedFilterSettings? {
+        switch spec.capture {
+        case .whole:
+            switch operation {
+            case "gimp:brightness-contrast":
+                return (try? session.brightnessContrastSettings(filter)).map(CommittedFilterSettings.brightnessContrast)
+            case "gimp:color-balance":
+                return (try? session.colorBalanceSettings(filter)).map(CommittedFilterSettings.colorBalance)
+            case "gimp:curves":
+                return (try? session.curvesSettings(filter)).map(CommittedFilterSettings.curves)
+            case "gimp:hue-saturation":
+                return (try? session.hueSaturationSettings(filter)).map(CommittedFilterSettings.hueSaturation)
+            case "gimp:levels":
+                return (try? session.levelsSettings(filter)).map(CommittedFilterSettings.levels)
+            case EngineSession.gaussianBlurOperation:
+                return (try? session.gaussianBlurSettings(filter)).map(CommittedFilterSettings.gaussianBlur)
+            case EngineSession.unsharpMaskOperation:
+                return (try? session.unsharpMaskSettings(filter)).map(CommittedFilterSettings.unsharpMask)
+            default:
+                return nil
+            }
+        case .names(let names):
+            var values: [String: EngineSession.FilterValue] = [:]
+            for name in names {
+                guard let value = try? session.filterProperty(filter, name) else { return nil }
+                values[name] = value
+            }
+            return .properties(values)
+        }
     }
 
     /// A live-preview property write through the typed setter, behind

@@ -1,19 +1,16 @@
 import AppKit
 
 /// App-wide state of plug-in commands: the one that is running (the engine
-/// runs one at a time) and the recently used ones for the Filter menu.
+/// runs one at a time). Completed runs join native filter applies in
+/// `FilterCommands` for Last Filter and Recently Used.
 @MainActor
 enum PlugInCommands {
-    static let maximumRecent = 8
     static let didFinishNotification = Notification.Name("ch.lkmc.Glims.plugInDidFinish")
 
     /// The running command and the document it works on.
     private(set) static var running: (procedure: EngineSession.Procedure, document: ImageDocument)?
-    /// Most recent first. Only image commands count, as in GIMP's history.
-    private(set) static var recent: [EngineSession.Procedure] = []
 
     static var isRunning: Bool { running != nil }
-    static var last: EngineSession.Procedure? { recent.first }
 
     static func willRun(_ procedure: EngineSession.Procedure, on document: ImageDocument) {
         running = (procedure, document)
@@ -26,10 +23,7 @@ enum PlugInCommands {
             NotificationCenter.default.post(name: didFinishNotification, object: nil)
         }
         guard outcome == .completed else { return }
-        recent.removeAll { $0.name == procedure.name }
-        recent.insert(procedure, at: 0)
-        recent = Array(recent.prefix(maximumRecent))
-        PlugInMenus.updateRecent()
+        FilterCommands.record(.plugIn(procedure))
     }
 }
 
@@ -67,16 +61,6 @@ enum PlugInMenus {
                 }
                 append(node, to: menu)
             }
-        }
-    }
-
-    /// Rebuilds the Filter menu's Recently Used submenu.
-    static func updateRecent() {
-        guard let menu = NSApp.mainMenu?.item(withTitle: GlimsMenu.filter.rawValue)?.submenu?
-            .item(withTitle: MainMenu.recentlyUsedTitle)?.submenu else { return }
-        menu.removeAllItems()
-        for procedure in PlugInCommands.recent {
-            menu.addItem(commandItem(procedure))
         }
     }
 
