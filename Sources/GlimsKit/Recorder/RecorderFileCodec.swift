@@ -41,7 +41,9 @@ enum RecorderFileCodec {
     static let mattingVersion = 34
     /// Image > Adjust > Variations; renumber if another branch takes 35 first.
     static let variationsVersion = 35
-    static let latestVersion = variationsVersion
+    /// Select > Color Range; renumber if another branch takes 36 first.
+    static let colorRangeVersion = 36
+    static let latestVersion = colorRangeVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -169,6 +171,7 @@ enum RecorderFileCodec {
         var hasLayerEdits = false
         var hasMatting = false
         var hasVariations = false
+        var hasColorRange = false
         var usedSymbols: Set<UUID> = []
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
@@ -206,6 +209,7 @@ enum RecorderFileCodec {
                 if case .cropResize = command { hasCropResize = true }
                 if case .matting = command { hasMatting = true }
                 if case .applyVariations = command { hasVariations = true }
+                if case .colorRange = command { hasColorRange = true }
                 if case .moveLayer = command { hasLayerEdits = true }
                 if case .duplicateLayers = command { hasLayerEdits = true }
                 if case .deleteLayers = command { hasLayerEdits = true }
@@ -358,6 +362,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == variationsVersion, !hasVariations {
             throw RecorderFileError.invalid("Version 35 requires a successful Variations command.")
+        }
+        if fileVersion == colorRangeVersion, !hasColorRange {
+            throw RecorderFileError.invalid("Version 36 requires a successful Color Range command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -986,6 +993,22 @@ enum RecorderFileCodec {
             guard version >= variationsVersion else { throw RecorderFileError.invalid("A Variations command needs recording version 35.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyVariations(try variations(value.get("settings")))
+        case "colorRange":
+            guard version >= colorRangeVersion else { throw RecorderFileError.invalid("A Color Range command needs recording version 36.") }
+            let value = try Object(node, required: ["tag", "mode", "fuzziness", "invert", "samples"])
+            guard let mode = RecorderColorRangeValue.Mode(rawValue: try string(value.get("mode"))) else {
+                throw RecorderFileError.invalid("Unknown color range mode.")
+            }
+            let samples = try array(value.get("samples")).map { node -> RecorderColorRangeValue.Sample in
+                let sample = try Object(node, required: ["red", "green", "blue", "subtract"])
+                return RecorderColorRangeValue.Sample(red: try number(sample.get("red")),
+                                                      green: try number(sample.get("green")),
+                                                      blue: try number(sample.get("blue")),
+                                                      subtract: try bool(sample.get("subtract")))
+            }
+            return .colorRange(try RecorderColorRangeValue(mode: mode,
+                fuzziness: try number(value.get("fuzziness")),
+                invert: try bool(value.get("invert")), samples: samples).validated())
         case "applyBrightnessContrast":
             guard version >= brightnessContrastVersion else { throw RecorderFileError.invalid("A Brightness/Contrast command needs recording version 10.") }
             let value = try Object(node, required: ["tag", "settings"])
@@ -1441,6 +1464,7 @@ enum RecorderFileCodec {
             guard layer(id) else { throw RecorderFileError.invalid("A Variations command needs a layer description.") }
             return
         case (.mergeVisible, .none): return
+        case (.colorRange, .none): return
         case (.selectSimilar(_, _, let sampleMerged), .none) where sampleMerged: return
         case (.selectSimilar(_, _, let sampleMerged), .context) where !sampleMerged: break
         case (.adjustment, .context): break

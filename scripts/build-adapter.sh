@@ -153,6 +153,13 @@ if [[ "$MODE" == test ]]; then
     die "plug-ins reported load errors during the tests; see $OUT/test.log"
   criticals="$(grep -c "CRITICAL" "$OUT/test.log" || true)"
   (( criticals == 0 )) || echo "!! $criticals GLib CRITICAL message(s) during the tests; see $OUT/test.log"
+  # The Color Range kernel is pure C, so its harness runs alongside the
+  # engine suites without starting GIMP.
+  status=0
+  run_with_timeout 120 "$OUT/color-range-math-test.log" \
+    python3 "$ROOT/scripts/test-color-range-math.py" || status=$?
+  cat "$OUT/color-range-math-test.log"
+  (( status == 0 )) || die "the Color Range math tests failed (status $status)"
   # Each native runner below starts the engine cold with a fresh home, so
   # GIMP queries every plug-in before the first check. On a loaded Mac that
   # start alone has taken about three minutes; the checks take seconds.

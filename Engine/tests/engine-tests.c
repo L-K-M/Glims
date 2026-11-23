@@ -15038,6 +15038,272 @@ test_image_variations (void)
   api->image_close (engine, a);
 }
 
+/* Slots 257/258: Select > Color Range. Four solid quadrants (a bright red,
+ * a near-black, a near-white and a light blue) make every mode's selection
+ * exact. The weighted pixel count comes from drawable_histogram, the same
+ * selection-weighted read the Smooth Selection test uses. */
+static void
+test_color_range (void)
+{
+  uint8_t blocks[8 * 8 * 4];
+  GlimsImageID image = 0, preview_image = 0;
+  GlimsItemID  layer;
+  GlimsColorRangeSample sample = { 1.0, 100.0 / 255.0, 100.0 / 255.0, 0 };
+  GlimsColorRangeSettings settings = { .struct_size = sizeof settings };
+  GlimsSelectOptions none = { .struct_size = sizeof none,
+                              .operation = GLIMS_SELECT_REPLACE };
+  GlimsUndoInfo undo;
+  GlimsRect bounds;
+  bool      empty = true;
+  int32_t   depth, w = 0, h = 0;
+  uint8_t   mask[4 * 4];
+  char     *error = NULL;
+
+  for (int y = 0; y < 8; y++)
+    for (int x = 0; x < 8; x++)
+      {
+        uint8_t *p = blocks + (y * 8 + x) * 4;
+
+        if (y < 4 && x < 4)
+          memcpy (p, (uint8_t[]) { 255, 100, 100, 255 }, 4);
+        else if (y < 4)
+          memcpy (p, (uint8_t[]) { 250, 250, 250, 255 }, 4);
+        else if (x < 4)
+          memcpy (p, (uint8_t[]) { 8, 8, 12, 255 }, 4);
+        else
+          memcpy (p, (uint8_t[]) { 120, 160, 255, 255 }, 4);
+      }
+
+  if ((size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, selection_color_range) +
+        sizeof api->selection_color_range || ! api->selection_color_range ||
+      (size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, color_range_preview) +
+        sizeof api->color_range_preview || ! api->color_range_preview)
+    {
+      CHECK (false, "the adapter exports slots 257/258 selection_color_range/color_range_preview");
+      return;
+    }
+
+  settings.mode = GLIMS_COLOR_RANGE_SAMPLED;
+  settings.fuzziness = 40;
+  settings.invert = 0;
+  settings.sample_count = 1;
+  settings.samples = &sample;
+
+  CHECK (api->image_from_pixels (engine, 8, 8, blocks, sizeof blocks, &image, NULL) ==
+         GLIMS_STATUS_OK && image != 0,
+         "the Color Range fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  depth = undo_depth (image);
+
+  CHECK (api->selection_color_range (engine, image, &settings, &error) ==
+         GLIMS_STATUS_OK,
+         "Sampled Colors applies%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (image) == depth + 1 &&
+         api->image_undo_info (engine, image, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Color Range") == 0,
+         "Sampled Colors is one undo step named Color Range (next: %s)", undo.next_undo);
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 4, 4) &&
+         selected_pixels (image, layer) == 16,
+         "the sampled red block is selected exactly (%.1f pixels)",
+         selected_pixels (image, layer));
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "undo restores the empty selection");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 4, 4),
+         "redo restores the sampled selection");
+
+  /* Invert selects everything the sample did not. With the sampled block
+   * still selected the command would work only inside it, so clear it. */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  settings.invert = 1;
+  depth = undo_depth (image);
+  CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "Invert applies as one step");
+  CHECK (api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 8, 8) &&
+         selected_pixels (image, layer) == 48,
+         "Invert selects the other three blocks (%.1f pixels)",
+         selected_pixels (image, layer));
+  settings.invert = 0;
+
+  /* An active rectangle limits the range to itself. */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                     (GlimsPoint[]) { { 0, 0 }, { 2, 2 } }, 2, &none);
+  depth = undo_depth (image);
+  CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 2, 2) &&
+         selected_pixels (image, layer) == 4,
+         "an active selection limits the range (%.1f pixels)",
+         selected_pixels (image, layer));
+
+  /* Fixed ranges ignore Fuzziness and samples. */
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  settings.mode = GLIMS_COLOR_RANGE_REDS;
+  settings.sample_count = 0;
+  settings.samples = NULL;
+  CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 4, 4) &&
+         selected_pixels (image, layer) == 16,
+         "Reds selects only the red block (%.1f pixels)",
+         selected_pixels (image, layer));
+
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  settings.mode = GLIMS_COLOR_RANGE_SHADOWS;
+  CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 4, 4, 4) &&
+         selected_pixels (image, layer) == 16,
+         "Shadows selects only the dark block (%.1f pixels)",
+         selected_pixels (image, layer));
+
+  api->image_close (engine, image);
+  image = 0;
+
+  /* The preview is a scaled mask and changes no history. */
+  CHECK (api->image_from_pixels (engine, 8, 8, blocks, sizeof blocks,
+                                 &preview_image, NULL) == GLIMS_STATUS_OK &&
+         preview_image != 0, "the Color Range preview fixture exists");
+  if (preview_image)
+    {
+      settings.mode = GLIMS_COLOR_RANGE_SAMPLED;
+      settings.sample_count = 1;
+      settings.samples = &sample;
+      depth = undo_depth (preview_image);
+      memset (mask, 0, sizeof mask);
+      CHECK (api->color_range_preview (engine, preview_image, &settings, 4,
+                                      NULL, 0, &w, &h, &error) ==
+             GLIMS_STATUS_OK && w == 4 && h == 4 && undo_depth (preview_image) == depth,
+             "a NULL mask queries the reduced size (%dx%d)", w, h);
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->color_range_preview (engine, preview_image, &settings, 4,
+                                      mask, sizeof mask, &w, &h, &error) ==
+             GLIMS_STATUS_OK && w == 4 && h == 4 && undo_depth (preview_image) == depth,
+             "the reduced preview keeps the history%s%s",
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (mask[0] == 255 && mask[1] == 0 && mask[4] == 0 && mask[5] == 0,
+             "the reduced preview marks only the red quadrant (%u %u %u %u)",
+             mask[0], mask[1], mask[4], mask[5]);
+
+      CHECK (api->color_range_preview (engine, preview_image, &settings, 0,
+                                      mask, sizeof mask, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+             api->color_range_preview (engine, preview_image, &settings, 513,
+                                      mask, sizeof mask, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a preview size outside 1...512 is refused");
+      CHECK (api->color_range_preview (engine, preview_image, &settings, 4,
+                                      mask, 15, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a short preview buffer is refused");
+
+      /* Every refusal leaves the selection and history untouched. */
+      sample.subtract = 1;
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && undo_depth (preview_image) == depth,
+             "a sample list without an add is refused");
+      api->free_string (error);
+      error = NULL;
+      sample.subtract = 0;
+
+      settings.mode = GLIMS_COLOR_RANGE_REDS;
+      settings.sample_count = 1;
+      settings.samples = &sample;
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && undo_depth (preview_image) == depth,
+             "a fixed range with a sample is refused");
+      api->free_string (error);
+      error = NULL;
+      settings.mode = GLIMS_COLOR_RANGE_SAMPLED;
+      settings.sample_count = 0;
+      settings.samples = NULL;
+
+      settings.fuzziness = 201;
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "fuzziness 201 is refused");
+      api->free_string (error);
+      error = NULL;
+      settings.fuzziness = NAN;
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "NaN fuzziness is refused");
+      api->free_string (error);
+      error = NULL;
+      settings.fuzziness = 40;
+
+      {
+        GlimsColorRangeSample many[GLIMS_COLOR_RANGE_MAX_SAMPLES + 1];
+
+        memset (many, 0, sizeof many);
+        settings.sample_count = GLIMS_COLOR_RANGE_MAX_SAMPLES + 1;
+        settings.samples = many;
+        CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+               GLIMS_STATUS_INVALID_ARGUMENT,
+               "65 samples are refused");
+        api->free_string (error);
+        error = NULL;
+      }
+
+      settings.sample_count = 1;
+      settings.samples = &sample;
+      settings.invert = 2;
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "invert 2 is refused");
+      api->free_string (error);
+      error = NULL;
+      settings.invert = 0;
+
+      settings.struct_size = offsetof (GlimsColorRangeSettings, mode);
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a short settings struct is refused");
+      api->free_string (error);
+      error = NULL;
+      settings.struct_size = sizeof settings;
+
+      /* No pixel reaches half a step, so nothing matches. */
+      sample.red = 1.0;
+      sample.green = 0.0;
+      sample.blue = 1.0;
+      settings.fuzziness = 0;
+      CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
+             GLIMS_STATUS_FAILED && error &&
+             strcmp (error, "No pixels match the color range.") == 0 &&
+             undo_depth (preview_image) == depth,
+             "an empty range refuses with its message (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+
+      CHECK (api->selection_bounds (engine, preview_image, &empty, &bounds) ==
+             GLIMS_STATUS_OK && empty,
+             "every refusal leaves the selection empty");
+      CHECK (api->selection_color_range (engine, 123456, &settings, NULL) ==
+             GLIMS_STATUS_NOT_FOUND,
+             "an unknown image is NOT_FOUND");
+
+      api->image_close (engine, preview_image);
+      preview_image = 0;
+    }
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -17148,6 +17414,7 @@ main (int argc, char **argv)
   test_layer_matting ();
   test_edit_purge ();
   test_image_variations ();
+  test_color_range ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

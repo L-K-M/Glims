@@ -110,6 +110,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, mattingVersion)
             case .success(.applyVariations, _):
                 fileVersion = max(fileVersion, variationsVersion)
+            case .success(.colorRange, _):
+                fileVersion = max(fileVersion, colorRangeVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -445,6 +447,15 @@ extension RecorderFileCodec {
                 "shadows": try rangeJSON(balance.shadows), "midtones": try rangeJSON(balance.midtones),
                 "highlights": try rangeJSON(balance.highlights),
                 "preserveLuminosity": .bool(balance.preserveLuminosity)])])
+        case .colorRange(let value):
+            let value = try value.validated()
+            return .object(["tag": .string("colorRange"),
+                            "mode": .string(value.mode.rawValue),
+                            "fuzziness": try d(value.fuzziness),
+                            "invert": .bool(value.invert),
+                            "samples": .array(try value.samples.map {
+                                .object(["red": try d($0.red), "green": try d($0.green),
+                                         "blue": try d($0.blue), "subtract": .bool($0.subtract)]) })])
         case .applyVariations(let variations):
             let variations = try variations.validated()
             func rangeJSON(_ range: RecorderVariationsValue.Range) throws -> RecorderJSON {

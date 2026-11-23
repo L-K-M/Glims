@@ -134,7 +134,8 @@ version 33: a Move Layer offset, Duplicate Layers, Delete Layers, Merge
 Visible, Add Layer Mask and Select Similar, Layer > Matting version 34:
 Defringe, Remove Black Matte and Remove White Matte, and Image > Adjust
 > Variations version 35 with its three tonal ranges, lightness and
-saturation. See
+saturation, and Select > Color Range version 36 with its mode, fuzziness,
+Invert and sampled colors. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

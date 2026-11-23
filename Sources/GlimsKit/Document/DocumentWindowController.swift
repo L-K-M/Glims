@@ -107,6 +107,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Image ▸ Adjust ▸ Variations…'s sheet content, retained while the
     /// sheet is open so validation and the smoke test can read its model.
     private(set) var variationsForm: VariationsForm?
+    /// Select ▸ Color Range…'s utility panel, retained while it is open so
+    /// validation and the smoke test can reach its state. The panel owns
+    /// the canvas sampler hook and clears it when it closes.
+    private(set) var colorRangePanel: ColorRangePanel?
     /// View ▸ Show Grid's cached per-window state, defaulting to off.
     private(set) var gridViewState = GridViewState()
 
@@ -644,7 +648,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc override func deleteBackward(_ sender: Any?) { clearPixels(sender) }
     @objc override func cancelOperation(_ sender: Any?) {
-        if let previewPanel { previewPanel.cancel() }
+        if let colorRangePanel { colorRangePanel.cancel() }
+        else if let previewPanel { previewPanel.cancel() }
         else if let inkLevelsPanel { inkLevelsPanel.cancel() }
         else if let inkCurvesPanel { inkCurvesPanel.cancel() }
         else if let labCurvesPanel { labCurvesPanel.cancel() }
@@ -2058,6 +2063,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self?.variationsForm = nil
         }
     }
+
+    /// Select ▸ Color Range…: opens this document's utility panel. The
+    /// panel keeps the canvas clickable for its eyedroppers; other edits
+    /// are refused through the same preview gate a filter panel uses. The
+    /// menu validation already read the cached refusal; OK queues one
+    /// command and closes.
+    @objc func colorRange(_ sender: Any?) {
+        guard let window, !closeStarted, colorRangePanel == nil,
+              imageDocument.colorRangeRefusal() == nil else { return }
+        endPendingEdits()
+        let panel = ColorRangePanel(document: imageDocument, tools: canvas.tools)
+        panel.onClose = { [weak self, weak panel] in
+            guard let self, let panel, self.colorRangePanel === panel else { return }
+            self.colorRangePanel = nil
+            self.imageDocument.filterPreviewIsOpen = false
+        }
+        colorRangePanel = panel
+        imageDocument.filterPreviewIsOpen = true
+        panel.showWindow(nil)
+        stateDidChange()
+    }
     @objc func addTransparency(_ sender: Any?) { applyAdjustment(.addAlpha) }
     @objc func removeTransparency(_ sender: Any?) { applyAdjustment(.removeAlpha) }
 
@@ -3470,6 +3496,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let needsNoSheet = menuItem.action == #selector(defringe(_:))
             return refusal == nil && !editingBlocked && !previewBusy
                 && (!needsNoSheet || window?.attachedSheet == nil)
+        case #selector(colorRange(_:)):
+            // Cached admission only, like Similar; the engine revalidates
+            // the fresh projection and selection states. The utility panel
+            // keeps this document's canvas for its eyedroppers, so a second
+            // one cannot open while it is up.
+            let refusal = imageDocument.colorRangeRefusal()
+            menuItem.toolTip = refusal
+            return refusal == nil && !closeStarted && !editingBlocked && !previewBusy
+                && colorRangePanel == nil
         case #selector(selectSimilar(_:)):
             let refusal = imageDocument.selectSimilarRefusal
             menuItem.toolTip = refusal ?? Self.similarHint
@@ -4371,6 +4406,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         metadataSheet = nil
         adjustmentSheet?.invalidate()
 
+        colorRangePanel?.cancel()
         previewPanel?.cancel()
         if let token = inkPreviewToken { cancelInkAdjustment(token: token) }
         if let token = labPreviewToken { cancelLabAdjustment(token: token) }

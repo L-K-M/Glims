@@ -301,6 +301,11 @@ final class CanvasToolController {
     var onTextNeedsRestore: ((_ layer: Int32, _ stateVersion: Int) -> Void)?
     /// View-only refreshes never use onStatus, which clears error latches.
     var onHintChange: ((ToolHintPolicy.Refresh) -> Void)?
+    /// While Select > Color Range is open, a press samples for its panel
+    /// instead of running the current tool. Hand and Zoom keep their own
+    /// gestures; scrolling and keyboard zoom are untouched. Set by the
+    /// panel while it is open and cleared when it closes.
+    var canvasSampler: ((CGPoint, NSEvent.ModifierFlags) -> Void)?
 
     var hint: String {
         // An idle hint has modifier state, not a tablet device event. The
@@ -457,6 +462,10 @@ final class CanvasToolController {
         defer { hintChanged(.afterAction) }
         let point = canvas.imagePoint(for: event)
         let tool = pointerTool(for: event)
+        if let sampler = canvasSampler, tool != .hand, tool != .zoom {
+            sampler(point, event.modifierFlags)
+            return
+        }
         let optionDown = keyboard.optionIsDown(flags: event.modifierFlags)
         let canSampleLabBrush = document.storage.layout == .layeredLab && tool == .paintbrush &&
             document.session.supportsLayeredLabSampling

@@ -92,6 +92,10 @@ enum SemanticImageCommand {
     /// sample-merged form needs no target; the drawable form binds the
     /// captured paint target context.
     case selectSimilar(threshold: Double, antialias: Bool, sampleMerged: Bool)
+    /// Select ▸ Color Range: mode, fuzziness, Invert and sampled colors,
+    /// evaluated on the merged projection. Target-independent like the
+    /// whole-image selection commands.
+    case colorRange(EngineSession.ColorRangeSettings)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine in absolute image pixels, y down.
     /// The explicit layer lives in the document's runtime binding, never in
@@ -167,7 +171,7 @@ enum SemanticImageCommand {
     var requiresResolvedFloatingSelection: Bool {
         switch self {
         case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .matting, .applyVariations, .completeStroke, .completeTabletStroke: return true
-        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties, .selectSimilar: return false
+        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties, .selectSimilar, .colorRange: return false
         case .adjustment: return true
         }
     }
@@ -218,6 +222,7 @@ enum SemanticImageCommand {
         case .matting(let operation, _): return operation.title
         case .applyVariations: return "Variations"
         case .selectSimilar: return "Select Similar"
+        case .colorRange: return "Color Range"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
         case .transformProjectiveLayer: return "Transform Layer Perspective"
@@ -299,6 +304,8 @@ enum SemanticImageCommand {
             options.antialias = antialias
             options.sampleMerged = sampleMerged
             try session.selectSimilar(image, options: options)
+        case .colorRange(let settings):
+            try session.selectColorRange(image, settings: settings)
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .applyVariations:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:

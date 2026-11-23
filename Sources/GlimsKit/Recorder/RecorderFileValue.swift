@@ -415,6 +415,9 @@ enum RecorderFileCommand: Equatable {
     /// master lightness/saturation. The explicit layer is the record's
     /// `layer` binding; the command carries no native filter identity.
     case applyVariations(RecorderVariationsValue)
+    /// Select > Color Range: the mode, fuzziness, Invert and sampled colors.
+    /// Target-independent like the whole-image selection commands.
+    case colorRange(RecorderColorRangeValue)
     /// A newly applied Brightness/Contrast adjustment with its whole
     /// accepted settings. The explicit layer is the record's `layer`
     /// binding; the command carries no native filter/effect identity.
@@ -434,7 +437,7 @@ enum RecorderFileCommand: Equatable {
         case .selectColor(_, let options): return options.sampleMerged
         case .selectSimilar(_, _, let sampleMerged): return sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .mergeVisible: return true
+        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .mergeVisible, .colorRange: return true
         case .adjustment: return false
         }
     }

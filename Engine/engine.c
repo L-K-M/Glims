@@ -1569,6 +1569,16 @@ MARSHAL (image_variations_preview, {
                                          (int32_t *) a->count, (int32_t *) a->in_out,
                                          a->error);
 })
+MARSHAL (selection_color_range, {
+  const GlimsColorRangeSettings *settings = a->in;
+  return glims_selection_color_range (e, a->image, settings, a->error);
+})
+MARSHAL (color_range_preview, {
+  const GlimsColorRangeSettings *settings = a->in;
+  return glims_color_range_preview (e, a->image, settings, a->width, a->pixels,
+                                     a->stride, (int32_t *) a->count,
+                                     (int32_t *) a->in_out, a->error);
+})
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2612,6 +2622,32 @@ api_image_variations_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID la
   return glims_facade_call (e, GLIMS_FACADE_OP_image_variations_preview,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_variations_preview_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_selection_color_range (GlimsEngine *e, GlimsImageID image,
+                           const GlimsColorRangeSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .in = settings, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_selection_color_range,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            selection_color_range_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_color_range_preview (GlimsEngine *e, GlimsImageID image,
+                         const GlimsColorRangeSettings *settings, int32_t max_size,
+                         uint8_t *mask, size_t byte_count,
+                         int32_t *width, int32_t *height, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .in = settings, .width = max_size,
+                  .pixels = mask, .stride = byte_count,
+                  .count = width, .in_out = height, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_color_range_preview,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            color_range_preview_on_engine, &a, error);
 }
 
 static GlimsStatus

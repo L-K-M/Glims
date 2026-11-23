@@ -4914,6 +4914,58 @@ final class ImageDocument {
         if !accepted { deliver(nil) }
     }
 
+    // MARK: Color Range
+
+    /// Select > Color Range: why the command cannot run now, or nil. Reads
+    /// only cached state, so menu validation never calls the engine. The
+    /// merged projection is evaluated, so any ordinary target qualifies;
+    /// indexed documents and component layouts refuse, as does an active
+    /// floating selection.
+    func colorRangeRefusal() -> String? {
+        guard session.supportsColorRange else {
+            return "This image engine cannot select a color range."
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Color Range is available for ordinary layered images only."
+        }
+        guard colorInfo.mode != .indexed else {
+            return "Color Range is available for RGB and grayscale images only."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        return nil
+    }
+
+    /// Select > Color Range: replaces the whole-image selection through one
+    /// queued command and one undo step. The command reads the merged
+    /// projection, so it carries no layer binding. Cancel never reaches
+    /// this method.
+    func selectColorRange(_ settings: EngineSession.ColorRangeSettings) {
+        if let reason = colorRangeRefusal() {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        let command = SemanticImageCommand.colorRange(settings)
+        run(semantic: command, command.apply)
+    }
+
+    /// Renders the color-range mask off the main thread, through the
+    /// document's counted read queue, and delivers it on the main thread.
+    /// A refused read delivers nil; the panel drops stale generations.
+    func colorRangePreview(_ image: Int32, settings: EngineSession.ColorRangeSettings,
+                           maxSize: Int32,
+                           deliver: @escaping @MainActor ((width: Int, height: Int, mask: [UInt8])?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let preview = try? session.colorRangePreview(documentImage, settings: settings, maxSize: maxSize)
+            DispatchQueue.main.async { deliver(preview) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.

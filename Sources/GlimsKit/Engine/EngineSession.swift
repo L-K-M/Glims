@@ -3191,6 +3191,65 @@ final class EngineSession: @unchecked Sendable {
         let clipping: [UInt8]
     }
 
+    /// Select > Color Range's settings. Sampled Colors compares one or more
+    /// sampled colors with Fuzziness 0...200; the fixed modes replace them
+    /// with a hue sector or a luma band and ignore Fuzziness.
+    struct ColorRangeSettings: Equatable, Codable {
+        enum Mode: UInt32, CaseIterable, Codable {
+            case sampled = 1, reds, yellows, greens, cyans, blues, magentas,
+                 highlights, midtones, shadows
+
+            var title: String {
+                switch self {
+                case .sampled: return "Sampled Colors"
+                case .reds: return "Reds"
+                case .yellows: return "Yellows"
+                case .greens: return "Greens"
+                case .cyans: return "Cyans"
+                case .blues: return "Blues"
+                case .magentas: return "Magentas"
+                case .highlights: return "Highlights"
+                case .midtones: return "Midtones"
+                case .shadows: return "Shadows"
+                }
+            }
+        }
+
+        /// One sampled color. Components may lie slightly outside 0...1;
+        /// the engine clamps them before comparing.
+        struct Sample: Equatable, Codable {
+            var red: Double
+            var green: Double
+            var blue: Double
+            var subtract: Bool
+        }
+
+        var mode: Mode = .sampled
+        var fuzziness: Double = 40
+        var invert = false
+        var samples: [Sample] = []
+
+        var isValid: Bool {
+            fuzziness.isFinite && (0...200).contains(fuzziness)
+                && samples.count <= Int(GLIMS_COLOR_RANGE_MAX_SAMPLES)
+                && samples.allSatisfy {
+                    $0.red.isFinite && $0.green.isFinite && $0.blue.isFinite
+                }
+                && (mode == .sampled
+                    ? (!samples.isEmpty && samples.contains { !$0.subtract })
+                    : samples.isEmpty)
+        }
+
+        /// The engine-facing settings: a fixed mode never carries samples,
+        /// though the dialog keeps them for when Sampled Colors returns.
+        var engineSettings: ColorRangeSettings {
+            guard mode != .sampled else { return self }
+            var value = self
+            value.samples = []
+            return value
+        }
+    }
+
     func colorBalanceSettings(_ filter: Int32) throws -> ColorBalanceSettings {
         var raw = GlimsColorBalanceSettings()
         raw.struct_size = UInt32(MemoryLayout<GlimsColorBalanceSettings>.size)
@@ -5633,6 +5692,96 @@ final class EngineSession: @unchecked Sendable {
         raw.lightness = settings.lightness
         raw.saturation = settings.saturation
         return raw
+    }
+
+    /// Whether this adapter has both Select > Color Range slots (257/258).
+    /// Older adapters keep their selection commands and refuse cleanly.
+    var supportsColorRange: Bool {
+        guard let selectOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.selection_color_range),
+              let previewOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.color_range_preview) else {
+            return false
+        }
+        return Int(api.struct_size) >= selectOffset + MemoryLayout.size(ofValue: api.selection_color_range)
+            && Int(api.struct_size) >= previewOffset + MemoryLayout.size(ofValue: api.color_range_preview)
+            && api.selection_color_range != nil
+            && api.color_range_preview != nil
+    }
+
+    private static func colorRangeSamples(_ settings: ColorRangeSettings) -> [GlimsColorRangeSample] {
+        settings.samples.map {
+            GlimsColorRangeSample(red: $0.red, green: $0.green, blue: $0.blue,
+                                  subtract: $0.subtract ? 1 : 0)
+        }
+    }
+
+    /// Select > Color Range: replaces the selection with `settings`'s range
+    /// as one undo step named "Color Range". A fixed mode's samples are not
+    /// sent; the dialog keeps them for when Sampled Colors returns.
+    func selectColorRange(_ image: Int32, settings: ColorRangeSettings) throws {
+        guard supportsColorRange, let select = api.selection_color_range else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot select a color range.")
+        }
+        let settings = settings.engineSettings
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a sampled color and a fuzziness from 0 to 200.")
+        }
+        let samples = Self.colorRangeSamples(settings)
+        var raw = GlimsColorRangeSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsColorRangeSettings>.size)
+        raw.mode = settings.mode.rawValue
+        raw.fuzziness = settings.fuzziness
+        raw.invert = settings.invert ? 1 : 0
+        var error: UnsafeMutablePointer<CChar>?
+        try samples.withUnsafeBufferPointer { buffer in
+            raw.sample_count = UInt32(buffer.count)
+            raw.samples = buffer.baseAddress
+            try check(select(engine, image, &raw, &error), error)
+        }
+    }
+
+    /// Renders `settings`'s color-range mask at most `maxSize` on its long
+    /// side, one byte per pixel. A fixed mode's samples are not sent.
+    func colorRangePreview(_ image: Int32, settings: ColorRangeSettings,
+                           maxSize: Int32) throws -> (width: Int, height: Int, mask: [UInt8]) {
+        guard supportsColorRange, let preview = api.color_range_preview else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot render a color range preview.")
+        }
+        let settings = settings.engineSettings
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a sampled color and a fuzziness from 0 to 200.")
+        }
+        guard (1...512).contains(maxSize) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a color range preview size from 1 to 512 pixels.")
+        }
+        let samples = Self.colorRangeSamples(settings)
+        var raw = GlimsColorRangeSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsColorRangeSettings>.size)
+        raw.mode = settings.mode.rawValue
+        raw.fuzziness = settings.fuzziness
+        raw.invert = settings.invert ? 1 : 0
+        var mask = [UInt8](repeating: 0, count: Int(maxSize) * Int(maxSize))
+        var width: Int32 = 0
+        var height: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try samples.withUnsafeBufferPointer { buffer in
+            raw.sample_count = UInt32(buffer.count)
+            raw.samples = buffer.baseAddress
+            try mask.withUnsafeMutableBufferPointer { maskBuffer in
+                try check(preview(engine, image, &raw, maxSize, maskBuffer.baseAddress,
+                                  maskBuffer.count, &width, &height, &error), error)
+            }
+        }
+        let w = Int(width), h = Int(height)
+        guard w > 0, h > 0, w * h <= mask.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The color range preview size was invalid.")
+        }
+        return (width: w, height: h, mask: Array(mask.prefix(w * h)))
     }
 
     /// Whether this adapter offers Layer > Merge Visible (facade slot 235).

@@ -226,6 +226,7 @@ extension RecorderFileCommand {
         case .applyColorBalance(let settings): self = .applyColorBalance(try RecorderColorBalanceValue(settings))
         case .applyHueSaturation(let settings): self = .applyHueSaturation(try RecorderHueSaturationValue(settings))
         case .applyVariations(let settings): self = .applyVariations(try RecorderVariationsValue(settings))
+        case .colorRange(let settings): self = .colorRange(try RecorderColorRangeValue(settings))
         case .applyBrightnessContrast(let settings): self = .applyBrightnessContrast(try RecorderBrightnessContrastValue(settings))
         case .applyGaussianBlur(let settings): self = .applyGaussianBlur(try RecorderGaussianBlurValue(settings))
         case .applyUnsharpMask(let settings): self = .applyUnsharpMask(try RecorderUnsharpMaskValue(settings))

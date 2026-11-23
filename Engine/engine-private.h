@@ -769,6 +769,17 @@ GlimsStatus glims_image_variations_preview (GlimsEngine *e, GlimsImageID image, 
                                             uint8_t *pixels, size_t byte_count,
                                             uint8_t *clipping, size_t clipping_byte_count,
                                             int32_t *width, int32_t *height, char **error);
+/* color-range.c: facade slots 257/258. Both read the merged projection in
+ * straight nonlinear sRGB through glims_projection_prepare_read, evaluate
+ * the pure kernel's weights and limit them by the current selection. Apply
+ * replaces the root mask as one "Color Range" undo step; preview returns a
+ * scaled one-byte-per-pixel mask and changes no history. */
+GlimsStatus glims_selection_color_range (GlimsEngine *e, GlimsImageID image,
+                                        const GlimsColorRangeSettings *settings, char **error);
+GlimsStatus glims_color_range_preview (GlimsEngine *e, GlimsImageID image,
+                                      const GlimsColorRangeSettings *settings, int32_t max_size,
+                                      uint8_t *mask, size_t byte_count,
+                                      int32_t *width, int32_t *height, char **error);
 GlimsStatus glims_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
                                       int32_t count, GlimsItemID reference, uint32_t alignment,
                                       char **error);
