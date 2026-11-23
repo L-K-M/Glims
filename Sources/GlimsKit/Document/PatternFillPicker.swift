@@ -48,6 +48,9 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         )
     }()
     private var updatingTable = false
+    /// Called after the picker invalidated itself because its document
+    /// went away, so a host other than the Fill sheet can close too.
+    var onAbandoned: (() -> Void)?
 
     init(document: ImageDocument, currentIdentity: EngineSession.ResourceIdentity?) {
         self.model = ResourceChooserModel(kind: .pattern, currentIdentity: currentIdentity)
@@ -61,7 +64,10 @@ final class PatternFillPicker: NSObject, NSTableViewDataSource, NSTableViewDeleg
         controller.onChange = { [weak self] in self?.refresh() }
         controller.onCatalogDelivered = { [weak self] in self?.refresh() }
         controller.onThumbnailsDelivered = { [weak self] in self?.reloadTable(scrollToSelection: false) }
-        controller.onAbandoned = { [weak self] in self?.invalidate() }
+        controller.onAbandoned = { [weak self] in
+            self?.invalidate()
+            self?.onAbandoned?()
+        }
         buildContent()
         refresh()
     }

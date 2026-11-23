@@ -184,6 +184,29 @@ extension EngineSmokeTest {
                 && capturedSnapshot.resource == softIdentity && capturedSnapshot.source == cloneSource,
               "the brush captured before the panel session is unchanged by every action")
 
+        // Paint options travel through Update and Apply and need schema 2;
+        // without them the document is written as schema 1 again, which
+        // older versions still read.
+        func storedSchema() -> Int? {
+            presetStore.storedData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["schemaVersion"] as? Int
+        }
+        let fade = EngineSession.Brush.Fade(steps: 12, target: .background)
+        state.update(.paintbrush) { $0.paintMode = "multiply"; $0.spacing = 0.5; $0.fade = fade }
+        button(win, "Update selected preset with current settings")?.performClick(nil)
+        let optioned = try presetStore.load().first?.settings
+        check(optioned?.paintMode == "multiply" && optioned?.spacing == 0.5
+                && optioned?.fade == PaintToolPreset.Fade(brushFade: fade) && storedSchema() == 2,
+              "Update keeps the paint mode, spacing and fade in a schema 2 document")
+        state.update(.paintbrush) { $0.clearPaintOptions() }
+        button(win, "Apply selected preset")?.performClick(nil)
+        let reapplied = state.brush(for: .paintbrush)
+        check(reapplied.paintMode == "multiply" && reapplied.spacing == 0.5 && reapplied.fade == fade,
+              "Apply restores the paint mode, spacing and fade")
+        state.update(.paintbrush) { $0.clearPaintOptions() }
+        button(win, "Update selected preset with current settings")?.performClick(nil)
+        check(try presetStore.load().first?.settings.hasPaintOptions == false && storedSchema() == 1,
+              "a document without paint options is written as schema 1 again")
+
         // One bounded worker stroke through the ordinary document queue:
         // the applied identity resolves there, never in the panel.
         let image = try session.newImage(width: 64, height: 48)

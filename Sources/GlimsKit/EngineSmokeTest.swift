@@ -826,6 +826,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (export options)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "export-formats" {
+                try exerciseExportFormats(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (export-formats)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "region-anchor" {
                 try exerciseSelectionAnchor(session, documents: documents, regionOnly: true)
                 print(failures == 0 ? "PASSED (Region anchor)" : "FAILED: \(failures) failure(s)")
@@ -844,6 +849,16 @@ enum EngineSmokeTest {
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "tool-modifiers" {
                 try exerciseToolModifiers(session, documents: documents)
                 print(failures == 0 ? "PASSED (Tool Modifiers)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "paint-options" {
+                try exercisePaintOptions(session, documents: documents)
+                print(failures == 0 ? "PASSED (Paint Options)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "clone-pattern" {
+                try exerciseClonePattern(session, documents: documents)
+                print(failures == 0 ? "PASSED (Clone Pattern)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "clone-alignment" {
@@ -1300,11 +1315,14 @@ enum EngineSmokeTest {
             try exerciseLine(session, documents: documents)
             try exerciseNewImageContents(session, documents: documents)
             try exerciseImageDuplicate(session, documents: documents)
+            try exerciseExportFormats(session, work: work, documents: documents)
             try exerciseRotateArbitrary(session, documents: documents)
             try exerciseImageResolution(session, documents: documents)
             try exerciseAlignLayers(session, documents: documents)
             try exerciseSmoothSelection(session, documents: documents)
             try exerciseCloneAlignment(session, documents: documents)
+            try exercisePaintOptions(session, documents: documents)
+            try exerciseClonePattern(session, documents: documents)
             try exerciseToolModifiers(session, documents: documents)
             try exerciseEverydayAdjustments(session, work: work, documents: documents)
             // Older adapters lack slots 250/251; the dedicated case requires them.

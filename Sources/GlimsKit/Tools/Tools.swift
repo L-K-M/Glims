@@ -213,6 +213,9 @@ final class ToolState {
     var brushStore: BrushSelectionStore
     /// Where the gradient tool's preferences persist; tests inject a suite.
     var gradientStore: GradientToolStore
+    /// The current pattern, shared by Edit ▸ Fill and Clone's Pattern
+    /// source; tests inject a suite.
+    let patternStore: PatternFillStore
 
     private(set) var current: ToolID = .paintbrush
     /// Explicit selection identity, including choosing the same tool again.
@@ -232,9 +235,11 @@ final class ToolState {
     /// Brush settings per painting tool; `brush(for:)` fills in the tool.
     private var brushes: [ToolID: EngineSession.Brush] = [:]
 
-    init(brushStore: BrushSelectionStore = .shared, gradientStore: GradientToolStore = .shared) {
+    init(brushStore: BrushSelectionStore = .shared, gradientStore: GradientToolStore = .shared,
+         patternStore: PatternFillStore = .shared) {
         self.brushStore = brushStore
         self.gradientStore = gradientStore
+        self.patternStore = patternStore
     }
     var selectOptions = EngineSession.SelectOptions()
     var foreground = NSColor.black
@@ -310,7 +315,20 @@ final class ToolState {
         didSet { cloneAlignment.reset() }
     }
     /// Whether later Clone and Heal strokes keep their distance to the source.
+    /// For a pattern source, whether the pattern stays anchored to the
+    /// image (aligned) or starts again at each stroke.
     var cloneAlignment = SourceAlignment()
+
+    /// What Clone paints from. Heal always copies from the image.
+    enum CloneFrom: Equatable {
+        /// The point Option-click set.
+        case image
+        /// The current pattern, the one Edit ▸ Fill uses.
+        case pattern
+    }
+    var cloneFrom = CloneFrom.image {
+        didSet { if cloneFrom != oldValue { notify() } }
+    }
 
     private var observers: [UUID: () -> Void] = [:]
 
@@ -363,7 +381,23 @@ final class ToolState {
         } else {
             brush.eraserBackground = nil
         }
-        brush.source = cloneSource
+        if brush.fade?.target == .background {
+            let background = background.usingColorSpace(.sRGB) ?? .white
+            brush.fadeBackground = .init(red: Double(background.redComponent),
+                                        green: Double(background.greenComponent),
+                                        blue: Double(background.blueComponent))
+        } else {
+            brush.fadeBackground = nil
+        }
+        if tool.paintTool == .clone, cloneFrom == .pattern {
+            brush.source = nil
+            brush.clonePattern = patternStore.identity.map {
+                .init(resource: $0, aligned: cloneAlignment.isAligned)
+            }
+        } else {
+            brush.source = cloneSource
+            brush.clonePattern = nil
+        }
         return brush
     }
 

@@ -463,6 +463,13 @@ typedef struct _GimpPaintOptions GimpPaintOptions;
  * defaults; FALSE for a missing/short struct or an unknown tool. */
 gboolean         glims_read_brush          (const GlimsBrushSettings *brush,
                                             GlimsBrushSettings       *settings);
+/* The end of GlimsBrushSettings' paint options tail (paint_mode through
+ * clone_pattern): glims_read_brush reads it whole or not at all. */
+#define GLIMS_BRUSH_PAINT_OPTIONS_END \
+  (offsetof (GlimsBrushSettings, clone_pattern) + sizeof (uint64_t))
+/* TRUE when read settings ask for any paint option other than its zero
+ * default ("normal" counts as the default mode). */
+gboolean         glims_brush_has_paint_options (const GlimsBrushSettings *settings);
 /* The paint info behind a GlimsPaintTool, or NULL when the engine lacks
  * the tool. */
 GimpPaintInfo *  glims_paint_info_for_tool (Gimp *gimp, uint32_t tool);
