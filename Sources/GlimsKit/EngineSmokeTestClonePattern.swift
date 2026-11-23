@@ -40,6 +40,11 @@ extension EngineSmokeTest {
         guard let window = controller.window else { return check(false, "clone pattern: the window exists") }
         window.contentView?.layoutSubtreeIfNeeded()
         let canvas = controller.canvas
+        // A refused press reports only a status line, never an error.
+        var statuses: [String] = []
+        let oldStatus = canvas.tools.onStatus
+        canvas.tools.onStatus = { statuses.append($0); oldStatus?($0) }
+        defer { canvas.tools.onStatus = oldStatus }
 
         func settle() {
             document.inputQueue.sync {}
@@ -47,6 +52,9 @@ extension EngineSmokeTest {
         }
         func gesture(_ points: [CGPoint]) {
             guard let first = points.first, let last = points.last else { return }
+            // The chooser's last thumbnail batch can still hold the engine
+            // after Choose; a press then is refused, as a person would see.
+            settle()
             let steps = [(NSEvent.EventType.leftMouseDown, first)]
                 + points.dropFirst().map { (NSEvent.EventType.leftMouseDragged, $0) }
                 + [(NSEvent.EventType.leftMouseUp, last)]
@@ -138,7 +146,7 @@ extension EngineSmokeTest {
         gesture(line(30))
         let painted = changed(30)
         check(try painted > 100 && (try session.undoInfo(image).undoCount) == steps + 1,
-              "clone pattern: a pattern stroke paints without a source point as one step (\(painted) columns)")
+              "clone pattern: a pattern stroke paints without a source point as one step (\(painted) columns, status \(statuses))")
         state.cloneAlignment.isAligned = false
         check(state.brush(for: .clone).clonePattern?.aligned == false,
               "clone pattern: clearing Aligned makes the pattern start at each stroke")
