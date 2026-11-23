@@ -1325,6 +1325,9 @@ final class ImageDocument {
         var isV2: Bool { if case .tablet = self { return true }; return false }
     }
 
+    static let paintOptionsNeedRGB = "Blend modes, spacing, fade and patterns do not paint in Lab, CMYK or multichannel images. "
+        + "Set the tool back to Normal, Default spacing and no Fade to paint here."
+
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
         beginStroke(input: .v1(point), brush: brush)
     }
@@ -1335,6 +1338,13 @@ final class ImageDocument {
     }
 
     private func beginStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        // Lab and ink-channel images paint through their own engine paths,
+        // which take no paint options: refuse rather than drop them.
+        if brush.hasPaintOptions, storage.layout == .layeredLab || colorInfo.mode == .lab || colorInfo.mode.usesInkChannels {
+            onError?(Self.paintOptionsNeedRGB)
+            NSSound.beep()
+            return
+        }
         if storage.layout == .layeredLab {
             beginLabLayerBrushStroke(input: input, brush: brush)
             return

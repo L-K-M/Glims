@@ -36,7 +36,7 @@ final class ExportOptionsFormTests: XCTestCase {
     }
 
     func testEveryFormatHasATitleAndAnExtensionThatParsesBack() {
-        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd, .gif, .bmp, .tga])
+        XCTAssertEqual(ExportFormat.allCases, [.png, .jpeg, .tiff, .psd, .gif, .bmp, .tga, .pcx, .eps, .pdf])
         for format in ExportFormat.allCases {
             XCTAssertFalse(format.title.isEmpty)
             XCTAssertFalse(format.preferredExtension.isEmpty)
@@ -53,6 +53,15 @@ final class ExportOptionsFormTests: XCTestCase {
         }
         for ext in ["tif", "tiff", "TIF", "TIFF"] {
             XCTAssertEqual(ExportFormat.forFileExtension(ext), .tiff, ext)
+        }
+        for ext in ["pcx", "PCX", "pcc", "PCC", ".pcx"] {
+            XCTAssertEqual(ExportFormat.forFileExtension(ext), .pcx, ext)
+        }
+        for ext in ["eps", "EPS", ".ePs"] {
+            XCTAssertEqual(ExportFormat.forFileExtension(ext), .eps, ext)
+        }
+        for ext in ["pdf", "PDF", ".pdf"] {
+            XCTAssertEqual(ExportFormat.forFileExtension(ext), .pdf, ext)
         }
     }
 
@@ -79,6 +88,28 @@ final class ExportOptionsFormTests: XCTestCase {
         XCTAssertFalse(form.psdLayoutPopup.isHidden)
         form.selectFormat(.gif)
         XCTAssertTrue(form.commitEditing())
+    }
+
+    func testPcxEpsPdfFormatsExposeExtensionsAndExplanations() {
+        let form = ExportOptionsForm()
+        for fmt in [ExportFormat.pcx, .eps, .pdf] {
+            form.selectFormat(fmt)
+            XCTAssertEqual(form.settings.format, fmt)
+            XCTAssertTrue(form.commitEditing(), "\(fmt) should be committable with defaults")
+        }
+        XCTAssertEqual(ExportFormat.forFileExtension("pcx"), .pcx)
+        XCTAssertEqual(ExportFormat.forFileExtension("pcc"), .pcx)
+        XCTAssertEqual(ExportFormat.forFileExtension("eps"), .eps)
+        XCTAssertEqual(ExportFormat.forFileExtension("pdf"), .pdf)
+        form.selectFormat(.pcx)
+        XCTAssertFalse(form.pcxExplanation.isHidden)
+        XCTAssertTrue(form.pcxExplanation.stringValue.lowercased().contains("pcx"))
+        form.selectFormat(.eps)
+        XCTAssertFalse(form.epsExplanation.isHidden)
+        XCTAssertTrue(form.epsExplanation.stringValue.lowercased().contains("eps"))
+        form.selectFormat(.pdf)
+        XCTAssertFalse(form.pdfExplanation.isHidden)
+        XCTAssertTrue(form.pdfExplanation.stringValue.lowercased().contains("pdf"))
     }
 
     func testPsdContentChoiceSurvivesOtherFormatEdits() {

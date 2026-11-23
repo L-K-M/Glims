@@ -10152,6 +10152,332 @@ out:
   free (renderBefore);
 }
 
+/* Paint options (GlimsBrushSettings paint_mode through clone_pattern),
+ * through the facade only. Modes are checked where they differ exactly
+ * from Normal: a hard Pencil at full opacity over black and white. */
+static int
+alpha_at (GlimsImageID image, int32_t x, int32_t y)
+{
+  uint8_t pixel[4];
+
+  render_pixel (image, x, y, pixel);
+  return pixel[3];
+}
+
+static int
+painted_columns (GlimsImageID image, int32_t y, int32_t width)
+{
+  int x, painted = 0;
+
+  for (x = 0; x < width; x++)
+    if (alpha_at (image, x, y) > 0)
+      painted++;
+  return painted;
+}
+
+/* 1 when the stroke returns capture facts, 0 when it paints without
+ * them, -1 when it fails; `fingerprint` (optional) receives a copy. */
+static int
+stroke_captures (GlimsImageID image, GlimsItemID layer, const GlimsBrushSettings *brush,
+                 double x, double y, char fingerprint[65])
+{
+  GlimsStrokePoint        first = { x, y, 1.0, 0.0, 0.0, 0 };
+  GlimsStrokeCaptureFacts facts = { .struct_size = sizeof facts };
+  GlimsStrokeID           stroke = 0;
+  int                     captured;
+
+  if (api->stroke_begin_with_capture_facts (engine, image, layer, 0, brush, &first, NULL, &stroke,
+                                            &facts, NULL) != GLIMS_STATUS_OK)
+    return -1;
+  api->stroke_end (engine, stroke);
+  captured = facts.fingerprint != NULL;
+  if (fingerprint)
+    snprintf (fingerprint, 65, "%s", facts.fingerprint ? facts.fingerprint : "");
+  api->free_string (facts.brush_name);
+  api->free_string (facts.brush_collection);
+  api->free_string (facts.fingerprint);
+  return captured;
+}
+
+static void
+test_paint_options (void)
+{
+  GlimsImageID       image = 0, clear = 0, faded = 0, colored = 0, cloned = 0;
+  GlimsItemID        layer, clear_layer, faded_layer, colored_layer, cloned_layer;
+  GlimsBrushSettings brush;
+  GlimsResourceID    patterns[2] = { 0, 0 };
+  GlimsPixelBuffer   thumbs[2]   = { { 0 }, { 0 } };
+  char              *error = NULL, plain[65], normal[65];
+  int32_t            before;
+  int                value, worst, covered, spaced, dense, found;
+  uint8_t            px[4];
+
+  CHECK (api->struct_size >= offsetof (GlimsEngineAPI, brush_settings_features) + sizeof api->brush_settings_features &&
+         api->brush_settings_features && (api->brush_settings_features () & GLIMS_BRUSH_FEATURE_PAINT_OPTIONS),
+         "the engine advertises the paint options tail");
+
+  /* Blend modes, each where it differs from Normal: a black band on
+   * white, crossed by vertical Pencil lines. */
+  api->image_new (engine, 128, 48, &image, NULL);
+  layer = first_layer (image);
+  brush = brush_for (GLIMS_PAINT_PENCIL, 5.0);
+  stroke_line (image, layer, &brush, 4, 24, 124, 24, NULL);
+  before = undo_depth (image);
+
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "lighten-only");
+  CHECK (stroke_line (image, layer, &brush, 20, 4, 20, 44, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 20, 10) == 255 && red_at (image, 20, 24) == 0,
+         "Lighten Only paints black over white and black without a change (%d, %d)",
+         red_at (image, 20, 10), red_at (image, 20, 24));
+
+  brush.red = brush.green = brush.blue = 1.0;
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "darken-only");
+  CHECK (stroke_line (image, layer, &brush, 40, 4, 40, 44, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 40, 24) == 0 && red_at (image, 40, 10) == 255,
+         "Darken Only paints white over the band without a change (%d)", red_at (image, 40, 24));
+
+  brush.red = brush.green = brush.blue = 0.5;
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+  value = red_at (image, 60, 10);
+  CHECK (stroke_line (image, layer, &brush, 60, 4, 60, 44, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 60, 24) == 0 && red_at (image, 60, 10) > 100 && red_at (image, 60, 10) < 160,
+         "Multiply keeps the band black and grays the white (%d, %d before)", red_at (image, 60, 10), value);
+
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "screen");
+  CHECK (stroke_line (image, layer, &brush, 80, 4, 80, 44, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 80, 10) == 255 && red_at (image, 80, 24) > 60,
+         "Screen keeps the white and lightens the band (%d)", red_at (image, 80, 24));
+
+  /* "normal" is the default, also for the Recorder's capture. */
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  CHECK (stroke_captures (image, layer, &brush, 100, 10, plain) == 1, "a plain Pencil stroke has capture facts");
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "normal");
+  CHECK (stroke_captures (image, layer, &brush, 100, 12, normal) == 1 && ! strcmp (plain, normal),
+         "an explicit \"normal\" mode captures exactly as the default");
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+  CHECK (stroke_captures (image, layer, &brush, 100, 14, NULL) == 0, "a Multiply stroke paints without capture facts");
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  brush.spacing = 0.5;
+  CHECK (stroke_captures (image, layer, &brush, 100, 16, NULL) == 0, "a stroke with its own spacing paints without capture facts");
+  CHECK (undo_depth (image) == before + 8, "each mode stroke is one undo step (%d)", undo_depth (image) - before);
+
+  /* Refusals change nothing. */
+  before = undo_depth (image);
+  value  = red_at (image, 110, 24);
+  brush  = brush_for (GLIMS_PAINT_SMUDGE, 6.0);
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "Smudge refuses a blend mode (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "erase");
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "an internal mode (erase) is refused (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply-legacy");
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a legacy mode is refused");
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "no-such-mode");
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown mode is refused");
+  memset (brush.paint_mode, 'a', sizeof brush.paint_mode);
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unterminated mode is refused");
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  brush.spacing = 0.005;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "spacing below 1%% is refused");
+  brush.spacing = NAN;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "non-finite spacing is refused");
+  brush = brush_for (GLIMS_PAINT_SMUDGE, 6.0);
+  brush.fade_steps = 10;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "Smudge refuses a fade (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  brush = brush_for (GLIMS_PAINT_PENCIL, 100.0);
+  brush.fade_steps = 9999;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a fade beyond 32767 pixels is refused (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  brush.fade_steps = 10000;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "more than 9999 fade steps are refused");
+  brush.fade_steps  = 10;
+  brush.fade_target = 2;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown fade target is refused");
+  brush.fade_target = GLIMS_FADE_TO_BACKGROUND;
+  brush.fade_background_red = 1.5;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a fade background outside 0 ... 1 is refused");
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  brush.clone_source = GLIMS_CLONE_FROM_PATTERN;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "Pencil refuses a pattern source (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  brush = brush_for (GLIMS_PAINT_CLONE, 6.0);
+  brush.clone_source = GLIMS_CLONE_FROM_PATTERN;
+  brush.clone_pattern = 0;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "Clone from pattern handle 0 is refused (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  {
+    GlimsResourceInfo row;
+    int32_t           n = 0;
+
+    if (api->resources (engine, GLIMS_RESOURCE_BRUSH, &row, 1, &n) == GLIMS_STATUS_OK && n > 0)
+      brush.clone_pattern = row.id;
+    CHECK (n > 0 && stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_NOT_FOUND,
+           "Clone from a brush handle as the pattern is NOT_FOUND");
+  }
+  brush.clone_source = 2;
+  CHECK (stroke_line (image, layer, &brush, 110, 20, 110, 30, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown clone source is refused");
+  CHECK (undo_depth (image) == before && red_at (image, 110, 24) == value,
+         "the refusals leave no undo step and no pixel change (%d steps)", undo_depth (image) - before);
+
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 90, 8 }, { 120, 40 } }, 2, NULL);
+  before = undo_depth (image);
+  CHECK (api->selection_stroke (engine, image, layer, 0, &brush, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error &&
+         undo_depth (image) == before && red_at (image, 110, 24) == value,
+         "Stroke Selection refuses paint options unchanged (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Older callers: a struct that ends before the tail, or inside it,
+   * paints as before whatever lies beyond. */
+  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "lighten-only");
+  brush.struct_size = (uint32_t) offsetof (GlimsBrushSettings, paint_mode);
+  CHECK (stroke_line (image, layer, &brush, 30, 4, 30, 14, NULL) == GLIMS_STATUS_OK && red_at (image, 30, 8) == 0,
+         "a caller without the tail paints in Normal (%d)", red_at (image, 30, 8));
+  brush.struct_size = (uint32_t) offsetof (GlimsBrushSettings, fade_steps);
+  CHECK (stroke_line (image, layer, &brush, 34, 4, 34, 14, NULL) == GLIMS_STATUS_OK && red_at (image, 34, 8) == 0,
+         "a partial tail is not read (%d)", red_at (image, 34, 8));
+  api->image_close (engine, image);
+
+  /* Behind paints only where the layer is transparent. */
+  api->image_new_filled (engine, 64, 16, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &clear, NULL);
+  clear_layer = first_layer (clear);
+  brush = brush_for (GLIMS_PAINT_PENCIL, 5.0);
+  brush.red = 1.0;
+  stroke_line (clear, clear_layer, &brush, 2, 8, 30, 8, NULL);
+  brush.red = 0.0; brush.blue = 1.0;
+  snprintf (brush.paint_mode, sizeof brush.paint_mode, "behind");
+  CHECK (stroke_line (clear, clear_layer, &brush, 2, 8, 60, 8, NULL) == GLIMS_STATUS_OK, "a Behind stroke runs");
+  render_pixel (clear, 16, 8, px);
+  value = px[0] == 255 && px[2] == 0;
+  render_pixel (clear, 46, 8, px);
+  CHECK (value && px[0] == 0 && px[2] == 255 && px[3] == 255,
+         "Behind keeps the red paint and fills the transparent pixels blue (%d %d %d %d)",
+         px[0], px[1], px[2], px[3]);
+  api->image_close (engine, clear);
+
+  /* Spacing: 500% of a 4-pixel Pencil leaves gaps of 16 pixels. */
+  api->image_new_filled (engine, 128, 16, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &clear, NULL);
+  clear_layer = first_layer (clear);
+  brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
+  brush.spacing = 5.0;
+  stroke_line (clear, clear_layer, &brush, 10, 4, 110, 4, NULL);
+  spaced = painted_columns (clear, 4, 128);
+  brush.spacing = 0;
+  stroke_line (clear, clear_layer, &brush, 10, 12, 110, 12, NULL);
+  dense = painted_columns (clear, 12, 128);
+  CHECK (spaced > 10 && spaced < 50 && dense > 98,
+         "500%% spacing paints separate dabs (%d of %d columns painted at the default)", spaced, dense);
+  api->image_close (engine, clear);
+
+  /* Fade to transparent over 40 one-pixel dabs. */
+  api->image_new_filled (engine, 140, 16, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &faded, NULL);
+  faded_layer = first_layer (faded);
+  before = undo_depth (faded);
+  brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
+  brush.spacing = 0.25;
+  brush.fade_steps = 40;
+  CHECK (stroke_line (faded, faded_layer, &brush, 10, 8, 130, 8, NULL) == GLIMS_STATUS_OK &&
+         alpha_at (faded, 12, 8) > 200 && alpha_at (faded, 30, 8) > 60 && alpha_at (faded, 30, 8) < 200 &&
+         alpha_at (faded, 60, 8) == 0 && alpha_at (faded, 120, 8) == 0,
+         "a Pencil fade reaches transparency after 40 dabs (%d, %d, %d, %d)", alpha_at (faded, 12, 8),
+         alpha_at (faded, 30, 8), alpha_at (faded, 60, 8), alpha_at (faded, 120, 8));
+  brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 4.0);
+  brush.spacing = 0.25;
+  brush.fade_steps = 40;
+  brush.pressure_size = true;
+  CHECK (stroke_line (faded, faded_layer, &brush, 10, 3, 130, 3, NULL) == GLIMS_STATUS_OK &&
+         alpha_at (faded, 12, 3) > 100 && alpha_at (faded, 80, 3) == 0,
+         "with pen pressure on, a Paintbrush still fades (%d, %d)", alpha_at (faded, 12, 3), alpha_at (faded, 80, 3));
+  CHECK (stroke_captures (faded, faded_layer, &brush, 20, 13, NULL) == 0, "a faded stroke paints without capture facts");
+  CHECK (undo_depth (faded) == before + 3, "each faded stroke is one undo step (%d)", undo_depth (faded) - before);
+  api->image_close (engine, faded);
+
+  /* Fade from red to a blue background over 40 dabs, then blue. */
+  api->image_new (engine, 140, 16, &colored, NULL);
+  colored_layer = first_layer (colored);
+  brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
+  brush.red = 1.0;
+  brush.spacing = 0.25;
+  brush.fade_steps = 40;
+  brush.fade_target = GLIMS_FADE_TO_BACKGROUND;
+  brush.fade_background_blue = 1.0;
+  CHECK (stroke_line (colored, colored_layer, &brush, 10, 8, 130, 8, NULL) == GLIMS_STATUS_OK,
+         "a fade to the background runs");
+  render_pixel (colored, 11, 8, px);
+  value = px[0] > 200 && px[2] < 60;
+  render_pixel (colored, 30, 8, px);
+  value = value && px[0] > 30 && px[2] > 30;
+  render_pixel (colored, 100, 8, px);
+  CHECK (value && px[0] < 8 && px[1] < 8 && px[2] > 247,
+         "the color moves from red to the background and stays there (%d %d %d at 100)", px[0], px[1], px[2]);
+  api->image_close (engine, colored);
+
+  /* Clone from a pattern: aligned strokes share one tiling, unaligned
+   * strokes start at the pattern's center. Inside the dabs only. */
+  found = find_opaque_patterns (patterns, thumbs);
+  CHECK (found >= 1, "a stock opaque pattern renders at native size (%d found)", found);
+  if (found >= 1)
+    {
+      int32_t pw = thumbs[0].bounds.width, ph = thumbs[0].bounds.height, w = 3 * pw + 60, h = ph + 40;
+      int32_t ax = 20, ay = ph / 2 + 20, bx = pw + 37, by = ay + 3;
+
+      api->image_new (engine, w, h, &cloned, NULL);
+      cloned_layer = first_layer (cloned);
+      before = undo_depth (cloned);
+      brush = brush_for (GLIMS_PAINT_CLONE, 24.0);
+      brush.hardness = 1.0;
+      brush.clone_source = GLIMS_CLONE_FROM_PATTERN;
+      brush.clone_pattern = patterns[0];
+      brush.clone_pattern_aligned = true;
+      CHECK (stroke_line (cloned, cloned_layer, &brush, ax, ay, ax + 20, ay, &error) == GLIMS_STATUS_OK &&
+             stroke_line (cloned, cloned_layer, &brush, bx, by, bx + 20, by, NULL) == GLIMS_STATUS_OK,
+             "two aligned pattern strokes run%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error); error = NULL;
+      worst = tiled_region_diff (cloned, (GlimsRect) { ax + 2, ay - 2, 17, 5 }, -(pw / 2), -(ph / 2), &thumbs[0], &covered);
+      value = tiled_region_diff (cloned, (GlimsRect) { bx + 2, by - 2, 17, 5 }, -(pw / 2), -(ph / 2), &thumbs[0], &covered);
+      CHECK (covered == 85 && worst <= 2 && value <= 2,
+             "aligned strokes show one tiling fixed to the layer (worst %d and %d)", worst, value);
+
+      brush.clone_pattern_aligned = false;
+      ax = 2 * pw + 41;
+      CHECK (stroke_line (cloned, cloned_layer, &brush, ax, ay, ax + 20, ay, NULL) == GLIMS_STATUS_OK,
+             "an unaligned pattern stroke runs");
+      worst = tiled_region_diff (cloned, (GlimsRect) { ax + 2, ay - 2, 17, 5 }, ax - pw / 2, ay - ph / 2, &thumbs[0], &covered);
+      value = tiled_region_diff (cloned, (GlimsRect) { ax + 2, ay - 2, 17, 5 }, -(pw / 2), -(ph / 2), &thumbs[0], &covered);
+      CHECK (worst <= 2 && (value > 2 || (ax % pw == 0 && ay % ph == 0)),
+             "an unaligned stroke starts at the pattern's center (worst %d; %d against the fixed tiling)", worst, value);
+      CHECK (stroke_captures (cloned, cloned_layer, &brush, 10, 10, NULL) == 0,
+             "a pattern clone paints without capture facts");
+      CHECK (undo_depth (cloned) == before + 4, "each pattern stroke is one undo step (%d)", undo_depth (cloned) - before);
+      api->image_close (engine, cloned);
+    }
+  if (thumbs[0].pixels) api->free_pixels (thumbs[0].pixels);
+  if (thumbs[1].pixels) api->free_pixels (thumbs[1].pixels);
+}
+
 /* Selected-resource gradients: the builtin FG to BG (RGB) resolved by
  * its stable internal collection, drawn through every blend space, plus
  * a second stock gradient, reverse, opacity, selection clipping, the
@@ -15907,6 +16233,7 @@ main (int argc, char **argv)
   test_stroke_brush_resource ();
 
   test_pattern_fill ();
+  test_paint_options ();
 
   test_resource_gradient ();
   test_guides (argv[2]);
@@ -15934,7 +16261,9 @@ main (int argc, char **argv)
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
   /* Quitting while a plug-in runs (a dialog left open) must not wait for
-   * it: stop closes running plug-ins first. */
+   * it: stop closes running plug-ins first. The failed run proves the
+   * plug-in was ended; the time bound only catches a stop that hangs, so
+   * it leaves room for a loaded machine (5.7 s seen at load 11). */
   {
     BackgroundRun run = { 0 };
     pthread_t     thread;
@@ -15951,7 +16280,7 @@ main (int argc, char **argv)
     api->stop (engine);
     stopped = now_ms () - start;
     pthread_join (thread, NULL);
-    CHECK (running && run.status != GLIMS_STATUS_OK && stopped < 5000,
+    CHECK (running && run.status != GLIMS_STATUS_OK && stopped < 15000,
            "stopping the engine ends a running plug-in (stopped in %.0f ms, run %d)", stopped, run.status);
   }
 
