@@ -6,6 +6,9 @@ enum ToolHintPolicy {
     enum Phase: Equatable {
         case idle, dragging, textEditing, transformReady
         case cropReady(width: Int, height: Int)
+        /// A Fixed Target Size crop waiting for Return; `resolution` is
+        /// pixels per inch, nil when the crop keeps the image's own.
+        case cropResizeReady(width: Int, height: Int, resolution: Double?)
         /// A Polygon Lasso polygon with this many corners waits for more.
         case polygonOpen(corners: Int)
     }
@@ -45,6 +48,10 @@ enum ToolHintPolicy {
         case .transformReady: return "Return applies the transform; Escape cancels it."
         case .cropReady(let width, let height):
             return "Return crops to \(width) × \(height) px; Escape cancels."
+        case .cropResizeReady(let width, let height, let resolution):
+            var message = "Return crops and resamples to \(width) × \(height) px"
+            if let resolution { message += " at \(String(format: "%g", resolution)) ppi" }
+            return message + "; Escape cancels."
         default: break
         }
         if phase == .idle, tool.paintTool != nil, flags.contains(.option) {

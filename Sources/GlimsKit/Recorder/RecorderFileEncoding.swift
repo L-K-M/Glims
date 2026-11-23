@@ -101,6 +101,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, scaleInterpolationVersion)
             case .success(.setResolution, _), .success(.resize, _):
                 fileVersion = max(fileVersion, imageResolutionVersion)
+            case .success(.cropResize, _):
+                fileVersion = max(fileVersion, cropResizeVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -358,6 +360,11 @@ extension RecorderFileCodec {
         case .resizeCanvas(let width, let height, let offset, let color):
             return .object(["tag": .string("resizeCanvas"), "width": j(width), "height": j(height), "offset": try pointJSON(offset), "fill": try colorJSON(color)])
         case .crop(let rect): return .object(["tag": .string("crop"), "rect": try rectJSON(rect)])
+        case .cropResize(let rect, let width, let height, let xResolution, let yResolution, let interpolation):
+            return .object(["tag": .string("cropResize"), "rect": try rectJSON(rect),
+                            "width": j(width), "height": j(height),
+                            "xResolution": try d(xResolution), "yResolution": try d(yResolution),
+                            "interpolation": .string(interpolation.rawValue)])
         case .layerProperties(let properties):
             var fields: [String: RecorderJSON] = [:]
             if let name = properties.name { fields["name"] = .string(name) }

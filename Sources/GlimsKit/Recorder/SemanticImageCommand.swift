@@ -58,6 +58,10 @@ enum SemanticImageCommand {
                 interpolation: EngineSession.Interpolation)
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
     case crop(CGRect)
+    /// The Crop tool's Fixed Target Size: a crop rectangle, the pixel
+    /// size to resample to and the resolution, as one undo step.
+    case cropResize(rect: CGRect, width: Int, height: Int, xResolution: Double, yResolution: Double,
+                    interpolation: EngineSession.Interpolation)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine in absolute image pixels, y down.
     /// The explicit layer lives in the document's runtime binding, never in
@@ -132,7 +136,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties: return false
         case .adjustment: return true
         }
@@ -175,7 +179,7 @@ enum SemanticImageCommand {
         case .setResolution: return "Change Image Resolution"
         case .rotateCanvas: return "Rotate Canvas"
         case .resizeCanvas: return "Resize Canvas"
-        case .crop: return "Crop Image"
+        case .crop, .cropResize: return "Crop Image"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
         case .transformProjectiveLayer: return "Transform Layer Perspective"
@@ -234,6 +238,10 @@ enum SemanticImageCommand {
             try session.resizeCanvas(image, width: width, height: height, offset: offset, fill: fill)
         case .crop(let rect):
             try session.crop(image: image, to: rect)
+        case .cropResize(let rect, let width, let height, let xResolution, let yResolution, let interpolation):
+            try session.cropResize(image, rect: rect, width: width, height: height,
+                                   resolution: .init(x: xResolution, y: yResolution),
+                                   interpolation: interpolation)
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:

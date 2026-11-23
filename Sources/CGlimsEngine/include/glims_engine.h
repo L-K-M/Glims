@@ -4697,6 +4697,24 @@ typedef struct GlimsEngineAPI {
                                                     GlimsItemID channel,
                                                     const GlimsLayerTransformRequest *request,
                                                     char **error);
+  /* Slot 252: the Crop tool's Fixed Target Size. Crops to `rect` exactly
+   * as image_crop, then resamples to `width` x `height` with
+   * `interpolation` (a GlimsInterpolation; DEFAULT uses the engine's
+   * preference) when that differs from the rect's size, and sets the
+   * resolution when it differs (GIMP's 1e-5 comparison), all as ONE undo
+   * step named "Crop Image". A call that crops nothing out, keeps the
+   * size and keeps the resolution adds no undo step. `rect` must meet
+   * the image bounds with positive size, `width` and `height` must be
+   * 1 ... GIMP_MAX_IMAGE_SIZE, the resolutions finite and within
+   * GLIMS_MIN_RESOLUTION ... GLIMS_MAX_RESOLUTION and the interpolation
+   * known, else INVALID_ARGUMENT; an unknown image is NOT_FOUND; a
+   * component layout is UNSUPPORTED; a busy engine is BUSY; a floating
+   * selection is treated as by image_crop. Every refusal changes
+   * nothing. */
+  GlimsStatus (*image_crop_resize) (GlimsEngine *engine, GlimsImageID image, GlimsRect rect,
+                                    int32_t width, int32_t height,
+                                    double x_resolution, double y_resolution,
+                                    uint32_t interpolation, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

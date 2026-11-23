@@ -1280,7 +1280,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     /// How transformed pixels are resampled (GlimsInterpolation).
-    enum Interpolation: UInt32, CaseIterable {
+    enum Interpolation: UInt32, CaseIterable, Codable {
         case none = 1, linear, cubic, noHalo, loHalo
 
         var name: String {
@@ -5378,6 +5378,40 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(resize(engine, image, Int32(width), Int32(height), resolution.x, resolution.y,
                          interpolation.rawValue, &error), error)
+    }
+
+    /// Whether this adapter has the crop-to-target-size slot (252).
+    /// Older adapters keep the plain Crop gesture and refuse the
+    /// combined command cleanly.
+    var supportsCropResize: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_crop_resize) else {
+            return false
+        }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_crop_resize)
+            && api.image_crop_resize != nil
+    }
+
+    /// The Crop tool's Fixed Target Size: crops to `rect` exactly as
+    /// `crop(image:to:)` does, then resamples to `width` x `height` with
+    /// `interpolation` and sets the resolution, as one "Crop Image" undo
+    /// step. Refuses on adapters without slot 252.
+    func cropResize(_ image: Int32, rect: CGRect, width: Int, height: Int,
+                    resolution: ImageResolution, interpolation: Interpolation) throws {
+        guard supportsCropResize, let cropResize = api.image_crop_resize else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot crop to a target size.")
+        }
+        guard ImageSizeModel.isValidPixelWidth(width), ImageSizeModel.isValidPixelWidth(height),
+              ImageSizeModel.isValidResolution(resolution.x),
+              ImageSizeModel.isValidResolution(resolution.y) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid pixel size and resolution.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        let area = GlimsRect(x: Int32(rect.minX.rounded()), y: Int32(rect.minY.rounded()),
+                             width: Int32(rect.width.rounded()), height: Int32(rect.height.rounded()))
+        try check(cropResize(engine, image, area, Int32(width), Int32(height), resolution.x,
+                             resolution.y, interpolation.rawValue, &error), error)
     }
 
     /// Whether this adapter offers Layer > Merge Visible (facade slot 235).

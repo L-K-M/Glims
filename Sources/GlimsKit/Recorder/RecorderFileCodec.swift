@@ -33,7 +33,9 @@ enum RecorderFileCodec {
     static let smoothSelectionVersion = 29
     static let adjustmentVersion = 30
     static let imageResolutionVersion = 31
-    static let latestVersion = imageResolutionVersion
+    /// Crop to a target size; renumber if another branch takes 32 first.
+    static let cropResizeVersion = 32
+    static let latestVersion = cropResizeVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -157,6 +159,7 @@ enum RecorderFileCodec {
         var hasSmoothSelection = false
         var hasAdjustment = false
         var hasImageResolution = false
+        var hasCropResize = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -189,6 +192,7 @@ enum RecorderFileCodec {
                 if case .scaleWithInterpolation = command { hasScaleInterpolation = true }
                 if case .setResolution = command { hasImageResolution = true }
                 if case .resize = command { hasImageResolution = true }
+                if case .cropResize = command { hasCropResize = true }
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
                 if case .applyInkCurves = command { hasInkCurves = true }
@@ -297,6 +301,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == imageResolutionVersion, !hasImageResolution {
             throw RecorderFileError.invalid("Version 31 requires a successful Image Size resolution command.")
+        }
+        if fileVersion == cropResizeVersion, !hasCropResize {
+            throw RecorderFileError.invalid("Version 32 requires a successful Crop to a target size command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -767,6 +774,28 @@ enum RecorderFileCodec {
             for coordinate in [x, y, width, height, x + width, y + height] { try nativeInteger(coordinate) }
             guard width >= 1, height >= 1 else { throw RecorderFileError.invalid("The rounded crop rectangle is empty.") }
             return .crop(rectangle)
+        case "cropResize":
+            guard version >= cropResizeVersion else {
+                throw RecorderFileError.invalid("A crop to a target size needs recording version 32.")
+            }
+            let value = try Object(node, required: ["tag", "rect", "width", "height", "xResolution", "yResolution", "interpolation"])
+            guard let interpolation = RecorderFileCommand.LayerInterpolation(rawValue: try string(value.get("interpolation"))) else {
+                throw RecorderFileError.invalid("Unknown resampling method.")
+            }
+            let rectangle = try rect(value.get("rect"))
+            let cropX = min(rectangle.x, rectangle.x + rectangle.width).rounded()
+            let cropY = min(rectangle.y, rectangle.y + rectangle.height).rounded()
+            let cropWidth = abs(rectangle.width).rounded(), cropHeight = abs(rectangle.height).rounded()
+            for coordinate in [cropX, cropY, cropWidth, cropHeight, cropX + cropWidth, cropY + cropHeight] { try nativeInteger(coordinate) }
+            guard cropWidth >= 1, cropHeight >= 1 else { throw RecorderFileError.invalid("The rounded crop rectangle is empty.") }
+            let x = try number(value.get("xResolution")), y = try number(value.get("yResolution"))
+            guard ImageSizeModel.isValidResolution(x), ImageSizeModel.isValidResolution(y) else {
+                throw RecorderFileError.invalid("A recorded resolution is outside the engine's range.")
+            }
+            return .cropResize(rect: rectangle,
+                               width: try integer(value.get("width"), range: 1...524288),
+                               height: try integer(value.get("height"), range: 1...524288),
+                               xResolution: x, yResolution: y, interpolation: interpolation)
         case "layerProperties":
             let value = try Object(node, required: ["tag", "properties"])
             let properties = try Object(value.get("properties"), required: [], optional: ["name", "visible", "opacity", "mode"])
@@ -1247,7 +1276,7 @@ enum RecorderFileCodec {
             }
         case (.labSelection, .none): return
         case (.adjustment, .context): break
-        case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.smoothSelection, .none), (.transformImage, .none), (.rotateCanvas, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.setResolution, .none), (.resize, .none), (.resizeCanvas, .none), (.crop, .none):
+        case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.smoothSelection, .none), (.transformImage, .none), (.rotateCanvas, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.setResolution, .none), (.resize, .none), (.resizeCanvas, .none), (.crop, .none), (.cropResize, .none):
             if case .selectColor(_, let options) = command, !options.sampleMerged { throw RecorderFileError.invalid("Drawable color selection needs a context.") }
             if case .selectCommand(.fromAlpha, _) = command { throw RecorderFileError.invalid("Select Alpha needs a context.") }
             return

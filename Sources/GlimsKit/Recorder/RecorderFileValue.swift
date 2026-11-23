@@ -323,6 +323,10 @@ enum RecorderFileCommand: Equatable {
                 interpolation: LayerInterpolation)
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
     case crop(Rect)
+    /// The Crop tool's Fixed Target Size: a crop rectangle, the pixel
+    /// size to resample to and the resolution, as one undo step.
+    case cropResize(rect: Rect, width: Int, height: Int, xResolution: Double, yResolution: Double,
+                    interpolation: LayerInterpolation)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine. The explicit layer is the record's
     /// `layer` binding; the command itself carries no native identity.
@@ -380,7 +384,7 @@ enum RecorderFileCommand: Equatable {
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop: return true
+        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize: return true
         case .adjustment: return false
         }
     }

@@ -14016,6 +14016,134 @@ test_image_resolution (const char *work)
   api->image_close (engine, image);
 }
 
+/* Slot 252: the Crop tool's Fixed Target Size. A crop plus resample and
+ * resolution change is one "Crop Image" undo step; undo restores the
+ * size, the resolution and the pixels. A same-size crop is a plain crop,
+ * a call changing nothing adds no step and every refusal leaves the
+ * image untouched. */
+static void
+test_image_crop_resize (void)
+{
+  GlimsImageID       image = 0, component = 0;
+  GlimsImageInfo     info;
+  GlimsSelectOptions replace = { .struct_size = sizeof replace,
+                                 .operation = GLIMS_SELECT_REPLACE };
+  GlimsFillSettings  black = { .struct_size = sizeof black, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 0, 0, 0, 1 }, .opacity = 1 };
+  double             x = -1.0, y = -1.0;
+  int32_t            depth;
+  char              *error = NULL;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_crop_resize) +
+          sizeof api->image_crop_resize || ! api->image_crop_resize)
+    {
+      CHECK (false, "the adapter exports slot 252 image_crop_resize");
+      return;
+    }
+
+  /* A two-color 200x150 image: the left half black, the right white. */
+  CHECK (api->image_new (engine, 200, 150, &image, NULL) == GLIMS_STATUS_OK &&
+         api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 100, 150 } }, 2, &replace) == GLIMS_STATUS_OK &&
+         api->fill (engine, image, (GlimsPoint) { 50, 75 }, &black, NULL) == GLIMS_STATUS_OK,
+         "a two-color source image is ready");
+  depth = undo_depth (image);
+
+  /* Crop to the black half and resample to 60x40 at 144 ppi: one step,
+   * all black pixels under NEAREST. */
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 60, 40, 144.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1 &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 60 && info.height == 40 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         x == 144.0 && y == 144.0 &&
+         red_at (image, 30, 20) == 0 && red_at (image, 0, 0) == 0 &&
+         red_at (image, 59, 39) == 0,
+         "a crop plus resample is one undo step at the target size and resolution");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 200 && info.height == 150 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         x == 300.0 && undo_depth (image) == depth &&
+         red_at (image, 150, 75) == 255 && red_at (image, 50, 75) == 0,
+         "undo restores the size, the resolution and both color regions in one step");
+
+  /* A crop to the target's own size at the image's resolution is a
+   * plain crop: one step, no resample. */
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 100, 150, 300.0, 300.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1 &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 100 && info.height == 150 &&
+         red_at (image, 50, 75) == 0,
+         "a same-size crop to a fixed target is a plain crop");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth,
+         "undo restores the plain crop");
+
+  /* The whole image, unchanged size and resolution: no step. */
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 200, 150 },
+                                 200, 150, 300.0, 300.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth,
+         "a call that changes nothing adds no undo step");
+
+  /* Every refusal leaves the undo depth, the size and the resolution. */
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 500, 500, 10, 10 },
+                                 60, 40, 144.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a crop rectangle outside the image is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 0, 150 },
+                                 60, 40, 144.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an empty crop rectangle is refused");
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 0, 40, 144.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 999999, 40, 144.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a zero or oversized target is refused");
+  CHECK (api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 60, 40, 0.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 60, 40, NAN, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_crop_resize (engine, image, (GlimsRect) { 0, 0, 100, 150 },
+                                 60, 40, 144.0, 144.0, 99, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_crop_resize (engine, 99999, (GlimsRect) { 0, 0, 100, 150 },
+                                 60, 40, 144.0, 144.0,
+                                 GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "bad resolutions, an unknown interpolation and an unknown image are refused");
+  CHECK (undo_depth (image) == depth &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 200 && info.height == 150 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         x == 300.0 && y == 300.0,
+         "the refusals changed nothing");
+
+  /* Component layouts refuse through the ordinary-image admission. */
+  if (api->image_new_multichannel &&
+      api->image_new_multichannel (engine, 8, 8, GLIMS_COLOR_COMPONENT_U8, 4, &component, NULL) ==
+          GLIMS_STATUS_OK && component)
+    {
+      CHECK (api->image_crop_resize (engine, component, (GlimsRect) { 0, 0, 8, 8 },
+                                     4, 4, 144.0, 144.0,
+                                     GLIMS_INTERPOLATION_NONE, NULL) == GLIMS_STATUS_UNSUPPORTED &&
+             undo_depth (component) == 0,
+             "a component document refuses a crop to a target size");
+      api->image_close (engine, component);
+    }
+
+  api->image_close (engine, image);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -16122,6 +16250,7 @@ main (int argc, char **argv)
   test_everyday_adjustments ();
   test_image_new_filled ();
   test_image_resolution (argv[2]);
+  test_image_crop_resize ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

@@ -7106,3 +7106,26 @@ the Quick Mask round trip, canvas clipping, scale, a stale box, an empty
 channel and every refusal. The `channel-transform` editor smoke case
 (`GLIMS_SMOKE_CASE=channel-transform`) drives the whole route with canvas
 events; its runs are recorded in the PR.
+
+### Crop to a target size (2026-11-23)
+
+The Crop tool's Fixed Target Size, as in 1996-era editors: Tool Options
+takes a target width and height in pixels, inches, centimeters or
+millimeters, an optional resolution in pixels/inch or pixels/cm (empty
+keeps the image's own) and a resampling method. The dragged rectangle
+keeps the target's proportions; Return crops to it and resamples to the
+target's pixel size and resolution as ONE undo step named "Crop Image"
+and one Recorder row. Facade slot 252 `image_crop_resize` does the whole
+thing in the engine: it validates first, then wraps GIMP's own
+`gimp_image_crop` and `gimp_image_scale` calls inside one outer
+GIMP_UNDO_GROUP_IMAGE_CROP group, sets the resolution with GIMP's 1e-5
+change test and adds no undo step when nothing changes. The pure model
+`CropTargetSettings`/`CropTarget` owns the unit conversions, the
+proportion constraint and the Front Image fill; the settings persist
+through `CropTargetStore` like the gradient tool's preferences. The
+Recorder writes `cropResize` at format version 32 (the number moves if
+another branch takes it first), with the usual anchor rule: a version 32
+file must hold one and older versions refuse the tag. `swift test` covers
+the model and the codec rules; the `crop-target` smoke case
+(`GLIMS_SMOKE_CASE=crop-target`) drives the real canvas gesture, the one
+undo step, the recorded row and the plain-crop fallback.

@@ -112,7 +112,8 @@ the highest required version. Mask Levels, Curves and Brightness/Contrast requir
 versions 23, 24 and 25 respectively; Gaussian Blur and Unsharp Mask require
 version 26, Image Size with a chosen resampling method version 27, and arbitrary
 canvas rotation with its background fill version 28. Smooth Selection uses
-version 29. See
+version 29, one-click adjustments version 30, Image Size with a resolution
+version 31, and a crop to a target size version 32. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

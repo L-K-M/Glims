@@ -150,6 +150,10 @@ extension RecorderFileCommand {
                            yResolution: yResolution, interpolation: .init(interpolation))
         case .resizeCanvas(let width, let height, let offset, let fill): self = .resizeCanvas(width: width, height: height, offset: point(offset), fill: fill)
         case .crop(let value): self = .crop(rect(value))
+        case .cropResize(let value, let width, let height, let xResolution, let yResolution, let interpolation):
+            self = .cropResize(rect: rect(value), width: width, height: height,
+                               xResolution: xResolution, yResolution: yResolution,
+                               interpolation: .init(interpolation))
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,
             mode: try value.mode.map { try RecorderFileLayerMode($0) }))
         case .transformLayer(let matrix, let interpolation):

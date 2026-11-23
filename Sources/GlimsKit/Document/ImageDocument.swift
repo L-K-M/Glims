@@ -4553,6 +4553,22 @@ final class ImageDocument {
         run(semantic: command, command.apply)
     }
 
+    /// The Crop tool's Fixed Target Size: crops to `rect`, then resamples
+    /// to the target's pixel size and resolution, as one queued command
+    /// and one undo step. A target without a resolution keeps the
+    /// image's own.
+    func crop(to rect: CGRect, target: CropTarget) {
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileFloatingActive() else { return }
+        let resolution = target.resolution ?? self.resolution
+            ?? .init(x: ImageSizeModel.defaultResolution, y: ImageSizeModel.defaultResolution)
+        let command = SemanticImageCommand.cropResize(rect: rect, width: target.width,
+                                                      height: target.height, xResolution: resolution.x,
+                                                      yResolution: resolution.y,
+                                                      interpolation: target.interpolation)
+        run(semantic: command, command.apply)
+    }
+
     // MARK: One-click adjustments
 
     /// Image > Adjust's one-click commands: why `adjustment` cannot run

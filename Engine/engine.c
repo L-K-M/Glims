@@ -1551,6 +1551,9 @@ MARSHAL (image_set_resolution,
 MARSHAL (image_resize,
          return glims_image_resize (e, a->image, a->width, a->height, a->number, a->number2,
                                      (uint32_t) a->n, a->error);)
+MARSHAL (image_crop_resize,
+         return glims_image_crop_resize (e, a->image, a->area, a->width, a->height,
+                                         a->number, a->number2, (uint32_t) a->n, a->error);)
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2532,6 +2535,19 @@ api_image_resize (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t hei
   return glims_facade_call (e, GLIMS_FACADE_OP_image_resize,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_resize_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_crop_resize (GlimsEngine *e, GlimsImageID image, GlimsRect rect, int32_t width,
+                       int32_t height, double x_resolution, double y_resolution,
+                       uint32_t interpolation, char **error)
+{
+  GlimsArgs a = { .image = image, .area = rect, .width = width, .height = height,
+                  .number = x_resolution, .number2 = y_resolution,
+                  .n = interpolation, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_crop_resize,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_crop_resize_on_engine, &a, error);
 }
 
 static GlimsStatus

@@ -73,6 +73,7 @@ Commands have an owned `tag` and the following exact fields:
 | `adjustment` | `adjustment`, `background` (version 30) |
 | `setResolution` | `x`, `y` (version 31) |
 | `resize` | integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 31) |
+| `cropResize` | `rect`, integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 32) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -649,3 +650,11 @@ at least one successful adjustment; earlier versions reject the tag.
 independent and need the `none` binding. Version 31 requires at least one
 of them; earlier versions reject the tags. Replay refuses on an adapter
 without facade slots 246-248.
+
+## Crop to a target size (version 32)
+
+`cropResize` stores the `rect` cropped first, the `width` and `height`
+the result resamples to, `xResolution`, `yResolution` and the
+`interpolation` name, and replays as one Crop Image step through facade
+slot 252. It is target independent and needs the `none` binding. Version
+32 requires at least one; earlier versions reject the tag.
