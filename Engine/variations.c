@@ -15,9 +15,10 @@
  * glims_drawable_thumbnail does, then applies the same chain to a float
  * copy. The intermediate result is quantized back to the 8-bit grid
  * before the second operation, because the destructive commit writes
- * each stage into the layer's 8-bit buffer; the final quantization also
- * produces the clipping mask, whose threshold is half a 8-bit step
- * beyond the representable range.
+ * each stage into the layer's 8-bit buffer. Both upstream operations
+ * clamp their output, so a channel can never leave 0...1; the clipping
+ * mask therefore marks a pixel whose adjustment drove a color channel to
+ * 0 or 255 when the original thumbnail's channel was not already there.
  */
 #include "engine-private.h"
 #include "color-balance-config.h"
@@ -189,7 +190,10 @@ glims_image_variations_apply (GlimsEngine                 *engine,
   if (engine->busy > 0 || engine->progress || g_hash_table_size (engine->strokes) ||
       g_hash_table_size (engine->filters) || ! gimp_image_undo_is_enabled (image) ||
       gimp_image_get_undo_group_count (image))
-    return GLIMS_STATUS_BUSY;
+    {
+      if (error) *error = strdup ("Finish the stroke or close the filter dialog first.");
+      return GLIMS_STATUS_BUSY;
+    }
   if (gimp_image_get_floating_selection (image))
     return glims_fail (error, NULL, "Anchor or cancel the floating selection first.");
 
@@ -446,8 +450,6 @@ glims_image_variations_preview (GlimsEngine                 *engine,
 
   babl_process (babl_fish (babl_format ("R'G'B'A u8"), float_format),
                 thumbnail, source, pixel_count);
-  g_free (thumbnail);
-  thumbnail = NULL;
 
   rect = (GeglRectangle) { 0, 0, out_w, out_h };
   if (! zero_range (&settings->shadows) || ! zero_range (&settings->midtones) ||
@@ -459,6 +461,7 @@ glims_image_variations_preview (GlimsEngine                 *engine,
         {
           g_clear_object (&source_buffer);
           g_clear_object (&destination_buffer);
+          g_free (thumbnail);
           g_free (source);
           g_free (destination);
           return GLIMS_STATUS_FAILED;
@@ -469,6 +472,7 @@ glims_image_variations_preview (GlimsEngine                 *engine,
         {
           g_clear_object (&source_buffer);
           g_clear_object (&destination_buffer);
+          g_free (thumbnail);
           g_free (source);
           g_free (destination);
           return GLIMS_STATUS_FAILED;
@@ -490,6 +494,7 @@ glims_image_variations_preview (GlimsEngine                 *engine,
         {
           g_clear_object (&source_buffer);
           g_clear_object (&destination_buffer);
+          g_free (thumbnail);
           g_free (source);
           g_free (destination);
           return GLIMS_STATUS_FAILED;
@@ -500,6 +505,7 @@ glims_image_variations_preview (GlimsEngine                 *engine,
         {
           g_clear_object (&source_buffer);
           g_clear_object (&destination_buffer);
+          g_free (thumbnail);
           g_free (source);
           g_free (destination);
           return GLIMS_STATUS_FAILED;
@@ -517,15 +523,20 @@ glims_image_variations_preview (GlimsEngine                 *engine,
       gboolean clipped = FALSE;
       for (size_t c = 0; c < 4; c++)
         {
-          float value = final[i * 4 + c];
-          if (c < 3 && (value < -0.5f / 255.0f || value > 1.0f + 0.5f / 255.0f))
+          int value = quantized_channel (final[i * 4 + c]);
+          int original = thumbnail[i * 4 + c];
+          /* A visible color channel pushed onto a limit it did not
+           * already sit on has lost detail to the adjustment. */
+          if (c < 3 && thumbnail[i * 4 + 3] > 0 &&
+              ((value == 0 && original != 0) || (value == 255 && original != 255)))
             clipped = TRUE;
-          pixels[i * 4 + c] = (uint8_t) quantized_channel (value);
+          pixels[i * 4 + c] = (uint8_t) value;
         }
       if (clipping)
         clipping[i] = clipped ? 255 : 0;
     }
 
+  g_free (thumbnail);
   g_free (source);
   g_free (destination);
   return GLIMS_STATUS_OK;

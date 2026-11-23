@@ -14959,10 +14959,8 @@ test_image_variations (void)
       free (got);
       plain = got = NULL;
 
-      /* A strong red correction reaches the 8-bit ceiling. Upstream both
-       * operations clamp their output, so the documented half-step rule
-       * keeps the mask at zero; this checks the mask's shape contract
-       * rather than a saturation upstream cannot produce. */
+      /* A strong red correction drives channels of the reddest and
+       * brightest pixels onto 0 or 255, which the mask marks. */
       {
         GlimsVariationsSettings red = { .struct_size = sizeof red };
         red.shadows.cyan_red = 1.0;
@@ -14983,6 +14981,9 @@ test_image_variations (void)
           }
         CHECK (clipped_count + zero_count == w * h,
                "every clipping byte is 0 or 255");
+        CHECK (clipped_count > 0 && zero_count > 0,
+               "a strong red preview marks some pixels clipped and leaves others clear (%d clipped)",
+               clipped_count);
         free (plain);
         free (got);
         plain = got = NULL;

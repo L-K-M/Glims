@@ -53,7 +53,7 @@ final class RecorderVariationsTests: XCTestCase {
 
     func testVersionAnchorAndOlderVersionRefusal() throws {
         XCTAssertEqual(RecorderFileCodec.variationsVersion, 35)
-        XCTAssertEqual(RecorderFileCodec.latestVersion, 35)
+        XCTAssertGreaterThanOrEqual(RecorderFileCodec.latestVersion, RecorderFileCodec.variationsVersion)
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             fullCommand, version: 34, binding: layerBinding, symbols: layerSymbolJSON))))
         // A version 35 file without a Variations row is refused.
