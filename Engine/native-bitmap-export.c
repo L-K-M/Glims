@@ -3,7 +3,7 @@
 #include "engine-private.h"
 #include "bitmap-psd-file.h"
 #include "bitmap-diffusion.h"
-#include <cairo.h>
+#include "stored-pixels.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,9 +11,7 @@
 #include "core/gimpimage-duplicate.h"
 #include "core/gimppickable.h"
 #include "core/gimpprogress.h"
-#include "core/gimpprojectable.h"
 #include "core/gimpprojection.h"
-#include "gegl/gimptilehandlervalidate.h"
 #if GIMP_CHECK_VERSION (3, 2, 0)
 #include "core/gimplinklayer.h"
 #endif
@@ -22,10 +20,8 @@ typedef enum { BITMAP_EXISTING, BITMAP_THRESHOLD, BITMAP_DIFFUSION } BitmapMetho
 
 typedef struct {
   GlimsEngine *engine;
-  GeglBuffer *projection;
-  const Babl *format;
+  GlimsStoredRows rows;         /* the frozen copy's projection */
   GlimsProgress *progress;
-  guint components;
   BitmapMethod method;
   guint threshold;
   GlimsBitmapDiffusion diffusion;
@@ -68,47 +64,30 @@ static bool
 bitmap_read (void *data, uint32_t y, uint32_t x, uint32_t count, uint8_t *samples)
 {
   BitmapExport *state = data;
-  float pixels[GLIMS_BITMAP_PSD_CHUNK_PIXELS * 4];
-  GeglRectangle area = { (gint) x, (gint) y, (gint) count, 1 };
-  if (count == 1)
-    {
-      /* GEGL's one-pixel shortcut can bypass projection tile validation. */
-      GimpTileHandlerValidate *validate = gimp_tile_handler_validate_get_assigned (state->projection);
-      if (validate)
-        gimp_tile_handler_validate_validate (validate, state->projection, &area, TRUE, FALSE);
-    }
-  gegl_buffer_get (state->projection, &area, 1.0, state->format, pixels,
-                   GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+  const GlimsStoredRows *rows = &state->rows;
+  glims_stored_rows_read (&state->rows, GEGL_RECTANGLE ((gint) x, (gint) y, (gint) count, 1));
   if (state->method == BITMAP_DIFFUSION)
     {
       float values[GLIMS_BITMAP_PSD_CHUNK_PIXELS];
       gboolean valid = TRUE;
-      for (uint32_t i = 0; i < count; i++)
-        {
-          float *p = pixels + i * state->components;
-          values[i] = p[0];
-          valid = valid && p[state->components - 1] == 1.0f;
-        }
+      for (uint32_t i = 0; i < count && valid; i++)
+        valid = glims_stored_rows_opaque_gray (rows, i, &values[i]);
       if (!valid || !glims_bitmap_diffusion_apply (&state->diffusion, y, x, count, values, samples))
         memset (samples, 127, count); /* serializer reports invalid pixel */
     }
+  else if (state->method == BITMAP_THRESHOLD)
+    for (uint32_t i = 0; i < count; i++)
+      {
+        float value;
+        gboolean valid = glims_stored_rows_opaque_gray (rows, i, &value);
+        guint level = valid ? (guint) floorf (value * 255.0f + 0.5f) : 0;
+        samples[i] = valid ? (level <= state->threshold ? 0 : 255) : 127;
+      }
   else
     for (uint32_t i = 0; i < count; i++)
       {
-        float *p = pixels + i * state->components;
-        gboolean opaque = p[state->components - 1] == 1.0f;
-        if (state->method == BITMAP_THRESHOLD)
-          {
-            gboolean valid = opaque && isfinite (p[0]) && p[0] >= 0.0f && p[0] <= 1.0f;
-            guint value = valid ? (guint) floorf (p[0] * 255.0f + 0.5f) : 0;
-            samples[i] = valid ? (value <= state->threshold ? 0 : 255) : 127;
-          }
-        else
-          {
-            gboolean binary = p[0] == 0.0f || p[0] == 1.0f;
-            for (guint c = 1; c + 1 < state->components; c++) binary = binary && p[c] == p[0];
-            samples[i] = binary && opaque ? (p[0] == 0.0f ? 0 : 255) : 127;
-          }
+        gboolean white;
+        samples[i] = glims_stored_rows_black_or_white (rows, i, &white) ? (white ? 255 : 0) : 127;
       }
   state->samples += count;
   return true;
@@ -186,18 +165,13 @@ bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
   GeglBuffer *buffer = gimp_pickable_get_buffer (GIMP_PICKABLE (projection));
   gimp_projection_stop_rendering (projection);
   gimp_projection_flush_now (projection, FALSE);
-  const Babl *projection_format = gimp_projectable_get_format (GIMP_PROJECTABLE (copy));
-  const Babl *space = projection_format ? babl_format_get_space (projection_format) : NULL;
-  const char *name = method != BITMAP_EXISTING ? "Y'A float" : base == GIMP_GRAY ? "YA float" : "RGBA float";
-  const Babl *format = space ? babl_format_with_space (name, space) : babl_format (name);
-  if (!buffer || !format)
-    { g_object_unref (copy); engine->busy--; return GLIMS_STATUS_FAILED; }
-  BitmapExport state = { .engine = engine, .projection = buffer, .format = format,
-                         .components = base == GIMP_GRAY ? 2u : 4u,
-                         .method = method, .threshold = threshold,
+  BitmapExport state = { .engine = engine, .method = method, .threshold = threshold,
                          .total = (guint64) spec.width * spec.height };
-  if (method == BITMAP_DIFFUSION && !glims_bitmap_diffusion_begin (&state.diffusion, spec.width, spec.height))
+  if (!glims_stored_rows_init (&state.rows, buffer, GLIMS_BITMAP_PSD_CHUNK_PIXELS,
+                              method == BITMAP_EXISTING ? GLIMS_STORED_ANY_MODEL : GLIMS_STORED_GRAY_VALUES))
     { g_object_unref (copy); engine->busy--; return GLIMS_STATUS_FAILED; }
+  if (method == BITMAP_DIFFUSION && !glims_bitmap_diffusion_begin (&state.diffusion, spec.width, spec.height))
+    { glims_stored_rows_clear (&state.rows); g_object_unref (copy); engine->busy--; return GLIMS_STATUS_FAILED; }
   state.progress = glims_progress_new (engine);
   engine->progress = state.progress;
   gulong cancel = g_signal_connect (state.progress, "cancel", G_CALLBACK (bitmap_cancel), &state);
@@ -210,6 +184,7 @@ bitmap_export (GlimsEngine *engine, GlimsImageID id, const char *path,
   engine->progress = NULL;
   g_object_unref (state.progress);
   glims_bitmap_diffusion_end (&state.diffusion);
+  glims_stored_rows_clear (&state.rows);
   g_object_unref (copy);
   engine->busy--;
 

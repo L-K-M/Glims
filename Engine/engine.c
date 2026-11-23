@@ -1277,6 +1277,8 @@ open_image_free (gpointer data)
         g_signal_handler_disconnect (projection, open->projection_update_handler);
       if (open->undo_event_handler)
         g_signal_handler_disconnect (open->image, open->undo_event_handler);
+      if (open->dirty_handler)
+        g_signal_handler_disconnect (open->image, open->dirty_handler);
       if (open->layers_changed_handler)
         g_signal_handler_disconnect (open->image, open->layers_changed_handler);
       if (open->mask_changed_handler)
