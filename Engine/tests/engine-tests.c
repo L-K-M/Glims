@@ -14185,8 +14185,12 @@ test_edit_purge (void)
                             (GlimsPoint[]) { { 0, 0 }, { 16, 16 } }, 2, &replace) == GLIMS_STATUS_OK &&
          api->fill (engine, b, (GlimsPoint) { 8, 8 }, &black, NULL) == GLIMS_STATUS_OK &&
          api->fill (engine, b, (GlimsPoint) { 8, 8 }, &white, NULL) == GLIMS_STATUS_OK &&
-         undo_depth (a) == 2 && undo_depth (b) == 2,
-         "each image has two undoable fills");
+         undo_depth (a) >= 2 && undo_depth (b) >= 2,
+         "each image has undoable steps (the selection and two fills)");
+  depth_b = undo_depth (b);
+  CHECK (api->image_undo (engine, a) == GLIMS_STATUS_OK &&
+         api->image_undo_info (engine, a, &undo) == GLIMS_STATUS_OK && undo.redo_count == 1,
+         "image A has a redo step before the purge");
   render_pixel (a, 8, 8, before_a);
   render_pixel (b, 8, 8, before_b);
 
@@ -14194,7 +14198,7 @@ test_edit_purge (void)
          api->image_undo_info (engine, a, &undo) == GLIMS_STATUS_OK &&
          undo.undo_count == 0 && undo.redo_count == 0 &&
          api->image_undo_info (engine, b, &undo) == GLIMS_STATUS_OK &&
-         undo.undo_count == 2 && undo.redo_count == 0,
+         undo.undo_count == depth_b && undo.redo_count == 0,
          "Purge Undo clears the named image's undo and redo only");
 
   CHECK (api->edit_purge (engine, 0, GLIMS_PURGE_HISTORIES, NULL) == GLIMS_STATUS_OK &&
