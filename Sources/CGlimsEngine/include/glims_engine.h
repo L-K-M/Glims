@@ -182,7 +182,8 @@ typedef struct GlimsUndoInfo {
 
 /* History positions are ordered from the earliest retained state (0) to
  * the last redo state. A revision is valid for this open image only and
- * changes whenever its native undo/redo history changes. */
+ * changes whenever its native undo/redo history changes, and whenever an
+ * edit dirties the image while its undo is frozen, which adds no state. */
 typedef struct GlimsHistoryInfo {
   uint64_t revision;
   int32_t  count;             /* includes the earliest retained state */

@@ -162,6 +162,7 @@ typedef struct
   GlimsItemSets *item_sets;
   gulong     projection_update_handler;
   gulong     undo_event_handler;
+  gulong     dirty_handler;
   gulong     layers_changed_handler;
   gulong     mask_changed_handler;
   gulong     size_changed_handler;

@@ -43,7 +43,7 @@ extension EngineSmokeTest {
         }
 
         // Throwaway stores: the scenario never persists into the real defaults.
-        let suite = "ch.lkmc.Glims.smoke.tool-presets.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-tool-presets")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let presetStore = PaintToolPresetStore(defaults: defaults)

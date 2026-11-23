@@ -179,7 +179,8 @@ final class NavigatorPaletteController: NSViewController, PaletteContent {
 
     static let definition = PaletteDefinition(
         kind: PaletteKind("ch.lkmc.Glims.navigator"), title: "Navigator",
-        contentSize: NSSize(width: 240, height: 210),
+        // As wide as the Recorder, so the default right column has one edge.
+        contentSize: NSSize(width: 330, height: 210),
         sizing: .resizable(minimumContentSize: NSSize(width: 200, height: 150)),
         frameAutosaveName: "Glims.palette.navigator")
 

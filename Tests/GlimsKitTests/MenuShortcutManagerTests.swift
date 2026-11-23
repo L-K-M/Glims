@@ -14,7 +14,7 @@ final class MenuShortcutManagerTests: XCTestCase {
     // MARK: - Helpers
 
     private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
-        let suite = "ch.lkmc.Glims.tests.menushortcuts.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("tests-menushortcuts")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         try body(defaults)
