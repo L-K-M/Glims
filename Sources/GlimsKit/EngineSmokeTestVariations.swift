@@ -180,8 +180,16 @@ extension EngineSmokeTest {
             midtones: .init(cyanRed: 0, magentaGreen: -0.2, yellowBlue: 0),
             highlights: .init(cyanRed: 0, magentaGreen: 0, yellowBlue: 0.3),
             lightness: 0.15, saturation: -0.2)
+        // OK after the active layer changed (here: a layer id the sheet
+        // never previewed) is refused and edits nothing.
+        let recordSource = try pixels(record.image)
+        record.applyVariations(recordedSettings, layer: (record.activeLayer ?? 0) + 9999)
+        settle(record)
+        check(try pixels(record.image) == recordSource,
+              "Variations refuses a layer other than the previewed one")
+
         try record.startRecording()
-        record.applyVariations(recordedSettings)
+        record.applyVariations(recordedSettings, layer: record.activeLayer ?? 0)
         settle(record)
         try record.stopRecording()
         settle(record)

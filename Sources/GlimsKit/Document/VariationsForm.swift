@@ -147,7 +147,7 @@ final class VariationsForm {
         alert.beginSheetModal(for: window) { response in
             dismiss()
             guard response == .alertFirstButtonReturn else { return }
-            self.document?.applyVariations(self.model.settings)
+            self.document?.applyVariations(self.model.settings, layer: self.layer)
         }
     }
 
@@ -197,9 +197,10 @@ final class VariationsForm {
             for (direction, button) in colorButtons {
                 request(button, settings: model.settings(afterClick: direction), generation: expected)
             }
-            request(lighterButton, settings: model.settings(afterClick: .lighter), generation: expected)
-            request(darkerButton, settings: model.settings(afterClick: .darker), generation: expected)
         }
+        // Lighter and Darker stay visible and clickable in both modes.
+        request(lighterButton, settings: model.settings(afterClick: .lighter), generation: expected)
+        request(darkerButton, settings: model.settings(afterClick: .darker), generation: expected)
     }
 
     private func request(_ button: NSButton, settings: EngineSession.VariationsSettings,

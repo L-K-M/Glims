@@ -4799,9 +4799,11 @@ typedef struct GlimsEngineAPI {
    * Output is straight-alpha sRGB RGBA 8-bit. `pixels` NULL queries the
    * size only (`clipping` is ignored); otherwise `byte_count` must
    * hold the whole thumbnail and `clipping` is either NULL or
-   * `clipping_byte_count` wide, one byte per pixel, 255 where any final
-   * color channel lies below -0.5/255 or above 1+0.5/255 before 8-bit
-   * conversion. Wrong buffer sizes are INVALID_ARGUMENT; an unknown image
+   * `clipping_byte_count` wide, one byte per pixel, 255 where a visible
+   * pixel (alpha above 0) has a color channel that the corrections drove
+   * to 0 or 255 when the plain thumbnail's channel was not already there
+   * (both operations clamp, so nothing leaves 0...1; reaching a new limit
+   * is the clipping). Wrong buffer sizes are INVALID_ARGUMENT; an unknown image
    * or drawable is NOT_FOUND. Read-only: no locks, no undo step. */
   GlimsStatus (*image_variations_preview) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                                            const GlimsVariationsSettings *settings,

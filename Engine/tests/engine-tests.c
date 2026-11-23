@@ -14665,6 +14665,47 @@ variations_same (const uint8_t *a, const uint8_t *b, size_t count)
   return a && b && memcmp (a, b, count) == 0;
 }
 
+/* The largest per-byte difference, with its index in `at`; 256 when a
+ * buffer is missing. */
+static int
+variations_max_difference (const uint8_t *a, const uint8_t *b, size_t count, long *at)
+{
+  int largest = 0;
+
+  *at = -1;
+  if (! a || ! b)
+    return 256;
+  for (size_t i = 0; i < count; i++)
+    {
+      int difference = abs ((int) a[i] - (int) b[i]);
+      if (difference > largest)
+        {
+          largest = difference;
+          *at = (long) i;
+        }
+    }
+  return largest;
+}
+
+/* Filter sessions on a layer commit as non-destructive effects, which
+ * the projection chains in float. Variations writes the 8-bit layer
+ * after each stage, so the oracle bakes each effect in right away. */
+static GlimsStatus
+variations_merge_effect (GlimsImageID image, GlimsItemID layer, char **error)
+{
+  GlimsEffectInfo row;
+  int32_t         count = 0;
+  GlimsStatus     status;
+
+  memset (&row, 0, sizeof row);
+  status = api->drawable_effects (engine, image, layer, &row, 1, &count);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  if (count != 1)
+    return GLIMS_STATUS_FAILED;
+  return api->effect_command (engine, image, layer, row.id, GLIMS_EFFECT_MERGE, error);
+}
+
 static GlimsStatus
 variations_filter_chain (GlimsImageID image, GlimsItemID layer,
                          const GlimsVariationsSettings *settings, char **error)
@@ -14686,6 +14727,8 @@ variations_filter_chain (GlimsImageID image, GlimsItemID layer,
     status = api->filter_color_balance_set (engine, filter, &balance, error);
   if (status == GLIMS_STATUS_OK)
     status = api->filter_commit (engine, filter, error);
+  if (status == GLIMS_STATUS_OK)
+    status = variations_merge_effect (image, layer, error);
   if (status != GLIMS_STATUS_OK)
     return status;
 
@@ -14695,6 +14738,8 @@ variations_filter_chain (GlimsImageID image, GlimsItemID layer,
     status = api->filter_hue_saturation_set (engine, filter, &hue, error);
   if (status == GLIMS_STATUS_OK)
     status = api->filter_commit (engine, filter, error);
+  if (status == GLIMS_STATUS_OK)
+    status = variations_merge_effect (image, layer, error);
   return status;
 }
 
@@ -14711,7 +14756,7 @@ test_image_variations (void)
   GlimsItemID           layer_a = 0, layer_b = 0, group = 0;
   GlimsVariationsSettings settings = { .struct_size = sizeof settings };
   GlimsVariationsSettings identity = { .struct_size = sizeof identity };
-  GlimsUndoInfo         undo;
+  GlimsUndoInfo         undo = { 0 };
   uint8_t              *before = NULL, *after = NULL, *check = NULL, *plain = NULL, *got = NULL;
   uint8_t               clipping[8 * 8];
   size_t                count = 0;
@@ -14761,11 +14806,20 @@ test_image_variations (void)
          "the filter oracle runs%s%s", error ? ": " : "", error ? error : "");
   api->free_string (error);
   error = NULL;
-  CHECK (undo_depth (b) == depth + 2,
-         "the two filter commits are two undo steps (%d)", undo_depth (b));
+  CHECK (undo_depth (b) == depth + 4,
+         "the two filter commits and merges are four undo steps (%d)", undo_depth (b));
   check = variations_bytes (b, &count);
-  CHECK (variations_same (after, check, count),
-         "Variations and the equivalent filter chain render identical pixels");
+  {
+    /* The oracle commits through drawable filters, which composite the
+     * result into the layer through the layer-mode blender; Variations
+     * writes gimp_drawable_apply_operation's output directly. Both are
+     * 8-bit between the stages, so they agree to one level. */
+    long at;
+    int  largest = variations_max_difference (after, check, count, &at);
+    CHECK (largest <= 1,
+           "Variations and the equivalent filter chain agree within one level"
+           " (largest %d at byte %ld)", largest, at);
+  }
   free (check);
   check = NULL;
 
@@ -14807,11 +14861,18 @@ test_image_variations (void)
       CHECK (api->image_variations_apply (engine, sel_image, layer, &settings, NULL) ==
              GLIMS_STATUS_OK && undo_depth (sel_image) == depth + 1,
              "a selection-bounded Variations applies as one step");
+      /* A merged copy clips to the selection; read the whole image. */
+      api->select_command (engine, sel_image, GLIMS_SELECT_NONE, 0, NULL);
       after = variations_bytes (sel_image, &count);
-      CHECK (after && count >= 6 * 2 * 4 &&
-             memcmp (after + 3 * 4, before + 3 * 4,
-                     (size_t) (6 - 3) * 2 * 4) == 0,
+      /* Columns 3...5 of each row lie outside the selection; 0...2 inside. */
+      CHECK (after && before && count >= 6 * 2 * 4 &&
+             memcmp (after + 3 * 4, before + 3 * 4, 3 * 4) == 0 &&
+             memcmp (after + (6 + 3) * 4, before + (6 + 3) * 4, 3 * 4) == 0,
              "pixels outside the selection are unchanged");
+      CHECK (after && before &&
+             (memcmp (after, before, 3 * 4) != 0 ||
+              memcmp (after + 6 * 4, before + 6 * 4, 3 * 4) != 0),
+             "pixels inside the selection change");
       free (before);
       free (after);
       before = after = NULL;
@@ -14865,6 +14926,35 @@ test_image_variations (void)
              GLIMS_STATUS_NOT_FOUND,
              "an unknown layer or image is NOT_FOUND");
 
+      /* A floating selection is BUSY; discarding it and clearing the
+       * selection restore the fixture for the next case. */
+      {
+        GlimsSelectOptions replace = { .struct_size = sizeof replace,
+                                       .operation = GLIMS_SELECT_REPLACE };
+        GlimsFloatingState state = { .struct_size = sizeof state };
+        GlimsItemID        floating = 0;
+        int32_t            float_depth;
+
+        CHECK (api->select_shape (engine, refuse, GLIMS_SHAPE_RECTANGLE,
+                                  (GlimsPoint[]) { { 0, 0 }, { 2, 2 } }, 2, &replace) ==
+               GLIMS_STATUS_OK &&
+               api->selection_float (engine, refuse, layer, GLIMS_FLOAT_COPY, &floating, NULL) ==
+               GLIMS_STATUS_OK && floating != 0,
+               "the floating-selection fixture floats");
+        float_depth = undo_depth (refuse);
+        CHECK (api->image_variations_apply (engine, refuse, layer, &settings, &error) ==
+               GLIMS_STATUS_BUSY && error && undo_depth (refuse) == float_depth,
+               "a floating selection is BUSY and changes nothing");
+        api->free_string (error);
+        error = NULL;
+        CHECK (api->floating_command (engine, refuse, floating, GLIMS_FLOATING_DISCARD,
+                                      NULL, NULL) == GLIMS_STATUS_OK &&
+               api->image_floating_selection (engine, refuse, &state) == GLIMS_STATUS_OK &&
+               ! state.active,
+               "discarding removes the floating selection");
+        api->select_command (engine, refuse, GLIMS_SELECT_NONE, 0, NULL);
+      }
+
       /* A non-RGB base type is UNSUPPORTED. */
       CHECK (api->image_convert_mode (engine, refuse, GLIMS_COLOR_MODE_GRAYSCALE, NULL) ==
              GLIMS_STATUS_OK, "the grayscale fixture converts");
@@ -14874,8 +14964,11 @@ test_image_variations (void)
              "a grayscale image is refused");
       api->free_string (error);
       error = NULL;
-      CHECK (variations_same (after, variations_bytes (refuse, &count), count),
+      check = variations_bytes (refuse, &count);
+      CHECK (variations_same (after, check, count),
              "the grayscale refusal changes nothing");
+      free (check);
+      check = NULL;
       free (after);
       after = NULL;
 
@@ -14889,9 +14982,9 @@ test_image_variations (void)
       if (group)
         {
           int32_t group_depth = undo_depth (refuse);
-          CHECK (api->image_variations_apply (engine, refuse, group, &settings, &error) !=
-                 GLIMS_STATUS_OK && undo_depth (refuse) == group_depth,
-                 "a group layer is refused and changes nothing");
+          CHECK (api->image_variations_apply (engine, refuse, group, &settings, &error) ==
+                 GLIMS_STATUS_UNSUPPORTED && error && undo_depth (refuse) == group_depth,
+                 "a group layer is UNSUPPORTED and changes nothing");
           api->free_string (error);
           error = NULL;
         }
@@ -14907,13 +15000,18 @@ test_image_variations (void)
                GLIMS_STATUS_OK,
                "the missing-selection rectangle is selected");
         depth = undo_depth (refuse);
-        CHECK (api->image_variations_apply (engine, refuse, layer, &settings, &error) !=
-               GLIMS_STATUS_OK && undo_depth (refuse) == depth,
-               "a selection that misses the layer is refused and changes nothing");
+        CHECK (api->image_variations_apply (engine, refuse, layer, &settings, &error) ==
+               GLIMS_STATUS_BUSY && error && undo_depth (refuse) == depth,
+               "a selection that misses the layer is BUSY and changes nothing");
         api->free_string (error);
         error = NULL;
       }
 
+      /* Undo the setup (selection, move) so the merged read covers the
+       * same pixels as before; the empty group renders nothing. */
+      api->select_command (engine, refuse, GLIMS_SELECT_NONE, 0, NULL);
+      CHECK (api->layer_move (engine, refuse, layer, 4, 0) == GLIMS_STATUS_OK,
+             "the layer moves back");
       after = variations_bytes (refuse, &count);
       CHECK (variations_same (before, after, count),
              "every refusal leaves the pixels unchanged");
