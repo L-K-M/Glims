@@ -262,7 +262,7 @@ extension EngineSmokeTest {
         documentA.maskToSelection(.replace)
         documentA.moveLayer(l2, toParent: 0, atIndex: 0)
         documentA.toggleLocks(l2, .pixels)
-        check(documentA.runOnPaintTarget { _, _ in } == false, "the paint-target runner refuses under multi-selection")
+        check(documentA.runOnPaintTarget("Paint") { _, _ in } == false, "the paint-target runner refuses under multi-selection")
         var copyError: Error?
         documentA.copyPixels(.layer, background: .white, consume: { _ in }, completion: { copyError = $0 })
         settle(documentA)
