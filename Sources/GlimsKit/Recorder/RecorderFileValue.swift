@@ -330,8 +330,9 @@ enum RecorderFileCommand: Equatable {
     case resizeCanvas(width: Int, height: Int, offset: Point, fill: RecorderColor)
     case crop(Rect)
     /// The Crop tool's Fixed Target Size: a crop rectangle, the pixel
-    /// size to resample to and the resolution, as one undo step.
-    case cropResize(rect: Rect, width: Int, height: Int, xResolution: Double, yResolution: Double,
+    /// size to resample to and the resolution, as one undo step. Absent
+    /// resolutions (always both) keep the receiving image's own.
+    case cropResize(rect: Rect, width: Int, height: Int, xResolution: Double?, yResolution: Double?,
                     interpolation: LayerInterpolation)
     /// The Move tool's offset move. The explicit layer is the record's
     /// `layer` binding; the offset is in whole image pixels.

@@ -189,6 +189,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     private var shownBrushPresentationRevision = 0
     private var shownGradient: GradientPresentation?
     private var shownMoveTargetMode: MoveTargetMode?
+    /// The Crop tool's settings the rows show; a change from a control,
+    /// Front Image or another window rebuilds them, so the fields' enabled
+    /// state and text never go stale.
+    private var shownCropTarget: CropTargetSettings?
     private var observer: UUID?
     /// Existing controls follow external changes without replacing the active
     /// field editor. Resource presentation rebuilds wait for editing to end.
@@ -282,7 +286,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         let gradientChanged = state.current == .gradient
             && shownGradient != Self.gradientPresentation(of: state)
         let moveTargetChanged = state.current == .move && shownMoveTargetMode != state.moveTargetMode
+        let cropTargetChanged = state.current == .crop && shownCropTarget != state.cropTarget
         let presentationChanged = fontsArrived || brushChanged || gradientChanged || moveTargetChanged
+            || cropTargetChanged
         // Keep presentation rows until the active field finishes its normal
         // commit. A tool switch still replaces the options immediately.
         if shownTool != state.current || (presentationChanged && !Self.hasFieldEditor(in: view)) {
@@ -406,6 +412,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
         shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
         shownMoveTargetMode = tool == .move ? state.moveTargetMode : nil
+        shownCropTarget = tool == .crop ? state.cropTarget : nil
         brushRefreshers.removeAll()
         transformRefreshers.removeAll()
         transformFieldEntries.removeAll()

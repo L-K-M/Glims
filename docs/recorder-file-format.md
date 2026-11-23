@@ -75,7 +75,7 @@ Commands have an owned `tag` and the following exact fields:
 | `adjustment` | `adjustment`, `background` (version 30) |
 | `setResolution` | `x`, `y` (version 31) |
 | `resize` | integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 31) |
-| `cropResize` | `rect`, integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 32) |
+| `cropResize` | `rect`, integer `width` and `height`, `interpolation`, optional `xResolution` and `yResolution` (both or neither) (version 32) |
 | `moveLayer` | `offset` with integer `x` and `y` within ±524288 (version 33) |
 | `duplicateLayers` | no fields (version 33) |
 | `deleteLayers` | no fields (version 33) |
@@ -665,10 +665,13 @@ without facade slots 246-248.
 ## Crop to a target size (version 32)
 
 `cropResize` stores the `rect` cropped first, the `width` and `height`
-the result resamples to, `xResolution`, `yResolution` and the
-`interpolation` name, and replays as one Crop Image step through facade
-slot 252. It is target independent and needs the `none` binding. Version
-32 requires at least one; earlier versions reject the tag.
+the result resamples to, the `interpolation` name and, when the Crop
+tool set one, `xResolution` and `yResolution`. Both resolutions are
+present or both absent; absent keeps the receiving image's own
+resolution, read when the command runs, as the live command kept its
+own. It replays as one Crop Image step through facade slot 252. It is
+target independent and needs the `none` binding. Version 32 requires at
+least one; earlier versions reject the tag.
 
 ## Layer edits (version 33)
 

@@ -364,10 +364,14 @@ extension RecorderFileCodec {
             return .object(["tag": .string("resizeCanvas"), "width": j(width), "height": j(height), "offset": try pointJSON(offset), "fill": try colorJSON(color)])
         case .crop(let rect): return .object(["tag": .string("crop"), "rect": try rectJSON(rect)])
         case .cropResize(let rect, let width, let height, let xResolution, let yResolution, let interpolation):
-            return .object(["tag": .string("cropResize"), "rect": try rectJSON(rect),
-                            "width": j(width), "height": j(height),
-                            "xResolution": try d(xResolution), "yResolution": try d(yResolution),
-                            "interpolation": .string(interpolation.rawValue)])
+            var fields: [String: RecorderJSON] = ["tag": .string("cropResize"), "rect": try rectJSON(rect),
+                                                  "width": j(width), "height": j(height),
+                                                  "interpolation": .string(interpolation.rawValue)]
+            if let xResolution, let yResolution {
+                fields["xResolution"] = try d(xResolution)
+                fields["yResolution"] = try d(yResolution)
+            }
+            return .object(fields)
         case .moveLayer(let offset):
             return .object(["tag": .string("moveLayer"),
                             "offset": .object(["x": j(offset.x), "y": j(offset.y)])])

@@ -33,7 +33,10 @@ struct CropTargetSettings: Codable, Equatable {
         }
         set {
             if let newValue {
-                resolution = String(format: "%g", newValue.x)
+                // The shortest exact form, so Front Image does not round
+                // the resolution into a change on Return.
+                resolution = newValue.x == newValue.x.rounded() && abs(newValue.x) < 1e15
+                    ? String(Int(newValue.x)) : String(newValue.x)
                 resolutionUnit = .pixelsPerInch
             } else {
                 resolution = ""
