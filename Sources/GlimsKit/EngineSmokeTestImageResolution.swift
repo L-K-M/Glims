@@ -181,8 +181,11 @@ extension EngineSmokeTest {
             recordedResize = width == 600 && height == 450 && xResolution == 300 && yResolution == 300
                 && interpolation == .cubic
         }
-        check(document.recorder.records.count == 2 && recordedResize,
-              "a resampling resize records one combined command")
+        // Starting Recorder clears the earlier recording, so this one
+        // holds only the resize.
+        check(document.recorder.records.count == 1 && recordedResize,
+              "a resampling resize records one combined command "
+              + "(\(document.recorder.records.count) rows)")
         check(document.info.width == 600 && document.info.height == 450
                 && document.resolution?.x == 300 && document.undoInfo.undoCount == undoBefore + 2,
               "a combined resize is one undo step with the new size and resolution "
