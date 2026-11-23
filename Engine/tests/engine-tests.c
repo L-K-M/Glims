@@ -8036,7 +8036,8 @@ test_history_while_undo_is_frozen (void)
          "a plug-in leaves undo frozen%s%s", error ? ": " : "", error ? error : "");
   api->free_string (error);
 
-  api->image_history (engine, image, NULL, 0, &before);
+  CHECK (api->image_history (engine, image, NULL, 0, &before) == GLIMS_STATUS_OK,
+         "history reads before the frozen edit");
   strcpy (change.name, "Edited while frozen");
   events = atomic_load (&undo_events);
   CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
