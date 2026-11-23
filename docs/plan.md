@@ -6893,12 +6893,28 @@ and linking it here would change existing strokes and their recorded
 fingerprints.
 
 Tool Options gain Mode, Spacing (with Default spacing) and Fade
-rows. The Clone pattern source has no app control yet.
+rows.
 `test_paint_options` in the conformance tests checks each mode where it
 differs exactly from Normal, spacing gaps, both fades, aligned and
 unaligned pattern clones against a tiled oracle, every refusal with no
 undo or pixel change, partial tails and the capture facts;
 `GLIMS_SMOKE_CASE=paint-options` paints them through the canvas.
+
+### Clone from a pattern (2026-11-23)
+
+Clone's Tool Options gain Source (Image or Pattern) and, for Pattern,
+a button that opens the Fill sheet's pattern picker in a small panel.
+The pattern is the one current pattern Edit > Fill already persists
+(`PatternFillStore`), as an editor's defined pattern serves both its
+fill and its pattern stamp, and as GIMP's context pattern serves both
+Bucket Fill and Clone. Aligned keeps its meaning: on, the pattern stays
+one tiling of the layer across strokes (the engine's aligned pattern
+source); off, each stroke starts it again. A pattern stroke needs no
+Option-click; with no pattern chosen the press is refused before any
+paint. Heal still copies from the image. The source choice lasts for
+the session, like the source point and Aligned. No facade change.
+`GLIMS_SMOKE_CASE=clone-pattern` drives the menu, the chooser and
+strokes through the canvas.
 
 ### Gradient and Eyedropper modifiers (2026-11-22)
 

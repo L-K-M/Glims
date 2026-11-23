@@ -233,7 +233,12 @@ What the tools do:
   to set the source, then paint. With Aligned on in Tool Options, later
   strokes keep the first stroke's distance to the source; with it off,
   every stroke restarts at the source. Setting a new source starts a new
-  alignment. Smudge, Blur and Sharpen retouch what is already painted,
+  alignment. Set Clone's Source to Pattern to paint the current pattern,
+  the one Edit > Fill uses, with no source point; the Pattern button
+  chooses it. With Aligned on, the pattern stays continuous across
+  strokes; with it off, each stroke starts it again. Pattern strokes
+  paint only in RGB and grayscale images, and Recorder keeps them as
+  failed rows. Smudge, Blur and Sharpen retouch what is already painted,
   and Dodge and Burn lighten and darken it.
   Sponge Desaturate and Sponge Saturate reduce or increase saturation under
   the brush, preserving hue and transparency. Choose either from the O tool

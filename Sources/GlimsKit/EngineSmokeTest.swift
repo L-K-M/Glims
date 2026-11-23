@@ -847,6 +847,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Paint Options)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "clone-pattern" {
+                try exerciseClonePattern(session, documents: documents)
+                print(failures == 0 ? "PASSED (Clone Pattern)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "clone-alignment" {
                 try exerciseCloneAlignment(session, documents: documents)
                 print(failures == 0 ? "PASSED (Clone Alignment)" : "FAILED: \(failures) failure(s)")
@@ -1269,6 +1274,7 @@ enum EngineSmokeTest {
             try exerciseSmoothSelection(session, documents: documents)
             try exerciseCloneAlignment(session, documents: documents)
             try exercisePaintOptions(session, documents: documents)
+            try exerciseClonePattern(session, documents: documents)
             try exerciseToolModifiers(session, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
