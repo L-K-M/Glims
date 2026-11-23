@@ -1495,6 +1495,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func sendLayerToBack(_ sender: Any?) { imageDocument.layerCommand(.toBottom) }
     @objc func layerToImageSize(_ sender: Any?) { imageDocument.layerCommand(.fitToImage) }
     @objc func trimLayerToContent(_ sender: Any?) { imageDocument.layerCommand(.trimToContent) }
+    @objc func defringe(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil else { return }
+        DefringeForm.present(in: imageDocument, on: window)
+    }
+    @objc func removeBlackMatte(_ sender: Any?) { imageDocument.applyMatting(.removeBlackMatte, width: 0) }
+    @objc func removeWhiteMatte(_ sender: Any?) { imageDocument.applyMatting(.removeWhiteMatte, width: 0) }
     @objc func mergeDown(_ sender: Any?) { imageDocument.layerCommand(.mergeDown) }
     @objc func flattenImage(_ sender: Any?) { imageDocument.layerCommand(.flatten) }
     @objc func mergeVisible(_ sender: Any?) { imageDocument.mergeVisible() }
@@ -3383,6 +3389,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let refusal = imageDocument.adjustmentRefusal(adjustment)
             menuItem.toolTip = refusal
             return refusal == nil && !editingBlocked && !previewBusy
+        case #selector(defringe(_:)), #selector(removeBlackMatte(_:)), #selector(removeWhiteMatte(_:)):
+            // Cached admission only; the engine revalidates the alpha and
+            // partial-pixel states the cache cannot see. The refusal
+            // reason becomes the item’s tool tip. Defringe also needs the
+            // window free of another sheet for its own sheet.
+            let operation: EngineSession.Matting
+            switch menuItem.action {
+            case #selector(defringe(_:)): operation = .defringe
+            case #selector(removeBlackMatte(_:)): operation = .removeBlackMatte
+            default: operation = .removeWhiteMatte
+            }
+            let refusal = imageDocument.mattingRefusal(operation)
+            menuItem.toolTip = refusal
+            let needsNoSheet = menuItem.action == #selector(defringe(_:))
+            return refusal == nil && !editingBlocked && !previewBusy
+                && (!needsNoSheet || window?.attachedSheet == nil)
         case #selector(selectSimilar(_:)):
             let refusal = imageDocument.selectSimilarRefusal
             menuItem.toolTip = refusal ?? Self.similarHint

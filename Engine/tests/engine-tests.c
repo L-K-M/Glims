@@ -14144,6 +14144,330 @@ test_image_crop_resize (void)
   api->image_close (engine, image);
 }
 
+/* Slot 253: Layer > Matting. Black matte divides the stored color by
+ * alpha; white matte subtracts the remaining background first. Defringe
+ * copies the nearest opaque pixel's color within the width, measured
+ * corner to corner. The command is layer-wide, ignores the selection,
+ * never writes alpha, and adds one undo step only when a value changes. */
+static uint8_t *
+matting_bytes (GlimsImageID image, size_t *count)
+{
+  GlimsPixelBuffer copied = { 0 };
+  uint8_t *bytes;
+  if (api->image_copy_pixels (engine, image, false, &copied, NULL) != GLIMS_STATUS_OK)
+    return NULL;
+  bytes = malloc (copied.byte_count ? copied.byte_count : 1);
+  if (! bytes)
+    {
+      api->free_pixels (copied.pixels);
+      return NULL;
+    }
+  memcpy (bytes, copied.pixels, copied.byte_count);
+  *count = copied.byte_count;
+  api->free_pixels (copied.pixels);
+  return bytes;
+}
+
+static int
+matting_close (const uint8_t *actual, const uint8_t *expected, int tolerance)
+{
+  for (int i = 0; i < 4; i++)
+    if (abs ((int) actual[i] - (int) expected[i]) > tolerance)
+      return 0;
+  return 1;
+}
+
+static int
+matting_same (const uint8_t *a, const uint8_t *b, size_t count)
+{
+  return a && b && memcmp (a, b, count) == 0;
+}
+
+static void
+test_layer_matting (void)
+{
+  GlimsImageID image = 0, plain = 0, group_image = 0, fringe_image = 0, noop_image = 0;
+  GlimsItemID  layer = 0, group = 0;
+  uint8_t     *bytes = NULL, *after = NULL;
+  size_t       count = 0;
+  int32_t      depth = 0;
+  char        *error = NULL;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, layer_matting) +
+          sizeof api->layer_matting || ! api->layer_matting)
+    {
+      CHECK (false, "the adapter exports slot 253 layer_matting");
+      return;
+    }
+
+  /* Black matte oracle: (100,50,0,128) -> (100,50,0)/128*255 =
+   * (199,100,0), alpha 128. White matte oracle: (200,150,128,128) ->
+   * ((200,150,128) - (255-128))/128 = (145,46,2), alpha 128. */
+  const uint8_t source[4 * 4] = {
+    100, 50, 0, 128,
+    200, 150, 128, 128,
+    0, 0, 0, 0,
+    10, 20, 30, 255
+  };
+  CHECK (api->image_from_pixels (engine, 4, 1, source, sizeof source, &image, NULL) ==
+         GLIMS_STATUS_OK && image != 0, "the matting fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  depth = undo_depth (image);
+
+  /* A selection that excludes the partial pixels does not bound the
+   * command: the halo is a layer-wide edge property. */
+  GlimsSelectOptions replace = { .struct_size = sizeof replace,
+                                 .operation = GLIMS_SELECT_REPLACE };
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 3, 0 }, { 4, 1 } }, 2, &replace) ==
+         GLIMS_STATUS_OK, "the matting selection is ready");
+
+  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_REMOVE_BLACK_MATTE,
+                             0, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "Remove Black Matte is one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  bytes = matting_bytes (image, &count);
+  CHECK (bytes && count == sizeof source &&
+         matting_close (bytes + 0 * 4, (uint8_t[]) { 199, 100, 0, 128 }, 1) &&
+         matting_close (bytes + 1 * 4, (uint8_t[]) { 255, 255, 255, 128 }, 1) &&
+         matting_close (bytes + 2 * 4, (uint8_t[]) { 0, 0, 0, 0 }, 0) &&
+         matting_close (bytes + 3 * 4, (uint8_t[]) { 10, 20, 30, 255 }, 0),
+         "black matte divides by alpha, clamps, and leaves transparent "
+         "and opaque pixels byte-identical");
+  free (bytes);
+  bytes = NULL;
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "undo and redo bracket Remove Black Matte");
+  after = matting_bytes (image, &count);
+  CHECK (after && count == sizeof source &&
+         matting_close (after + 0 * 4, (uint8_t[]) { 199, 100, 0, 128 }, 1),
+         "redo reapplies Remove Black Matte");
+  free (after);
+  after = NULL;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth,
+         "undo restores the source before the white matte");
+
+  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_REMOVE_WHITE_MATTE,
+                             0, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "Remove White Matte is one undo step");
+  bytes = matting_bytes (image, &count);
+  CHECK (bytes && count == sizeof source &&
+         matting_close (bytes + 0 * 4, (uint8_t[]) { 0, 0, 0, 128 }, 1) &&
+         matting_close (bytes + 1 * 4, (uint8_t[]) { 145, 46, 2, 128 }, 1) &&
+         matting_close (bytes + 2 * 4, (uint8_t[]) { 0, 0, 0, 0 }, 0) &&
+         matting_close (bytes + 3 * 4, (uint8_t[]) { 10, 20, 30, 255 }, 0),
+         "white matte subtracts the background, clamps, and leaves "
+         "transparent and opaque pixels byte-identical");
+  free (bytes);
+  bytes = NULL;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth,
+         "undo restores the white matte source");
+
+  /* Defringe: one unique opaque seed at x=0, partial pixels at x=1..4. */
+  const uint8_t fringe[8 * 4] = {
+    10, 20, 30, 255,
+    200, 100, 50, 128,
+    200, 100, 50, 128,
+    200, 100, 50, 128,
+    200, 100, 50, 128,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0
+  };
+  CHECK (api->image_from_pixels (engine, 8, 1, fringe, sizeof fringe, &fringe_image, NULL) ==
+         GLIMS_STATUS_OK && fringe_image != 0, "the defringe fixture exists");
+  if (fringe_image)
+    {
+      GlimsItemID fringe_layer = first_layer (fringe_image);
+      int32_t     fringe_depth = undo_depth (fringe_image);
+
+      CHECK (api->layer_matting (engine, fringe_image, fringe_layer,
+                                 GLIMS_MATTING_DEFRINGE, 1, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (fringe_image) == fringe_depth + 1,
+             "Defringe width 1 is one undo step");
+      bytes = matting_bytes (fringe_image, &count);
+      CHECK (bytes && count == sizeof fringe &&
+             matting_close (bytes + 1 * 4, (uint8_t[]) { 10, 20, 30, 128 }, 0) &&
+             matting_close (bytes + 2 * 4, (uint8_t[]) { 200, 100, 50, 128 }, 0) &&
+             matting_close (bytes + 4 * 4, (uint8_t[]) { 200, 100, 50, 128 }, 0),
+             "Defringe width 1 reaches the adjacent pixel only");
+      free (bytes);
+      bytes = NULL;
+      CHECK (api->image_undo (engine, fringe_image) == GLIMS_STATUS_OK &&
+             undo_depth (fringe_image) == fringe_depth,
+             "undo restores the defringe source");
+
+      CHECK (api->layer_matting (engine, fringe_image, fringe_layer,
+                                 GLIMS_MATTING_DEFRINGE, 2, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (fringe_image) == fringe_depth + 1,
+             "Defringe width 2 is one undo step");
+      bytes = matting_bytes (fringe_image, &count);
+      CHECK (bytes && count == sizeof fringe &&
+             matting_close (bytes + 1 * 4, (uint8_t[]) { 10, 20, 30, 128 }, 0) &&
+             matting_close (bytes + 2 * 4, (uint8_t[]) { 10, 20, 30, 128 }, 0) &&
+             matting_close (bytes + 3 * 4, (uint8_t[]) { 200, 100, 50, 128 }, 0),
+             "Defringe width 2 reaches two pixels and no further");
+      free (bytes);
+      bytes = NULL;
+      /* Alpha is never written. */
+      CHECK (api->image_undo (engine, fringe_image) == GLIMS_STATUS_OK,
+             "undo restores the width 2 source");
+      CHECK (api->layer_matting (engine, fringe_image, fringe_layer,
+                                 GLIMS_MATTING_DEFRINGE, 4, NULL) == GLIMS_STATUS_OK);
+      bytes = matting_bytes (fringe_image, &count);
+      CHECK (bytes && count == sizeof fringe &&
+             bytes[4] == 128 && bytes[2 * 4 + 4] == 128 &&
+             bytes[4 * 4 + 4] == 128,
+             "Defringe leaves every alpha value unchanged");
+      free (bytes);
+      bytes = NULL;
+      api->image_close (engine, fringe_image);
+    }
+
+  /* A partial pixel that already has the seed color changes nothing. */
+  const uint8_t noop[2 * 4] = { 10, 20, 30, 255, 10, 20, 30, 128 };
+  CHECK (api->image_from_pixels (engine, 2, 1, noop, sizeof noop, &noop_image, NULL) ==
+         GLIMS_STATUS_OK && noop_image != 0, "the no-op defringe fixture exists");
+  if (noop_image)
+    {
+      int32_t noop_depth = undo_depth (noop_image);
+      CHECK (api->layer_matting (engine, noop_image, first_layer (noop_image),
+                                 GLIMS_MATTING_DEFRINGE, 1, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (noop_image) == noop_depth,
+             "a defringe that changes no value adds no undo step");
+      api->image_close (engine, noop_image);
+    }
+
+  /* Every refusal leaves the pixels and the undo count unchanged. */
+  bytes = matting_bytes (image, &count);
+  depth = undo_depth (image);
+  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_DEFRINGE, 0, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && error, "Defringe width 0 is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_DEFRINGE, 201, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && error, "Defringe width 201 is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_REMOVE_BLACK_MATTE,
+                             1, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a matte width is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_matting (engine, image, layer, 0, 0, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && error, "operation 0 is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_matting (engine, image, layer, 4, 0, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && error, "operation 4 is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->layer_matting (engine, image, 99999, GLIMS_MATTING_DEFRINGE, 1, NULL) ==
+         GLIMS_STATUS_NOT_FOUND, "an unknown layer is NOT_FOUND");
+  CHECK (api->layer_matting (engine, 99999, layer, GLIMS_MATTING_DEFRINGE, 1, NULL) ==
+         GLIMS_STATUS_NOT_FOUND, "an unknown image is NOT_FOUND");
+  after = matting_bytes (image, &count);
+  CHECK (matting_same (bytes, after, count) && undo_depth (image) == depth,
+         "every argument refusal changes nothing");
+  free (bytes);
+  free (after);
+  bytes = after = NULL;
+
+  /* A layer without alpha is INVALID_ARGUMENT with its own message. */
+  CHECK (api->image_new (engine, 4, 1, &plain, NULL) == GLIMS_STATUS_OK && plain != 0,
+         "the plain layer fixture exists");
+  if (plain)
+    {
+      CHECK (api->layer_matting (engine, plain, first_layer (plain),
+                                 GLIMS_MATTING_DEFRINGE, 1, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && error &&
+             strstr (error, "no transparency") != NULL,
+             "a layer without alpha is refused with the transparency reason");
+      api->free_string (error);
+      error = NULL;
+      api->image_close (engine, plain);
+    }
+
+  /* A group layer is refused. */
+  CHECK (api->image_new (engine, 4, 1, &group_image, NULL) == GLIMS_STATUS_OK &&
+         group_image != 0, "the group fixture exists");
+  if (group_image)
+    {
+      CHECK (api->create_group (engine, group_image, 0, 0, "Group", &group, NULL) ==
+             GLIMS_STATUS_OK && group != 0, "the group is created");
+      if (group)
+        {
+          depth = undo_depth (group_image);
+          CHECK (api->layer_matting (engine, group_image, group,
+                                     GLIMS_MATTING_REMOVE_BLACK_MATTE, 0, &error) ==
+                 GLIMS_STATUS_FAILED && undo_depth (group_image) == depth,
+                 "a group layer is refused and changes nothing");
+          api->free_string (error);
+          error = NULL;
+        }
+      api->image_close (engine, group_image);
+    }
+
+  /* No partial pixels: FAILED with the edge-pixel reason. */
+  uint8_t opaque_pixels[2 * 4] = { 10, 20, 30, 255, 40, 50, 60, 255 };
+  {
+    GlimsImageID opaque_image = 0;
+    CHECK (api->image_from_pixels (engine, 2, 1, opaque_pixels, sizeof opaque_pixels,
+                                    &opaque_image, NULL) == GLIMS_STATUS_OK && opaque_image != 0,
+           "the opaque fixture exists");
+    if (opaque_image)
+      {
+        depth = undo_depth (opaque_image);
+        CHECK (api->layer_matting (engine, opaque_image, first_layer (opaque_image),
+                                   GLIMS_MATTING_REMOVE_BLACK_MATTE, 0, &error) ==
+               GLIMS_STATUS_FAILED && error &&
+               strstr (error, "no partially transparent") != NULL,
+               "a layer without partial pixels is refused with the edge-pixel reason");
+        api->free_string (error);
+        error = NULL;
+        CHECK (undo_depth (opaque_image) == depth,
+               "the no-partial refusal changes nothing");
+        api->image_close (engine, opaque_image);
+      }
+  }
+
+  /* No opaque pixels for Defringe: FAILED with the opaque reason. */
+  uint8_t partial_pixels[2 * 4] = { 10, 20, 30, 128, 40, 50, 60, 128 };
+  {
+    GlimsImageID partial_image = 0;
+    CHECK (api->image_from_pixels (engine, 2, 1, partial_pixels, sizeof partial_pixels,
+                                    &partial_image, NULL) == GLIMS_STATUS_OK && partial_image != 0,
+           "the partial-only fixture exists");
+    if (partial_image)
+      {
+        depth = undo_depth (partial_image);
+        CHECK (api->layer_matting (engine, partial_image, first_layer (partial_image),
+                                   GLIMS_MATTING_DEFRINGE, 1, &error) ==
+               GLIMS_STATUS_FAILED && error &&
+               strstr (error, "no fully opaque") != NULL,
+               "Defringe without an opaque pixel is refused with the opaque reason");
+        api->free_string (error);
+        error = NULL;
+        CHECK (undo_depth (partial_image) == depth,
+               "the no-opaque refusal changes nothing");
+        api->image_close (engine, partial_image);
+      }
+  }
+
+  api->image_close (engine, image);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -16251,6 +16575,7 @@ main (int argc, char **argv)
   test_image_new_filled ();
   test_image_resolution (argv[2]);
   test_image_crop_resize ();
+  test_layer_matting ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

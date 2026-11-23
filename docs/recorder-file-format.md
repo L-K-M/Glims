@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 33
+# Recorder file format, versions 1 to 34
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `33`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `34`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -23,13 +23,13 @@ an Eraser stroke with an explicit background color 22, mask Levels 23,
 mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
 `applyUnsharpMask` 26, `scaleWithInterpolation` 27, `rotateCanvas` 28,
 `smoothSelection` 29, `adjustment` 30, `setResolution` or `resize` 31,
-`cropResize` 32, and `moveLayer`, `duplicateLayers`, `deleteLayers`,
-`mergeVisible`, `addLayerMask` or `selectSimilar` 33.
+`cropResize` 32, `moveLayer`, `duplicateLayers`, `deleteLayers`,
+`mergeVisible`, `addLayerMask` or `selectSimilar` 33, and `matting` 34.
 A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...33 refuse the file.
+version 1. Integers outside 1...34 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -84,6 +84,7 @@ Commands have an owned `tag` and the following exact fields:
 | `mergeVisible` | no fields (version 33) |
 | `addLayerMask` | `source`, `edit` (version 33) |
 | `selectSimilar` | `threshold`, `antialias`, `sampleMerged` (version 33) |
+| `matting` | `operation`, `width` on Defringe only (version 34) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -115,9 +116,9 @@ symbol for a layer adjustment or a context for an editing-mask adjustment.
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha, color selection with `sampleMerged:false`, mask Levels, Curves or Brightness/Contrast,
 and one-click adjustments require context; `mergeVisible` and sample-merged
-`selectSimilar` require none; `moveLayer`, `duplicateLayers`, `deleteLayers` and
-`addLayerMask` require a layer symbol; non-sample-merged `selectSimilar` requires the
-captured context. Other non-ink commands require none. Native ink commands require the `ink`
+`selectSimilar` require none; `moveLayer`, `duplicateLayers`, `deleteLayers`,
+`addLayerMask` and `matting` require a layer symbol; non-sample-merged
+`selectSimilar` requires the captured context. Other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
 `quickMask`. Target kinds are layer/channel/quickMask with `symbol`, or mask with
@@ -718,3 +719,13 @@ create a layer and then edit or delete it in one installation.
 
 The reparenting Layer ▸ Move Layer command is a different edit and keeps
 its explicit failed row, named Reorder Layer.
+
+## Layer > Matting (version 34)
+
+`matting` stores an owned `operation` tag (`defringe`, `removeBlackMatte`
+or `removeWhiteMatte`) and, for `defringe`, an integer `width` from 1
+through 200. The matte operations carry no `width`; a width on them is
+refused, as is a missing or out-of-range Defringe width. It requires a
+`layer` binding and replays on that explicit layer through facade slot
+253. Version 34 requires at least one successful matting row; earlier
+versions reject the tag.
