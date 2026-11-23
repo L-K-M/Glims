@@ -151,13 +151,15 @@ extension EngineSmokeTest {
         check(state.brush(for: .paintbrush) == fixturePaintbrush,
               "opening the sheets never mutates the global ToolState")
 
-        // Cancel on B after local edits: nothing mutates anywhere.
-        let undoB0 = docB.undoInfo.undoCount
+        // Cancel on B after local edits: nothing mutates anywhere. B's undo
+        // count comes from the engine: the document's cached copy can still
+        // be settling from the setup under load.
+        let undoB0 = try session.undoInfo(imageB).undoCount
         editableField(sheetB, "Stroke size, pixels")?.stringValue = "77"
         button(sheetB, "Cancel stroke selection")?.performClick(nil)
         spin(0.1)
         check(b.window?.attachedSheet == nil && b.strokeSelectionSheet == nil, "Cancel closes B's sheet")
-        check(docB.undoInfo.undoCount == undoB0 && docB.pendingWork == 0 && errorsB.isEmpty,
+        check(try session.undoInfo(imageB).undoCount == undoB0 && docB.pendingWork == 0 && errorsB.isEmpty,
               "Cancel mutates nothing: no undo, no queued work, no error")
         check(state.brush(for: .paintbrush) == fixturePaintbrush,
               "editing and cancelling the sheet never mutates the global ToolState")
@@ -165,7 +167,7 @@ extension EngineSmokeTest {
         // Accept on A while B's window is front: the captured document and
         // settings still win.
         b.window?.makeKeyAndOrderFront(nil)
-        let undoA0 = docA.undoInfo.undoCount
+        let undoA0 = try session.undoInfo(imageA).undoCount
         let boundsA = try session.selectionBounds(image: imageA)
         let outlineA = docA.selectionOutline
         let pixelsABefore = try session.copyPixels(imageA, merged: true).pixels
@@ -177,8 +179,9 @@ extension EngineSmokeTest {
         check(a.window?.attachedSheet == nil && a.strokeSelectionSheet == nil,
               "the sheet closes after one accepted enqueue")
         check(errorsA.isEmpty, "a valid accept reports no error (\(errorsA))")
-        check(docA.undoInfo.undoCount == undoA0 + 1, "Stroke Selection is exactly one undo step")
-        check(docB.undoInfo.undoCount == undoB0, "the other document is untouched even while its window is front")
+        check(try session.undoInfo(imageA).undoCount == undoA0 + 1, "Stroke Selection is exactly one undo step")
+        check(try session.undoInfo(imageB).undoCount == undoB0,
+              "the other document is untouched even while its window is front")
         let boundary = pixel(session, imageA, x: 4, y: 12) ?? []
         let inside = pixel(session, imageA, x: 12, y: 12) ?? []
         let outside = pixel(session, imageA, x: 30, y: 30) ?? []
