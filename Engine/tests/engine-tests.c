@@ -2804,6 +2804,12 @@ test_channel_transform (void)
   CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
          "a non-finite matrix is refused");
   request = move;
+  request.interpolation = 99;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         error && strstr (error, "interpolation") && undo_depth (image) == before,
+         "an unknown interpolation method is refused with a message");
+  api->free_string (error); error = NULL;
+  request = move;
   request.matrix.m[0][0] = 0;
   request.matrix.m[0][1] = 0;
   CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,

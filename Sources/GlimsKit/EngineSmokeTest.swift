@@ -1307,7 +1307,8 @@ enum EngineSmokeTest {
             try exerciseCloneAlignment(session, documents: documents)
             try exerciseToolModifiers(session, documents: documents)
             try exerciseEverydayAdjustments(session, work: work, documents: documents)
-            try exerciseChannelTransform(session, documents: documents)
+            // Older adapters lack slots 250/251; the dedicated case requires them.
+            if session.supportsChannelTransform { try exerciseChannelTransform(session, documents: documents) }
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseFade(session, documents: documents)
