@@ -458,9 +458,9 @@ extension EngineSmokeTest {
         }
     }
 
-    /// An unchanged history revision and a cancelled status prove nothing:
-    /// GIMP changes an image whose undo is frozen without an undo step,
-    /// and Cancel kills a plug-in without rolling back what it changed.
+    /// A missing undo step and a cancelled status prove nothing: GIMP
+    /// changes an image whose undo is frozen without an undo step, and
+    /// Cancel kills a plug-in without rolling back what it changed.
     static func exerciseRecorderGapPlugIns(_ session: EngineSession, documents: DocumentList) throws {
         func wait(_ condition: () -> Bool) {
             let deadline = Date().addingTimeInterval(20)
@@ -531,8 +531,8 @@ extension EngineSmokeTest {
         check(try session.grid(frozen.image).spacingX == 5, "the grid changes while undo is frozen")
         check(failedRows(frozen) == ["Recorder does not yet save Move Guide.", "Recorder does not yet save Grid."],
               "a grid changed while undo is frozen keeps its row")
-        check(try session.historyRevision(frozen.image) == revision,
-              "neither change moved the history revision")
+        check(try session.historyRevision(frozen.image) != revision,
+              "the changes move the history revision while undo is frozen")
         try frozen.stopRecording()
 
         let cancelled = try open("Recorder cancelled plug-in")

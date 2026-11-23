@@ -6957,3 +6957,16 @@ is widened to 1e-5. Lab Copy also requires exactly opaque floats from an
 RGB read; in babl 0.1.124 no three-step path from R'G'B'A u8 or u16 to
 RGBA float passes through u32, and it is unchanged. Other kinds of lossy
 paths were not searched.
+
+### Edits while undo is frozen (2026-11-22)
+
+A plug-in can leave an image's undo disabled; GIMP's cleanup for that is
+compiled out. Later edits then pushed no undo event, so the history
+revision stood still: recovery kept its older copy, and History accepted
+a stale click. The adapter now also moves the revision, and reports
+changed history, when the image is dirtied while undo is frozen. With
+undo enabled nothing changes.
+
+Verified: the engine tests install a plug-in that disables undo. Their
+revision, stale-click and event checks failed before the change. Counts
+per engine set are in the PR.
