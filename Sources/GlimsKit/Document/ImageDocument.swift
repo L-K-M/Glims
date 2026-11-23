@@ -4881,10 +4881,13 @@ final class ImageDocument {
         return nil
     }
 
-    /// Image > Adjust > Variations: applies `settings` to the active
-    /// layer as one queued command and one undo step. The Recorder binds
-    /// the explicit layer; Cancel never reaches this method.
-    func applyVariations(_ settings: EngineSession.VariationsSettings) {
+    /// Image > Adjust > Variations: applies `settings` to `previewed`,
+    /// the layer the sheet rendered its thumbnails from, as one queued
+    /// command and one undo step. The Layers palette stays usable while
+    /// the sheet is open, so a different active layer at OK is refused
+    /// rather than edited unseen. The Recorder binds the explicit layer;
+    /// Cancel never reaches this method.
+    func applyVariations(_ settings: EngineSession.VariationsSettings, layer previewed: Int32) {
         if let reason = variationsRefusal() {
             onError?(reason)
             NSSound.beep()
@@ -4894,6 +4897,11 @@ final class ImageDocument {
         guard !refuseWhileTargetPending() else { return }
         endPendingUserEdits()
         guard let layer = activeLayer else { return }
+        guard layer == previewed else {
+            onError?("The active layer changed while Variations was open. Open Variations again.")
+            NSSound.beep()
+            return
+        }
         let command = SemanticImageCommand.applyVariations(settings)
         run(semantic: command, recorderLayer: layer) { session, image in
             try session.applyVariations(image, layer: layer, settings: settings)

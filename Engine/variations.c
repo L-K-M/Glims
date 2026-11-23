@@ -85,11 +85,20 @@ identity_settings (const GlimsVariationsSettings *settings)
          settings->lightness == 0.0 && settings->saturation == 0.0;
 }
 
+/* A refusal with a message and the status the facade documents for it;
+ * glims_fail always returns FAILED. */
+static GlimsStatus
+refuse (char **error, GlimsStatus status, const char *message)
+{
+  glims_fail (error, NULL, message);
+  return status;
+}
+
 static GlimsStatus
 bad_settings (char **error)
 {
-  return glims_fail (error, NULL,
-                     "Variations values must be finite and between -1 and 1.");
+  return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT,
+                 "Variations values must be finite and between -1 and 1.");
 }
 
 /* Fills the native Color Balance settings the facade struct maps to:
@@ -138,24 +147,21 @@ static GlimsStatus
 admit_layer (GimpImage *image, GimpLayer *layer, char **error)
 {
   if (GIMP_IS_GROUP_LAYER (layer))
-    return glims_fail (error, NULL, "A layer group cannot take Variations.");
+    return refuse (error, GLIMS_STATUS_UNSUPPORTED, "A layer group cannot take Variations.");
 
   switch (glims_layer_kind (layer))
     {
     case GLIMS_LAYER_PIXEL:
       break;
     case GLIMS_LAYER_GROUP:
-      return glims_fail (error, NULL, "A layer group cannot take Variations.");
+      return refuse (error, GLIMS_STATUS_UNSUPPORTED, "A layer group cannot take Variations.");
     default:
-      return glims_fail (error, NULL,
-                         "Rasterize the text, link or vector layer before using Variations.");
+      return refuse (error, GLIMS_STATUS_UNSUPPORTED,
+                     "Rasterize the text, link or vector layer before using Variations.");
     }
 
   if (gimp_image_get_base_type (image) != GIMP_RGB)
-    {
-      glims_fail (error, NULL, "Variations operates only on RGB images.");
-      return GLIMS_STATUS_UNSUPPORTED;
-    }
+    return refuse (error, GLIMS_STATUS_UNSUPPORTED, "Variations operates only on RGB images.");
 
   return GLIMS_STATUS_OK;
 }
@@ -181,7 +187,7 @@ glims_image_variations_apply (GlimsEngine                 *engine,
   if (! settings || settings->struct_size < sizeof *settings || ! valid_settings (settings))
     return bad_settings (error);
   if (identity_settings (settings))
-    return glims_fail (error, NULL, "Variations has no change to apply.");
+    return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT, "Variations has no change to apply.");
 
   open = glims_lookup_image (engine, id);
   if (! open)
@@ -196,7 +202,7 @@ glims_image_variations_apply (GlimsEngine                 *engine,
       return GLIMS_STATUS_BUSY;
     }
   if (gimp_image_get_floating_selection (image))
-    return glims_fail (error, NULL, "Anchor or cancel the floating selection first.");
+    return refuse (error, GLIMS_STATUS_BUSY, "Anchor or cancel the floating selection first.");
 
   status = resolve_layer (engine, open, layer_id, &layer);
   if (status != GLIMS_STATUS_OK)
@@ -212,7 +218,7 @@ glims_image_variations_apply (GlimsEngine                 *engine,
     return status;
 
   if (! gimp_item_mask_intersect (GIMP_ITEM (drawable), NULL, NULL, NULL, NULL))
-    return glims_fail (error, NULL, "The selection does not overlap the layer.");
+    return refuse (error, GLIMS_STATUS_BUSY, "The selection does not overlap the layer.");
 
   balance_from (settings, &balance);
   hue_saturation_from (settings, &hue);

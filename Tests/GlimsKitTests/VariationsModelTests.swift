@@ -72,7 +72,7 @@ final class VariationsModelTests: XCTestCase {
         model.stepIndex = 6 // 0.25
         for _ in 0..<5 { model.apply(.moreRed) }
         XCTAssertEqual(model.settings.midtones.cyanRed, 1)
-        for _ in 0..<5 { model.apply(.moreCyan) }
+        for _ in 0..<10 { model.apply(.moreCyan) }
         XCTAssertEqual(model.settings.midtones.cyanRed, -1)
         for _ in 0..<5 { model.apply(.lighter) }
         XCTAssertEqual(model.settings.lightness, 1)

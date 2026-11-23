@@ -3182,8 +3182,8 @@ final class EngineSession: @unchecked Sendable {
     }
 
     /// One rendered Variations thumbnail: straight-alpha sRGB RGBA and a
-    /// per-pixel clipping mask (255 where the final float channel left the
-    /// representable range by more than half an 8-bit step).
+    /// per-pixel clipping mask (255 where the corrections drove a color
+    /// channel of a visible pixel to 0 or 255 from somewhere else).
     struct VariationsPreview {
         let image: CGImage
         let width: Int

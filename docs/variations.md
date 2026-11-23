@@ -74,9 +74,12 @@ identity settings, which reproduce the plain thumbnail.
 
 The same two operations run in the same order on a float copy, quantized
 back to the 8-bit grid between them so an 8-bit layer's destructive result
-matches. `clipping` is optional, one byte per pixel: 255 where any final
-RGB channel lies below -0.5/255 or above 1 + 0.5/255 before 8-bit
-conversion, 0 otherwise. Show Clipping overlays those pixels in a vivid
+matches. `clipping` is optional, one byte per pixel: 255 where a visible
+pixel (alpha above 0) has an RGB channel that the corrections drove to 0
+or 255 when the plain thumbnail's channel was not already there, 0
+otherwise. Both operations clamp to the 0...1 range, so a correction
+cannot push a channel past it; landing on a limit it did not start at is
+what loses detail. Show Clipping overlays those pixels in a vivid
 color on each thumbnail. Thumbnail requests run off the main thread with a
 generation counter, so a stale result is dropped rather than painted.
 
