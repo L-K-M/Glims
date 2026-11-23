@@ -238,6 +238,20 @@ What the tools do:
   Sponge Desaturate and Sponge Saturate reduce or increase saturation under
   the brush, preserving hue and transparency. Choose either from the O tool
   group or View > Tools. Opacity sets strength; the foreground color is ignored.
+
+  Tool Options set how the paint tools lay down paint. Mode blends the
+  Brush, Pencil, Airbrush and Clone paint with the pixels under it, in
+  the layer blend modes plus Behind, which paints only where the layer
+  is transparent, and Color Erase. Spacing sets the distance between the
+  brush's dabs as a percentage of its size; Default spacing is 10% for
+  every brush. Fade, for Brush, Pencil and Airbrush, fades each
+  stroke over the chosen number of dabs, to transparent or to the
+  background color selected when the stroke begins, which it then keeps
+  painting. A fade can be at most 32767 pixels long. These options do
+  not paint in Lab, CMYK or multichannel images, and Edit > Stroke
+  Selection paints in Normal at the default spacing without a fade.
+  Presets do not keep them yet, and Recorder keeps strokes that use
+  them as failed rows.
   Sponge requires RGB pixels; grayscale, indexed images, masks and channels
   cannot be painted with it. Brush color and gradient color dynamics are ignored;
   Sponge uses the brush mask. Save a preset for either Sponge tool to retain

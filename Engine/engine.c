@@ -1442,7 +1442,7 @@ api_engine_version (GlimsEngine *engine)
 static uint64_t
 api_brush_settings_features (void)
 {
-  return GLIMS_BRUSH_FEATURE_ERASER_BACKGROUND;
+  return GLIMS_BRUSH_FEATURE_ERASER_BACKGROUND | GLIMS_BRUSH_FEATURE_PAINT_OPTIONS;
 }
 
 /* ---- Facade: marshalled calls ------------------------------------------
