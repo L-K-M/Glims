@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run the BMP/TGA export conformance tests.
+"""Build and run the BMP/TGA/PCX/EPS/PDF export conformance tests.
 
 Compiles Engine/tests/bitmap-export-tests.c against the public facade
 header only (the runner dlopen()s the existing adapter, so nothing is linked
@@ -38,7 +38,7 @@ def pinned_ref() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description='Build and run the BMP/TGA export conformance tests.')
+        description='Build and run the flat-format export conformance tests.')
     parser.add_argument('--ref', default=pinned_ref(),
                         help='engine set name (default: pinned set from scripts/engine.env: %(default)s)')
     parser.add_argument('--adapter-root', default=os.environ.get(
@@ -62,7 +62,7 @@ def main() -> int:
         runner = work / 'glims-bitmap-export-tests'
 
         compile_cmd = ['xcrun', 'clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
-                       '-I', str(FACADE_INCLUDE), str(TEST_SOURCE), '-o', str(runner)]
+                       '-I', str(FACADE_INCLUDE), str(TEST_SOURCE), '-framework', 'CoreGraphics', '-o', str(runner)]
         print('+', ' '.join(compile_cmd), flush=True)
         subprocess.run(compile_cmd, check=True)
 

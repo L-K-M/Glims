@@ -54,6 +54,9 @@ extension ExportFormat {
         case .gif: return .gif
         case .bmp: return .bmp
         case .tga: return UTType("com.truevision.tga-image")!
+        case .pcx: return UTType("com.zsoft.pcx") ?? UTType(filenameExtension: "pcx")!
+        case .eps: return UTType("com.adobe.encapsulated-postscript") ?? UTType(filenameExtension: "eps")!
+        case .pdf: return .pdf
         }
     }
 }

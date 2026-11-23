@@ -7023,3 +7023,19 @@ catalog and plug-in merges leave them in place across rebuilds.
 GIMP 3.0.8 equalizes in linear light and 3.2 in non-linear values
 (upstream #14486), so Equalize gives different pixels on 3.0.8; the
 conformance test expects each engine's own values.
+
+### PCX, EPS and PDF export (2026-11-22)
+
+File > Export writes PCX, EPS and single-page PDF through the existing
+configured-export slot: `GlimsExportFormat` gains the values 8-10. Each is
+written from a private merged copy, composited on white in a context of
+its own. The writer arguments are bound by name. This matters for EPS:
+file-ps.c defaults to a 287 x 200 mm box at a 5 mm offset, so the page is
+set to the image's print size at the origin. PDF is sized by its writer
+from the resolution. PCX is refused above 65534 x 65536 pixels, because
+file-pcx.c wraps the bytes per line at 65535, and EPS and PDF above
+14400 points a side, before the destination is touched.
+
+`scripts/test-bitmap-export.py` decodes PCX and renders PDF with Core
+Graphics to compare pixels, and checks the EPS bounding box. EPS pixels
+are not decoded: macOS has no PostScript interpreter.

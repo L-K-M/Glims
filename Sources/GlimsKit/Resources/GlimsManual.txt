@@ -88,7 +88,7 @@ Saving and exporting are two separate jobs:
   name. Save a Copy… writes an XCF copy without changing the file you
   are editing.
 
-  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF, PSD, GIF, BMP or TGA. After exporting once, File > Export Again… (Command-E) reads
+  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF, PSD, GIF, BMP, TGA, PCX, EPS or PDF. After exporting once, File > Export Again… (Command-E) reads
   "Export to name.png" and overwrites that file with the current
   image.
 
@@ -121,6 +121,15 @@ information; some older readers ignore its alpha channel. TGA uses top-left
 origin and embeds no ICC profile. Grayscale and indexed documents are converted
 to RGB only in the export copy. High precision is reduced to eight bits per
 channel. Save XCF to retain the original layers, profile and precision.
+
+PCX exports the visible canvas as a flat sRGB PCX image. Transparency
+is composited on white. PCX is limited to 65534 pixels across and 65536
+down. Save XCF to retain layers, profile and precision.
+
+EPS and PDF export the visible canvas as a single flattened page at the
+image's print size, which follows from its pixels and resolution.
+Transparency is composited on white. A page can be up to 200 inches a
+side. Save XCF to retain layers and full editing.
 
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.
