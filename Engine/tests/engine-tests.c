@@ -2850,6 +2850,32 @@ test_channel_transform (void)
          selection_box (image, 16, 11, 10, 8),
          "turning Quick Mask off leaves the transformed selection");
   api->image_close (engine, image);
+
+  /* The result is a new canvas-sized buffer, bounded like a layer's
+   * destinations: a channel of a 23200 x 23200 8-bit image needs
+   * 538,240,000 bytes, over 512 MiB. The transparent image stays sparse,
+   * so nothing that large is ever written. */
+  {
+    GlimsImageID huge = 0;
+    GlimsItemID big = 0;
+
+    CHECK (api->image_new_filled (engine, 23200, 23200, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &huge, NULL)
+             == GLIMS_STATUS_OK &&
+           api->select_shape (engine, huge, GLIMS_SHAPE_RECTANGLE,
+                              (GlimsPoint[]) { { 4, 6 }, { 14, 14 } }, 2, NULL) == GLIMS_STATUS_OK &&
+           api->channel_from_selection (engine, huge, "Saved", &big, NULL) == GLIMS_STATUS_OK &&
+           channel_box (huge, big, 4, 6, 10, 8),
+           "a rectangle is saved as a channel of a 23200 x 23200 image");
+    before = undo_depth (huge);
+    CHECK (api->channel_transform_matrix_captured (engine, huge, big, &move, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           error && strstr (error, "output limit") && undo_depth (huge) == before &&
+           channel_box (huge, big, 4, 6, 10, 8),
+           "a channel whose canvas-sized result exceeds 512 MiB is refused unchanged%s%s",
+           error ? ": " : "", error ? error : "");
+    api->free_string (error); error = NULL;
+    if (huge)
+      api->image_close (engine, huge);
+  }
 }
 
 static void

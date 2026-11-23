@@ -110,6 +110,26 @@ extension EngineSmokeTest {
         drain("Undo")
         check(box() == moved, "channel transform: Undo restores the saved channel")
 
+        // Two selected channels are no single target; the refusal says so.
+        document.saveSelectionToChannel(name: "Second")
+        drain("saving a second channel")
+        guard let second = document.channels.first(where: { $0.name == "Second" })?.id else {
+            check(false, "channel transform: the second channel was saved")
+            return
+        }
+        document.selectChannelItems([saved, second])
+        drain("selecting both channels")
+        tools.transformDocumentStateDidChange()
+        let undoBeforePair = document.undoInfo.undoCount
+        send(.leftMouseDown, CGPoint(x: moved.midX, y: moved.midY))
+        send(.leftMouseUp, CGPoint(x: moved.midX, y: moved.midY))
+        check(document.hasMultipleSelectedChannels && tools.transformSession == nil
+                && document.undoInfo.undoCount == undoBeforePair
+                && controller.statusBar.message == "Select only one channel to transform.",
+              "channel transform: two selected channels refuse with a reason (\(controller.statusBar.message))")
+        document.selectChannel(saved)
+        drain("selecting the saved channel again")
+
         // While recording, the Recorder keeps a failed row that names it.
         try document.startRecording()
         drag(from: CGPoint(x: moved.midX, y: moved.midY), by: CGSize(width: -10, height: 0))
