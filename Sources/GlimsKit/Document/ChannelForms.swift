@@ -105,12 +105,12 @@ enum ChannelForms {
                                  editable: EditableAttributes = .init()) -> EngineSession.ChannelChange? {
         // A value typed again in another spelling is no change either.
         let typedName = validName(entered.name)
-        let name = !editable.name || entered.name == shown.name || typedName == shown.name ? nil : typedName
+        let name = (!editable.name || entered.name == shown.name || typedName == shown.name) ? nil : typedName
         let typedOpacity = opacityValue(entered.opacity)
-        let opacity = !editable.opacity || typedOpacity == opacityValue(shown.opacity) ? nil : typedOpacity
+        let opacity = (!editable.opacity || typedOpacity == opacityValue(shown.opacity)) ? nil : typedOpacity
         // The untouched percent text is rounded, so it never becomes the opacity.
         let alpha = CGFloat(opacity ?? storedOpacity)
-        let color = !editable.color || entered.color == shown.color ? nil : entered.color.withAlphaComponent(alpha)
+        let color = (!editable.color || entered.color == shown.color) ? nil : entered.color.withAlphaComponent(alpha)
         guard name != nil || opacity != nil || color != nil else { return nil }
         return .init(name: name, opacity: opacity, color: color)
     }
