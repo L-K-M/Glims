@@ -14,11 +14,26 @@ final class RankFilterPanel: FilterPreviewPanel {
         var title: String { self == .maximum ? "Maximum" : "Minimum" }
         /// GEGL's percentile for the rank: 100 is the largest value.
         var percentile: Double { self == .maximum ? 100 : 0 }
+        /// The Last Filter history's discriminator between the two
+        /// dedicated panels sharing `gegl:median-blur`.
+        var variantTitle: String { title }
+
+        init?(variantTitle: String) {
+            switch variantTitle {
+            case Rank.maximum.title: self = .maximum
+            case Rank.minimum.title: self = .minimum
+            default: return nil
+            }
+        }
     }
 
     nonisolated static let operation = "gegl:median-blur"
     nonisolated static let radiusRange = 1...100
     nonisolated static let defaultRadius = 1
+    /// Every property the panel writes, so Last Filter snapshots the
+    /// whole committed state of a rank filter by name.
+    nonisolated static let captureNames = ["neighborhood", "percentile", "alpha-percentile",
+                                           "abyss-policy", "high-precision", "radius"]
 
     let rank: Rank
     private let slider: NSSlider
@@ -41,9 +56,10 @@ final class RankFilterPanel: FilterPreviewPanel {
         return value
     }
 
-    init(document imageDocument: ImageDocument, filter: Int32, rank: Rank) {
+    init(document imageDocument: ImageDocument, filter: Int32, rank: Rank, initialRadius: Int? = nil) {
         self.rank = rank
-        slider = NSSlider(value: Double(Self.defaultRadius), minValue: Double(Self.radiusRange.lowerBound),
+        let startRadius = initialRadius ?? Self.defaultRadius
+        slider = NSSlider(value: Double(startRadius), minValue: Double(Self.radiusRange.lowerBound),
                           maxValue: Double(Self.radiusRange.upperBound), target: nil, action: nil)
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 110),
                             styleMask: [.titled, .closable, .utilityWindow],
@@ -56,7 +72,7 @@ final class RankFilterPanel: FilterPreviewPanel {
         _ = imageDocument.run(effect: .changesPreview) { session, _ in
             for (name, value) in settings { try session.setFilterProperty(filter, name, to: value) }
         }
-        apply(radius: Self.defaultRadius)
+        apply(radius: startRadius)
     }
 
     @available(*, unavailable)
@@ -69,7 +85,7 @@ final class RankFilterPanel: FilterPreviewPanel {
         slider.isContinuous = true
         slider.numberOfTickMarks = 0
         slider.setAccessibilityLabel("\(rank.title) radius")
-        field.integerValue = Self.defaultRadius
+        field.integerValue = slider.integerValue
         field.target = self
         field.action = #selector(fieldChanged)
         field.setAccessibilityLabel("\(rank.title) radius in pixels")

@@ -162,6 +162,7 @@ typedef struct
   GlimsItemSets *item_sets;
   gulong     projection_update_handler;
   gulong     undo_event_handler;
+  gulong     dirty_handler;
   gulong     layers_changed_handler;
   gulong     mask_changed_handler;
   gulong     size_changed_handler;
@@ -663,6 +664,10 @@ GlimsStatus glims_vector_layer_style_get (GlimsEngine *e, GlimsImageID image, Gl
                                           GlimsVectorStyle *style, char **error);
 GlimsStatus glims_vector_layer_style_set (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                           const GlimsVectorStyleChange *change, char **error);
+
+/* adjust-command.c */
+GlimsStatus glims_adjustment_apply (GlimsEngine *e, GlimsImageID image, uint32_t adjustment,
+                                   const GlimsColor *background, char **error);
 
 /* edit.c */
 GlimsStatus glims_fill             (GlimsEngine *e, GlimsImageID image, GlimsPoint point,

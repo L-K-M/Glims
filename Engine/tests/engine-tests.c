@@ -1758,6 +1758,57 @@ install_slow_load_plug_in (const char *user_dir)
     }
 }
 
+/* ---- Frozen undo -------------------------------------------------------
+ *
+ * A plug-in that leaves the image's undo disabled, as GIMP lets it: the
+ * PDB's cleanup for this is compiled out. Laid out like the slow loader.
+ */
+static const char freeze_undo_source[] =
+"#!/usr/bin/env python3\n"
+"import gi\n"
+"gi.require_version('Gimp', '3.0')\n"
+"from gi.repository import Gimp\n"
+"from gi.repository import GLib\n"
+"import sys\n"
+"\n"
+"def freeze(procedure, run_mode, image, drawables, config, data):\n"
+"    image.undo_disable()\n"
+"    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())\n"
+"\n"
+"class GlimsFreezeUndo(Gimp.PlugIn):\n"
+"    def do_query_procedures(self):\n"
+"        return ['plug-in-glims-freeze-undo']\n"
+"    def do_create_procedure(self, name):\n"
+"        procedure = Gimp.ImageProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, freeze, None)\n"
+"        procedure.set_image_types('*')\n"
+"        procedure.set_menu_label('Glims freeze-undo fixture')\n"
+"        procedure.set_documentation('disable undo', 'disables undo', name)\n"
+"        procedure.add_menu_path('<Image>/Filters/Glims Freeze Undo')\n"
+"        return procedure\n"
+"\n"
+"Gimp.main(GlimsFreezeUndo.__gtype__, sys.argv)\n";
+
+static void
+install_freeze_undo_plug_in (const char *user_dir)
+{
+  char  path[1100];
+  FILE *file;
+
+  mkdir (user_dir, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-freeze-undo", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-freeze-undo/glims-freeze-undo.py", user_dir);
+  file = fopen (path, "w");
+  if (file)
+    {
+      fputs (freeze_undo_source, file);
+      fclose (file);
+      chmod (path, 0755);
+    }
+}
+
 /* ---- Metadata preservation fixtures (.gmeta loader + oracle) -----------
  *
  * The glims-metadata-loader Python plug-in (Engine/tests/metadata-loader.py,
@@ -5118,6 +5169,29 @@ test_channels (const char *work)
                rows[i].color.blue > 0.9;
     CHECK (attrs, "the row reports visibility, opacity and color");
   }
+  /* The attributes sheet sends only what was edited: an opacity alone
+   * has to reach the color's alpha, which is where GIMP keeps it. */
+  memset (&change, 0, sizeof change);
+  change.struct_size = sizeof change;
+  change.properties  = GLIMS_CHANNEL_OPACITY;
+  change.opacity     = 0.25;
+  before = undo_depth (image);
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "an opacity alone is one undo step");
+  {
+    bool faded = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      faded |= rows[i].id == saved &&
+               rows[i].opacity > 0.24 && rows[i].opacity < 0.26 &&
+               rows[i].color.alpha > 0.24 && rows[i].color.alpha < 0.26 &&
+               rows[i].color.blue > 0.9;
+    CHECK (faded, "an opacity alone moves the color's alpha and keeps the color");
+  }
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "the opacity step undoes");
   memset (&change, 0, sizeof change);
   change.struct_size = sizeof change;
   change.properties  = GLIMS_CHANNEL_VISIBLE;
@@ -7962,6 +8036,50 @@ test_filters (GlimsImageID image, const char *work)
  * come from the engine's GEGL sources: gegl:gaussian-blur (a double, an
  * enum and a boolean), gegl:median-blur (an int), gegl:color-overlay (a
  * color), gegl:displace (auxiliary input), gimp:curves (config object). */
+/* GIMP changes an image whose undo is frozen without an undo event. The
+ * history revision must still move: recovery copies and History's
+ * stale-click refusal have nothing else to tell them the image changed. */
+static void
+test_history_while_undo_is_frozen (void)
+{
+  GlimsImageID     image = 0;
+  GlimsHistoryInfo before = { 0 }, after = { 0 }, again = { 0 };
+  GlimsLayerChange change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_NAME };
+  GlimsItemID      layer;
+  char            *error = NULL;
+  int              events;
+
+  CHECK (api->image_new (engine, 16, 16, &image, NULL) == GLIMS_STATUS_OK,
+         "the frozen-undo image opens");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  CHECK (api->procedure_run (engine, image, "plug-in-glims-freeze-undo",
+                             GLIMS_RUN_WITH_LAST_VALUES, &error) == GLIMS_STATUS_OK,
+         "a plug-in leaves undo frozen%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+
+  CHECK (api->image_history (engine, image, NULL, 0, &before) == GLIMS_STATUS_OK,
+         "history reads before the frozen edit");
+  strcpy (change.name, "Edited while frozen");
+  events = atomic_load (&undo_events);
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_history (engine, image, NULL, 0, &after) == GLIMS_STATUS_OK &&
+         after.count == before.count,
+         "an edit with undo frozen succeeds and adds no history state");
+  CHECK (after.revision != before.revision,
+         "an edit with undo frozen moves the history revision");
+  CHECK (atomic_load (&undo_events) > events,
+         "an edit with undo frozen reports changed history, so the app reads it again");
+  CHECK (api->image_history_move (engine, image, before.revision, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a revision from before a frozen edit is stale");
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_history (engine, image, NULL, 0, &again) == GLIMS_STATUS_OK &&
+         again.revision == after.revision,
+         "an unchanged command with undo frozen leaves the revision alone");
+  api->image_close (engine, image);
+}
+
 static void
 test_history_and_snapshots (void)
 {
@@ -13332,6 +13450,297 @@ test_selection_smooth (void)
   api->image_close (engine, image);
 }
 
+/* One-click adjustments: exact desaturate and alpha pixels, the
+ * selection bound, undo/redo, and every refusal with no history change. */
+/* GIMP 3.2 equalizes non-linear values, as 2.10 did (upstream #14486);
+ * 3.0 equalizes linear light. */
+static int
+equalizes_nonlinear_values (void)
+{
+  int major = 0, minor = 0;
+  sscanf (api->engine_version (engine), "%d.%d", &major, &minor);
+  return major > 3 || (major == 3 && minor >= 2);
+}
+
+static void
+test_everyday_adjustments (void)
+{
+  GlimsImageID       image = 0, levels_image = 0, equalize_image = 0;
+  GlimsImageID       alpha_image = 0, plain_image = 0, gray_image = 0;
+  GlimsItemID        layer, levels_layer, equalize_layer;
+  GlimsItemID        alpha_layer, plain_layer, gray_layer;
+  GlimsItemID        group = 0, mask = 0, channel = 0;
+  GlimsSelectOptions sel = { .struct_size = sizeof sel, .operation = GLIMS_SELECT_REPLACE, .antialias = false };
+  GlimsColor         background = { 0, 0, 0, 1 };
+  uint8_t            pixels[16 * 16 * 4];
+  uint8_t            levels_pixels[8 * 8 * 4];
+  uint8_t            equalize_pixels[4 * 4 * 4];
+  uint8_t            alpha_pixels[8 * 8 * 4];
+  uint8_t            plain_pixels[8 * 8 * 4];
+  int32_t            before;
+  char              *error = NULL;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, adjustment_apply) + sizeof api->adjustment_apply ||
+      ! api->adjustment_apply)
+    {
+      CHECK (false, "the adapter exports slot 245 adjustment_apply");
+      return;
+    }
+
+  for (int y = 0; y < 16; y++)
+    for (int x = 0; x < 16; x++)
+      {
+        uint8_t *p = pixels + 4 * (y * 16 + x);
+
+        if (x < 8) { p[0] = 200; p[1] = 100; p[2] = 40; }
+        else        { p[0] = 60;  p[1] = 140; p[2] = 220; }
+        p[3] = 255;
+      }
+  CHECK (api->image_from_pixels (engine, 16, 16, pixels, sizeof pixels, &image, NULL) == GLIMS_STATUS_OK && image != 0,
+         "the adjustment fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  api->layer_select (engine, image, layer);
+
+  /* Desaturate uses HSL lightness: (max + min) / 2, exactly. */
+  before = undo_depth (image);
+  CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_DESATURATE, &background, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1, "Desaturate is one undo step%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (red_at (image, 0, 0) == 120 && red_at (image, 15, 15) == 140,
+         "Desaturate maps lightness exactly (%d, %d)", red_at (image, 0, 0), red_at (image, 15, 15));
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before &&
+         red_at (image, 0, 0) == 200 && red_at (image, 15, 15) == 60,
+         "one Undo restores the colors");
+
+  /* The selection bounds the change. */
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 7, 15 } }, 2, &sel);
+  CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_DESATURATE, &background, NULL) == GLIMS_STATUS_OK &&
+         red_at (image, 0, 0) == 120 && red_at (image, 15, 15) == 60,
+         "the selection bounds Desaturate (%d, %d)", red_at (image, 0, 0), red_at (image, 15, 15));
+  api->image_undo (engine, image);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  /* Auto Levels stretches the channel range to the full extent. */
+  for (int y = 0; y < 8; y++)
+    for (int x = 0; x < 8; x++)
+      {
+        uint8_t *p = levels_pixels + 4 * (y * 8 + x);
+        uint8_t  v = ((x + y) % 2) ? 200 : 50;
+
+        p[0] = p[1] = p[2] = v;
+        p[3] = 255;
+      }
+  CHECK (api->image_from_pixels (engine, 8, 8, levels_pixels, sizeof levels_pixels, &levels_image, NULL) ==
+         GLIMS_STATUS_OK && levels_image != 0, "the Auto Levels fixture exists");
+  if (levels_image)
+    {
+      levels_layer = first_layer (levels_image);
+      api->layer_select (engine, levels_image, levels_layer);
+      before = undo_depth (levels_image);
+      CHECK (api->adjustment_apply (engine, levels_image, GLIMS_ADJUSTMENT_AUTO_LEVELS, &background, &error) ==
+             GLIMS_STATUS_OK && undo_depth (levels_image) == before + 1,
+             "Auto Levels is one undo step%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (red_at (levels_image, 0, 0) <= 5 && red_at (levels_image, 1, 0) == 255,
+             "Auto Levels stretches the range to its extremes (%d, %d)",
+             red_at (levels_image, 0, 0), red_at (levels_image, 1, 0));
+      CHECK (api->image_undo (engine, levels_image) == GLIMS_STATUS_OK &&
+             red_at (levels_image, 0, 0) == 50 && red_at (levels_image, 1, 0) == 200,
+             "one Undo restores the Auto Levels source");
+    }
+
+  /* Equalize maps the cumulative histogram. */
+  for (int y = 0; y < 4; y++)
+    for (int x = 0; x < 4; x++)
+      {
+        uint8_t *p = equalize_pixels + 4 * (y * 4 + x);
+
+        p[0] = p[1] = p[2] = (uint8_t) ((x + y * 4) * 255 / 15);
+        p[3] = 255;
+      }
+  CHECK (api->image_from_pixels (engine, 4, 4, equalize_pixels, sizeof equalize_pixels, &equalize_image, NULL) ==
+         GLIMS_STATUS_OK && equalize_image != 0, "the Equalize fixture exists");
+  if (equalize_image)
+    {
+      equalize_layer = first_layer (equalize_image);
+      api->layer_select (engine, equalize_image, equalize_layer);
+      before = undo_depth (equalize_image);
+      CHECK (api->adjustment_apply (engine, equalize_image, GLIMS_ADJUSTMENT_EQUALIZE, &background, &error) ==
+             GLIMS_STATUS_OK && undo_depth (equalize_image) == before + 1,
+             "Equalize is one undo step%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      /* Sixteen equal levels: the cumulative map is k/16 of the range,
+       * which 3.0 applies in linear light: sRGB of 1/16 is 71, of 2/16 99. */
+      int first  = equalizes_nonlinear_values () ? 16 : 71;
+      int second = equalizes_nonlinear_values () ? 32 : 99;
+
+      CHECK (red_at (equalize_image, 0, 0) == first && red_at (equalize_image, 1, 0) == second &&
+             red_at (equalize_image, 15 % 4, 15 / 4) == 255,
+             "Equalize flattens the histogram (%d, %d, %d)", red_at (equalize_image, 0, 0),
+             red_at (equalize_image, 1, 0), red_at (equalize_image, 15 % 4, 15 / 4));
+      CHECK (api->image_undo (engine, equalize_image) == GLIMS_STATUS_OK &&
+             red_at (equalize_image, 0, 0) == 0 && red_at (equalize_image, 1, 0) == 17,
+             "one Undo restores the Equalize source");
+    }
+
+  /* Add Alpha then Remove Alpha: the format state and the composite. */
+  memset (plain_pixels, 255, sizeof plain_pixels);
+  for (size_t i = 3; i < sizeof plain_pixels; i += 4)
+    plain_pixels[i] = 255;
+  CHECK (api->image_new (engine, 8, 8, &plain_image, NULL) == GLIMS_STATUS_OK && plain_image != 0,
+         "the Add Alpha fixture exists");
+  if (plain_image)
+    {
+      plain_layer = first_layer (plain_image);
+      api->layer_select (engine, plain_image, plain_layer);
+      before = undo_depth (plain_image);
+      CHECK (api->adjustment_apply (engine, plain_image, GLIMS_ADJUSTMENT_REMOVE_ALPHA, &background, &error) ==
+             GLIMS_STATUS_FAILED && undo_depth (plain_image) == before,
+             "Remove Alpha refuses a layer without alpha (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->adjustment_apply (engine, plain_image, GLIMS_ADJUSTMENT_ADD_ALPHA, &background, &error) ==
+             GLIMS_STATUS_OK && undo_depth (plain_image) == before + 1,
+             "Add Alpha is one undo step%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (red_at (plain_image, 0, 0) == 255, "Add Alpha keeps the pixels");
+      CHECK (api->adjustment_apply (engine, plain_image, GLIMS_ADJUSTMENT_REMOVE_ALPHA, &background, &error) ==
+             GLIMS_STATUS_OK, "the layer now has alpha to remove");
+      api->free_string (error);
+      error = NULL;
+      api->image_undo (engine, plain_image); /* Remove Alpha */
+      api->image_undo (engine, plain_image); /* Add Alpha */
+    }
+
+  for (int i = 0; i < 8 * 8; i++)
+    {
+      alpha_pixels[4 * i + 0] = 200;
+      alpha_pixels[4 * i + 1] = 100;
+      alpha_pixels[4 * i + 2] = 50;
+      alpha_pixels[4 * i + 3] = 128;
+    }
+  CHECK (api->image_from_pixels (engine, 8, 8, alpha_pixels, sizeof alpha_pixels, &alpha_image, NULL) ==
+         GLIMS_STATUS_OK && alpha_image != 0, "the Remove Alpha fixture exists");
+  if (alpha_image)
+    {
+      alpha_layer = first_layer (alpha_image);
+      api->layer_select (engine, alpha_image, alpha_layer);
+      before = undo_depth (alpha_image);
+      CHECK (api->adjustment_apply (engine, alpha_image, GLIMS_ADJUSTMENT_REMOVE_ALPHA, &background, &error) ==
+             GLIMS_STATUS_OK && undo_depth (alpha_image) == before + 1,
+             "Remove Alpha composites on the background as one undo step%s%s",
+             error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      {
+        uint8_t black[4];
+
+        render_pixel (alpha_image, 0, 0, black);
+        CHECK (black[0] == 147 && black[1] == 72 && black[2] == 34 && black[3] == 255,
+               "Remove Alpha composites on black exactly (%d, %d, %d, %d)",
+               black[0], black[1], black[2], black[3]);
+      }
+      CHECK (api->image_undo (engine, alpha_image) == GLIMS_STATUS_OK && undo_depth (alpha_image) == before,
+             "one Undo restores the alpha layer");
+    }
+
+  /* Refusals change nothing. */
+  before = undo_depth (image);
+  CHECK (api->adjustment_apply (engine, 9999, GLIMS_ADJUSTMENT_DESATURATE, &background, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->adjustment_apply (engine, image, 99, &background, NULL) == GLIMS_STATUS_FAILED &&
+         api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_REMOVE_ALPHA, NULL, NULL) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == before, "unknown image, unknown adjustment and a missing background refuse");
+
+  CHECK (api->create_group (engine, image, 0, 0, "Group", &group, NULL) == GLIMS_STATUS_OK && group != 0 &&
+         api->layer_select (engine, image, group) == GLIMS_STATUS_OK,
+         "a group becomes the adjustment target");
+  before = undo_depth (image);
+  CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_DESATURATE, &background, &error) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == before, "a group refuses (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->layer_select (engine, image, layer);
+
+  /* Without the mask, Equalize below would pass on the layer instead. */
+  CHECK (api->layer_mask_add (engine, image, layer, GLIMS_MASK_WHITE, false, &mask, NULL) == GLIMS_STATUS_OK && mask != 0 &&
+         api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, GLIMS_MASK_EDITING, NULL) == GLIMS_STATUS_OK,
+         "an edited mask becomes the adjustment target");
+  before = undo_depth (image);
+  CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_AUTO_LEVELS, &background, &error) == GLIMS_STATUS_FAILED &&
+         api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_ADD_ALPHA, &background, NULL) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == before, "a mask refuses the layer-only adjustments (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_EQUALIZE, &background, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1, "Equalize works on a mask%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->image_undo (engine, image);
+  api->layer_mask_set (engine, image, layer, GLIMS_MASK_EDITING, 0, NULL);
+
+  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE, (GlimsPoint[]) { { 0, 0 }, { 7, 15 } }, 2, &sel);
+  CHECK (api->channel_from_selection (engine, image, "Saved", &channel, NULL) == GLIMS_STATUS_OK && channel != 0 &&
+         api->channel_command (engine, image, channel, GLIMS_CHANNEL_SELECT, NULL, NULL) == GLIMS_STATUS_OK,
+         "a saved channel becomes the target");
+  if (channel)
+    {
+      before = undo_depth (image);
+      CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_DESATURATE, &background, &error) == GLIMS_STATUS_FAILED &&
+             api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_ADD_ALPHA, &background, NULL) == GLIMS_STATUS_FAILED &&
+             undo_depth (image) == before, "a channel refuses the layer-only adjustments (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_EQUALIZE, &background, &error) == GLIMS_STATUS_OK &&
+             undo_depth (image) == before + 1, "Equalize works on a channel%s%s", error ? ": " : "", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      api->image_undo (engine, image);
+    }
+  api->channel_command (engine, image, 0, GLIMS_CHANNEL_SELECT, NULL, NULL);
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+
+  CHECK (api->image_new (engine, 8, 8, &gray_image, NULL) == GLIMS_STATUS_OK &&
+         api->image_convert_mode (engine, gray_image, GLIMS_COLOR_MODE_GRAYSCALE, NULL) == GLIMS_STATUS_OK,
+         "the grayscale fixture exists");
+  if (gray_image)
+    {
+      gray_layer = first_layer (gray_image);
+      api->layer_select (engine, gray_image, gray_layer);
+      before = undo_depth (gray_image);
+      CHECK (api->adjustment_apply (engine, gray_image, GLIMS_ADJUSTMENT_AUTO_LEVELS, &background, &error) ==
+             GLIMS_STATUS_FAILED && api->adjustment_apply (engine, gray_image, GLIMS_ADJUSTMENT_DESATURATE, &background, NULL) ==
+             GLIMS_STATUS_FAILED && undo_depth (gray_image) == before,
+             "grayscale refuses Auto Levels and Desaturate (%s)", error ? error : "");
+      api->free_string (error);
+      error = NULL;
+      CHECK (api->adjustment_apply (engine, gray_image, GLIMS_ADJUSTMENT_EQUALIZE, &background, NULL) == GLIMS_STATUS_OK,
+             "grayscale still equalizes");
+      api->image_undo (engine, gray_image);
+    }
+
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->adjustment_apply (engine, image, GLIMS_ADJUSTMENT_DESATURATE, &background, &error) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before, "a pixel lock refuses (%s)", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  api->set_layer_locks (engine, image, layer, GLIMS_LOCK_PIXELS, 0, NULL);
+
+  api->image_close (engine, image);
+  if (levels_image) api->image_close (engine, levels_image);
+  if (equalize_image) api->image_close (engine, equalize_image);
+  if (alpha_image) api->image_close (engine, alpha_image);
+  if (plain_image) api->image_close (engine, plain_image);
+  if (gray_image) api->image_close (engine, gray_image);
+}
+
 static void
 paint_rect (uint8_t *pixels, int width, int x0, int y0, int w, int h, uint8_t r, uint8_t g, uint8_t b)
 {
@@ -15515,6 +15924,7 @@ main (int argc, char **argv)
    * plug-in path at start. The release marker stays preset: only a test
    * that arms a load removes it. */
   install_slow_load_plug_in (user_dir);
+  install_freeze_undo_plug_in (user_dir);
   setenv ("GLIMS_SLOWLOAD_DIR", argv[2], 1);
   slow_load_release (argv[2]);
 
@@ -15546,6 +15956,7 @@ main (int argc, char **argv)
       test_filters (image, argv[2]);
       test_filter_properties ();
       test_history_and_snapshots ();
+      test_history_while_undo_is_frozen ();
       test_save_reopen_export (image, argv[2]);
       test_save_copy (argv[2]);
       test_image_from_pixels ();
@@ -15623,6 +16034,7 @@ main (int argc, char **argv)
   test_drawable_histogram ();
   test_selection_smooth ();
   test_selection_similar ();
+  test_everyday_adjustments ();
   test_image_new_filled ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
@@ -15633,7 +16045,9 @@ main (int argc, char **argv)
   CHECK (atomic_load (&undo_events) > 0, "undo-changed events arrived (%d)", atomic_load (&undo_events));
 
   /* Quitting while a plug-in runs (a dialog left open) must not wait for
-   * it: stop closes running plug-ins first. */
+   * it: stop closes running plug-ins first. The failed run proves the
+   * plug-in was ended; the time bound only catches a stop that hangs, so
+   * it leaves room for a loaded machine (5.7 s seen at load 11). */
   {
     BackgroundRun run = { 0 };
     pthread_t     thread;
@@ -15650,7 +16064,7 @@ main (int argc, char **argv)
     api->stop (engine);
     stopped = now_ms () - start;
     pthread_join (thread, NULL);
-    CHECK (running && run.status != GLIMS_STATUS_OK && stopped < 5000,
+    CHECK (running && run.status != GLIMS_STATUS_OK && stopped < 15000,
            "stopping the engine ends a running plug-in (stopped in %.0f ms, run %d)", stopped, run.status);
   }
 
