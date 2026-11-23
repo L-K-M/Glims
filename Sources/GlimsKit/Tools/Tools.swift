@@ -363,6 +363,14 @@ final class ToolState {
         } else {
             brush.eraserBackground = nil
         }
+        if brush.fade?.target == .background {
+            let background = background.usingColorSpace(.sRGB) ?? .white
+            brush.fadeBackground = .init(red: Double(background.redComponent),
+                                        green: Double(background.greenComponent),
+                                        blue: Double(background.blueComponent))
+        } else {
+            brush.fadeBackground = nil
+        }
         brush.source = cloneSource
         return brush
     }
