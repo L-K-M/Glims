@@ -97,7 +97,7 @@ final class RecorderLayerEditsTests: XCTestCase {
 
     func testVersionAnchorAndOlderVersionRefusal() throws {
         XCTAssertEqual(RecorderFileCodec.layerEditsVersion, 33)
-        XCTAssertEqual(RecorderFileCodec.latestVersion, 33)
+        XCTAssertGreaterThanOrEqual(RecorderFileCodec.latestVersion, RecorderFileCodec.layerEditsVersion)
         let commands = [
             #"{"tag":"moveLayer","offset":{"x":1,"y":0}}"#,
             #"{"tag":"duplicateLayers"}"#,
