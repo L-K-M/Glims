@@ -3198,10 +3198,23 @@ final class ImageDocument {
         endPendingUserEdits()
         if strokeIsActive { endStroke() }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        recordUnsupportedCommand("Duplicate Layers")
+        let command = captured.count == 1 ? SemanticImageCommand.duplicateLayers : nil
+        let capture: RecorderCapture?
+        if let command {
+            capture = reserveRecordedCommand(command, explicitLayer: captured[0], fallback: "Duplicate Layers")
+        } else {
+            recordUnsupportedCommand("Duplicate Layers", reason: Self.singleLayerSelectionReason)
+            capture = nil
+        }
         enqueueTargetCommand({ session, image in
-            _ = try session.duplicateLayers(image, layers: captured)
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { _ = try session.duplicateLayers(image, layers: captured) }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture, let command {
+                self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+            }
         }, completion: completion)
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Capture the whole ordered vector before queued selection changes can
@@ -3218,10 +3231,23 @@ final class ImageDocument {
         endPendingUserEdits()
         if strokeIsActive { endStroke() }
         guard !isClosing else { return completion(.failure(DocumentError.closed)) }
-        recordUnsupportedCommand("Delete Layers")
+        let command = captured.count == 1 ? SemanticImageCommand.deleteLayers : nil
+        let capture: RecorderCapture?
+        if let command {
+            capture = reserveRecordedCommand(command, explicitLayer: captured[0], fallback: "Delete Layers")
+        } else {
+            recordUnsupportedCommand("Delete Layers", reason: Self.singleLayerSelectionReason)
+            capture = nil
+        }
         enqueueTargetCommand({ session, image in
-            try session.deleteLayers(image, layers: captured)
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { try session.deleteLayers(image, layers: captured) }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture, let command {
+                self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+            }
         }, completion: completion)
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Cached admission only; menu validation never reads the native engine.
@@ -3501,10 +3527,17 @@ final class ImageDocument {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Merge Visible")
-        enqueueTargetCommand { session, image in
-            _ = try session.mergeVisible(image)
-        }
+        let command = SemanticImageCommand.mergeVisible
+        let capture = reserveRecordedCommand(command, explicitLayer: nil, fallback: "Merge Visible")
+        enqueueTargetCommand({ session, image in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { _ = try session.mergeVisible(image) }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture {
+                self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+            }
+        })
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Layer ▸ Rasterize Layer… after its confirmation sheet approved:
@@ -3709,7 +3742,7 @@ final class ImageDocument {
             return
         case .move(let parent, let index):
             endPendingUserEdits()
-            run(unsupported: "Move Layer") { session, image in try session.reparentLayer(item, image: image, toParent: parent, index: index) }
+            run(unsupported: "Reorder Layer") { session, image in try session.reparentLayer(item, image: image, toParent: parent, index: index) }
         }
     }
 
@@ -3842,7 +3875,10 @@ final class ImageDocument {
         guard !refuseSingleLayerCommand("Move Layer") else { return }
         guard !isMaskTargetActive else { return refuseMaskEdit() }
         guard !isChannelTargetActive else { return refuseChannelTransform() }
-        run(unsupported: "Move Layer") { session, image in try session.moveLayer(layer, image: image, by: offset) }
+        let semantic = SemanticImageCommand.moveLayer(offset: offset)
+        run(semantic: semantic, recorderLayer: layer) { session, image in
+            try session.moveLayer(layer, image: image, by: offset)
+        }
     }
 
     /// Existing target-route versions identify the owner of a transient Move
@@ -4987,18 +5023,29 @@ final class ImageDocument {
             guard !isClosing, !refuseWhileEditingUnavailable() else { return }
             guard !refuseWhileFloatingActive() else { return }
             endPendingUserEdits()
-            recordUnsupportedCommand("Add Layer Mask")
-            enqueueTargetCommand { session, image in
-                // addLayerMask sets the mask's EDITING flag but does not
-                // select the layer; without selecting it first the new
-                // target could land on a layer the engine selected last.
-                try session.channelCommand(.select, channel: 0, image: image)
-                try session.selectLayer(layer, image: image)
-                _ = try session.addLayerMask(layer, image: image, source: source, edit: true)
-            }
+            let command = SemanticImageCommand.addLayerMask(source: source, edit: true)
+            let capture = reserveRecordedCommand(command, explicitLayer: layer, fallback: "Add Layer Mask")
+            enqueueTargetCommand({ session, image in
+                let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+                let result = Result {
+                    // addLayerMask sets the mask's EDITING flag but does not
+                    // select the layer; without selecting it first the new
+                    // target could land on a layer the engine selected last.
+                    try session.channelCommand(.select, channel: 0, image: image)
+                    try session.selectLayer(layer, image: image)
+                    _ = try session.addLayerMask(layer, image: image, source: source, edit: true)
+                }
+                if case .failure(let error) = result { self.report(error) }
+                if let capture {
+                    self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+                }
+            })
+            if capture != nil { notifyRecorderChanged() }
         } else {
             guard !refuseWhileFloatingActive() else { return }
-            runMaskCommand(named: "Add Layer Mask") { session, image in
+            runMaskCommand(named: "Add Layer Mask",
+                           semantic: .addLayerMask(source: source, edit: false),
+                           explicitLayer: layer) { session, image in
                 _ = try session.addLayerMask(layer, image: image, source: source, edit: false)
             }
         }
@@ -5078,13 +5125,26 @@ final class ImageDocument {
     /// pending work and reload afterwards — mask flag changes report no
     /// engine event of their own (EDITING has no undo record at all), so
     /// the reload is what makes `maskStates` authoritative again.
-    private func runMaskCommand(named name: String, _ work: @escaping (EngineSession, Int32) throws -> Void) {
+    private func runMaskCommand(named name: String, semantic: SemanticImageCommand? = nil,
+                                explicitLayer: Int32? = nil,
+                                _ work: @escaping (EngineSession, Int32) throws -> Void) {
         guard !isClosing else { return }
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand(name)
+        let capture: RecorderCapture?
+        if let semantic {
+            capture = reserveRecordedCommand(semantic, explicitLayer: explicitLayer, fallback: name)
+        } else {
+            recordUnsupportedCommand(name)
+            capture = nil
+        }
         enqueue(on: inputQueue, input: true) { [session, image] in
-            do { try work(session, image) } catch { self.report(error) }
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { try work(session, image) }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture, let semantic {
+                self.settleRecording(capture, result: result.map { _ in semantic }, confirmed: confirmed)
+            }
             self.dispatchReadWhenReady { try? self.reload() }
         }
     }
@@ -5092,12 +5152,28 @@ final class ImageDocument {
     /// Mask commands that remove the target drawable queue as target
     /// commands: the gate keeps an edit accepted meanwhile from
     /// capturing the drawable about to disappear.
-    private func runMaskTargetCommand(named name: String, _ work: @escaping (EngineSession, Int32) throws -> Void) {
+    private func runMaskTargetCommand(named name: String, semantic: SemanticImageCommand? = nil,
+                                      explicitLayer: Int32? = nil,
+                                      _ work: @escaping (EngineSession, Int32) throws -> Void) {
         guard !isClosing else { return }
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand(name)
-        enqueueTargetCommand(work)
+        let capture: RecorderCapture?
+        if let semantic {
+            capture = reserveRecordedCommand(semantic, explicitLayer: explicitLayer, fallback: name)
+        } else {
+            recordUnsupportedCommand(name)
+            capture = nil
+        }
+        enqueueTargetCommand({ session, image in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { try work(session, image) }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture, let semantic {
+                self.settleRecording(capture, result: result.map { _ in semantic }, confirmed: confirmed)
+            }
+        })
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Edit ▸ Stroke Path: draws the path on the active layer. The
@@ -6111,7 +6187,8 @@ final class ImageDocument {
 
     /// Adds the pixels similar to the selected ones as one queued command
     /// and one undo step, using `options`' threshold, antialiasing and
-    /// sample-merged settings; pending edits end first. Not recorded.
+    /// sample-merged settings; pending edits end first. The Recorder captures
+    /// those three values at admission.
     func selectSimilar(options: EngineSession.SelectOptions,
                        completion: (@MainActor (Result<Void, Error>) -> Void)? = nil) {
         if let reason = selectSimilarRefusal {
@@ -6121,10 +6198,19 @@ final class ImageDocument {
         }
         guard !refuseWhileEditingUnavailable() else { return }
         endPendingUserEdits()
-        recordUnsupportedCommand("Select Similar")
+        let command = SemanticImageCommand.selectSimilar(threshold: options.threshold,
+                                                        antialias: options.antialias,
+                                                        sampleMerged: options.sampleMerged)
+        let capture = reserveRecordedCommand(command, explicitLayer: nil, fallback: "Select Similar")
         enqueueTargetCommand({ session, image in
-            try session.selectSimilar(image, options: options)
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { try session.selectSimilar(image, options: options) }
+            if case .failure(let error) = result { self.report(error) }
+            if let capture {
+                self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+            }
         }, completion: completion)
+        if capture != nil { notifyRecorderChanged() }
     }
 
     // MARK: Histogram
@@ -8399,7 +8485,8 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask: return true
+        case .selectSimilar(_, _, let sampleMerged): return !sampleMerged
         default: return false
         }
     }
@@ -8440,6 +8527,16 @@ final class ImageDocument {
                 return .unavailable("The explicit layer could not be identified when this transform was recorded.")
             }
             return .layer(layer)
+        }
+        switch command {
+        case .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask:
+            guard let layer = explicitLayer, layer > 0 else {
+                return .unavailable("The explicit layer could not be identified when this \(command.title) was recorded.")
+            }
+            // These commands bind the explicit layer they were invoked on
+            // and never fall through to the implicit paint target.
+            return .layer(layer)
+        default: break
         }
         if command.isLayerAdjustment {
             guard let layer = explicitLayer, layer > 0 else {
@@ -8594,9 +8691,14 @@ final class ImageDocument {
     ///
     /// The command is not queued yet, and an observer may close the document
     /// or restart recording, so observers hear of the row on the next turn.
-    private func recordUnsupportedCommand(_ action: String) {
+    private static let singleLayerSelectionReason = "Recorder saves Duplicate and Delete for one selected layer only."
+
+    private func recordUnsupportedCommand(_ action: String, reason: String? = nil) {
         guard let capture = reserveUnsupportedCommand(action) else { return }
-        resolveUnsupportedCommand(capture, action, notifies: false)
+        let text = reason ?? Self.unsupportedReason(action)
+        resolveRecording(capture.reservation, with: .failure(text),
+                         confirmed: .init(context: capture.context, binding: .unavailable(text), descriptions: [:]),
+                         notifies: false)
         DispatchQueue.main.async { self.notifyRecorderChanged() }
     }
 
@@ -8676,6 +8778,19 @@ final class ImageDocument {
         guard let command, recorder.isRecording else { return nil }
         return try reserveRecording(context: captureRecorderContext(for: command, explicitLayer: explicitLayer,
                                                                    explicitChannel: explicitChannel))
+    }
+
+    /// Reserves a recorded command's row before its counted work is
+    /// admitted. A reservation the log refuses falls back to the explicit
+    /// unsupported row, so an admitted edit can never silently vanish.
+    private func reserveRecordedCommand(_ command: SemanticImageCommand, explicitLayer: Int32?,
+                                        fallback action: String) -> RecorderCapture? {
+        do { return try reserveRecording(command, explicitLayer: explicitLayer) }
+        catch {
+            assertionFailure("A recording log refused an admitted \(action): \(error)")
+            recordUnsupportedCommand(action)
+            return nil
+        }
     }
 
     private func reserveRecording(context: RecorderContext?) throws -> RecorderCapture {

@@ -29,6 +29,13 @@ Current capture covers these command families:
 - A newly applied Levels, Curves or Brightness/Contrast adjustment on a bound layer mask.
 - A newly applied Gaussian Blur or Unsharp Mask on an explicitly bound layer,
   with the whole accepted settings.
+- A Move Layer offset from a Move-tool drag or an arrow-key nudge, with the
+  active layer's whole-pixel delta.
+- Duplicate Layers and Delete Layers with exactly one selected layer.
+- Merge Visible, which combines the visible top-level layers.
+- Add Layer Mask, with its owned source tag and whether the new mask starts
+  as the edit target.
+- Select Similar, with its threshold, antialiasing and sample-merged choice.
 
 - Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
   Levels/Curves Apply and complete Brush gestures, including
@@ -39,10 +46,13 @@ Current capture covers these command families:
   an explicitly bound ink. See [native ink recording](ink-recorder.md).
 
 Other layer changes, other effects (including edits to an existing effect)
-and file operations remain outside this capture scope. While recording, such
-an admitted command still reserves one explicit unsupported row that names
-the command, so a recording never looks complete while omitting an edit and
-replay refuses the log. A command refused before it is admitted, a preview
+and file operations remain outside this capture scope. The reparenting
+Move Layer command is named Reorder Layer in its failed row, so it stays
+distinguishable from the recorded offset move. Duplicate Layers and Delete
+Layers with two or more selected layers keep an explicit failed row. While
+recording, such an admitted command still reserves one explicit unsupported
+row that names the command, so a recording never looks complete while
+omitting an edit and replay refuses the log. A command refused before it is admitted, a preview
 and its Cancel, a cancelled file import, a target pick, a view change, a
 save, an export and a read add no row, and replay's own commands add none. A
 plug-in keeps its row even when cancelled, because it can change the image
@@ -113,7 +123,9 @@ versions 23, 24 and 25 respectively; Gaussian Blur and Unsharp Mask require
 version 26, Image Size with a chosen resampling method version 27, and arbitrary
 canvas rotation with its background fill version 28. Smooth Selection uses
 version 29, one-click adjustments version 30, Image Size with a resolution
-version 31, and a crop to a target size version 32. See
+version 31, a crop to a target size version 32, and the six layer edits
+version 33: a Move Layer offset, Duplicate Layers, Delete Layers, Merge
+Visible, Add Layer Mask and Select Similar. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

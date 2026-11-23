@@ -1,0 +1,197 @@
+import AppKit
+
+// MARK: - GLIMS_SMOKE_CASE=recorder-layer-edits
+
+@MainActor
+extension EngineSmokeTest {
+    /// GLIMS_SMOKE_CASE=recorder-layer-edits (also in the full run): the six
+    /// layer edits the Recorder now saves. One document records a Move tool
+    /// offset, one arrow nudge, Duplicate Layers, Delete Layers on the
+    /// duplicate, Add Layer Mask (white, editing), Merge Visible and Select
+    /// Similar after a rectangle selection. Every row succeeds, and the
+    /// recording replays into a second identical document with the same
+    /// pixels and layer tree. Duplicate with two selected layers keeps its
+    /// failed row.
+    static func exerciseRecorderLayerEdits(_ session: EngineSession, work: URL,
+                                           documents: DocumentList) throws {
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(20)
+            while !condition() && Date() < deadline { spin(0.01) }
+            if !condition() { check(false, "a layer-edit fixture wait timed out after 20 seconds") }
+        }
+        func settle(_ document: ImageDocument) {
+            document.inputQueue.sync {}
+            wait { document.pendingWork == 0 && document.recorder.pendingCount == 0
+                && !document.recorder.isReplaying && !EngineActivity.shared.isBusy }
+            spin(0.02)
+        }
+        func pixels(_ document: ImageDocument) throws -> Data {
+            try session.copyPixels(document.image, merged: true).pixels
+        }
+        func structure(_ document: ImageDocument) throws -> [(String, Bool, Bool, Bool)] {
+            try session.layers(document.image).map { ($0.name, $0.isVisible, $0.hasMask, $0.isSelected) }
+        }
+        func close(_ document: ImageDocument) {
+            document.onError = nil
+            document.closeImageWhenDrained()
+            wait { (try? session.info(document.image)) == nil }
+            documents.items.removeAll { $0 === document }
+        }
+
+        var bytes: [UInt8] = []
+        for index in 0..<16 * 16 {
+            bytes += [UInt8(index * 7 % 256), UInt8(index * 13 % 256), UInt8(index * 29 % 256), 255]
+        }
+        let payload = ClipboardImage(width: 16, height: 16, pixels: Data(bytes), origin: .zero)
+        func fixture(_ name: String) throws -> (ImageDocument, Int32, Int32) {
+            let image = try session.newImage(width: 48, height: 48)
+            let base = try session.layers(image)[0].id
+            let layer = try session.pastePixels(image, pixels: payload, at: CGPoint(x: 8, y: 8))
+            let document = try ImageDocument(session: session, image: image, name: name)
+            document.onError = { _ in }
+            documents.items.append(document)
+            try document.reload()
+            settle(document)
+            return (document, base, layer)
+        }
+
+        let (a, _, layerA) = try fixture("Layer edits capture")
+        defer { close(a) }
+        try a.startRecording()
+        a.moveActiveLayer(by: CGSize(width: 3, height: 2))
+        settle(a)
+        a.moveActiveLayer(by: CanvasKeyboardPolicy.nudge(.right, shift: false))
+        settle(a)
+        a.selectLayer(layerA)
+        settle(a)
+        a.duplicateSelectedLayers { _ in }
+        settle(a)
+        guard let copyA = a.activeLayer, copyA != layerA else {
+            return check(false, "the duplicate is selected after Duplicate Layers")
+        }
+        a.deleteSelectedLayers { _ in }
+        settle(a)
+        a.addMask(layerA, source: .white, edit: true)
+        settle(a)
+        a.mergeVisible()
+        settle(a)
+        a.select(.rectangle(CGRect(x: 8, y: 8, width: 20, height: 20)))
+        settle(a)
+        var similar = EngineSession.SelectOptions()
+        similar.sampleMerged = true
+        a.selectSimilar(options: similar) { _ in }
+        settle(a)
+        try a.stopRecording()
+        settle(a)
+
+        let rows = a.recorder.records
+        check(rows.count == 8
+              && rows.allSatisfy({ if case .success = $0.resolution { return true }; return false })
+              && a.recorder.replayRefusal == nil,
+              "every layer edit records one successful row (\(rows.count) rows)")
+        if case .success(.moveLayer(let first))? = rows.first?.resolution {
+            check(first == CGSize(width: 3, height: 2), "the Move tool offset is recorded")
+        } else { check(false, "the first row is the Move tool offset") }
+        if case .success(.moveLayer(let nudge))? = rows.dropFirst().first?.resolution {
+            check(nudge == CGSize(width: 1, height: 0), "one arrow nudge is one recorded row")
+        } else { check(false, "the second row is the arrow nudge") }
+        if case .success(.duplicateLayers)? = rows.dropFirst(2).first?.resolution {
+            check(true, "Duplicate Layers records a row without fields")
+        } else { check(false, "the third row is Duplicate Layers") }
+        if case .success(.deleteLayers)? = rows.dropFirst(3).first?.resolution {
+            check(true, "Delete Layers records a row without fields")
+        } else { check(false, "the fourth row is Delete Layers") }
+        if case .success(.addLayerMask(let source, let edit))? = rows.dropFirst(4).first?.resolution {
+            check(source == .white && edit, "Add Layer Mask stores the owned source and edit flag")
+        } else { check(false, "the fifth row is Add Layer Mask") }
+        if case .success(.mergeVisible)? = rows.dropFirst(5).first?.resolution {
+            check(true, "Merge Visible records a row without fields")
+        } else { check(false, "the sixth row is Merge Visible") }
+        if case .success(.selectSimilar(let threshold, let antialias, let sampleMerged))?
+            = rows.dropFirst(7).first?.resolution {
+            check(threshold == 15.0 / 255.0 && antialias && sampleMerged,
+                  "Select Similar stores threshold, antialias and sample-merged")
+        } else { check(false, "the last row is Select Similar") }
+
+        let url = work.appendingPathComponent("layer-edits.glims-recording")
+        var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
+        a.saveRecording(to: url, checkpoint: try a.recorderSaveCheckpoint()) { saved = $0 }
+        settle(a)
+        guard let saved, case .success = try? saved.get() else {
+            return check(false, "the layer-edit recording saves")
+        }
+        var loaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
+        a.prepareRecordingFile(at: url, checkpoint: try a.recorderInstallCheckpoint()) { loaded = $0 }
+        settle(a)
+        guard let loaded, let file = try? loaded.get().file else {
+            return check(false, "the layer-edit recording loads")
+        }
+        check(file.records.count == 8, "the saved recording keeps every layer-edit row")
+
+        // The Delete row binds the copy the Duplicate row creates, so a fresh
+        // image cannot resolve it during one install. Replay the saved rows
+        // in two installs: the prefix through Duplicate, then the rest with
+        // the copy present.
+        var prefix = file
+        for index in [7, 6, 5, 4, 3] { prefix = try prefix.removingRecord(at: index) }
+        var suffix = file
+        for _ in 0..<3 { suffix = try suffix.removingRecord(at: 0) }
+        check(prefix.records.count == 3 && suffix.records.count == 5,
+              "the saved recording splits into a duplicate prefix and its suffix")
+
+        let (b, baseB, layerB) = try fixture("Layer edits replay")
+        defer { close(b) }
+        var prefixInstalled: Result<Void, Error>?
+        let prefixChoices = try RecorderBatchBindings.resolve(
+            file: prefix, candidates: b.recorderBatchCandidates(), policy: .matchingNamesAndKinds)
+        b.installRecording(try RecorderFileSemanticBridge.prepare(prefix),
+                           checkpoint: try b.recorderInstallCheckpoint(),
+                           choices: prefixChoices) { prefixInstalled = $0 }
+        settle(b)
+        try prefixInstalled!.get()
+        try b.startReplay()
+        settle(b)
+
+        try b.reload()
+        settle(b)
+        guard let copyB = try session.layers(b.image).first(where: { $0.id != baseB && $0.id != layerB })?.id else {
+            return check(false, "the replayed duplicate exists in the second document")
+        }
+        let copyName = try session.layers(b.image).first { $0.id == copyB }!.name
+        let layerName = try session.layers(b.image).first { $0.id == layerB }!.name
+        var suffixChoices: [UUID: ImageDocument.RecorderInstallChoice] = [:]
+        for symbol in suffix.symbols {
+            if symbol.description.name == copyName { suffixChoices[symbol.id] = .layer(copyB) }
+            if symbol.description.name == layerName { suffixChoices[symbol.id] = .layer(layerB) }
+        }
+        var suffixInstalled: Result<Void, Error>?
+        b.installRecording(try RecorderFileSemanticBridge.prepare(suffix),
+                           checkpoint: try b.recorderInstallCheckpoint(),
+                           choices: suffixChoices) { suffixInstalled = $0 }
+        settle(b)
+        try suffixInstalled!.get()
+        try b.startReplay()
+        settle(b)
+
+        check(try pixels(a) == pixels(b), "the replayed layer edits render the same pixels")
+        check(try structure(a) == structure(b),
+              "the replayed layer edits keep the same names, order, visibility, active layer and masks")
+
+        // Duplicate with two selected layers keeps its explicit failed row.
+        let (multi, baseMulti, layerMulti) = try fixture("Layer edits multi-select")
+        defer { close(multi) }
+        try multi.startRecording()
+        multi.selectLayers([baseMulti, layerMulti])
+        settle(multi)
+        multi.duplicateSelectedLayers { _ in }
+        settle(multi)
+        let multiRows = multi.recorder.records
+        check(multiRows.count == 1
+              && multiRows.first.map({ if case .failure(let reason) = $0.resolution {
+                  return reason == "Recorder saves Duplicate and Delete for one selected layer only."
+              } else { return false } }) == true,
+              "Duplicate with two selected layers keeps its failed row")
+        try multi.stopRecording()
+        settle(multi)
+    }
+}

@@ -62,6 +62,25 @@ enum SemanticImageCommand {
     /// size to resample to and the resolution, as one undo step.
     case cropResize(rect: CGRect, width: Int, height: Int, xResolution: Double, yResolution: Double,
                     interpolation: EngineSession.Interpolation)
+    /// The Move tool's offset move of the active layer, in image pixels.
+    /// The explicit layer lives in the document's runtime binding.
+    case moveLayer(offset: CGSize)
+    /// Layer ▸ Duplicate Layers with exactly one selected layer. The
+    /// explicit layer lives in the document's runtime binding.
+    case duplicateLayers
+    /// Layer ▸ Delete Layers with exactly one selected layer. The explicit
+    /// layer lives in the document's runtime binding.
+    case deleteLayers
+    /// Layer ▸ Merge Visible: image-wide, with no target binding.
+    case mergeVisible
+    /// Layer ▸ Mask ▸ Add: the source and whether the new mask starts as
+    /// the edit target. The explicit layer lives in the document's
+    /// runtime binding.
+    case addLayerMask(source: EngineSession.MaskSource, edit: Bool)
+    /// Select ▸ Similar: threshold, antialiasing and sample-merged. The
+    /// sample-merged form needs no target; the drawable form binds the
+    /// captured paint target context.
+    case selectSimilar(threshold: Double, antialias: Bool, sampleMerged: Bool)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine in absolute image pixels, y down.
     /// The explicit layer lives in the document's runtime binding, never in
@@ -136,8 +155,8 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .completeStroke, .completeTabletStroke: return true
-        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties: return false
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .completeStroke, .completeTabletStroke: return true
+        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties, .selectSimilar: return false
         case .adjustment: return true
         }
     }
@@ -180,6 +199,12 @@ enum SemanticImageCommand {
         case .rotateCanvas: return "Rotate Canvas"
         case .resizeCanvas: return "Resize Canvas"
         case .crop, .cropResize: return "Crop Image"
+        case .moveLayer: return "Move Layer"
+        case .duplicateLayers: return "Duplicate Layers"
+        case .deleteLayers: return "Delete Layers"
+        case .mergeVisible: return "Merge Visible"
+        case .addLayerMask: return "Add Layer Mask"
+        case .selectSimilar: return "Select Similar"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
         case .transformProjectiveLayer: return "Transform Layer Perspective"
@@ -242,7 +267,15 @@ enum SemanticImageCommand {
             try session.cropResize(image, rect: rect, width: width, height: height,
                                    resolution: .init(x: xResolution, y: yResolution),
                                    interpolation: interpolation)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
+        case .mergeVisible:
+            _ = try session.mergeVisible(image)
+        case .selectSimilar(let threshold, let antialias, let sampleMerged):
+            var options = EngineSession.SelectOptions()
+            options.threshold = threshold
+            options.antialias = antialias
+            options.sampleMerged = sampleMerged
+            try session.selectSimilar(image, options: options)
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
@@ -359,6 +392,25 @@ enum SemanticImageCommand {
         case .completeTabletStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)
+        case .moveLayer(let offset):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.moveLayer(layer, image: image, by: offset)
+        case .duplicateLayers:
+            guard layer > 0 else { throw MissingLayerBinding() }
+            _ = try session.duplicateLayers(image, layers: [layer])
+        case .deleteLayers:
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.deleteLayers(image, layers: [layer])
+        case .addLayerMask(let source, let edit):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            if edit {
+                // addLayerMask sets the mask's EDITING flag but does not
+                // select the layer; without selecting it first the new
+                // target could land on a layer the engine selected last.
+                try session.channelCommand(.select, channel: 0, image: image)
+                try session.selectLayer(layer, image: image)
+            }
+            _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
         default:
             try apply(session: session, image: image)
         }

@@ -912,6 +912,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Crop Target)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-layer-edits" {
+                try exerciseRecorderLayerEdits(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Recorder Layer Edits)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "image-duplicate" {
                 try exerciseImageDuplicate(session, documents: documents)
                 print(failures == 0 ? "PASSED (Image Duplicate)" : "FAILED: \(failures) failure(s)")
@@ -1343,6 +1348,7 @@ enum EngineSmokeTest {
             try exerciseRecorderCapture(session, documents: documents)
             try exerciseRecorderGaps(session, work: work, documents: documents)
             try exerciseRecorderReplay(session, work: work, documents: documents)
+            try exerciseRecorderLayerEdits(session, work: work, documents: documents)
             try exerciseRecorderChannelSelection(session, work: work, documents: documents)
             try exerciseRecorderPalette(session, documents: documents)
             try exercisePlugInCommands(session, documents: documents)

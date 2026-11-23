@@ -69,6 +69,12 @@ extension RecorderFileCommand {
     init(_ command: SemanticImageCommand) throws {
         func point(_ value: CGPoint) -> Point { .init(x: Double(value.x), y: Double(value.y)) }
         func rect(_ value: CGRect) -> Rect { .init(x: Double(value.origin.x), y: Double(value.origin.y), width: Double(value.size.width), height: Double(value.size.height)) }
+        func wholePixel(_ value: CGFloat) throws -> Int {
+            guard value == value.rounded(), abs(value) <= 524288 else {
+                throw RecorderFileError.invalid("A recorded layer move offset must be a whole number of pixels within ±524288.")
+            }
+            return Int(value)
+        }
         func options(_ value: EngineSession.SelectOptions) -> Options {
             let operation: Operation
             switch value.operation {
@@ -154,6 +160,18 @@ extension RecorderFileCommand {
             self = .cropResize(rect: rect(value), width: width, height: height,
                                xResolution: xResolution, yResolution: yResolution,
                                interpolation: .init(interpolation))
+        case .moveLayer(let offset):
+            self = .moveLayer(offset: .init(x: try wholePixel(offset.width), y: try wholePixel(offset.height)))
+        case .duplicateLayers: self = .duplicateLayers
+        case .deleteLayers: self = .deleteLayers
+        case .mergeVisible: self = .mergeVisible
+        case .addLayerMask(let source, let edit):
+            self = .addLayerMask(source: RecorderFileCommand.MaskSource(source), edit: edit)
+        case .selectSimilar(let threshold, let antialias, let sampleMerged):
+            guard threshold.isFinite, (0...1).contains(threshold) else {
+                throw RecorderFileError.invalid("A recorded Similar threshold is outside 0...1.")
+            }
+            self = .selectSimilar(threshold: threshold, antialias: antialias, sampleMerged: sampleMerged)
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,
             mode: try value.mode.map { try RecorderFileLayerMode($0) }))
         case .transformLayer(let matrix, let interpolation):

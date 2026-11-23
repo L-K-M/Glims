@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 30
+# Recorder file format, versions 1 to 33
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `30`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `33`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -22,12 +22,14 @@ The writer chooses the highest version required by a successful record:
 an Eraser stroke with an explicit background color 22, mask Levels 23,
 mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
 `applyUnsharpMask` 26, `scaleWithInterpolation` 27, `rotateCanvas` 28,
-`smoothSelection` 29, and `adjustment` 30.
+`smoothSelection` 29, `adjustment` 30, `setResolution` or `resize` 31,
+`cropResize` 32, and `moveLayer`, `duplicateLayers`, `deleteLayers`,
+`mergeVisible`, `addLayerMask` or `selectSimilar` 33.
 A file declaring one of those versions must contain at least one
 successful command from that version's family. It may also contain
 commands from all earlier versions. Failure/cancelled rows do not raise
 the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...30 refuse the file.
+version 1. Integers outside 1...33 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -74,6 +76,12 @@ Commands have an owned `tag` and the following exact fields:
 | `setResolution` | `x`, `y` (version 31) |
 | `resize` | integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 31) |
 | `cropResize` | `rect`, integer `width` and `height`, `xResolution`, `yResolution`, `interpolation` (version 32) |
+| `moveLayer` | `offset` with integer `x` and `y` within ±524288 (version 33) |
+| `duplicateLayers` | no fields (version 33) |
+| `deleteLayers` | no fields (version 33) |
+| `mergeVisible` | no fields (version 33) |
+| `addLayerMask` | `source`, `edit` (version 33) |
+| `selectSimilar` | `threshold`, `antialias`, `sampleMerged` (version 33) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -104,7 +112,10 @@ symbol for a layer adjustment or a context for an editing-mask adjustment.
 `channelToSelection` requires a channel symbol whose description kind is
 `channel` — the explicit source channel, never the active paint target.
 Select Alpha, color selection with `sampleMerged:false`, mask Levels, Curves or Brightness/Contrast,
-and one-click adjustments require context; other non-ink commands require none. Native ink commands require the `ink`
+and one-click adjustments require context; `mergeVisible` and sample-merged
+`selectSimilar` require none; `moveLayer`, `duplicateLayers`, `deleteLayers` and
+`addLayerMask` require a layer symbol; non-sample-merged `selectSimilar` requires the
+captured context. Other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
 `quickMask`. Target kinds are layer/channel/quickMask with `symbol`, or mask with
@@ -658,3 +669,28 @@ the result resamples to, `xResolution`, `yResolution` and the
 `interpolation` name, and replays as one Crop Image step through facade
 slot 252. It is target independent and needs the `none` binding. Version
 32 requires at least one; earlier versions reject the tag.
+
+## Layer edits (version 33)
+
+Six layer edits share version 33. Each is refused in an older file, and a
+version 33 file must contain at least one successful command from the six.
+
+- `moveLayer` stores `offset` with integer `x` and `y`, each within
+  ±524288. Live Move-tool drags and arrow-key nudges produce whole-pixel
+  deltas; one nudge is one row. It requires a `layer` binding.
+- `duplicateLayers` and `deleteLayers` store no fields. They are recorded
+  only when exactly one layer is selected and require that layer's
+  `layer` binding. A multi-selection keeps the explicit failed row
+  instead.
+- `mergeVisible` stores no fields, is target independent and needs the
+  `none` binding. It merges the visible top-level layers on replay.
+- `addLayerMask` stores `source` (one of the owned tags `white`, `black`,
+  `alpha`, `alphaTransfer`, `selection`, `grayscale`, never a native enum
+  value) and Boolean `edit`. It requires a `layer` binding. With `edit`
+  replay selects the layer before adding the mask, exactly as live.
+- `selectSimilar` stores finite `threshold` in 0...1, Boolean `antialias`
+  and Boolean `sampleMerged`. Sample-merged uses the `none` binding; the
+  drawable form requires the captured context.
+
+The reparenting Layer ▸ Move Layer command is a different edit and keeps
+its explicit failed row, named Reorder Layer.

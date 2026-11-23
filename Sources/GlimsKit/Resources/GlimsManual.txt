@@ -503,8 +503,9 @@ visibility, opacity and blend mode changes; affine and perspective
 layer transforms with their resampling method; newly applied Levels, Curves, Color Balance,
 Hue/Saturation and Brightness/Contrast adjustments with their complete settings;
 newly applied Gaussian Blur and Unsharp Mask filters with their complete
-settings;
-and complete Pencil, Eraser, Paintbrush and Sponge strokes on
+settings; a Move Layer offset from a Move-tool drag or an arrow-key nudge;
+Duplicate Layer and Delete Layer with one selected layer; Merge Visible;
+Add Layer Mask; Select Similar; and complete Pencil, Eraser, Paintbrush and Sponge strokes on
 ordinary pixel layers. A stroke keeps the settings used when it was
 drawn, including accepted tablet rotation and tangential pressure. Replay
 checks that the required brush and its supported paint dynamics still match
@@ -539,7 +540,10 @@ Invert Selection are also recordable. These root-mask commands require a Lab
 destination but do not depend on its selected axis.
 
 Not every edit is recorded: other layer changes, other effects and file
-operations stay outside the capture. While a recording runs, such an edit
+operations stay outside the capture. The reparenting Move Layer command is
+named Reorder Layer in its failed row. Duplicate Layer and Delete Layer
+with two or more selected layers also keep a failed row. While a recording
+runs, such an edit
 still adds one explicit unsupported row that names it, so the recording
 never looks complete while leaving an edit out, and Replay refuses it. An
 edit refused before it starts, a preview and its Cancel, a cancelled file

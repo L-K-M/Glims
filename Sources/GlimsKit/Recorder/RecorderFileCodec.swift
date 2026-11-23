@@ -35,7 +35,9 @@ enum RecorderFileCodec {
     static let imageResolutionVersion = 31
     /// Crop to a target size; renumber if another branch takes 32 first.
     static let cropResizeVersion = 32
-    static let latestVersion = cropResizeVersion
+    /// Layer edits; renumber if another branch takes 33 first.
+    static let layerEditsVersion = 33
+    static let latestVersion = layerEditsVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -160,6 +162,7 @@ enum RecorderFileCodec {
         var hasAdjustment = false
         var hasImageResolution = false
         var hasCropResize = false
+        var hasLayerEdits = false
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -193,6 +196,12 @@ enum RecorderFileCodec {
                 if case .setResolution = command { hasImageResolution = true }
                 if case .resize = command { hasImageResolution = true }
                 if case .cropResize = command { hasCropResize = true }
+                if case .moveLayer = command { hasLayerEdits = true }
+                if case .duplicateLayers = command { hasLayerEdits = true }
+                if case .deleteLayers = command { hasLayerEdits = true }
+                if case .mergeVisible = command { hasLayerEdits = true }
+                if case .addLayerMask = command { hasLayerEdits = true }
+                if case .selectSimilar = command { hasLayerEdits = true }
                 if case .editInk = command { hasInkCommand = true }
                 if case .applyInkLevels = command { hasInkCommand = true }
                 if case .applyInkCurves = command { hasInkCurves = true }
@@ -304,6 +313,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == cropResizeVersion, !hasCropResize {
             throw RecorderFileError.invalid("Version 32 requires a successful Crop to a target size command.")
+        }
+        if fileVersion == layerEditsVersion, !hasLayerEdits {
+            throw RecorderFileError.invalid("Version 33 requires a successful layer edit command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -796,6 +808,52 @@ enum RecorderFileCodec {
                                width: try integer(value.get("width"), range: 1...524288),
                                height: try integer(value.get("height"), range: 1...524288),
                                xResolution: x, yResolution: y, interpolation: interpolation)
+        case "moveLayer":
+            guard version >= layerEditsVersion else {
+                throw RecorderFileError.invalid("A layer move needs recording version 33.")
+            }
+            let value = try Object(node, required: ["tag", "offset"])
+            let offset = try Object(value.get("offset"), required: ["x", "y"])
+            return .moveLayer(offset: .init(x: try integer(offset.get("x"), range: -524288...524288),
+                                            y: try integer(offset.get("y"), range: -524288...524288)))
+        case "duplicateLayers":
+            guard version >= layerEditsVersion else {
+                throw RecorderFileError.invalid("Duplicate Layers needs recording version 33.")
+            }
+            _ = try Object(node, required: ["tag"])
+            return .duplicateLayers
+        case "deleteLayers":
+            guard version >= layerEditsVersion else {
+                throw RecorderFileError.invalid("Delete Layers needs recording version 33.")
+            }
+            _ = try Object(node, required: ["tag"])
+            return .deleteLayers
+        case "mergeVisible":
+            guard version >= layerEditsVersion else {
+                throw RecorderFileError.invalid("Merge Visible needs recording version 33.")
+            }
+            _ = try Object(node, required: ["tag"])
+            return .mergeVisible
+        case "addLayerMask":
+            guard version >= layerEditsVersion else {
+                throw RecorderFileError.invalid("Add Layer Mask needs recording version 33.")
+            }
+            let value = try Object(node, required: ["tag", "source", "edit"])
+            guard let source = RecorderFileCommand.MaskSource(rawValue: try string(value.get("source"))) else {
+                throw RecorderFileError.invalid("Unknown layer mask source.")
+            }
+            return .addLayerMask(source: source, edit: try bool(value.get("edit")))
+        case "selectSimilar":
+            guard version >= layerEditsVersion else {
+                throw RecorderFileError.invalid("Select Similar needs recording version 33.")
+            }
+            let value = try Object(node, required: ["tag", "threshold", "antialias", "sampleMerged"])
+            let threshold = try number(value.get("threshold"))
+            guard threshold.isFinite, (0...1).contains(threshold) else {
+                throw RecorderFileError.invalid("A Similar threshold must be finite and inside 0...1.")
+            }
+            return .selectSimilar(threshold: threshold, antialias: try bool(value.get("antialias")),
+                                  sampleMerged: try bool(value.get("sampleMerged")))
         case "layerProperties":
             let value = try Object(node, required: ["tag", "properties"])
             let properties = try Object(value.get("properties"), required: [], optional: ["name", "visible", "opacity", "mode"])
@@ -1275,6 +1333,21 @@ enum RecorderFileCodec {
                 throw RecorderFileError.invalid("A mask adjustment needs an editing layer mask.")
             }
         case (.labSelection, .none): return
+        case (.moveLayer, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A layer move needs a layer description.") }
+            return
+        case (.duplicateLayers, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("Duplicate Layers needs a layer description.") }
+            return
+        case (.deleteLayers, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("Delete Layers needs a layer description.") }
+            return
+        case (.addLayerMask, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("Add Layer Mask needs a layer description.") }
+            return
+        case (.mergeVisible, .none): return
+        case (.selectSimilar(_, _, let sampleMerged), .none) where sampleMerged: return
+        case (.selectSimilar(_, _, let sampleMerged), .context) where !sampleMerged: break
         case (.adjustment, .context): break
         case (.selectionShape, .none), (.selectColor, .none), (.selectCommand, .none), (.smoothSelection, .none), (.transformImage, .none), (.rotateCanvas, .none), (.scale, .none), (.scaleWithInterpolation, .none), (.setResolution, .none), (.resize, .none), (.resizeCanvas, .none), (.crop, .none), (.cropResize, .none):
             if case .selectColor(_, let options) = command, !options.sampleMerged { throw RecorderFileError.invalid("Drawable color selection needs a context.") }
