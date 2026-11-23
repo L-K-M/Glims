@@ -45,7 +45,7 @@ final class SwatchesTests: XCTestCase {
 
     @MainActor
     func testStorePersistsEditsAndIgnoresCorruptPreferences() throws {
-        let suite = "SwatchesTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("SwatchesTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -69,7 +69,7 @@ final class SwatchesTests: XCTestCase {
 
     @MainActor
     func testHintKeepsItsInsetBesideTheGrid() throws {
-        let suite = "SwatchesTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("SwatchesTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let palette = SwatchesPaletteController(store: SwatchStore(defaults: defaults), tools: ToolState())
@@ -91,7 +91,7 @@ final class SwatchesTests: XCTestCase {
 
     @MainActor
     func testPaletteClicksChangeToolColorsAndSwatches() throws {
-        let suite = "SwatchesTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("SwatchesTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = SwatchStore(defaults: defaults)

@@ -28,7 +28,7 @@ final class SpongeToolTests: XCTestCase {
     }
 
     func testSpongePresetRoundTripKeepsDirectionBrushAndStrength() throws {
-        let suite = "ch.lkmc.Glims.Tests.Sponge." + UUID().uuidString
+        let suite = ScratchDefaults.suiteName("Tests-Sponge")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let state = ToolState(brushStore: BrushSelectionStore(defaults: defaults))

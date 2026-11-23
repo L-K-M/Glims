@@ -1758,6 +1758,57 @@ install_slow_load_plug_in (const char *user_dir)
     }
 }
 
+/* ---- Frozen undo -------------------------------------------------------
+ *
+ * A plug-in that leaves the image's undo disabled, as GIMP lets it: the
+ * PDB's cleanup for this is compiled out. Laid out like the slow loader.
+ */
+static const char freeze_undo_source[] =
+"#!/usr/bin/env python3\n"
+"import gi\n"
+"gi.require_version('Gimp', '3.0')\n"
+"from gi.repository import Gimp\n"
+"from gi.repository import GLib\n"
+"import sys\n"
+"\n"
+"def freeze(procedure, run_mode, image, drawables, config, data):\n"
+"    image.undo_disable()\n"
+"    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())\n"
+"\n"
+"class GlimsFreezeUndo(Gimp.PlugIn):\n"
+"    def do_query_procedures(self):\n"
+"        return ['plug-in-glims-freeze-undo']\n"
+"    def do_create_procedure(self, name):\n"
+"        procedure = Gimp.ImageProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, freeze, None)\n"
+"        procedure.set_image_types('*')\n"
+"        procedure.set_menu_label('Glims freeze-undo fixture')\n"
+"        procedure.set_documentation('disable undo', 'disables undo', name)\n"
+"        procedure.add_menu_path('<Image>/Filters/Glims Freeze Undo')\n"
+"        return procedure\n"
+"\n"
+"Gimp.main(GlimsFreezeUndo.__gtype__, sys.argv)\n";
+
+static void
+install_freeze_undo_plug_in (const char *user_dir)
+{
+  char  path[1100];
+  FILE *file;
+
+  mkdir (user_dir, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-freeze-undo", user_dir);
+  mkdir (path, 0755);
+  snprintf (path, sizeof path, "%s/plug-ins/glims-freeze-undo/glims-freeze-undo.py", user_dir);
+  file = fopen (path, "w");
+  if (file)
+    {
+      fputs (freeze_undo_source, file);
+      fclose (file);
+      chmod (path, 0755);
+    }
+}
+
 /* ---- Metadata preservation fixtures (.gmeta loader + oracle) -----------
  *
  * The glims-metadata-loader Python plug-in (Engine/tests/metadata-loader.py,
@@ -5118,6 +5169,29 @@ test_channels (const char *work)
                rows[i].color.blue > 0.9;
     CHECK (attrs, "the row reports visibility, opacity and color");
   }
+  /* The attributes sheet sends only what was edited: an opacity alone
+   * has to reach the color's alpha, which is where GIMP keeps it. */
+  memset (&change, 0, sizeof change);
+  change.struct_size = sizeof change;
+  change.properties  = GLIMS_CHANNEL_OPACITY;
+  change.opacity     = 0.25;
+  before = undo_depth (image);
+  CHECK (api->channel_change (engine, image, saved, &change, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "an opacity alone is one undo step");
+  {
+    bool faded = false;
+
+    api->image_channels (engine, image, rows, 8, &count);
+    for (int32_t i = 0; i < count && i < 8; i++)
+      faded |= rows[i].id == saved &&
+               rows[i].opacity > 0.24 && rows[i].opacity < 0.26 &&
+               rows[i].color.alpha > 0.24 && rows[i].color.alpha < 0.26 &&
+               rows[i].color.blue > 0.9;
+    CHECK (faded, "an opacity alone moves the color's alpha and keeps the color");
+  }
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before,
+         "the opacity step undoes");
   memset (&change, 0, sizeof change);
   change.struct_size = sizeof change;
   change.properties  = GLIMS_CHANNEL_VISIBLE;
@@ -7962,6 +8036,50 @@ test_filters (GlimsImageID image, const char *work)
  * come from the engine's GEGL sources: gegl:gaussian-blur (a double, an
  * enum and a boolean), gegl:median-blur (an int), gegl:color-overlay (a
  * color), gegl:displace (auxiliary input), gimp:curves (config object). */
+/* GIMP changes an image whose undo is frozen without an undo event. The
+ * history revision must still move: recovery copies and History's
+ * stale-click refusal have nothing else to tell them the image changed. */
+static void
+test_history_while_undo_is_frozen (void)
+{
+  GlimsImageID     image = 0;
+  GlimsHistoryInfo before = { 0 }, after = { 0 }, again = { 0 };
+  GlimsLayerChange change = { .struct_size = sizeof change, .properties = GLIMS_LAYER_NAME };
+  GlimsItemID      layer;
+  char            *error = NULL;
+  int              events;
+
+  CHECK (api->image_new (engine, 16, 16, &image, NULL) == GLIMS_STATUS_OK,
+         "the frozen-undo image opens");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  CHECK (api->procedure_run (engine, image, "plug-in-glims-freeze-undo",
+                             GLIMS_RUN_WITH_LAST_VALUES, &error) == GLIMS_STATUS_OK,
+         "a plug-in leaves undo frozen%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+
+  CHECK (api->image_history (engine, image, NULL, 0, &before) == GLIMS_STATUS_OK,
+         "history reads before the frozen edit");
+  strcpy (change.name, "Edited while frozen");
+  events = atomic_load (&undo_events);
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_history (engine, image, NULL, 0, &after) == GLIMS_STATUS_OK &&
+         after.count == before.count,
+         "an edit with undo frozen succeeds and adds no history state");
+  CHECK (after.revision != before.revision,
+         "an edit with undo frozen moves the history revision");
+  CHECK (atomic_load (&undo_events) > events,
+         "an edit with undo frozen reports changed history, so the app reads it again");
+  CHECK (api->image_history_move (engine, image, before.revision, 0, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a revision from before a frozen edit is stale");
+  CHECK (api->layer_change (engine, image, layer, &change, NULL) == GLIMS_STATUS_OK &&
+         api->image_history (engine, image, NULL, 0, &again) == GLIMS_STATUS_OK &&
+         again.revision == after.revision,
+         "an unchanged command with undo frozen leaves the revision alone");
+  api->image_close (engine, image);
+}
+
 static void
 test_history_and_snapshots (void)
 {
@@ -15694,6 +15812,7 @@ main (int argc, char **argv)
    * plug-in path at start. The release marker stays preset: only a test
    * that arms a load removes it. */
   install_slow_load_plug_in (user_dir);
+  install_freeze_undo_plug_in (user_dir);
   setenv ("GLIMS_SLOWLOAD_DIR", argv[2], 1);
   slow_load_release (argv[2]);
 
@@ -15725,6 +15844,7 @@ main (int argc, char **argv)
       test_filters (image, argv[2]);
       test_filter_properties ();
       test_history_and_snapshots ();
+      test_history_while_undo_is_frozen ();
       test_save_reopen_export (image, argv[2]);
       test_save_copy (argv[2]);
       test_image_from_pixels ();

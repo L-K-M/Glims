@@ -208,7 +208,8 @@ extension ImageSizeForm {
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = form.widthField
-        form.onValidityChanged = { valid in alert.buttons.first?.isEnabled = valid }
+        // The alert owns the form, so the form must not own the alert.
+        form.onValidityChanged = { [weak ok = alert.buttons.first] valid in ok?.isEnabled = valid }
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
             if form.resample {

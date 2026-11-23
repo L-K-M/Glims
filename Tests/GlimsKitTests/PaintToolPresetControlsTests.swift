@@ -11,7 +11,7 @@ import XCTest
 final class PaintToolPresetControlsTests: XCTestCase {
 
     private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
-        let suite = "ch.lkmc.Glims.tests.presetcontrols.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("tests-presetcontrols")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         try body(defaults)

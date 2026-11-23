@@ -25,6 +25,35 @@ final class RecorderLogTests: XCTestCase {
         }
     }
 
+    func testWithdrawingTheNewestReservationLeavesAReplayableLog() throws {
+        var log = Log()
+        try log.startRecording()
+        let first = try log.reserve()
+        let cancelled = try log.reserve()
+        XCTAssertTrue(try log.withdraw(cancelled))
+        XCTAssertEqual(log.pendingCount, 1)
+        try log.resolve(first, with: .success(Command("first")))
+        let next = try log.reserve()
+        XCTAssertEqual(next.ordinal, 1)
+        try log.resolve(next, with: .success(Command("next")))
+        try log.stopRecording()
+        XCTAssertEqual(log.records.count, 2)
+        XCTAssertNil(log.replayRefusal)
+    }
+
+    func testOnlyTheNewestUnresolvedReservationOfTheEpochWithdraws() throws {
+        var log = Log()
+        try log.startRecording()
+        let earlier = try log.reserve()
+        let later = try log.reserve()
+        XCTAssertFalse(try log.withdraw(earlier))
+        XCTAssertEqual(log.pendingCount, 2)
+        try log.resolve(later, with: .failure("failed"))
+        assertRefusal(.alreadyResolved) { try log.withdraw(later) }
+        log.clear()
+        assertRefusal(.staleReservation) { try log.withdraw(earlier) }
+    }
+
     private func recorded(_ names: [String]) throws -> Log {
         var log = Log()
         try log.startRecording()
