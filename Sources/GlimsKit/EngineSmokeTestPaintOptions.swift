@@ -83,7 +83,7 @@ extension EngineSmokeTest {
         // Black in Lighten Only leaves white alone; in Normal it paints.
         let steps = try session.undoInfo(image).undoCount
         gesture(line(20, from: 10, to: 150))
-        check(red(80, 20) > 250 && (try session.undoInfo(image).undoCount) == steps + 1,
+        check(try red(80, 20) > 250 && (try session.undoInfo(image).undoCount) == steps + 1,
               "paint options: a Lighten Only black stroke leaves white unchanged as one step (\(red(80, 20)))")
         state.update(.pencil) { $0.paintMode = EngineSession.PaintModes.normal }
         gesture(line(30, from: 10, to: 150))
