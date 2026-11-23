@@ -32,6 +32,10 @@ enum SemanticImageCommand {
         var errorDescription: String? { "This recorded edit has no explicit channel binding." }
     }
 
+    private struct HalfCropResolution: LocalizedError {
+        var errorDescription: String? { "A crop to a target size needs both resolutions or neither." }
+    }
+
     case labSelection(RecorderLabSelectionCommand)
     case selectionShape(EngineSession.SelectShape, options: EngineSession.SelectOptions)
     case selectColor(CGPoint, options: EngineSession.SelectOptions)
@@ -274,10 +278,13 @@ enum SemanticImageCommand {
             try session.crop(image: image, to: rect)
         case .cropResize(let rect, let width, let height, let xResolution, let yResolution, let interpolation):
             let resolution: EngineSession.ImageResolution
-            if let xResolution, let yResolution {
-                resolution = .init(x: xResolution, y: yResolution)
-            } else {
+            switch (xResolution, yResolution) {
+            case let (x?, y?):
+                resolution = .init(x: x, y: y)
+            case (nil, nil):
                 resolution = try session.imageResolution(image)
+            default:
+                throw HalfCropResolution()
             }
             try session.cropResize(image, rect: rect, width: width, height: height,
                                    resolution: resolution, interpolation: interpolation)
