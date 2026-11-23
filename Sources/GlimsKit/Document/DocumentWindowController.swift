@@ -2150,7 +2150,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
               !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isClosing, !imageDocument.isSavingForClose,
               !imageDocument.isTransferringClipboard,
-              imageDocument.session.supportsPurge,
+              imageDocument.session.supportsPurge, !imageDocument.recorder.isReplaying,
               imageDocument.undoInfo.undoCount > 0 || imageDocument.undoInfo.redoCount > 0 else { return }
         let alert = NSAlert()
         alert.messageText = "Purge Undo?"
@@ -3650,7 +3650,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 reason = "This image engine cannot purge memory."
             } else if imageDocument.undoInfo.undoCount == 0 && imageDocument.undoInfo.redoCount == 0 {
                 reason = "There is no undo history to purge."
-            } else if editingBlocked {
+            } else if imageDocument.recorder.isReplaying {
+                reason = "Wait for the recording to finish replaying."
+            } else if editingBlocked || previewBusy {
                 reason = "Finish the current operation before purging."
             } else {
                 reason = nil
