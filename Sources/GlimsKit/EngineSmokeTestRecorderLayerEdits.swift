@@ -28,8 +28,9 @@ extension EngineSmokeTest {
         func pixels(_ document: ImageDocument) throws -> Data {
             try session.copyPixels(document.image, merged: true).pixels
         }
-        func structure(_ document: ImageDocument) throws -> [(String, Bool, Bool, Bool)] {
-            try session.layers(document.image).map { ($0.name, $0.isVisible, $0.hasMask, $0.isSelected) }
+        /// Names, visibility, masks and selection, in stack order.
+        func structure(_ document: ImageDocument) throws -> [String] {
+            try session.layers(document.image).map { "\($0.name)|\($0.isVisible)|\($0.hasMask)|\($0.isSelected)" }
         }
         func close(_ document: ImageDocument) {
             document.onError = nil
@@ -75,7 +76,7 @@ extension EngineSmokeTest {
         settle(a)
         a.mergeVisible()
         settle(a)
-        a.select(.rectangle(CGRect(x: 8, y: 8, width: 20, height: 20)))
+        a.select(.rectangle(CGRect(x: 8, y: 8, width: 20, height: 20)), options: .init())
         settle(a)
         var similar = EngineSession.SelectOptions()
         similar.sampleMerged = true
@@ -117,7 +118,7 @@ extension EngineSmokeTest {
         var saved: Result<ImageDocument.RecorderSaveOutcome, Error>?
         a.saveRecording(to: url, checkpoint: try a.recorderSaveCheckpoint()) { saved = $0 }
         settle(a)
-        guard let saved, case .success = try? saved.get() else {
+        guard let saved, (try? saved.get()) != nil else {
             return check(false, "the layer-edit recording saves")
         }
         var loaded: Result<RecorderFileSemanticBridge.PreparedRecording, Error>?
