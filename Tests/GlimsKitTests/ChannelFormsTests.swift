@@ -1,7 +1,57 @@
+import AppKit
 import XCTest
 @testable import GlimsKit
 
 final class ChannelFormsTests: XCTestCase {
+    @MainActor
+    func testApplySendsOnlyTheEditedAttributes() {
+        let shown = ChannelForms.AttributeFields(name: "Mask", opacity: "50.196", color: .red)
+        func change(_ edit: (inout ChannelForms.AttributeFields) -> Void) -> EngineSession.ChannelChange? {
+            var entered = shown
+            edit(&entered)
+            return ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 128.0 / 255)
+        }
+        XCTAssertNil(change { _ in })
+        XCTAssertNil(change { $0.name = " Mask " })
+        XCTAssertNil(change { $0.opacity = "50.1960" })
+        let padded = ChannelForms.AttributeFields(name: " Mask", opacity: "50", color: .red)
+        var trimmed = padded
+        trimmed.name = "Mask"
+        XCTAssertEqual(ChannelForms.attributesChange(from: padded, to: trimmed, storedOpacity: 0.5),
+                       .init(name: "Mask"), "removing a stored space is a real rename")
+        XCTAssertEqual(change { $0.name = " Edges " }, .init(name: "Edges"))
+        XCTAssertEqual(change { $0.opacity = "25" }, .init(opacity: 0.25))
+        XCTAssertEqual(change { $0.color = .blue },
+                       .init(color: NSColor.blue.withAlphaComponent(128.0 / 255)))
+    }
+
+    @MainActor
+    func testApplyOmitsAttributesTheChannelKindCannotChange() {
+        let shown = ChannelForms.AttributeFields(name: "Cyan", opacity: "100", color: .cyan)
+        var entered = shown
+        entered.name = "Plate"
+        entered.opacity = "40"
+        entered.color = .blue
+        // A CMYK channel: a changed disabled color well is not sent.
+        XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
+                                                     editable: .init(opacity: false, color: false)),
+                       .init(name: "Plate"))
+        // A Quick Mask keeps its name.
+        XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
+                                                     editable: .init(name: false)),
+                       .init(opacity: 0.4, color: NSColor.blue.withAlphaComponent(0.4)))
+        // An ink channel keeps full opacity: the typed opacity is dropped
+        // and a new color is applied at the stored opacity.
+        XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
+                                                     editable: .init(opacity: false)),
+                       .init(name: "Plate", color: NSColor.blue.withAlphaComponent(1)))
+        // Nothing editable changed: no change at all.
+        var colorOnly = shown
+        colorOnly.color = .blue
+        XCTAssertNil(ChannelForms.attributesChange(from: shown, to: colorOnly, storedOpacity: 1,
+                                                   editable: .init(color: false)))
+    }
+
     func testNamesPreserveWholeUTF8Characters() async {
         await MainActor.run {
             XCTAssertEqual(ChannelForms.validName("  Saved area\n"), "Saved area")

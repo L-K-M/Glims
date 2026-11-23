@@ -1,7 +1,7 @@
 /* Export opaque grayscale with its retained, uninterpreted Duotone settings. */
 #include "engine-private.h"
 #include "duotone-psd-file.h"
-#include <cairo.h>
+#include "stored-pixels.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,18 +9,15 @@
 #include "core/gimpimage-duplicate.h"
 #include "core/gimppickable.h"
 #include "core/gimpprogress.h"
-#include "core/gimpprojectable.h"
 #include "core/gimpprojection.h"
 #include "gegl/gimp-babl.h"
-#include "gegl/gimptilehandlervalidate.h"
 #if GIMP_CHECK_VERSION (3, 2, 0)
 #include "core/gimplinklayer.h"
 #endif
 
 typedef struct {
   GlimsEngine *engine;
-  GeglBuffer *projection;
-  const Babl *format;
+  GlimsStoredRows rows;         /* the frozen copy's projection */
   GlimsProgress *progress;
   guint depth;
   guint64 samples, total;
@@ -62,20 +59,11 @@ static bool
 duotone_read (void *data, uint32_t y, uint32_t x, uint32_t count, uint8_t *samples)
 {
   DuotoneExport *state = data;
-  float pixels[GLIMS_DUOTONE_PSD_CHUNK_PIXELS * 2];
-  GeglRectangle area = { (gint) x, (gint) y, (gint) count, 1 };
-  if (count == 1)
-    {
-      GimpTileHandlerValidate *validate = gimp_tile_handler_validate_get_assigned (state->projection);
-      if (validate)
-        gimp_tile_handler_validate_validate (validate, state->projection, &area, TRUE, FALSE);
-    }
-  gegl_buffer_get (state->projection, &area, 1.0, state->format, pixels,
-                   GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
+  glims_stored_rows_read (&state->rows, GEGL_RECTANGLE ((gint) x, (gint) y, (gint) count, 1));
   for (uint32_t i = 0; i < count; i++)
     {
-      float value = pixels[i * 2], alpha = pixels[i * 2 + 1];
-      if (!isfinite (value) || value < 0.0f || value > 1.0f || alpha != 1.0f)
+      float value;
+      if (!glims_stored_rows_opaque_gray (&state->rows, i, &value))
         { state->invalid_pixel = TRUE; return false; }
       uint32_t sample = (uint32_t) floor ((double) value * (state->depth == 8 ? 255.0 : 65535.0) + 0.5);
       if (state->depth == 8) samples[i] = (uint8_t) sample;
@@ -152,13 +140,10 @@ glims_image_export_duotone_psd (GlimsEngine *engine, GlimsImageID id,
   GeglBuffer *buffer = gimp_pickable_get_buffer (GIMP_PICKABLE (projection));
   gimp_projection_stop_rendering (projection);
   gimp_projection_flush_now (projection, FALSE);
-  const Babl *projection_format = gimp_projectable_get_format (GIMP_PROJECTABLE (copy));
-  const Babl *space = projection_format ? babl_format_get_space (projection_format) : NULL;
-  const Babl *format = space ? babl_format_with_space ("Y'A float", space) : babl_format ("Y'A float");
-  if (!buffer || !format)
+  DuotoneExport state = { .engine = engine, .depth = spec.depth,
+                          .total = (guint64) spec.width * spec.height };
+  if (!glims_stored_rows_init (&state.rows, buffer, GLIMS_DUOTONE_PSD_CHUNK_PIXELS, GLIMS_STORED_GRAY_VALUES))
     { g_object_unref (copy); g_bytes_unref (bytes); engine->busy--; return GLIMS_STATUS_FAILED; }
-  DuotoneExport state = { .engine = engine, .projection = buffer, .format = format,
-                          .depth = spec.depth, .total = (guint64) spec.width * spec.height };
   state.progress = glims_progress_new (engine);
   engine->progress = state.progress;
   gulong cancel = g_signal_connect (state.progress, "cancel", G_CALLBACK (duotone_cancel), &state);
@@ -170,6 +155,7 @@ glims_image_export_duotone_psd (GlimsEngine *engine, GlimsImageID id,
   gimp_progress_end (GIMP_PROGRESS (state.progress));
   engine->progress = NULL;
   g_object_unref (state.progress);
+  glims_stored_rows_clear (&state.rows);
   g_object_unref (copy);
   g_bytes_unref (bytes);
   engine->busy--;

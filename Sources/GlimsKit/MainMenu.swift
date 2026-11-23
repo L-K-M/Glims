@@ -100,10 +100,19 @@ enum MainMenu {
                 item("Assign…", #selector(DocumentWindowController.assignColorProfile(_:))),
                 item("Convert…", #selector(DocumentWindowController.convertColorProfile(_:))),
             ]),
-            // Filled by the native catalog (Threshold, Invert…) and by the
-            // plug-in merge (the engine's Colors commands); both merge into
-            // this one submenu instead of adding their own.
-            submenu(adjustTitle, []),
+            // Auto Levels, Desaturate and Equalize are dedicated
+            // commands, not catalog rows: their adjustment tags (1...5)
+            // are outside the native catalog's and the plug-in merge's
+            // generated tag values, so both merges leave them in place
+            // and never duplicate them. The catalog fills the rest.
+            submenu(adjustTitle, [
+                adjustmentItem("Auto Levels", selector: #selector(DocumentWindowController.autoLevels(_:)),
+                               key: "l", adjustment: .autoLevels),
+                adjustmentItem("Desaturate", selector: #selector(DocumentWindowController.desaturate(_:)),
+                               key: "u", adjustment: .desaturate),
+                adjustmentItem("Equalize", selector: #selector(DocumentWindowController.equalize(_:)),
+                               key: "", adjustment: .equalize),
+            ]),
             .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),
             item("Canvas Size…", #selector(DocumentWindowController.canvasSize(_:))),
@@ -219,6 +228,10 @@ enum MainMenu {
             ]),
             item("Layer to Image Size", #selector(DocumentWindowController.layerToImageSize(_:))),
             item("Trim Layer to Content", #selector(DocumentWindowController.trimLayerToContent(_:))),
+            adjustmentItem("Add Transparency", selector: #selector(DocumentWindowController.addTransparency(_:)),
+                           key: "", adjustment: .addAlpha),
+            adjustmentItem("Remove Transparency", selector: #selector(DocumentWindowController.removeTransparency(_:)),
+                           key: "", adjustment: .removeAlpha),
             .separator(),
             item("Merge Down", #selector(DocumentWindowController.mergeDown(_:))),
             item("Merge Visible", #selector(DocumentWindowController.mergeVisible(_:))),
@@ -439,6 +452,17 @@ enum MainMenu {
         // workspaces, the recent-documents list) is never marked and stays
         // out of the shortcut catalog.
         newItem.identifier = MenuShortcutBridge.builtinIdentifier
+        return newItem
+    }
+
+    /// A one-click adjustment item. Its tag carries the adjustment, so
+    /// validation reads the cached refusal without a selector table; a
+    /// nonempty key is a Shift-Command shortcut.
+    private static func adjustmentItem(_ title: String, selector: Selector, key: String,
+                                       adjustment: EngineSession.Adjustment) -> NSMenuItem {
+        let newItem = item(title, selector, key)
+        newItem.tag = Int(adjustment.rawValue)
+        if !key.isEmpty { newItem.keyEquivalentModifierMask = [.command, .shift] }
         return newItem
     }
 

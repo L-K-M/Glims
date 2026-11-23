@@ -199,6 +199,22 @@ undo_event (GimpImage      *image,
     }
 }
 
+/* With undo frozen, as a plug-in can leave it, a change has no undo event:
+ * gimp_image_undo_push() marks the image dirty and returns. Count it here,
+ * so recovery copies and History's stale-revision refusal still see it.
+ * While undo is enabled the undo event does that. */
+static void
+image_dirty (GimpImage      *image,
+             GimpDirtyMask   mask,
+             GlimsOpenImage *open)
+{
+  if (gimp_image_undo_is_enabled (image))
+    return;
+
+  open->history_revision++;
+  glims_emit (open->engine, GLIMS_EVENT_UNDO_CHANGED, image, NULL, NULL);
+}
+
 static void
 selected_layers_changed (GimpImage      *image,
                          GlimsOpenImage *open)
@@ -355,6 +371,8 @@ glims_adopt_image (GlimsEngine  *engine,
                       G_CALLBACK (projection_update), open);
   open->undo_event_handler =
     g_signal_connect (image, "undo-event", G_CALLBACK (undo_event), open);
+  open->dirty_handler =
+    g_signal_connect (image, "dirty", G_CALLBACK (image_dirty), open);
   open->layers_changed_handler =
     g_signal_connect (image, "selected-layers-changed", G_CALLBACK (selected_layers_changed), open);
   open->mask_changed_handler =

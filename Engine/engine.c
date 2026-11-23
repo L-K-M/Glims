@@ -1277,6 +1277,8 @@ open_image_free (gpointer data)
         g_signal_handler_disconnect (projection, open->projection_update_handler);
       if (open->undo_event_handler)
         g_signal_handler_disconnect (open->image, open->undo_event_handler);
+      if (open->dirty_handler)
+        g_signal_handler_disconnect (open->image, open->dirty_handler);
       if (open->layers_changed_handler)
         g_signal_handler_disconnect (open->image, open->layers_changed_handler);
       if (open->mask_changed_handler)
@@ -4398,6 +4400,26 @@ static GlimsStatus api_layer_draw_line (GlimsEngine *e, GlimsImageID image, Glim
   return glims_facade_call (e, GLIMS_FACADE_OP_layer_draw_line,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             layer_draw_line_on_engine, &a, error);
+}
+typedef struct {
+  GlimsImageID image;
+  uint32_t adjustment;
+  const GlimsColor *background;
+  char **error;
+} GlimsAdjustmentApplyArgs;
+static GlimsStatus adjustment_apply_on_engine (GlimsEngine *e, gpointer data)
+{
+  GlimsAdjustmentApplyArgs *a = data;
+  return glims_adjustment_apply (e, a->image, a->adjustment, a->background, a->error);
+}
+static GlimsStatus api_adjustment_apply (GlimsEngine *e, GlimsImageID image, uint32_t adjustment,
+                                         const GlimsColor *background, char **error)
+{
+  GlimsAdjustmentApplyArgs a = { image, adjustment, background, error };
+  if (error) *error = NULL;
+  return glims_facade_call (e, GLIMS_FACADE_OP_adjustment_apply,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            adjustment_apply_on_engine, &a, error);
 }
 static GlimsStatus api_filter_levels_auto (GlimsEngine *e, GlimsFilterID filter,
                                           GlimsLevelsSettings *out, char **error)

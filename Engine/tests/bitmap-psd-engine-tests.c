@@ -219,6 +219,54 @@ int main(int argc, char **argv)
     CHECK(status==GLIMS_STATUS_OK && packed_byte(output,0xf0), "16-bit threshold honors its inclusive boundary"); free_error(api,&error);
     api->image_close(engine,shades16);
   }
+  /* The exports judge the stored samples of every precision, allow the
+   * float round-off of GIMP's compositing, and threshold the space's
+   * non-linear gray also when the image stores another encoding. */
+  static const struct { uint32_t component, trc; const char *name; } precisions[] = {
+    { GLIMS_COLOR_COMPONENT_U32,    GLIMS_COLOR_TRC_NONLINEAR,  "32-bit integer" },
+    { GLIMS_COLOR_COMPONENT_HALF,   GLIMS_COLOR_TRC_NONLINEAR,  "16-bit float" },
+    { GLIMS_COLOR_COMPONENT_FLOAT,  GLIMS_COLOR_TRC_NONLINEAR,  "32-bit float" },
+    { GLIMS_COLOR_COMPONENT_DOUBLE, GLIMS_COLOR_TRC_NONLINEAR,  "64-bit float" },
+    { GLIMS_COLOR_COMPONENT_FLOAT,  GLIMS_COLOR_TRC_LINEAR,     "linear 32-bit float" },
+    { GLIMS_COLOR_COMPONENT_U16,    GLIMS_COLOR_TRC_PERCEPTUAL, "perceptual 16-bit" },
+  };
+  for (size_t p = 0; p < sizeof precisions / sizeof precisions[0]; p++) {
+    char label[160];
+    for (int binary = 0; binary <= 1; binary++) {
+      GlimsImageID converted=0;
+      status=api->image_open(engine,binary ? input : ramp,&converted,&error); free_error(api,&error);
+      if(status==GLIMS_STATUS_OK && converted)
+        status=api->image_convert_precision(engine,converted,precisions[p].component,precisions[p].trc,&error);
+      snprintf(label,sizeof label,"convert the %s fixture to %s",binary ? "black and white" : "threshold ramp",precisions[p].name);
+      CHECK(status==GLIMS_STATUS_OK && converted, label); free_error(api,&error);
+      if(!converted) continue;
+      if(binary) {
+        status=api->image_export_bitmap_psd(engine,converted,output,&error);
+        snprintf(label,sizeof label,"%s black and white exports the literal Bitmap pixels",precisions[p].name);
+        CHECK(status==GLIMS_STATUS_OK && has_bytes(output,psd,sizeof psd), label);
+      } else {
+        status=api->image_export_bitmap_threshold_psd(engine,converted,output,127,&error);
+        snprintf(label,sizeof label,"%s threshold keeps 127 black and maps 128 white",precisions[p].name);
+        CHECK(status==GLIMS_STATUS_OK && packed_byte(output,0xe0), label);
+      }
+      if(error) fprintf(stderr,"%s: %s\n",precisions[p].name,error); free_error(api,&error);
+      uint32_t component = precisions[p].component;
+      if(!binary && (component==GLIMS_COLOR_COMPONENT_U32 || component==GLIMS_COLOR_COMPONENT_FLOAT ||
+                     component==GLIMS_COLOR_COMPONENT_DOUBLE)) {
+        /* The round-off allowance stays narrow: these precisions store a
+         * millionth of transparency, and the export refuses it. */
+        GlimsLayerInfo layer; int32_t count=0;
+        GlimsLayerChange change={.struct_size=sizeof change,.properties=GLIMS_LAYER_OPACITY,.opacity=1.0-1e-6};
+        int changed = api->image_layers(engine,converted,&layer,1,&count)==GLIMS_STATUS_OK && count>0 &&
+                      api->layer_change(engine,converted,layer.id,&change,&error)==GLIMS_STATUS_OK;
+        free_error(api,&error);
+        status=changed ? api->image_export_bitmap_threshold_psd(engine,converted,output,127,&error) : GLIMS_STATUS_OK;
+        snprintf(label,sizeof label,"%s threshold refuses alpha a millionth below opaque",precisions[p].name);
+        CHECK(changed && status==GLIMS_STATUS_FAILED, label); free_error(api,&error);
+      }
+      api->image_close(engine,converted);
+    }
+  }
   GlimsImageID half_image=0;
   status=api->image_open(engine,half,&half_image,&error);
   CHECK(status==GLIMS_STATUS_OK && half_image, "open mid-gray diffusion fixture"); free_error(api,&error);

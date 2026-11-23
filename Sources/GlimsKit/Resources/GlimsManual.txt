@@ -88,7 +88,7 @@ Saving and exporting are two separate jobs:
   name. Save a Copy… writes an XCF copy without changing the file you
   are editing.
 
-  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF, PSD, GIF, BMP or TGA. After exporting once, File > Export Again… (Command-E) reads
+  Export… (Shift-Command-E) writes an image as PNG, JPEG, TIFF, PSD, GIF, BMP, TGA, PCX, EPS or PDF. After exporting once, File > Export Again… (Command-E) reads
   "Export to name.png" and overwrites that file with the current
   image.
 
@@ -121,6 +121,15 @@ information; some older readers ignore its alpha channel. TGA uses top-left
 origin and embeds no ICC profile. Grayscale and indexed documents are converted
 to RGB only in the export copy. High precision is reduced to eight bits per
 channel. Save XCF to retain the original layers, profile and precision.
+
+PCX exports the visible canvas as a flat sRGB PCX image. Transparency
+is composited on white. PCX is limited to 65534 pixels across and 65536
+down. Save XCF to retain layers, profile and precision.
+
+EPS and PDF export the visible canvas as a single flattened page at the
+image's print size, which follows from its pixels and resolution.
+Transparency is composited on white. A page can be up to 200 inches a
+side. Save XCF to retain layers and full editing.
 
 Exporting never marks the document saved; only Save does. The window
 title and the close prompt always name the XCF file that Save writes.
@@ -388,10 +397,29 @@ says why (for example "needs a second layer as its source").
 Glims also runs the engine's plug-in commands. They appear at the end
 of the Image, Layer, Select and Filter menus and open their own
 settings windows; one command runs at a time. Filter > Last Filter
-(Command-F) runs the last plug-in command again with the settings it
-last used, and Last Filter Settings… (Option-Command-F) opens its
-settings window. Recently Used lists the plug-in commands you ran,
-most recent first.
+(Command-F) runs the last native filter you applied from the Filter
+menu, or plug-in command from any menu, again with the settings it
+last committed, and Last Filter Settings… (Option-Command-F) opens
+that filter's own settings window at those settings. A filter that cannot
+run again without its settings window, such as one that reads a
+layer, mask or channel you choose as its source, is still named but
+Last Filter stays disabled. Recently Used lists native filters and
+plug-in commands together, most recent first. Commands under Image >
+Adjust are adjustments, not filters, so applying one does not change
+Last Filter.
+
+Image > Adjust carries one-click commands that act on the active layer,
+its mask while you edit it, or the selected channel. Auto Levels
+(Shift-Command-L) stretches each RGB channel's range, Desaturate
+(Shift-Command-U) turns the layer into HSL lightness grays, and
+Equalize flattens its histogram; all three respect the selection and are
+one undo step. Desaturate needs an RGB layer. Layer > Add Transparency
+and Remove Transparency change the layer's format; Remove Transparency
+composites transparent pixels on the tool background color. Groups,
+editable text, link and vector layers, locked pixels, and Lab or
+ink-channel documents are refused with the reason in the menu's tool
+tip. Recorder saves the adjustment and its background color and replays
+it on the same target.
 
 # History and Snapshots
 
@@ -505,11 +533,15 @@ Invert Selection are also recordable. These root-mask commands require a Lab
 destination but do not depend on its selected axis.
 
 Not every edit is recorded: other layer changes, other effects and file
-operations stay outside the capture. Editing an existing adjustment effect or
-applying a recorded adjustment to a mask/channel adds an explicit unsupported row;
-the live edit still works. A live recording belongs to one
-open image; to reuse a saved recording in another image, load it
-there.
+operations stay outside the capture. While a recording runs, such an edit
+still adds one explicit unsupported row that names it, so the recording
+never looks complete while leaving an edit out, and Replay refuses it. An
+edit refused before it starts, a preview and its Cancel, a cancelled file
+import, a target pick, a view change, a save, an export and a read add no
+row, and Replay adds no row of its own. A plug-in keeps its row even when
+you cancel it, because it may already have changed the image. A live
+recording belongs to one open image; to reuse a saved recording in another
+image, load it there.
 
 Save Recording… writes a .glimsrecording file with the commands,
 their settings, outcomes and original target descriptions. The file

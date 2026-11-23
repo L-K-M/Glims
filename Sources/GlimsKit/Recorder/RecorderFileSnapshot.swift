@@ -109,6 +109,16 @@ extension RecorderFileCommand {
             self = .selectCommand(command, radius: radius)
         case .smoothSelection(let radius):
             self = .smoothSelection(radius: radius)
+        case .adjustment(let adjustment, let background):
+            let value: RecorderFileCommand.Adjustment
+            switch adjustment {
+            case .autoLevels: value = .autoLevels
+            case .equalize: value = .equalize
+            case .desaturate: value = .desaturate
+            case .addAlpha: value = .addAlpha
+            case .removeAlpha: value = .removeAlpha
+            }
+            self = .adjustment(value, background: background)
         case .channelToSelection(let operation):
             let value: Operation
             switch operation {
