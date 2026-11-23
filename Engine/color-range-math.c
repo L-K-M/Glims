@@ -113,7 +113,8 @@ fixed_hue_weight (const double rgb[3], double center)
 static double
 fixed_luma_weight (const double rgb[3], uint32_t mode)
 {
-  double luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+  /* Integer weights keep a gray exact: 0.5 gray is luma 0.5, not 0.49999. */
+  double luma = (299.0 * rgb[0] + 587.0 * rgb[1] + 114.0 * rgb[2]) / 1000.0;
 
   switch (mode)
     {

@@ -4974,6 +4974,30 @@ final class ImageDocument {
         if !accepted { deliver(nil) }
     }
 
+    /// Color Range's eyedropper: reads one merged-image color off the main
+    /// thread through the counted read queue (the panel holds the
+    /// filter-preview gate, which the canvas sampler's path refuses), and
+    /// delivers it on the main thread; nil when the read is refused or fails.
+    func colorRangeSample(x: Int, y: Int,
+                          deliver: @escaping @MainActor (EngineSession.SampledColor?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let sample = try? session.sampleColor(documentImage, x: x, y: y)
+            DispatchQueue.main.async { deliver(sample) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
+    /// Color Range's Image preview: renders the merged image at `scale`
+    /// through the counted read queue, so closing the document drains it.
+    func colorRangeThumbnail(scale: Double, area: CGRect,
+                             deliver: @escaping @MainActor (CGImage?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let rendered = try? session.render(documentImage, scale: scale, area: area)
+            DispatchQueue.main.async { deliver(rendered) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.

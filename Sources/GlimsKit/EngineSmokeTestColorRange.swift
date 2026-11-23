@@ -55,11 +55,12 @@ extension EngineSmokeTest {
 
         var owned: [ImageDocument] = []
         var controllers: [DocumentWindowController] = []
+        var errors: [String] = []
         func fixture(_ name: String) throws -> (ImageDocument, DocumentWindowController) {
             let image = try session.newImage(pixels: ClipboardImage(width: 8, height: 8,
                                                                     pixels: Data(bytes), origin: .zero))
             let document = try ImageDocument(session: session, image: image, name: name)
-            document.onError = { _ in }
+            document.onError = { errors.append($0) }
             owned.append(document)
             documents.items.append(document)
             let controller = DocumentWindowController(document: document)
@@ -118,7 +119,7 @@ extension EngineSmokeTest {
         settle(document)
         let info = try session.undoInfo(document.image)
         check(info.undoCount == undoBefore + 1 && info.nextUndo == "Color Range",
-              "OK applies one named Color Range undo step (\(info.nextUndo))")
+              "OK applies one named Color Range undo step (\(info.nextUndo); errors: \(errors))")
         check(try session.selectionBounds(image: document.image) == CGRect(x: 0, y: 0, width: 4, height: 4),
               "OK replaces the selection with the sampled block")
 

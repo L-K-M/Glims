@@ -15295,9 +15295,17 @@ test_color_range (void)
              error ? ": " : "", error ? error : "");
       api->free_string (error);
       error = NULL;
-      CHECK (mask[0] == 255 && mask[1] == 0 && mask[4] == 0 && mask[5] == 0,
-             "the reduced preview marks only the red quadrant (%u %u %u %u)",
-             mask[0], mask[1], mask[4], mask[5]);
+      {
+        /* 8 x 8 at 4 x 4: the red quadrant is the top-left 2 x 2. */
+        int wrong = -1;
+
+        for (int k = 0; k < 16 && wrong < 0; k++)
+          if (mask[k] != ((k % 4 < 2 && k / 4 < 2) ? 255 : 0))
+            wrong = k;
+        CHECK (wrong < 0,
+               "the reduced preview marks only the red quadrant (byte %d is %u)",
+               wrong, wrong >= 0 ? mask[wrong] : 0);
+      }
 
       CHECK (api->color_range_preview (engine, preview_image, &settings, 0,
                                       mask, sizeof mask, &w, &h, NULL) ==

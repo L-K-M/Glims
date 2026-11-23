@@ -158,7 +158,8 @@ read_selection (GimpImage *image, gint width, gint height, double scale,
                    babl_format ("Y float"), values, GEGL_AUTO_ROWSTRIDE,
                    GEGL_ABYSS_NONE);
   *values_out = values;
-  *buffer_out = buffer;
+  /* gimp_drawable_get_buffer lends the mask's buffer; the caller unrefs. */
+  *buffer_out = g_object_ref (buffer);
   return GLIMS_STATUS_OK;
 }
 
@@ -175,7 +176,7 @@ glims_selection_color_range (GlimsEngine                 *engine,
   GlimsOpenImage     *open;
   GimpImage          *image;
   GimpChannel        *mask;
-  GeglBuffer         *projection = NULL;
+  GeglBuffer         *projection = NULL;   /* borrowed, not owned */
   GeglBuffer         *selection_buffer = NULL;
   GeglBuffer         *weight_buffer = NULL;
   GlimsCRSample       samples[GLIMS_COLOR_RANGE_MAX_SAMPLES];
@@ -214,8 +215,15 @@ glims_selection_color_range (GlimsEngine                 *engine,
   weights = g_try_malloc (band_pixels * sizeof (float));
   if (! gimp_channel_is_empty (mask))
     {
+      GeglBuffer *mask_buffer = gimp_drawable_get_buffer (GIMP_DRAWABLE (mask));
+
+      if (! mask_buffer)
+        {
+          status = glims_fail (error, NULL, "The selection could not be read.");
+          goto out;
+        }
       selection = g_try_malloc (band_pixels * sizeof (float));
-      selection_buffer = g_object_ref (gimp_drawable_get_buffer (GIMP_DRAWABLE (mask)));
+      selection_buffer = g_object_ref (mask_buffer);   /* lent by the mask */
     }
   weight_buffer = gegl_buffer_new (GEGL_RECTANGLE (0, 0, width, height),
                                    babl_format ("Y float"));
@@ -253,7 +261,7 @@ glims_selection_color_range (GlimsEngine                 *engine,
       gegl_buffer_set (weight_buffer, &band, 0, babl_format ("Y float"),
                        weights, GEGL_AUTO_ROWSTRIDE);
     }
-  g_clear_object (&projection);
+  projection = NULL;   /* borrowed from the projection; never unref */
 
   if (maximum < 0.5f / 255.0f)
     {
@@ -270,7 +278,7 @@ glims_selection_color_range (GlimsEngine                 *engine,
   status = GLIMS_STATUS_OK;
 
 out:
-  g_clear_object (&projection);
+  projection = NULL;   /* borrowed from the projection; never unref */
   g_clear_object (&selection_buffer);
   g_clear_object (&weight_buffer);
   g_free (rgba);
@@ -292,7 +300,7 @@ glims_color_range_preview (GlimsEngine                 *engine,
 {
   GlimsOpenImage     *open;
   GimpImage          *image;
-  GeglBuffer         *projection = NULL;
+  GeglBuffer         *projection = NULL;   /* borrowed, not owned */
   GeglBuffer         *selection_buffer = NULL;
   GlimsCRSample       samples[GLIMS_COLOR_RANGE_MAX_SAMPLES];
   GlimsCRSettings     kernel;
@@ -356,7 +364,7 @@ glims_color_range_preview (GlimsEngine                 *engine,
   gegl_buffer_get (projection, GEGL_RECTANGLE (0, 0, out_width, out_height),
                    scale, babl_format ("R'G'B'A float"), rgba,
                    GEGL_AUTO_ROWSTRIDE, GEGL_ABYSS_NONE);
-  g_clear_object (&projection);
+  projection = NULL;   /* borrowed from the projection; never unref */
 
   status = read_selection (image, out_width, out_height, scale,
                             &selection, &selection_buffer);
@@ -374,7 +382,7 @@ glims_color_range_preview (GlimsEngine                 *engine,
   status = GLIMS_STATUS_OK;
 
 out:
-  g_clear_object (&projection);
+  projection = NULL;   /* borrowed from the projection; never unref */
   g_clear_object (&selection_buffer);
   g_free (rgba);
   g_free (selection);

@@ -164,7 +164,7 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
         preview.widthAnchor.constraint(equalToConstant: 200).isActive = true
         preview.heightAnchor.constraint(equalToConstant: 200).isActive = true
         preview.setAccessibilityLabel("Color range preview; click to sample")
-        preview.onSample = { [weak self] point in self?.sample(at: point, flags: []) }
+        preview.onSample = { [weak self] point in self?.sample(at: point, flags: NSEvent.modifierFlags) }
 
         selectionRadio.state = .on
         selectionRadio.setAccessibilityLabel("Selection preview")
@@ -289,8 +289,10 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
     @objc func commit() {
         let value = settings.engineSettings
         guard value.isValid, !finished else { return }
-        imageDocument.selectColorRange(value)
+        // Close first: while the panel is open the window controller holds
+        // the document's filter-preview gate, which refuses every edit.
         finish()
+        imageDocument.selectColorRange(value)
     }
 
     @objc func cancel() {
@@ -312,23 +314,16 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
     func sample(at imagePoint: CGPoint, flags: NSEvent.ModifierFlags) {
         let info = imageDocument.info
         let x = Int(floor(imagePoint.x)), y = Int(floor(imagePoint.y))
-        guard x >= 0, y >= 0, x < info.width, y < info.height else { return }
-        let sampled: EngineSession.SampledColor
-        do {
-            sampled = try imageDocument.session.sampleColor(imageDocument.image, x: x, y: y)
-        } catch {
-            return
+        guard x >= 0, y >= 0, x < info.width, y < info.height, !finished else { return }
+        // The modifiers and eyedropper count at the click, not at delivery.
+        let kind: SampleAction = flags.contains(.shift) ? .add : flags.contains(.option) ? .subtract : action
+        imageDocument.colorRangeSample(x: x, y: y) { [weak self] sampled in
+            guard let self, !self.finished, let sampled else { return }
+            self.addSample(sampled, kind: kind)
         }
+    }
 
-        let kind: SampleAction
-        if flags.contains(.shift) {
-            kind = .add
-        } else if flags.contains(.option) {
-            kind = .subtract
-        } else {
-            kind = action
-        }
-
+    private func addSample(_ sampled: EngineSession.SampledColor, kind: SampleAction) {
         let color = EngineSession.ColorRangeSettings.Sample(red: sampled.red, green: sampled.green,
                                                             blue: sampled.blue,
                                                             subtract: kind == .subtract)
@@ -376,21 +371,16 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
     private func requestImageThumbnail() {
         thumbnailGeneration &+= 1
         let expected = thumbnailGeneration
-        let session = imageDocument.session
-        let image = imageDocument.image
         let info = imageDocument.info
         let scale = min(1.0, Double(Self.previewMax) / Double(max(info.width, info.height)))
         guard scale > 0, info.width > 0, info.height > 0 else { return }
         let area = CGRect(x: 0, y: 0,
                           width: max(1, (Double(info.width) * scale).rounded(.up)),
                           height: max(1, (Double(info.height) * scale).rounded(.up)))
-        DispatchQueue.global(qos: .userInitiated).async {
-            let rendered = try? session.render(image, scale: scale, area: area)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, expected == self.thumbnailGeneration else { return }
-                self.imageThumbnail = rendered
-                self.updatePreviewMode()
-            }
+        imageDocument.colorRangeThumbnail(scale: scale, area: area) { [weak self] rendered in
+            guard let self, expected == self.thumbnailGeneration else { return }
+            self.imageThumbnail = rendered
+            self.updatePreviewMode()
         }
     }
 
