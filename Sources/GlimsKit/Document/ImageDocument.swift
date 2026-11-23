@@ -9390,3 +9390,16 @@ final class ImageDocument {
         DispatchQueue.main.async { self.onError?(message) }
     }
 }
+
+/// Edit > Purge's engine step: runs off the main thread through the
+/// app-wide engine activity, so a busy engine never blocks AppKit, and
+/// reports the result on the main actor. `image` nil means the app-wide
+/// targets; `.undo` always carries its document's image.
+@MainActor
+func runEnginePurge(_ session: EngineSession, targets: EngineSession.PurgeTargets, image: Int32?,
+                    completion: @escaping (Result<Void, Error>) -> Void) {
+    EngineActivity.shared.performWhenReady(label: "Purging memory", work: {
+        let result = Result { try session.purge(targets, image: image) }
+        DispatchQueue.main.async { completion(result) }
+    })
+}

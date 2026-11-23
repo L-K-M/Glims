@@ -54,7 +54,11 @@ recording, such an admitted command still reserves one explicit unsupported
 row that names the command, so a recording never looks complete while
 omitting an edit and replay refuses the log. A command refused before it is admitted, a preview
 and its Cancel, a cancelled file import, a target pick, a view change, a
-save, an export and a read add no row, and replay's own commands add none. A
+save, an export, a read and an Edit > Purge add no row, and replay's own
+commands add none. Purge is not an image edit and changes no pixels.
+Purging a document's undo history does not clear or alter its recording:
+the log and the palette stay saveable, and replay still refuses a log whose
+captured sequence is incomplete. A
 plug-in keeps its row even when cancelled, because it can change the image
 before it stops and nothing rolls that back. A live recording belongs to one
 open image. To use a saved recording in another image, load it in that

@@ -14144,6 +14144,114 @@ test_image_crop_resize (void)
   api->image_close (engine, image);
 }
 
+/* Slot 253: Edit > Purge. Undo clears one image's history, Histories
+ * clears every open image's, Clipboard needs no image. Every refusal
+ * leaves both histories and the pixels intact; a busy engine cannot
+ * leave a partial purge. */
+static void
+test_edit_purge (void)
+{
+  GlimsImageID       a = 0, b = 0;
+  GlimsItemID        layer_a;
+  GlimsSelectOptions replace = { .struct_size = sizeof replace, .operation = GLIMS_SELECT_REPLACE };
+  GlimsFillSettings  black = { .struct_size = sizeof black, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 0, 0, 0, 1 }, .opacity = 1 };
+  GlimsFillSettings  white = { .struct_size = sizeof white, .mode = GLIMS_FILL_SELECTION,
+                               .color = { 1, 1, 1, 1 }, .opacity = 1 };
+  GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 2);
+  GlimsStrokePoint   point = { 1, 1, 1, 0, 0, 0 };
+  GlimsStrokeID      stroke = 0;
+  GlimsUndoInfo      undo;
+  uint8_t            before_a[4], before_b[4], after_a[4], after_b[4];
+  int32_t            depth_a, depth_b;
+  char              *error = NULL;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, edit_purge) +
+          sizeof api->edit_purge || ! api->edit_purge)
+    {
+      CHECK (false, "the adapter exports slot 253 edit_purge");
+      return;
+    }
+
+  CHECK (api->image_new (engine, 16, 16, &a, NULL) == GLIMS_STATUS_OK &&
+         api->image_new (engine, 16, 16, &b, NULL) == GLIMS_STATUS_OK,
+         "two purge test images open");
+  layer_a = first_layer (a);
+  CHECK (api->select_shape (engine, a, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 16, 16 } }, 2, &replace) == GLIMS_STATUS_OK &&
+         api->fill (engine, a, (GlimsPoint) { 8, 8 }, &black, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, a, (GlimsPoint) { 8, 8 }, &white, NULL) == GLIMS_STATUS_OK &&
+         api->select_shape (engine, b, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 16, 16 } }, 2, &replace) == GLIMS_STATUS_OK &&
+         api->fill (engine, b, (GlimsPoint) { 8, 8 }, &black, NULL) == GLIMS_STATUS_OK &&
+         api->fill (engine, b, (GlimsPoint) { 8, 8 }, &white, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (a) == 2 && undo_depth (b) == 2,
+         "each image has two undoable fills");
+  render_pixel (a, 8, 8, before_a);
+  render_pixel (b, 8, 8, before_b);
+
+  CHECK (api->edit_purge (engine, a, GLIMS_PURGE_UNDO, NULL) == GLIMS_STATUS_OK &&
+         api->image_undo_info (engine, a, &undo) == GLIMS_STATUS_OK &&
+         undo.undo_count == 0 && undo.redo_count == 0 &&
+         api->image_undo_info (engine, b, &undo) == GLIMS_STATUS_OK &&
+         undo.undo_count == 2 && undo.redo_count == 0,
+         "Purge Undo clears the named image's undo and redo only");
+
+  CHECK (api->edit_purge (engine, 0, GLIMS_PURGE_HISTORIES, NULL) == GLIMS_STATUS_OK &&
+         api->image_undo_info (engine, a, &undo) == GLIMS_STATUS_OK &&
+         undo.undo_count == 0 && undo.redo_count == 0 &&
+         api->image_undo_info (engine, b, &undo) == GLIMS_STATUS_OK &&
+         undo.undo_count == 0 && undo.redo_count == 0,
+         "Purge Histories clears every open image's undo and redo");
+
+  CHECK (api->edit_purge (engine, 0, GLIMS_PURGE_CLIPBOARD, NULL) == GLIMS_STATUS_OK,
+         "Purge Clipboard succeeds with no image");
+
+  CHECK (api->edit_purge (engine, 0, 0, &error) == GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "an empty target set is refused");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->edit_purge (engine, 0, 8, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown target bit is refused");
+  CHECK (api->edit_purge (engine, 0, GLIMS_PURGE_UNDO, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->edit_purge (engine, 99999, GLIMS_PURGE_UNDO, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "Purge Undo without a known open image is refused");
+  CHECK (api->edit_purge (engine, a, GLIMS_PURGE_HISTORIES, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a nonzero image with no Undo target is refused");
+
+  CHECK (api->edit_purge (engine, a, GLIMS_PURGE_UNDO, NULL) == GLIMS_STATUS_OK &&
+         api->edit_purge (engine, 0, GLIMS_PURGE_HISTORIES, NULL) == GLIMS_STATUS_OK,
+         "a second purge succeeds and an empty history changes nothing");
+
+  render_pixel (a, 8, 8, after_a);
+  render_pixel (b, 8, 8, after_b);
+  CHECK (memcmp (before_a, after_a, 4) == 0 && memcmp (before_b, after_b, 4) == 0,
+         "no purge changes pixels");
+
+  CHECK (api->select_shape (engine, a, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 16, 16 } }, 2, &replace) == GLIMS_STATUS_OK &&
+         api->fill (engine, a, (GlimsPoint) { 8, 8 }, &black, NULL) == GLIMS_STATUS_OK &&
+         api->select_shape (engine, b, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 16, 16 } }, 2, &replace) == GLIMS_STATUS_OK &&
+         api->fill (engine, b, (GlimsPoint) { 8, 8 }, &black, NULL) == GLIMS_STATUS_OK,
+         "both images have a fresh undo step");
+  depth_a = undo_depth (a);
+  depth_b = undo_depth (b);
+  CHECK (api->stroke_begin (engine, a, layer_a, &brush, &point, &stroke, NULL) == GLIMS_STATUS_OK,
+         "an active stroke holds the engine");
+  CHECK (api->edit_purge (engine, a, GLIMS_PURGE_UNDO, NULL) == GLIMS_STATUS_BUSY &&
+         api->edit_purge (engine, 0, GLIMS_PURGE_HISTORIES, NULL) == GLIMS_STATUS_BUSY &&
+         undo_depth (a) == depth_a && undo_depth (b) == depth_b,
+         "a busy engine refuses a purge and leaves both histories intact");
+  if (stroke) api->stroke_end (engine, stroke);
+  CHECK (api->edit_purge (engine, 0, GLIMS_PURGE_HISTORIES, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (a) == 0 && undo_depth (b) == 0,
+         "the purge succeeds once the stroke ends");
+
+  api->image_close (engine, a);
+  api->image_close (engine, b);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -16251,6 +16359,7 @@ main (int argc, char **argv)
   test_image_new_filled ();
   test_image_resolution (argv[2]);
   test_image_crop_resize ();
+  test_edit_purge ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

@@ -612,6 +612,118 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         })
     }
 
+    // MARK: Purge
+
+    /// Edit > Purge > Clipboard: clears the engine's clipboard state and,
+    /// only while the general pasteboard still holds Glims's own copy, the
+    /// system pasteboard too. Another application's copy is left alone.
+    @objc func purgeClipboard(_ sender: Any?) {
+        confirmPurge([.clipboard], image: nil) { [weak self] in self?.purgeClipboardConfirmed() }
+    }
+
+    /// The confirmed work for Edit > Purge > Clipboard, without the alert.
+    func purgeClipboardConfirmed() {
+        guard let session else { return }
+        runEnginePurge(session, targets: [.clipboard], image: nil) { [weak self] result in
+            self?.finishClipboardPurge(targets: [.clipboard], result: result)
+        }
+    }
+
+    /// Edit > Purge > Histories: clears the undo and redo history of every
+    /// open document.
+    @objc func purgeHistories(_ sender: Any?) {
+        confirmPurge([.histories], image: nil) { [weak self] in self?.purgeHistoriesConfirmed() }
+    }
+
+    /// The confirmed work for Edit > Purge > Histories, without the alert.
+    func purgeHistoriesConfirmed() {
+        guard let session else { return }
+        runEnginePurge(session, targets: [.histories], image: nil) { [weak self] result in
+            if case .failure(let error) = result { self?.showPurgeNote(error.localizedDescription) }
+        }
+    }
+
+    /// Edit > Purge > All: the undo history of the key document, every
+    /// open document's history and the clipboard. Without a document
+    /// window there is no undo history to name, so All clears the
+    /// clipboard and the open histories.
+    @objc func purgeAll(_ sender: Any?) {
+        let targets: EngineSession.PurgeTargets = frontDocument == nil
+            ? [.clipboard, .histories] : [.undo, .clipboard, .histories]
+        let image = frontDocument?.image
+        confirmPurge(targets, image: image) { [weak self] in
+            guard let self, let session else { return }
+            self.purgeAllConfirmed(targets, image: image, session: session)
+        }
+    }
+
+    func purgeAllConfirmed(_ targets: EngineSession.PurgeTargets, image: Int32?, session: EngineSession) {
+        runEnginePurge(session, targets: targets, image: image) { [weak self] result in
+            self?.finishClipboardPurge(targets: targets, result: result)
+        }
+    }
+
+    /// Finishes a purge that included Clipboard: clears the system
+    /// pasteboard only while it still holds Glims's own copy, and says so
+    /// when another application's data was left untouched. The engine's own
+    /// clipboard state is always cleared.
+    private func finishClipboardPurge(targets: EngineSession.PurgeTargets, result: Result<Void, Error>) {
+        guard targets.contains(.clipboard) else {
+            if case .failure(let error) = result { showPurgeNote(error.localizedDescription) }
+            return
+        }
+        switch result {
+        case .failure(let error):
+            showPurgeNote(error.localizedDescription)
+        case .success:
+            if ClipboardImage.clipboardIsOwned(current: NSPasteboard.general.changeCount,
+                                               owned: ClipboardImage.ownedChangeCount) {
+                NSPasteboard.general.clearContents()
+                ClipboardImage.ownedChangeCount = nil
+            } else {
+                showPurgeNote("The clipboard holds another application's data, so it was left unchanged.")
+            }
+        }
+    }
+
+    /// Edit > Purge's confirmation. The sheet attaches to the key document
+    /// window when there is one, so the command reads as document-modal;
+    /// otherwise it is application-modal. Cancel changes nothing.
+    private func confirmPurge(_ targets: EngineSession.PurgeTargets, image: Int32?,
+                              work: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "Purge?"
+        alert.informativeText = "This cannot be undone."
+        alert.addButton(withTitle: "Purge")
+        alert.addButton(withTitle: "Cancel")
+        let finished: (NSApplication.ModalResponse) -> Void = { response in
+            if response == .alertFirstButtonReturn { work() }
+        }
+        let keyDocument = NSApp.mainWindow?.windowController as? DocumentWindowController
+        let documentWindow = keyDocument?.window
+            ?? NSApp.windows.compactMap({ $0.windowController as? DocumentWindowController }).first?.window
+        if let window = documentWindow {
+            alert.beginSheetModal(for: window, completionHandler: finished)
+        } else {
+            finished(alert.runModal())
+        }
+    }
+
+    /// An informational purge result: the key document's status bar when
+    /// there is one, otherwise an application-modal alert. No new window.
+    private func showPurgeNote(_ message: String) {
+        let key = NSApp.mainWindow?.windowController as? DocumentWindowController
+        let controller = key ?? NSApp.windows.compactMap({ $0.windowController as? DocumentWindowController }).first
+        if let controller {
+            controller.statusBar.message = message
+        } else {
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
     @objc func pasteAsNewImage(_ sender: Any?) {
         guard let session, !terminationRequested, !PlugInCommands.isRunning else { return }
         let payload: ClipboardImage.Payload
@@ -1440,6 +1552,28 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         case #selector(pasteAsNewImage(_:)):
             return session != nil && !PlugInCommands.isRunning && !terminationRequested
                 && NSPasteboard.general.availableType(from: [.png, .tiff]) != nil
+        case #selector(purgeClipboard(_:)):
+            // Only Glims's own copy may be cleared; another application's
+            // data leaves the item disabled.
+            let owned = ClipboardImage.clipboardIsOwned(current: NSPasteboard.general.changeCount,
+                                                        owned: ClipboardImage.ownedChangeCount)
+            menuItem.toolTip = owned ? nil : "The clipboard does not hold a copy from Glims."
+            return session != nil && !terminationRequested && owned
+        case #selector(purgeHistories(_:)):
+            let anyHistory = documents.contains {
+                $0.imageDocument.undoInfo.undoCount > 0 || $0.imageDocument.undoInfo.redoCount > 0
+            }
+            menuItem.toolTip = anyHistory ? nil : "No open image has an undo history to purge."
+            return session != nil && !terminationRequested && anyHistory
+        case #selector(purgeAll(_:)):
+            let anyHistory = documents.contains {
+                $0.imageDocument.undoInfo.undoCount > 0 || $0.imageDocument.undoInfo.redoCount > 0
+            }
+            let clipboard = ClipboardImage.clipboardIsOwned(current: NSPasteboard.general.changeCount,
+                                                            owned: ClipboardImage.ownedChangeCount)
+            let enabled = session != nil && !terminationRequested && (anyHistory || clipboard)
+            menuItem.toolTip = enabled ? nil : "There is nothing to purge."
+            return enabled
         case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning && !terminationRequested

@@ -2134,6 +2134,40 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         FadeForm.present(in: imageDocument, target: target, on: window)
     }
 
+    // MARK: Purge
+
+    /// Edit > Purge > Undo: clears this document's undo and redo history.
+    /// The sheet is the only approval; the confirmed work runs off the
+    /// main thread. Cancel changes nothing.
+    @objc func purgeUndo(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
+              !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
+              !imageDocument.isTransferringClipboard,
+              imageDocument.session.supportsPurge,
+              imageDocument.undoInfo.undoCount > 0 || imageDocument.undoInfo.redoCount > 0 else { return }
+        let alert = NSAlert()
+        alert.messageText = "Purge Undo?"
+        alert.informativeText = "This cannot be undone."
+        alert.addButton(withTitle: "Purge")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.purgeUndoConfirmed()
+        }
+    }
+
+    /// The confirmed work for Edit > Purge > Undo, without the alert.
+    /// Exposed for the engine smoke test, which checks the menu's Cancel
+    /// separately.
+    func purgeUndoConfirmed() {
+        guard !imageDocument.isClosing else { return }
+        endPendingEdits()
+        runEnginePurge(imageDocument.session, targets: [.undo], image: imageDocument.image) { [weak self] result in
+            if case .failure(let error) = result { self?.showStatusError(error.localizedDescription) }
+        }
+    }
+
     @objc func reshowLastFilter(_ sender: Any?) {
         guard let last = FilterCommands.last else { return }
         switch last {
@@ -3586,6 +3620,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             menuItem.title = "Fade \(target.title)…"
             return !editingBlocked && !previewBusy && window?.attachedSheet == nil
+        case #selector(purgeUndo(_:)):
+            // Cached admission only; the engine revalidates the history
+            // and the busy state. The refusal becomes the tool tip.
+            let reason: String?
+            if !imageDocument.session.supportsPurge {
+                reason = "This image engine cannot purge memory."
+            } else if imageDocument.undoInfo.undoCount == 0 && imageDocument.undoInfo.redoCount == 0 {
+                reason = "There is no undo history to purge."
+            } else if editingBlocked {
+                reason = "Finish the current operation before purging."
+            } else {
+                reason = nil
+            }
+            menuItem.toolTip = reason
+            return reason == nil
         case #selector(runGlimsPageSetup(_:)):
             // Page setup edits only the document's print info; it just
             // must not compete with another sheet on the same window.

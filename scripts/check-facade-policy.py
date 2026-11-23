@@ -84,6 +84,10 @@ def check(root=ROOT):
         expected_id = (image or session_filter or stroke).group(1) if image or session_filter or stroke else '0'
         if name == 'procedure_run':
             expected_kind = 'ALL_IMAGES'
+        # edit_purge names an image only for the Undo target; its other
+        # targets are app-wide, so the manifest resolver is NONE.
+        if name == 'edit_purge':
+            expected_kind, expected_id = 'NONE', '0'
         if kind != expected_kind:
             errors.append(f'{name}: {kind} resolver disagrees with typed {expected_kind} arguments')
         target = re.findall(r'\(GlimsFacadeTarget\)\s*\{\s*GLIMS_FACADE_TARGET_(\w+)\s*,\s*(\w+)\s*,', body)
