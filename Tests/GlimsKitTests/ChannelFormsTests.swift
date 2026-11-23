@@ -38,8 +38,13 @@ final class ChannelFormsTests: XCTestCase {
                        .init(name: "Plate"))
         // A Quick Mask keeps its name.
         XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
-                                                     editable: .init(name: false, opacity: true, color: true)),
+                                                     editable: .init(name: false)),
                        .init(opacity: 0.4, color: NSColor.blue.withAlphaComponent(0.4)))
+        // An ink channel keeps full opacity: the typed opacity is dropped
+        // and a new color is applied at the stored opacity.
+        XCTAssertEqual(ChannelForms.attributesChange(from: shown, to: entered, storedOpacity: 1,
+                                                     editable: .init(opacity: false)),
+                       .init(name: "Plate", color: NSColor.blue.withAlphaComponent(1)))
         // Nothing editable changed: no change at all.
         var colorOnly = shown
         colorOnly.color = .blue
