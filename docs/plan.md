@@ -7013,6 +7013,17 @@ Verified: the engine tests install a plug-in that disables undo. Their
 revision, stale-click and event checks failed before the change. Counts
 per engine set are in the PR.
 
+### Native PSD test limits (2026-11-23)
+
+`build-adapter.sh --test` gave the Bitmap, Duotone preservation, Duotone
+export and PSD composite runners 180 seconds each. Each starts the engine
+cold with a fresh home, so GIMP queries every plug-in first. On the same
+engine set the Duotone preservation runner took from 12 seconds to more
+than 180 while other builds ran, and the limit failed qualification runs
+on GIMP 3.2.0 and master. A timed run on master spent 53 seconds starting
+and 3 on its 17 checks. The four runners now get 600 seconds, like the
+two alternate Duotone runners. No engine or app change.
+
 ### Everyday one-click adjustments (2026-11-22)
 
 Image > Adjust's Auto Levels (Shift-Command-L), Desaturate

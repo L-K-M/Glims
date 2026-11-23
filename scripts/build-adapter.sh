@@ -153,11 +153,14 @@ if [[ "$MODE" == test ]]; then
     die "plug-ins reported load errors during the tests; see $OUT/test.log"
   criticals="$(grep -c "CRITICAL" "$OUT/test.log" || true)"
   (( criticals == 0 )) || echo "!! $criticals GLib CRITICAL message(s) during the tests; see $OUT/test.log"
+  # Each native runner below starts the engine cold with a fresh home, so
+  # GIMP queries every plug-in before the first check. On a loaded Mac that
+  # start alone has taken about three minutes; the checks take seconds.
   # Verify the real public Bitmap export, including GIMP's own PSD import.
   BITMAP_WORK="$WORK/bitmap"
   mkdir -p "$BITMAP_WORK/home" "$BITMAP_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/bitmap-psd-test.log" \
+  run_with_timeout 600 "$OUT/bitmap-psd-test.log" \
     env HOME="$BITMAP_WORK/home" XDG_CACHE_HOME="$BITMAP_WORK/cache" \
         "$OUT/glims-bitmap-psd-engine-tests" "$OUT/libglimsengine.dylib" "$BITMAP_WORK" || status=$?
   cat "$OUT/bitmap-psd-test.log"
@@ -165,7 +168,7 @@ if [[ "$MODE" == test ]]; then
   DUOTONE_WORK="$WORK/duotone"
   mkdir -p "$DUOTONE_WORK/home" "$DUOTONE_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/duotone-preservation-test.log" \
+  run_with_timeout 600 "$OUT/duotone-preservation-test.log" \
     env HOME="$DUOTONE_WORK/home" XDG_CACHE_HOME="$DUOTONE_WORK/cache" \
         "$OUT/glims-duotone-preservation-tests" "$OUT/libglimsengine.dylib" "$DUOTONE_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/duotone-preservation-test.log"
@@ -173,7 +176,7 @@ if [[ "$MODE" == test ]]; then
   EXPORT_WORK="$WORK/duotone-export"
   mkdir -p "$EXPORT_WORK/home" "$EXPORT_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/duotone-export-test.log" \
+  run_with_timeout 600 "$OUT/duotone-export-test.log" \
     env HOME="$EXPORT_WORK/home" XDG_CACHE_HOME="$EXPORT_WORK/cache" \
         "$OUT/glims-duotone-export-tests" "$OUT/libglimsengine.dylib" "$EXPORT_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/duotone-export-test.log"
@@ -190,7 +193,7 @@ if [[ "$MODE" == test ]]; then
     arguments=("$OUT/libglimsengine.dylib" "$SEEDED_WORK")
     [[ "$program" == bitmap-psd-engine-tests ]] || arguments+=("$ROOT/Engine/tests/fixtures")
     status=0
-    run_with_timeout 180 "$OUT/$program-seeded.log" \
+    run_with_timeout 600 "$OUT/$program-seeded.log" \
       "${seeded[@]}" "$OUT/glims-$program" "${arguments[@]}" || status=$?
     cat "$OUT/$program-seeded.log"
     (( status == 0 )) || die "$program failed with lossy babl paths cached (status $status)"
@@ -198,7 +201,7 @@ if [[ "$MODE" == test ]]; then
   COMPOSITE_WORK="$WORK/psd-composite"
   mkdir -p "$COMPOSITE_WORK/home" "$COMPOSITE_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/psd-composite-test.log" \
+  run_with_timeout 600 "$OUT/psd-composite-test.log" \
     env HOME="$COMPOSITE_WORK/home" XDG_CACHE_HOME="$COMPOSITE_WORK/cache" \
         "$OUT/glims-psd-composite-tests" "$OUT/libglimsengine.dylib" "$COMPOSITE_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/psd-composite-test.log"
