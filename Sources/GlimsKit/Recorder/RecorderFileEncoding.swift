@@ -456,7 +456,7 @@ extension RecorderFileCodec {
                 "midtones": try rangeJSON(variations.midtones),
                 "highlights": try rangeJSON(variations.highlights),
                 "lightness": try d(variations.lightness),
-                "saturation": try d(variations.saturation)])
+                "saturation": try d(variations.saturation)])])
         case .applyHueSaturation(let hueSaturation):
             let hueSaturation = try hueSaturation.validated()
             func rangeJSON(_ range: RecorderHueSaturationValue.Range) throws -> RecorderJSON {

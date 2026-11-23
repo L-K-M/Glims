@@ -26,6 +26,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <cairo.h>
 
 #include "core/gimp.h"
 #include "core/gimpdrawable.h"

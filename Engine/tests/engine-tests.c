@@ -15018,6 +15018,23 @@ test_image_variations (void)
       refuse = 0;
     }
 
+  /* A grayscale image is refused: Variations works on RGB layers. */
+  CHECK (api->image_from_pixels (engine, 6, 2, gradient, sizeof gradient, &gray, NULL) ==
+         GLIMS_STATUS_OK && gray != 0 &&
+         api->image_convert_mode (engine, gray, GLIMS_COLOR_MODE_GRAYSCALE, NULL) ==
+         GLIMS_STATUS_OK, "the grayscale Variations fixture exists");
+  if (gray)
+    {
+      int32_t gray_depth = undo_depth (gray);
+      char   *gray_error = NULL;
+      CHECK (api->image_variations_apply (engine, gray, first_layer (gray), &settings,
+                                          &gray_error) == GLIMS_STATUS_UNSUPPORTED &&
+             gray_error && undo_depth (gray) == gray_depth,
+             "a grayscale image refuses Variations and changes nothing");
+      api->free_string (gray_error);
+      api->image_close (engine, gray);
+    }
+
   api->image_close (engine, a);
 }
 

@@ -123,7 +123,7 @@ enum MainMenu {
                 // Variations is a dialog command of its own, not a catalog
                 // row; like the one-click commands above it stays ahead of
                 // the generated adjustment entries.
-                item("Variations…", selector: #selector(DocumentWindowController.variations(_:))),
+                item("Variations…", #selector(DocumentWindowController.variations(_:))),
             ]),
             .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),

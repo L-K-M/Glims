@@ -4907,11 +4907,9 @@ final class ImageDocument {
                            settings: EngineSession.VariationsSettings, maxSize: Int32,
                            deliver: @escaping @MainActor (EngineSession.VariationsPreview?) -> Void) {
         let accepted = run(effect: .readsPixels) { session, documentImage in
-            let result = Result {
-                try session.variationsPreview(documentImage, layer: layer,
-                                              settings: settings, maxSize: maxSize)
-            }
-            DispatchQueue.main.async { deliver(result.success) }
+            let preview = try? session.variationsPreview(documentImage, layer: layer,
+                                                         settings: settings, maxSize: maxSize)
+            DispatchQueue.main.async { deliver(preview) }
         }
         if !accepted { deliver(nil) }
     }

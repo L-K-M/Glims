@@ -153,7 +153,7 @@ final class VariationsForm {
 
     private static func makeThumbnailButton(_ title: String) -> NSButton {
         let button = NSButton(title: title, target: nil, action: nil)
-        button.imagePosition = .imageTop
+        button.imagePosition = .imageAbove
         button.imageScaling = .scaleProportionallyDown
         button.setAccessibilityLabel(title)
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -222,7 +222,7 @@ final class VariationsForm {
               preview.clipping.count == source.width * source.height,
               let context = CGContext(data: nil, width: source.width, height: source.height,
                                       bitsPerComponent: 8, bytesPerRow: source.width * 4,
-                                      space: CGColorSpace.sRGB,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGBitmapInfo(rawValue:
                                           CGImageAlphaInfo.premultipliedLast.rawValue
                                           | CGBitmapInfo.byteOrder32Big.rawValue)) else {
