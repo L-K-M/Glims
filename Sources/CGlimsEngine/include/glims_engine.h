@@ -1758,6 +1758,16 @@ typedef enum GlimsInkEditOperation {
   GLIMS_INK_EDIT_INVERT = 2
 } GlimsInkEditOperation;
 
+/* Image > Adjust's one-click commands (slot 245). Each acts on the
+ * active paint target as its upstream action does. */
+typedef enum GlimsAdjustment {
+  GLIMS_ADJUSTMENT_AUTO_LEVELS  = 1, /* Image > Colors > Auto > White Balance */
+  GLIMS_ADJUSTMENT_EQUALIZE     = 2, /* Image > Colors > Auto > Equalize */
+  GLIMS_ADJUSTMENT_DESATURATE   = 3, /* Image > Colors > Desaturate, lightness */
+  GLIMS_ADJUSTMENT_ADD_ALPHA    = 4, /* Layer > Transparency > Add Alpha Channel */
+  GLIMS_ADJUSTMENT_REMOVE_ALPHA = 5  /* Layer > Transparency > Remove Alpha Channel */
+} GlimsAdjustment;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -4587,6 +4597,25 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*layer_draw_line) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                                   GlimsPoint start, GlimsPoint end,
                                   const GlimsLineDrawSettings *settings, char **error);
+  /* Slot 245: Image > Adjust's one-click commands. `adjustment` is one
+   * of GlimsAdjustment. The command acts on the image's active paint
+   * target — the selected layer, its mask while mask editing is on, or
+   * the selected channel — exactly as the upstream drawable and layer
+   * actions do, and the selection bounds the three pixel adjustments.
+   * Auto Levels stretches each RGB channel's range (GIMP's White
+   * Balance); Equalize histogram-equalizes the target; Desaturate
+   * applies GIMP's lightness (HSL) formula destructively; Add Alpha and
+   * Remove Alpha change the target layer's format, Remove Alpha
+   * compositing its transparent pixels on `background` (sRGB, 0 ... 1;
+   * required for that adjustment, ignored otherwise). Each success is
+   * one undo step. A group, an unrasterized text, link or vector layer,
+   * a content-locked target, a component document, an unknown image, a
+   * busy engine, an unknown adjustment, a non-RGB target where the
+   * command needs RGB, a missing alpha channel, or a selection that
+   * misses the target refuses with an actionable message and changes
+   * nothing: no undo step, no dirty mark, no selection change. */
+  GlimsStatus (*adjustment_apply) (GlimsEngine *engine, GlimsImageID image, uint32_t adjustment,
+                                   const GlimsColor *background, char **error);
 } GlimsEngineAPI;
 
 /* Returns NULL when the library cannot serve `api_version`. */

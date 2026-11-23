@@ -7001,6 +7001,29 @@ on GIMP 3.2.0 and master. A timed run on master spent 53 seconds starting
 and 3 on its 17 checks. The four runners now get 600 seconds, like the
 two alternate Duotone runners. No engine or app change.
 
+### Everyday one-click adjustments (2026-11-22)
+
+Image > Adjust's Auto Levels (Shift-Command-L), Desaturate
+(Shift-Command-U) and Equalize, plus Layer > Add Transparency and
+Remove Transparency, are now dedicated menu commands backed by one
+additive facade slot, 245 `adjustment_apply` (one enum-driven
+`GlimsAdjustment`), implemented in `Engine/adjust-command.c`. The
+command acts on the active paint target resolved through
+`gimp_image_get_selected_drawables`, exactly as the upstream GTK
+actions do, and calls the unmodified core functions
+(`gimp_drawable_levels_stretch`, `gimp_drawable_equalize`,
+`gimp:desaturate` in lightness mode, `gimp_layer_add_alpha`,
+`gimp_layer_remove_alpha` with a pinned background context). Each
+success is one undo step; groups, unrasterized text/link/vector
+layers, pixel locks, Lab and ink storage, non-RGB targets for the
+RGB-only commands, missing or present alpha, and a non-overlapping
+selection refuse with an actionable message and no history change.
+The menu items carry the adjustment in their tag so the native
+catalog and plug-in merges leave them in place across rebuilds.
+GIMP 3.0.8 equalizes in linear light and 3.2 in non-linear values
+(upstream #14486), so Equalize gives different pixels on 3.0.8; the
+conformance test expects each engine's own values.
+
 ### PCX, EPS and PDF export (2026-11-22)
 
 File > Export writes PCX, EPS and single-page PDF through the existing

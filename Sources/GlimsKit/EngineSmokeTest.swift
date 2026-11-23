@@ -887,6 +887,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Smooth Selection)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "everyday-adjustments" {
+                try exerciseEverydayAdjustments(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Everyday Adjustments)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "rotate-arbitrary" {
                 try exerciseRotateArbitrary(session, documents: documents)
                 print(failures == 0 ? "PASSED (Rotate Arbitrary)" : "FAILED: \(failures) failure(s)")
@@ -1290,6 +1295,7 @@ enum EngineSmokeTest {
             try exerciseSmoothSelection(session, documents: documents)
             try exerciseCloneAlignment(session, documents: documents)
             try exerciseToolModifiers(session, documents: documents)
+            try exerciseEverydayAdjustments(session, work: work, documents: documents)
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseFade(session, documents: documents)
