@@ -6869,3 +6869,14 @@ the Line tool's geometry. Option at the Eyedropper's press sets the
 background color for that whole drag. Option sampling from a paint tool
 still sets the foreground color. `GLIMS_SMOKE_CASE=tool-modifiers` drives
 both through real canvas events. No facade change.
+
+### Native PSD test limits (2026-11-23)
+
+`build-adapter.sh --test` gave the Bitmap, Duotone preservation, Duotone
+export and PSD composite runners 180 seconds each. Each starts the engine
+cold with a fresh home, so GIMP queries every plug-in first. On the same
+engine set the Duotone preservation runner took from 12 seconds to more
+than 180 while other builds ran, and the limit failed qualification runs
+on GIMP 3.2.0 and master. A timed run on master spent 53 seconds starting
+and 3 on its 17 checks. The four runners now get 600 seconds, like the
+two alternate Duotone runners. No engine or app change.
