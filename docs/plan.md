@@ -6870,6 +6870,23 @@ background color for that whole drag. Option sampling from a paint tool
 still sets the foreground color. `GLIMS_SMOKE_CASE=tool-modifiers` drives
 both through real canvas events. No facade change.
 
+### Return between an Undo and its reload (2026-11-22)
+
+The editor smoke's stale-transform check failed now and then on main. It
+settled with one turn of the run loop, but Undo's reload can wait for the
+transform preview's render, so its baseline was the box from before the
+Undo. A forced-order run showed that the app left the layer and the undo
+count alone. The check now presses Return both before and after the reload,
+waits for counted work with a deadline, and reads the engine as well as the
+document. It fails without the canvas's stale check, and without that
+check's test of the paint target, which a pending Undo clears.
+`GLIMS_SMOKE_CASE=palette-controls` runs it alone. No product change.
+
+The tool-modifiers smoke's Option-click check started the background at
+green, whose red component is as low as the sampled black's, so it passed
+when nothing was sampled. It starts at white now and fails with Option
+sampling disabled.
+
 ### Stored-sample checks in Bitmap and Duotone export (2026-11-22)
 
 About one loaded run in 70 refused valid 16-bit pixels in the Bitmap
