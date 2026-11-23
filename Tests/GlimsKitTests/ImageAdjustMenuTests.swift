@@ -32,6 +32,12 @@ final class ImageAdjustMenuTests: XCTestCase {
         descendants(menu).compactMap { ($0.representedObject as? NativeFilterCommand)?.operation.name }
     }
 
+    /// The catalog-generated rows only. Image > Adjust also carries the
+    /// dedicated one-click commands, which are not native filter copies.
+    private func nativeItems(_ menu: NSMenu) -> [NSMenuItem] {
+        menu.items.filter { ($0.representedObject as? NativeFilterCommand) != nil }
+    }
+
     private func pluginNames(_ menu: NSMenu) -> [String] {
         descendants(menu).compactMap { ($0.representedObject as? PlugInCommand)?.procedure.name }
     }
@@ -75,7 +81,7 @@ final class ImageAdjustMenuTests: XCTestCase {
         let unknown = operation("gimp:future-config", support: .needsConfig)
         NativeFilterMenus.install(operations + [brightness, unknown], in: menu)
         XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
-        XCTAssertEqual(adjust(menu).items.first?.title, "Brightness/Contrast…")
+        XCTAssertEqual(nativeItems(adjust(menu)).first?.title, "Brightness/Contrast…")
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(brightness))
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(unknown))
     }
@@ -87,7 +93,7 @@ final class ImageAdjustMenuTests: XCTestCase {
         let levels = operation("gimp:levels", support: .needsConfig)
         NativeFilterMenus.install(operations + [balance, levels, brightness], in: menu)
         XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:brightness-contrast", "gimp:color-balance", "gimp:levels", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
-        XCTAssertEqual(adjust(menu).items[1].title, "Color Balance…")
+        XCTAssertEqual(nativeItems(adjust(menu))[1].title, "Color Balance…")
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(balance))
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(levels))
     }
@@ -99,7 +105,7 @@ final class ImageAdjustMenuTests: XCTestCase {
         let levels = operation("gimp:levels", support: .needsConfig)
         NativeFilterMenus.install(operations + [hue, unknown, levels], in: menu)
         XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:hue-saturation", "gimp:levels", "gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
-        XCTAssertEqual(adjust(menu).items.first?.title, "Hue/Saturation…")
+        XCTAssertEqual(nativeItems(adjust(menu)).first?.title, "Hue/Saturation…")
         XCTAssertFalse(NativeFilterMenuLayout.supportsParameterEditor(unknown))
         XCTAssertTrue(NativeFilterMenuLayout.supportsParameterEditor(levels))
     }
@@ -107,7 +113,7 @@ final class ImageAdjustMenuTests: XCTestCase {
     func testExactNativeTitlesUseExistingCommandAndFilterCopies() {
         let menu = MainMenu.make()
         NativeFilterMenus.install(operations + [operation("gegl:threshold"), operation("gegl:brightness-contrast")], in: menu)
-        let entries = adjust(menu).items
+        let entries = nativeItems(adjust(menu))
         XCTAssertEqual(entries.map(\.title), ["Threshold…", "Invert Perceptual…", "Invert Linear…"])
         XCTAssertEqual(nativeNames(adjust(menu)), ["gimp:threshold", "gegl:invert-gamma", "gegl:invert-linear"])
         for entry in entries {
@@ -130,13 +136,13 @@ final class ImageAdjustMenuTests: XCTestCase {
             operation("gegl:invert-gamma", support: .needsAuxInput),
             operation("gegl:invert-linear")
         ], in: menu)
-        XCTAssertEqual(adjust(menu).items.map(\.title), ["Invert Linear…"])
+        XCTAssertEqual(nativeItems(adjust(menu)).map(\.title), ["Invert Linear…"])
         let color = menu.item(withTitle: "Filter")!.submenu!.item(withTitle: "Color")!.submenu!
         XCTAssertEqual(nativeNames(color).count, 3, "existing catalog presentation retains its support reasons")
         XCTAssertTrue(color.items.contains { $0.title.contains("needs a dedicated editor") })
         XCTAssertTrue(color.items.contains { $0.title.contains("needs a second layer") })
         NativeFilterMenus.install([], in: menu)
-        XCTAssertTrue(adjust(menu).items.isEmpty)
+        XCTAssertTrue(nativeItems(adjust(menu)).isEmpty)
     }
 
     func testPartialAndEmptyRefreshesRemoveOnlyTheirOwnContent() {
@@ -158,7 +164,7 @@ final class ImageAdjustMenuTests: XCTestCase {
         XCTAssertEqual(pluginNames(original).count, 2)
         assertSeparators(original)
         PlugInMenus.install([], in: menu)
-        XCTAssertTrue(original.items.isEmpty)
+        XCTAssertTrue(nativeItems(original).isEmpty)
         XCTAssertTrue(adjust(menu) === original)
     }
 

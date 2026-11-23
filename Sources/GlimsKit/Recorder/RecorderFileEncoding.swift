@@ -95,6 +95,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, arbitraryRotationVersion)
             case .success(.smoothSelection, _):
                 fileVersion = max(fileVersion, smoothSelectionVersion)
+            case .success(.adjustment, _):
+                fileVersion = max(fileVersion, adjustmentVersion)
             case .success(.scaleWithInterpolation, _):
                 fileVersion = max(fileVersion, scaleInterpolationVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
@@ -333,6 +335,9 @@ extension RecorderFileCodec {
             return .object(["tag": .string("selectCommand"), "command": .string(command.rawValue), "radius": try d(radius)])
         case .smoothSelection(let radius):
             return .object(["tag": .string("smoothSelection"), "radius": j(radius)])
+        case .adjustment(let adjustment, let background):
+            return .object(["tag": .string("adjustment"), "adjustment": .string(adjustment.rawValue),
+                            "background": try colorJSON(background)])
         case .channelToSelection(let operation):
             return .object(["tag": .string("channelToSelection"), "operation": .string(operation.rawValue)])
         case .transformImage(let transform): return .object(["tag": .string("transformImage"), "transform": .string(transform.rawValue)])

@@ -1988,6 +1988,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     static let similarHint = "Uses the Magic Wand's Threshold, Antialiasing and Sample merged options."
 
+    // MARK: Image Adjust
+
+    @objc func autoLevels(_ sender: Any?) { applyAdjustment(.autoLevels) }
+    @objc func desaturate(_ sender: Any?) { applyAdjustment(.desaturate) }
+    @objc func equalize(_ sender: Any?) { applyAdjustment(.equalize) }
+    @objc func addTransparency(_ sender: Any?) { applyAdjustment(.addAlpha) }
+    @objc func removeTransparency(_ sender: Any?) { applyAdjustment(.removeAlpha) }
+
+    /// Runs a one-click adjustment on the active paint target. Remove
+    /// Transparency composites on the tool background color, passed
+    /// explicitly; the other commands ignore it.
+    private func applyAdjustment(_ adjustment: EngineSession.Adjustment) {
+        imageDocument.applyAdjustment(adjustment, background: ToolState.shared.background) { _ in }
+    }
+
     /// A Smooth radius typed into the sheet: a whole number 1 ... 100.
     nonisolated static func smoothRadius(_ text: String) -> Int? {
         guard let value = Int(text.trimmingCharacters(in: .whitespaces)),
@@ -2853,7 +2868,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// The engine independently enforces the same boundary for direct callers.
     private func permitsMultichannelMenu(_ item: NSMenuItem) -> Bool {
         switch item.action {
-        case #selector(fill(_:)), #selector(deleteBackward(_:)), #selector(clearPixels(_:)):
+        case #selector(fill(_:)), #selector(deleteBackward(_:)), #selector(clearPixels(_:)),
+             #selector(autoLevels(_:)), #selector(desaturate(_:)), #selector(equalize(_:)),
+             #selector(addTransparency(_:)), #selector(removeTransparency(_:)):
             return true
         case #selector(runNativeFilter(_:)):
             let operation = (item.representedObject as? NativeFilterCommand)?.operation.name
@@ -2900,7 +2917,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return imageDocument.session.supportsLabConvertedCopy
         case #selector(selectAll(_:)), #selector(selectNone(_:)), #selector(selectInverse(_:)):
             return imageDocument.session.supportsLabSelections && !imageDocument.strokeIsActive
-        case #selector(fill(_:)),
+        case #selector(fill(_:)), #selector(autoLevels(_:)), #selector(desaturate(_:)), #selector(equalize(_:)),
+             #selector(addTransparency(_:)), #selector(removeTransparency(_:)),
              #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
              #selector(revertDocument(_:)), #selector(imageInformation(_:)),
              #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualPixels(_:)), #selector(fitImage(_:)),
@@ -3320,6 +3338,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let refusal = imageDocument.smoothSelectionRefusal
             menuItem.toolTip = refusal
             return refusal == nil && window?.attachedSheet == nil
+        case #selector(autoLevels(_:)), #selector(desaturate(_:)), #selector(equalize(_:)),
+             #selector(addTransparency(_:)), #selector(removeTransparency(_:)):
+            // Cached admission only; the engine revalidates the alpha and
+            // selection states the cache cannot see. The refusal reason
+            // becomes the item’s tool tip.
+            guard let adjustment = EngineSession.Adjustment(rawValue: UInt32(menuItem.tag)) else { return false }
+            let refusal = imageDocument.adjustmentRefusal(adjustment)
+            menuItem.toolTip = refusal
+            return refusal == nil && !editingBlocked && !previewBusy
         case #selector(selectSimilar(_:)):
             let refusal = imageDocument.selectSimilarRefusal
             menuItem.toolTip = refusal ?? Self.similarHint

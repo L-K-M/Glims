@@ -52,6 +52,7 @@ enum RecorderFileCommand: Equatable {
     enum Operation: String { case replace, add, subtract, intersect }
     enum Selection: String { case all, none, invert, feather, grow, shrink, border, sharpen, fromAlpha }
     enum Transform: String { case rotate90, rotate180, rotate270, flipHorizontal, flipVertical }
+    enum Adjustment: String { case autoLevels, equalize, desaturate, addAlpha, removeAlpha }
     struct Options: Equatable {
         let operation: Operation
         let antialias: Bool
@@ -302,6 +303,10 @@ enum RecorderFileCommand: Equatable {
     /// Select ▸ Smooth…: a whole-pixel sample radius. The command is
     /// image-wide; the record carries no target binding.
     case smoothSelection(radius: Int)
+    /// Image > Adjust's one-click command: the adjustment and the exact
+    /// sRGB background Remove Alpha composites on. The record's paint
+    /// target binding names the target; the command carries no native id.
+    case adjustment(Adjustment, background: RecorderColor)
     /// Channel ▸ To Selection: only the combination operation is a command
     /// value; the explicit source channel is the record's `channel` binding.
     case channelToSelection(Operation)
@@ -370,6 +375,7 @@ enum RecorderFileCommand: Equatable {
         case .selectColor(_, let options): return options.sampleMerged
         case .selectCommand(.fromAlpha, _): return false
         case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .resizeCanvas, .crop: return true
+        case .adjustment: return false
         }
     }
 }
