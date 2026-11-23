@@ -74,9 +74,9 @@ supported_components (GimpImage *image)
 /* The channel `id` in `image`'s channel list, or NULL. The container
  * check also rules out the selection mask and layer masks: both are
  * channels, but not rows of the channel list. */
-static GimpChannel *
-find_channel (GimpImage   *image,
-              GlimsItemID  id)
+GimpChannel *
+glims_find_channel (GimpImage   *image,
+                    GlimsItemID  id)
 {
   GimpItem *item = gimp_item_get_by_id (image->gimp, id);
 
@@ -85,6 +85,39 @@ find_channel (GimpImage   *image,
     return NULL;
 
   return GIMP_CHANNEL (item);
+}
+
+GlimsStatus
+glims_channel_bounds (GlimsEngine  *engine,
+                      GlimsImageID  id,
+                      GlimsItemID   channel_id,
+                      bool         *empty,
+                      GlimsRect    *bounds)
+{
+  GlimsOpenImage *open = glims_lookup_image (engine, id);
+  GimpChannel    *channel;
+  gint            x, y, w, h, offset_x, offset_y;
+  gboolean        covered;
+
+  if (! empty || ! bounds)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  *empty  = true;
+  *bounds = (GlimsRect) { 0, 0, 0, 0 };
+  if (! open)
+    return GLIMS_STATUS_NOT_FOUND;
+  channel = glims_find_channel (open->image, channel_id);
+  if (! channel)
+    return GLIMS_STATUS_NOT_FOUND;
+
+  covered = ! gimp_channel_is_empty (channel) &&
+            gimp_item_bounds (GIMP_ITEM (channel), &x, &y, &w, &h);
+  if (covered)
+    {
+      gimp_item_get_offset (GIMP_ITEM (channel), &offset_x, &offset_y);
+      *empty  = false;
+      *bounds = (GlimsRect) { x + offset_x, y + offset_y, w, h };
+    }
+  return GLIMS_STATUS_OK;
 }
 
 GlimsStatus
@@ -440,7 +473,7 @@ glims_channel_change (GlimsEngine              *engine,
   if (status != GLIMS_STATUS_OK)
     return status;
 
-  channel = find_channel (open->image, channel_id);
+  channel = glims_find_channel (open->image, channel_id);
   if (! channel)
     return GLIMS_STATUS_NOT_FOUND;
 
@@ -536,7 +569,7 @@ glims_channel_command (GlimsEngine  *engine,
           gimp_image_unset_selected_channels (open->image);
           return GLIMS_STATUS_OK;
         }
-      channel = find_channel (open->image, channel_id);
+      channel = glims_find_channel (open->image, channel_id);
       if (! channel)
         return GLIMS_STATUS_NOT_FOUND;
       {
@@ -552,7 +585,7 @@ glims_channel_command (GlimsEngine  *engine,
   if (status != GLIMS_STATUS_OK)
     return status;
 
-  channel = find_channel (open->image, channel_id);
+  channel = glims_find_channel (open->image, channel_id);
   if (! channel)
     return GLIMS_STATUS_NOT_FOUND;
 
@@ -607,7 +640,7 @@ glims_channel_to_selection (GlimsEngine  *engine,
   if (status != GLIMS_STATUS_OK)
     return status;
 
-  channel = find_channel (open->image, channel_id);
+  channel = glims_find_channel (open->image, channel_id);
   if (! channel)
     return GLIMS_STATUS_NOT_FOUND;
 

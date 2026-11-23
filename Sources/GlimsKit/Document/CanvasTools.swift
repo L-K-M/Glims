@@ -1982,27 +1982,31 @@ final class CanvasToolController {
             dragTool = nil
             return
         }
-        if document.isChannelTargetActive {
+        if document.isChannelTargetActive, !document.canTransformChannels {
             onStatus?("Return to Layers before transforming; the current channel cannot be transformed.")
             dragTool = nil
             return
         }
         guard document.activeDrawable != nil else {
-            onStatus?("Select a layer to transform after the target change finishes.")
+            onStatus?(document.hasMultipleSelectedChannels
+                      ? "Select only one channel to transform."
+                      : "Select a layer to transform after the target change finishes.")
             dragTool = nil
             return
         }
-        guard let layer = document.layers.first(where: { $0.id == document.activeLayer }),
-              layer.bounds.width > 0, layer.bounds.height > 0 else {
-            onStatus?("Select a layer to transform.")
+        guard let target = transformTarget() else {
+            onStatus?(document.isChannelTargetActive
+                      ? "The channel covers nothing to transform. Make a selection first."
+                      : "Select a layer to transform.")
             dragTool = nil
             return
         }
-        // A session for another layer, or for bounds an undo has since
-        // changed, no longer describes the layer.
-        if transformSession?.layer != layer.id || transformSession?.original != layer.bounds {
+        // A session for another target, or for a box an undo has since
+        // changed, no longer describes it.
+        if transformSession?.layer != target.id || transformSession?.original != target.bounds
+            || transformSession?.targetsChannel != target.channel {
             transformGeneration &+= 1
-            transformSession = LayerTransformSession(layer: layer.id, bounds: layer.bounds)
+            transformSession = LayerTransformSession(layer: target.id, bounds: target.bounds, channel: target.channel)
             transformSession?.setMode(transformMode)
         }
         guard let session = transformSession else { return }
@@ -2019,17 +2023,31 @@ final class CanvasToolController {
         transformSessionDidChange()
     }
 
-    /// Whether `session` still describes its layer as the document has it.
-    private func isCurrent(_ session: LayerTransformSession) -> Bool {
-        document.activeDrawable == session.layer
-            && document.layers.first { $0.id == session.layer }?.bounds == session.original
-    }
-
-    private func currentLayerSession() -> LayerTransformSession? {
+    /// What the Transform tool works on now: the selected layer's box, or,
+    /// while one channel is the target (the Quick Mask's or a saved
+    /// selection), the box that channel's coverage fills.
+    private func transformTarget() -> (id: Int32, bounds: CGRect, channel: Bool)? {
+        if document.isChannelTargetActive {
+            guard document.canTransformChannels, let channel = document.activeDrawable,
+                  let box = document.channelBoxes[channel], box.width > 0, box.height > 0 else { return nil }
+            return (channel, box, true)
+        }
         guard document.activeDrawable == document.activeLayer,
               let layer = document.layers.first(where: { $0.id == document.activeLayer }),
               layer.bounds.width > 0, layer.bounds.height > 0 else { return nil }
-        var session = LayerTransformSession(layer: layer.id, bounds: layer.bounds)
+        return (layer.id, layer.bounds, false)
+    }
+
+    /// Whether `session` still describes its target as the document has it.
+    private func isCurrent(_ session: LayerTransformSession) -> Bool {
+        guard let target = transformTarget() else { return false }
+        return target.id == session.layer && target.bounds == session.original
+            && target.channel == session.targetsChannel
+    }
+
+    private func currentLayerSession() -> LayerTransformSession? {
+        guard let target = transformTarget() else { return nil }
+        var session = LayerTransformSession(layer: target.id, bounds: target.bounds, channel: target.channel)
         session.setMode(transformMode)
         return session
     }
@@ -2058,7 +2076,7 @@ final class CanvasToolController {
         guard document.acceptsEdits, !transformCommitIsPending,
               !document.filterPreviewIsOpen, EngineActivity.shared.label == nil,
               !document.strokeIsActive, !document.hasMultipleSelectedLayers, !document.targetCommandIsPending,
-              !document.isMaskTargetActive, !document.isChannelTargetActive,
+              !document.isMaskTargetActive, !document.isChannelTargetActive || document.canTransformChannels,
               !document.floatingState.isActive,
               let layer = transformPreview?.layer else { return false }
         let locks = document.layerLocks[layer]?.effective ?? []
@@ -2135,7 +2153,9 @@ final class CanvasToolController {
         guard !transformCommitIsPending, let session = transformSession,
               !session.isIdentity else { return }
         guard isCurrent(session) else {
-            cancelTransform(message: "The layer changed, so the transform was not applied.")
+            cancelTransform(message: session.targetsChannel
+                            ? "The channel changed, so the transform was not applied."
+                            : "The layer changed, so the transform was not applied.")
             return
         }
         guard transformNumericEditsAllowed else { return }
@@ -2145,9 +2165,11 @@ final class CanvasToolController {
         let generation = transformGeneration
         onStatus?("Applying the transform…")
         transformSessionDidChange()
-        document.transformLayer(session.layer, matrix: session.projectiveMatrix,
-                                expectedBounds: session.original,
-                                interpolation: ToolState.shared.transformInterpolation) { [weak self] result in
+        let commit = session.targetsChannel
+            ? document.transformChannel(_:matrix:expectedBounds:interpolation:completion:)
+            : document.transformLayer(_:matrix:expectedBounds:interpolation:completion:)
+        commit(session.layer, session.projectiveMatrix, session.original,
+               ToolState.shared.transformInterpolation) { [weak self] result in
             guard let self else { return }
             self.transformCommitIsPending = false
             // Tool changes and close may have discarded the preview while

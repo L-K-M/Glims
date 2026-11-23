@@ -2682,6 +2682,202 @@ test_captured_layer_transform (void)
   api->image_close (engine, image);
 }
 
+/* Slots 250 and 251: Free Transform on a saved selection and on the
+ * Quick Mask's channel, the 1996 route to transforming a selection. */
+static bool
+channel_box (GlimsImageID image, GlimsItemID channel, int x, int y, int width, int height)
+{
+  bool empty = true;
+  GlimsRect bounds = { 0 };
+
+  return api->channel_bounds (engine, image, channel, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, x, y, width, height);
+}
+
+static bool
+selection_box (GlimsImageID image, int x, int y, int width, int height)
+{
+  bool empty = true;
+  GlimsRect bounds = { 0 };
+
+  return api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, x, y, width, height);
+}
+
+static void
+test_channel_transform (void)
+{
+  GlimsImageID image = 0, other = 0;
+  GlimsItemID saved = 0, blank = 0, quick = 0, foreign = 0, layer;
+  GlimsChannelInfo rows[8];
+  int32_t count = 0;
+  GlimsRect bounds = { 0 };
+  bool empty = false;
+  const GlimsLayerTransformRequest move = {
+    .struct_size = sizeof move,
+    .expected_bounds = { 4, 6, 10, 8 },
+    .matrix = { .m = { { 1, 0, 12 }, { 0, 1, 5 }, { 0, 0, 1 } } },
+    .interpolation = GLIMS_INTERPOLATION_NONE
+  };
+  GlimsLayerTransformRequest request = move;
+  uint8_t unaligned[sizeof move + 1];
+  char *error = NULL;
+  int before, selected;
+
+  CHECK (api->image_new (engine, 40, 30, &image, NULL) == GLIMS_STATUS_OK,
+         "the channel transform image opens");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 4, 6 }, { 14, 14 } }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->channel_from_selection (engine, image, "Saved", &saved, NULL) == GLIMS_STATUS_OK &&
+         saved > 0,
+         "a rectangle is saved as a channel");
+  CHECK (channel_box (image, saved, 4, 6, 10, 8), "channel_bounds reports the covered box");
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->channel_from_selection (engine, image, "Blank", &blank, NULL) == GLIMS_STATUS_OK &&
+         api->channel_bounds (engine, image, blank, &empty, &bounds) == GLIMS_STATUS_OK &&
+         empty && rect_equals (bounds, 0, 0, 0, 0),
+         "an empty channel reports no box");
+
+  /* A commit is one undo step; Undo restores the coverage. */
+  before = undo_depth (image);
+  memcpy (unaligned + 1, &move, sizeof move);
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved,
+           (const GlimsLayerTransformRequest *) (unaligned + 1), &error) == GLIMS_STATUS_OK &&
+         error == NULL && undo_depth (image) == before + 1,
+         "a channel transform reads an unaligned request and is one undo step%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (channel_box (image, saved, 16, 11, 10, 8), "the transform moves the channel's coverage");
+  selected = undo_depth (image);
+  CHECK (api->channel_to_selection (engine, image, saved, GLIMS_SELECT_REPLACE, NULL) == GLIMS_STATUS_OK &&
+         selection_box (image, 16, 11, 10, 8),
+         "the transformed channel loads as the moved selection");
+  while (undo_depth (image) > selected && api->image_undo (engine, image) == GLIMS_STATUS_OK)
+    ;
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK && undo_depth (image) == before &&
+         channel_box (image, saved, 4, 6, 10, 8),
+         "Undo restores the channel's coverage");
+
+  /* The channel keeps the canvas size, as in GIMP: coverage past the
+   * canvas is lost. A scale doubles the box about its own origin. */
+  request.matrix.m[0][2] = 30;
+  request.matrix.m[1][2] = 0;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_OK &&
+         channel_box (image, saved, 34, 6, 6, 8) && api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "coverage moved past the canvas is clipped to it");
+  request.matrix = (GlimsMatrix) { .m = { { 2, 0, -4 }, { 0, 2, -6 }, { 0, 0, 1 } } };
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_OK &&
+         channel_box (image, saved, 4, 6, 20, 16) && api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         channel_box (image, saved, 4, 6, 10, 8),
+         "a scale resizes the coverage and undoes");
+
+  /* Refusals change nothing. */
+  before = undo_depth (image);
+  request = move;
+  request.expected_bounds.x = 5;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, &error) == GLIMS_STATUS_FAILED &&
+         error && strstr (error, "channel changed") && undo_depth (image) == before &&
+         channel_box (image, saved, 4, 6, 10, 8),
+         "a stale box refuses the transform");
+  api->free_string (error); error = NULL;
+  request = move;
+  request.expected_bounds = (GlimsRect) { 0, 0, 40, 30 };
+  CHECK (api->channel_transform_matrix_captured (engine, image, blank, &request, &error) == GLIMS_STATUS_FAILED &&
+         error && strstr (error, "empty") && undo_depth (image) == before,
+         "an empty channel refuses the transform");
+  api->free_string (error); error = NULL;
+  request = move;
+  request.struct_size = sizeof request - 1;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->channel_transform_matrix_captured (engine, image, saved, NULL, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->channel_transform_matrix_captured (engine, image, 0, &move, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short or missing request and channel 0 are refused");
+  request = move;
+  request.expected_bounds.width = 0;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a box without area is refused");
+  request = move;
+  request.matrix.m[0][0] = NAN;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite matrix is refused");
+  request = move;
+  request.matrix.m[0][0] = 0;
+  request.matrix.m[0][1] = 0;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a flattening matrix is refused");
+  request = move;
+  request.matrix.m[2][0] = -.2;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "a perspective horizon across the box is refused");
+  request = move;
+  request.interpolation = 99;
+  CHECK (api->channel_transform_matrix_captured (engine, image, saved, &request, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown interpolation is refused");
+  api->image_new (engine, 8, 8, &other, NULL);
+  api->select_command (engine, other, GLIMS_SELECT_ALL, 0, NULL);
+  api->channel_from_selection (engine, other, "Foreign", &foreign, NULL);
+  CHECK (api->channel_transform_matrix_captured (engine, image, layer, &move, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_transform_matrix_captured (engine, image, foreign, &move, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_transform_matrix_captured (engine, 99999, saved, &move, NULL) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_bounds (engine, image, layer, &empty, &bounds) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_bounds (engine, image, foreign, &empty, &bounds) == GLIMS_STATUS_NOT_FOUND &&
+         api->channel_bounds (engine, image, saved, NULL, &bounds) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "layers, foreign channels and unknown images are not channels of this image");
+  api->image_close (engine, other);
+  CHECK (undo_depth (image) == before && channel_box (image, saved, 4, 6, 10, 8),
+         "every refusal left the channel and the history alone");
+
+  /* Quick Mask > Free Transform > Quick Mask transforms the selection. */
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 4, 6 }, { 14, 14 } }, 2, NULL) == GLIMS_STATUS_OK &&
+         api->image_set_quick_mask (engine, image, true, NULL) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, image, rows, 8, &count) == GLIMS_STATUS_OK,
+         "Quick Mask turns on over a rectangle");
+  for (int32_t i = 0; i < count && i < 8; i++)
+    if (rows[i].quick_mask)
+      quick = rows[i].id;
+  CHECK (quick > 0 && channel_box (image, quick, 4, 6, 10, 8),
+         "the Quick Mask's channel covers the selected rectangle");
+  before = undo_depth (image);
+  CHECK (api->channel_transform_matrix_captured (engine, image, quick, &move, &error) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1 && channel_box (image, quick, 16, 11, 10, 8),
+         "the Quick Mask's channel transforms as one undo step%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_set_quick_mask (engine, image, false, NULL) == GLIMS_STATUS_OK &&
+         selection_box (image, 16, 11, 10, 8),
+         "turning Quick Mask off leaves the transformed selection");
+  api->image_close (engine, image);
+
+  /* The result is a new canvas-sized buffer, bounded like a layer's
+   * destinations: a channel of a 23200 x 23200 8-bit image needs
+   * 538,240,000 bytes, over 512 MiB. The transparent image stays sparse,
+   * so nothing that large is ever written. */
+  {
+    GlimsImageID huge = 0;
+    GlimsItemID big = 0;
+
+    CHECK (api->image_new_filled (engine, 23200, 23200, GLIMS_NEW_IMAGE_TRANSPARENT, NULL, &huge, NULL)
+             == GLIMS_STATUS_OK &&
+           api->select_shape (engine, huge, GLIMS_SHAPE_RECTANGLE,
+                              (GlimsPoint[]) { { 4, 6 }, { 14, 14 } }, 2, NULL) == GLIMS_STATUS_OK &&
+           api->channel_from_selection (engine, huge, "Saved", &big, NULL) == GLIMS_STATUS_OK &&
+           channel_box (huge, big, 4, 6, 10, 8),
+           "a rectangle is saved as a channel of a 23200 x 23200 image");
+    before = undo_depth (huge);
+    CHECK (api->channel_transform_matrix_captured (engine, huge, big, &move, &error) == GLIMS_STATUS_INVALID_ARGUMENT &&
+           error && strstr (error, "output limit") && undo_depth (huge) == before &&
+           channel_box (huge, big, 4, 6, 10, 8),
+           "a channel whose canvas-sized result exceeds 512 MiB is refused unchanged%s%s",
+           error ? ": " : "", error ? error : "");
+    api->free_string (error); error = NULL;
+    if (huge)
+      api->image_close (engine, huge);
+  }
+}
+
 static void
 test_transform_preview_copy (void)
 {
@@ -15890,6 +16086,7 @@ main (int argc, char **argv)
   test_projective_source_offsets ();
   test_transform_masked_projection (argv[3]);
   test_captured_layer_transform ();
+  test_channel_transform ();
   test_transform_preview_copy ();
   test_channels (argv[2]);
   test_drawable_filters (argv[2]);
