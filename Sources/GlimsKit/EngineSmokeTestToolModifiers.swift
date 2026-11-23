@@ -74,7 +74,8 @@ extension EngineSmokeTest {
 
         state.select(.eyedropper)
         state.foreground = .red
-        state.background = .green
+        // A start color as dark as the sample would pass without a sample.
+        state.background = .white
         gesture([CGPoint(x: 30.5, y: 60.5)], .option)
         check(brightness(state.background) < 0.25 && state.foreground == .red,
               "Option-click with the Eyedropper sets only the background color")
