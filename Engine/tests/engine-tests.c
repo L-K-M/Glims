@@ -14066,7 +14066,7 @@ test_image_crop_resize (void)
          api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
          info.width == 200 && info.height == 150 &&
          api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK &&
-         x == 300.0 && undo_depth (image) == depth &&
+         x == 300.0 && y == 300.0 && undo_depth (image) == depth &&
          red_at (image, 150, 75) == 255 && red_at (image, 50, 75) == 0,
          "undo restores the size, the resolution and both color regions in one step");
 

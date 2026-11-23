@@ -370,9 +370,15 @@ extension RecorderFileCodec {
             var fields: [String: RecorderJSON] = ["tag": .string("cropResize"), "rect": try rectJSON(rect),
                                                   "width": j(width), "height": j(height),
                                                   "interpolation": .string(interpolation.rawValue)]
-            if let xResolution, let yResolution {
-                fields["xResolution"] = try d(xResolution)
-                fields["yResolution"] = try d(yResolution)
+            switch (xResolution, yResolution) {
+            case let (x?, y?):
+                fields["xResolution"] = try d(x)
+                fields["yResolution"] = try d(y)
+            case (nil, nil):
+                break
+            default:
+                // The decoder refuses this too; never write it as "keep".
+                throw RecorderFileError.invalid("A crop to a target size needs both resolutions or neither.")
             }
             return .object(fields)
         case .moveLayer(let offset):
