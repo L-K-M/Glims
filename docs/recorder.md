@@ -36,6 +36,8 @@ Current capture covers these command families:
 - Add Layer Mask, with its owned source tag and whether the new mask starts
   as the edit target.
 - Select Similar, with its threshold, antialiasing and sample-merged choice.
+- Layer > Matting's Defringe, Remove Black Matte and Remove White Matte,
+  with the operation and the Defringe width, on an explicitly bound layer.
 
 - Physical Lab selections (Rectangle, Ellipse, Lasso, All/None/Invert), Fill,
   Levels/Curves Apply and complete Brush gestures, including
@@ -127,9 +129,10 @@ versions 23, 24 and 25 respectively; Gaussian Blur and Unsharp Mask require
 version 26, Image Size with a chosen resampling method version 27, and arbitrary
 canvas rotation with its background fill version 28. Smooth Selection uses
 version 29, one-click adjustments version 30, Image Size with a resolution
-version 31, a crop to a target size version 32, and the six layer edits
+version 31, a crop to a target size version 32, the six layer edits
 version 33: a Move Layer offset, Duplicate Layers, Delete Layers, Merge
-Visible, Add Layer Mask and Select Similar. See
+Visible, Add Layer Mask and Select Similar, and Layer > Matting version
+34: Defringe, Remove Black Matte and Remove White Matte. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

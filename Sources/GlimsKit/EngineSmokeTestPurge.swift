@@ -3,7 +3,7 @@ import CGlimsEngine
 
 @MainActor
 extension EngineSmokeTest {
-    /// Edit > Purge (facade slot 253): Undo clears the active document's
+    /// Edit > Purge (facade slot 254): Undo clears the active document's
     /// history only, Histories clears every open document's, and Clipboard
     /// clears the system pasteboard only while it still holds Glims's own
     /// copy. None of it changes pixels or adds a Recorder row, and the

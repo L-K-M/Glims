@@ -5414,6 +5414,53 @@ final class EngineSession: @unchecked Sendable {
                              resolution.y, interpolation.rawValue, &error), error)
     }
 
+    /// Layer > Matting's operations (GlimsMatting).
+    enum Matting: UInt32, CaseIterable, Sendable {
+        case defringe = 1, removeBlackMatte, removeWhiteMatte
+
+        var title: String {
+            switch self {
+            case .defringe: return "Defringe"
+            case .removeBlackMatte: return "Remove Black Matte"
+            case .removeWhiteMatte: return "Remove White Matte"
+            }
+        }
+    }
+
+    /// Whether this adapter has the Layer > Matting slot (253). Older
+    /// adapters keep the plain layer commands and refuse matting cleanly.
+    var supportsMatting: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.layer_matting) else {
+            return false
+        }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.layer_matting)
+            && api.layer_matting != nil
+    }
+
+    /// Layer > Matting: applies `operation` to `layer` as one undo step.
+    /// `width` is 1 ... 200 for Defringe and 0 for the matte commands. An
+    /// adapter without slot 253 is UNSUPPORTED.
+    func applyMatting(_ image: Int32, layer: Int32, operation: Matting, width: Int) throws {
+        guard supportsMatting, let matting = api.layer_matting else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot apply that matting operation.")
+        }
+        switch operation {
+        case .defringe:
+            guard (1...200).contains(width) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "Choose a Defringe width from 1 to 200 pixels.")
+            }
+        case .removeBlackMatte, .removeWhiteMatte:
+            guard width == 0 else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "\(operation.title) takes no width.")
+            }
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(matting(engine, image, layer, operation.rawValue, UInt32(width), &error), error)
+    }
+
     /// The memory Edit > Purge frees. The raw values mirror the facade's
     /// GlimsPurgeTarget bits, never a GIMP value.
     struct PurgeTargets: OptionSet {
@@ -5424,7 +5471,7 @@ final class EngineSession: @unchecked Sendable {
         static let histories = PurgeTargets(rawValue: 4)
     }
 
-    /// Whether this adapter has the Edit > Purge slot (253). Older
+    /// Whether this adapter has the Edit > Purge slot (254). Older
     /// adapters keep their histories and refuse the command cleanly.
     var supportsPurge: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.edit_purge) else {

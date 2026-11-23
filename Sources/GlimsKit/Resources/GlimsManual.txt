@@ -373,6 +373,22 @@ on the canvas. Enable Mask toggles its effect without deleting it.
 Apply Mask combines the mask with the layer's pixels, while Delete Mask
 removes the mask. Mask to Selection uses the mask as a selection.
 
+Layer > Matting cleans the colored halo along a layer's partially
+transparent edge. Defringe… asks for a width in pixels (1 to 200) and
+gives each partially transparent pixel the color of the nearest fully
+opaque pixel within that distance, measured corner to corner; pixels
+with no opaque neighbor that close keep their color. Remove Black
+Matte and Remove White Matte divide out the background color left in
+partially transparent pixels: black divides each color by its alpha,
+white subtracts the remaining background before dividing. Transparent
+and fully opaque pixels, and every alpha value, stay exactly as they
+were. The commands ignore the selection and work on the whole layer,
+because the halo is an edge property of the layer. Each is one undo
+step. Groups, editable text, link and vector layers, locked pixels,
+Lab and ink-channel documents, and layers without transparency are
+refused with the reason in the menu's tool tip. Recorder saves the
+operation and width and replays it on the same target.
+
 # Filters
 
 Filter > Blur > Gaussian Blur… opens a settings window with a live

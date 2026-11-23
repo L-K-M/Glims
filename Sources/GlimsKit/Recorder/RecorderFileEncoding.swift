@@ -106,6 +106,8 @@ extension RecorderFileCodec {
             case .success(.moveLayer, _), .success(.duplicateLayers, _), .success(.deleteLayers, _),
                  .success(.mergeVisible, _), .success(.addLayerMask, _), .success(.selectSimilar, _):
                 fileVersion = max(fileVersion, layerEditsVersion)
+            case .success(.matting, _):
+                fileVersion = max(fileVersion, mattingVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -385,6 +387,11 @@ extension RecorderFileCodec {
         case .addLayerMask(let source, let edit):
             return .object(["tag": .string("addLayerMask"), "source": .string(source.rawValue),
                             "edit": .bool(edit)])
+        case .matting(let operation, let width):
+            var fields: [String: RecorderJSON] = ["tag": .string("matting"),
+                                                  "operation": .string(operation.rawValue)]
+            if let width { fields["width"] = j(width) }
+            return .object(fields)
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             return .object(["tag": .string("selectSimilar"), "threshold": try d(threshold),
                             "antialias": .bool(antialias), "sampleMerged": .bool(sampleMerged)])

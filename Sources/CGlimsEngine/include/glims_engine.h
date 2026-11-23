@@ -4723,7 +4723,27 @@ typedef struct GlimsEngineAPI {
                                     int32_t width, int32_t height,
                                     double x_resolution, double y_resolution,
                                     uint32_t interpolation, char **error);
-  /* Slot 253: Edit > Purge. Frees memory without changing pixels and is
+  /* Slot 253: Layer > Matting. Defringe, Remove Black Matte and Remove
+   * White Matte on one layer, as ONE undo step named after the
+   * operation. The command is layer-wide and ignores the selection: the
+   * halo is an edge property of the whole layer. Coordinates are the
+   * layer's own buffer coordinates; pixels outside the layer do not
+   * exist. `operation` is a GlimsMatting; `width` is
+   * 1 ... GLIMS_MATTING_MAX_WIDTH for Defringe and 0 for the matte
+   * commands. Every refusal changes nothing. An unknown image or layer,
+   * or an id that is a channel or mask, is NOT_FOUND; a group,
+   * unrasterized text, link or vector layer, an indexed image or a
+   * pixel-locked layer is refused as the one-click adjustments refuse
+   * them; a layer without alpha, a bad operation or width, or a matte
+   * width other than 0 is INVALID_ARGUMENT; a busy engine, disabled undo
+   * or an open undo group is BUSY; no partially transparent pixel is
+   * FAILED with "The layer has no partially transparent edge pixels.",
+   * and Defringe without a fully opaque pixel is FAILED with "The layer
+   * has no fully opaque pixels to take colors from.". A run that finds
+   * partial pixels but changes no value succeeds with no undo step. */
+  GlimsStatus (*layer_matting) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                uint32_t operation, uint32_t width, char **error);
+  /* Slot 254: Edit > Purge. Frees memory without changing pixels and is
    * itself not undoable. `targets` is a GlimsPurgeTarget bitmask; 0 or an
    * unknown bit is INVALID_ARGUMENT. UNDO takes `image`, which must name a
    * known open image (0 or an unknown id is NOT_FOUND) and clears that
@@ -4740,6 +4760,15 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*edit_purge) (GlimsEngine *engine, GlimsImageID image, uint32_t targets,
                              char **error);
 } GlimsEngineAPI;
+
+/* Slot 253's operation codes and Defringe width limit. */
+typedef enum {
+  GLIMS_MATTING_DEFRINGE = 1,
+  GLIMS_MATTING_REMOVE_BLACK_MATTE = 2,
+  GLIMS_MATTING_REMOVE_WHITE_MATTE = 3
+} GlimsMatting;
+
+#define GLIMS_MATTING_MAX_WIDTH 200
 
 /* Returns NULL when the library cannot serve `api_version`. */
 const GlimsEngineAPI *glims_engine_get_api (uint32_t api_version);

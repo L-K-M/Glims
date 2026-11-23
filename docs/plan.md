@@ -7152,13 +7152,44 @@ the `recorder-layer-edits` smoke case records all six on one document,
 checks every row, replays into a second identical document and compares
 pixels and the layer tree, including the multi-selection failed row.
 
+### Layer > Matting (2026-11-23)
+
+Layer > Matting adds Defringe..., Remove Black Matte and Remove White
+Matte to the Layer menu. The command is layer-wide and ignores the
+selection, because the halo is an edge property of the whole layer; the
+engine works in the layer's own buffer coordinates. Facade slot 253
+`layer_matting` does the pixel work in a new `Engine/matting.c`: the
+layer is read and written in its own format changed to float components
+(`gimp_babl_format_change_component_type` with `GIMP_COMPONENT_TYPE_FLOAT`),
+so its TRC is kept and grayscale and RGB layers both work. Black matte
+calculates `clamp(C/A, 0, 1)` and white matte
+`clamp((C-(1-A))/A, 0, 1)` for `0 < A < 1`; alpha is never written.
+Defringe copies the nearest fully opaque pixel's color within the width
+using a capped two-pass chamfer feature transform over the
+8-neighborhood, run in 64-row bands with a width-sized halo, which is
+exact for the Chebyshev distance; a strict `<` keeps the earlier
+candidate on a tie. The adapter refuses unknown image or layer ids,
+channels and masks with NOT_FOUND; bad operations, widths and a layer
+without alpha with INVALID_ARGUMENT; groups, unrasterized text, link and
+vector layers and indexed images as the one-click adjustments refuse
+ them; pixel locks with LOCKED; and a busy engine, disabled undo or an
+open undo group with BUSY. No partial pixel is FAILED, as is Defringe
+without a fully opaque pixel. A run that changes no value succeeds with
+no undo step; a change is one GIMP_UNDO_GROUP_DRAWABLE_MOD group pushed
+over the damage rectangle. The Recorder writes `matting` at format
+version 34 with an owned operation tag and a Defringe-only width, bound
+to the explicit layer. `swift test` covers the codec round trip, the
+version anchor, width rules and binding pairing; the `matting` smoke
+case (`GLIMS_SMOKE_CASE=matting`) drives the menu action, the real
+Defringe sheet, the group refusal and a save/load/replay comparison.
+
 ### Edit > Purge (2026-11-23)
 
 Edit > Purge frees memory and cannot be undone: Undo clears the active
 document's history, Clipboard clears the engine's clipboard and named
 buffers, Histories clears every open document's history, and All does all
 three. Each item confirms first with "This cannot be undone." Facade slot
-253 `edit_purge` takes a `GlimsPurgeTarget` bitmask and preflights every
+254 `edit_purge` takes a `GlimsPurgeTarget` bitmask and preflights every
 affected image before freeing anything, so a stroke, filter, plug-in or
 open undo group refuses BUSY and leaves every history intact. Upstream
 `gimp_image_undo_free` emits the UNDO_FREE event that image.c already

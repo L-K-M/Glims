@@ -21,7 +21,7 @@ empty succeeds and changes nothing. A dirty image stays dirty, as upstream
 
 ## Engine behavior
 
-Facade slot 253, `edit_purge`, carries a `GlimsPurgeTarget` bitmask:
+Facade slot 254, `edit_purge`, carries a `GlimsPurgeTarget` bitmask:
 `GLIMS_PURGE_UNDO` (1), `GLIMS_PURGE_CLIPBOARD` (2) and
 `GLIMS_PURGE_HISTORIES` (4). Zero or an unknown bit is
 `GLIMS_STATUS_INVALID_ARGUMENT`. `UNDO` names an open image; 0 or an
@@ -52,7 +52,7 @@ Glims's own.
 ## Menu validation
 
 - **Undo** is disabled without an active document, on an adapter without
-  slot 253, when the document's undo and redo histories are both empty, or
+  slot 254, when the document's undo and redo histories are both empty, or
   while the document is closing or the engine is busy.
 - **Histories** is disabled when no open document has any undo or redo
   step.
