@@ -167,7 +167,7 @@ extension EngineSmokeTest {
         // Accept on A while B's window is front: the captured document and
         // settings still win.
         b.window?.makeKeyAndOrderFront(nil)
-        let undoA0 = docA.undoInfo.undoCount
+        let undoA0 = try session.undoInfo(imageA).undoCount
         let boundsA = try session.selectionBounds(image: imageA)
         let outlineA = docA.selectionOutline
         let pixelsABefore = try session.copyPixels(imageA, merged: true).pixels
@@ -179,7 +179,7 @@ extension EngineSmokeTest {
         check(a.window?.attachedSheet == nil && a.strokeSelectionSheet == nil,
               "the sheet closes after one accepted enqueue")
         check(errorsA.isEmpty, "a valid accept reports no error (\(errorsA))")
-        check(docA.undoInfo.undoCount == undoA0 + 1, "Stroke Selection is exactly one undo step")
+        check(try session.undoInfo(imageA).undoCount == undoA0 + 1, "Stroke Selection is exactly one undo step")
         check(try session.undoInfo(imageB).undoCount == undoB0,
               "the other document is untouched even while its window is front")
         let boundary = pixel(session, imageA, x: 4, y: 12) ?? []

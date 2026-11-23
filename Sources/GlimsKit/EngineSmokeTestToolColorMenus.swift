@@ -221,7 +221,9 @@ extension EngineSmokeTest {
         let invalid = NSMenuItem(title: "Invalid", action: Selector(("selectToolFromMenu:")), keyEquivalent: "")
         invalid.identifier = MenuShortcutBridge.builtinIdentifier
         // The first tag past the catalog, so a new tool cannot make this stale.
-        let unassigned = (1...).first { ToolMenuCatalog.tool(forTag: $0) == nil }!
+        guard let unassigned = (1...1000).first(where: { ToolMenuCatalog.tool(forTag: $0) == nil }) else {
+            return expect(false, "the tool catalog leaves a tag below 1000 unassigned")
+        }
         for tag in [-1, 0, unassigned, 1001, Int.max] {
             invalid.tag = tag
             expect(!owner.validateMenuItem(invalid), "unknown tool tag \(tag) is refused")
