@@ -157,7 +157,7 @@ if [[ "$MODE" == test ]]; then
   BITMAP_WORK="$WORK/bitmap"
   mkdir -p "$BITMAP_WORK/home" "$BITMAP_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/bitmap-psd-test.log" \
+  run_with_timeout 600 "$OUT/bitmap-psd-test.log" \
     env HOME="$BITMAP_WORK/home" XDG_CACHE_HOME="$BITMAP_WORK/cache" \
         "$OUT/glims-bitmap-psd-engine-tests" "$OUT/libglimsengine.dylib" "$BITMAP_WORK" || status=$?
   cat "$OUT/bitmap-psd-test.log"
@@ -165,7 +165,7 @@ if [[ "$MODE" == test ]]; then
   DUOTONE_WORK="$WORK/duotone"
   mkdir -p "$DUOTONE_WORK/home" "$DUOTONE_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/duotone-preservation-test.log" \
+  run_with_timeout 600 "$OUT/duotone-preservation-test.log" \
     env HOME="$DUOTONE_WORK/home" XDG_CACHE_HOME="$DUOTONE_WORK/cache" \
         "$OUT/glims-duotone-preservation-tests" "$OUT/libglimsengine.dylib" "$DUOTONE_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/duotone-preservation-test.log"
@@ -173,7 +173,7 @@ if [[ "$MODE" == test ]]; then
   EXPORT_WORK="$WORK/duotone-export"
   mkdir -p "$EXPORT_WORK/home" "$EXPORT_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/duotone-export-test.log" \
+  run_with_timeout 600 "$OUT/duotone-export-test.log" \
     env HOME="$EXPORT_WORK/home" XDG_CACHE_HOME="$EXPORT_WORK/cache" \
         "$OUT/glims-duotone-export-tests" "$OUT/libglimsengine.dylib" "$EXPORT_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/duotone-export-test.log"
@@ -198,7 +198,7 @@ if [[ "$MODE" == test ]]; then
   COMPOSITE_WORK="$WORK/psd-composite"
   mkdir -p "$COMPOSITE_WORK/home" "$COMPOSITE_WORK/cache"
   status=0
-  run_with_timeout 180 "$OUT/psd-composite-test.log" \
+  run_with_timeout 600 "$OUT/psd-composite-test.log" \
     env HOME="$COMPOSITE_WORK/home" XDG_CACHE_HOME="$COMPOSITE_WORK/cache" \
         "$OUT/glims-psd-composite-tests" "$OUT/libglimsengine.dylib" "$COMPOSITE_WORK" "$ROOT/Engine/tests/fixtures" || status=$?
   cat "$OUT/psd-composite-test.log"
@@ -216,15 +216,15 @@ if [[ "$MODE" == test ]]; then
   cat "$OUT/tiff-import-test.log"
   (( status == 0 )) || die "the TIFF import preparation tests failed (status $status)"
   status=0
-  run_with_timeout 600 "$OUT/duotone-alternate-metadata-test.log" \
+  run_with_timeout 900 "$OUT/duotone-alternate-metadata-test.log" \
     python3 "$ROOT/scripts/test-duotone-alternate-metadata.py" \
-      --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 180 || status=$?
+      --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 600 || status=$?
   cat "$OUT/duotone-alternate-metadata-test.log"
   (( status == 0 )) || die "the Duotone alternate metadata tests failed (status $status)"
   status=0
-  run_with_timeout 600 "$OUT/duotone-alternate-export-test.log" \
+  run_with_timeout 900 "$OUT/duotone-alternate-export-test.log" \
     python3 "$ROOT/scripts/test-duotone-alternate-export.py" \
-      --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 180 || status=$?
+      --ref "$REF" --adapter-root "$ADAPTER_ROOT" --timeout 600 || status=$?
   cat "$OUT/duotone-alternate-export-test.log"
   (( status == 0 )) || die "the Duotone alternate export tests failed (status $status)"
 fi

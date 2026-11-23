@@ -6916,3 +6916,17 @@ is widened to 1e-5. Lab Copy also requires exactly opaque floats from an
 RGB read; in babl 0.1.124 no three-step path from R'G'B'A u8 or u16 to
 RGBA float passes through u32, and it is unchanged. Other kinds of lossy
 paths were not searched.
+
+### Load-tolerant engine test limits (2026-11-23)
+
+Merge qualification runs four engine sets and full smokes back to back,
+often beside other builds, at load averages of 9 to 11. Under that load
+the native PSD tests twice hit their 180-second limit with every check
+passing so far: the Duotone preservation tests on master (17 of 17 in
+164 s alone) and the Duotone alternate export tests on GIMP 3.0.8, which
+stalled at engine start and passed alone in 75 s. Stopping the engine
+while a plug-in runs took 5.7 s once, against a 5-second bound. The
+native PSD tests now get 600 seconds, the two Python runners 600 seconds
+inside a 900-second step, and the plug-in stop check allows 15 seconds:
+its failed run already proves the stop ended the plug-in rather than
+waiting for it, so the bound only has to catch a hang.
