@@ -359,11 +359,11 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
         imageDocument.colorRangePreview(imageDocument.image, settings: value,
                                     maxSize: Self.previewMax) { [weak self] result in
             guard let self, expected == self.generation else { return }
-            if let result {
-                self.maskWidth = result.width
-                self.maskHeight = result.height
-                self.maskBytes = result.mask
-            }
+            // A refused read clears the mask rather than leaving the previous
+            // settings' mask on screen.
+            self.maskWidth = result?.width ?? 0
+            self.maskHeight = result?.height ?? 0
+            self.maskBytes = result?.mask ?? []
             self.updatePreviewMode()
         }
     }

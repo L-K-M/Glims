@@ -85,8 +85,8 @@ by the current selection when one exists, and calls
 `gimp_channel_select_buffer` with GIMP_CHANNEL_OP_REPLACE, then applies the
 cached-mask workaround `select.c` documents. The preview reads a scaled
 projection and returns one byte per pixel, 0...255, at most 512 on the long
-side; a NULL mask queries the size. Neither slot locks anything or changes
-history.
+side; a NULL mask queries the size. The preview changes no history; apply
+adds exactly the one "Color Range" undo step.
 
 ## Recorder
 
