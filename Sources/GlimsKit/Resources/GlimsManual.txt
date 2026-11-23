@@ -437,6 +437,18 @@ ink-channel documents are refused with the reason in the menu's tool
 tip. Recorder saves the adjustment and its background color and replays
 it on the same target.
 
+Image > Adjust > Variations… opens a sheet that accumulates color and
+lightness corrections as thumbnails. Click More Red, More Green, More Blue
+or the opposite color to shift one tonal range; Lighter and Darker shift
+the whole range; Saturation mode trades the ring for Less and More
+Saturation. Each click adds one step from the Fine-to-Coarse slider, every
+value stays between -1 and 1, and Original starts over. The sheet shows
+what every click would do without changing the image. OK applies the set
+as one undo step named Variations, bounded by the selection when there is
+one; Cancel changes nothing. Only RGB images qualify. Show Clipping marks
+the pixels whose result leaves the 8-bit range. Recorder saves the
+accumulated settings and replays them on the same layer.
+
 # History and Snapshots
 
 The History palette lists every edit state the image keeps, with the

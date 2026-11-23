@@ -14588,6 +14588,392 @@ test_edit_purge (void)
   api->image_close (engine, b);
 }
 
+/* Slots 255/256: Image > Adjust > Variations. The apply path runs
+ * Color Balance then Hue-Saturation as one "Variations" undo group; the
+ * oracle runs the same two operations as two committed filter sessions.
+ * The preview renders the drawable thumbnail and repeats the chain in
+ * float with an 8-bit intermediate. */
+static uint8_t *
+variations_bytes (GlimsImageID image, size_t *count)
+{
+  GlimsPixelBuffer copied = { 0 };
+  uint8_t *bytes;
+
+  if (api->image_copy_pixels (engine, image, true, &copied, NULL) != GLIMS_STATUS_OK)
+    return NULL;
+  bytes = malloc (copied.byte_count ? copied.byte_count : 1);
+  if (! bytes)
+    {
+      api->free_pixels (copied.pixels);
+      return NULL;
+    }
+  memcpy (bytes, copied.pixels, copied.byte_count);
+  *count = copied.byte_count;
+  api->free_pixels (copied.pixels);
+  return bytes;
+}
+
+static int
+variations_same (const uint8_t *a, const uint8_t *b, size_t count)
+{
+  return a && b && memcmp (a, b, count) == 0;
+}
+
+static GlimsStatus
+variations_filter_chain (GlimsImageID image, GlimsItemID layer,
+                         const GlimsVariationsSettings *settings, char **error)
+{
+  GlimsFilterID           filter = 0;
+  GlimsColorBalanceSettings balance = { .struct_size = sizeof balance,
+                                        .preserve_luminosity = 1 };
+  GlimsHueSaturationSettings hue = { .struct_size = sizeof hue };
+  GlimsStatus             status;
+
+  balance.shadows = settings->shadows;
+  balance.midtones = settings->midtones;
+  balance.highlights = settings->highlights;
+  hue.master.lightness = settings->lightness;
+  hue.master.saturation = settings->saturation;
+
+  status = api->filter_begin (engine, image, layer, "gimp:color-balance", &filter, error);
+  if (status == GLIMS_STATUS_OK)
+    status = api->filter_color_balance_set (engine, filter, &balance, error);
+  if (status == GLIMS_STATUS_OK)
+    status = api->filter_commit (engine, filter, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+
+  filter = 0;
+  status = api->filter_begin (engine, image, layer, "gimp:hue-saturation", &filter, error);
+  if (status == GLIMS_STATUS_OK)
+    status = api->filter_hue_saturation_set (engine, filter, &hue, error);
+  if (status == GLIMS_STATUS_OK)
+    status = api->filter_commit (engine, filter, error);
+  return status;
+}
+
+static void
+test_image_variations (void)
+{
+  const uint8_t gradient[6 * 2 * 4] = {
+    20, 10, 10, 255,   70, 40, 30, 255,   130, 90, 60, 255,
+    190, 120, 200, 255, 240, 200, 110, 255, 255, 255, 255, 255,
+    10, 20, 30, 255,   60, 180, 90, 255,   90, 200, 220, 255,
+    220, 60, 40, 255,  30, 90, 160, 255,  120, 120, 120, 255,
+  };
+  GlimsImageID          a = 0, b = 0, sel_image = 0, gray = 0, refuse = 0;
+  GlimsItemID           layer_a = 0, layer_b = 0, group = 0;
+  GlimsVariationsSettings settings = { .struct_size = sizeof settings };
+  GlimsVariationsSettings identity = { .struct_size = sizeof identity };
+  GlimsUndoInfo         undo;
+  uint8_t              *before = NULL, *after = NULL, *check = NULL, *plain = NULL, *got = NULL;
+  uint8_t               clipping[8 * 8];
+  size_t                count = 0;
+  int32_t               depth, w = 0, h = 0, pw = 0, ph = 0;
+  int                   clipped_count = 0, zero_count = 0;
+  char                 *error = NULL;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_variations_apply) +
+          sizeof api->image_variations_apply || ! api->image_variations_apply ||
+      (size_t) api->struct_size < offsetof (GlimsEngineAPI, image_variations_preview) +
+          sizeof api->image_variations_preview || ! api->image_variations_preview)
+    {
+      CHECK (false, "the adapter exports slots 255/256 image_variations_apply/preview");
+      return;
+    }
+
+  settings.shadows.cyan_red = 0.2;
+  settings.midtones.magenta_green = -0.15;
+  settings.highlights.yellow_blue = 0.25;
+  settings.lightness = 0.1;
+  settings.saturation = -0.25;
+
+  CHECK (api->image_from_pixels (engine, 6, 2, gradient, sizeof gradient, &a, NULL) ==
+         GLIMS_STATUS_OK && a != 0 &&
+         api->image_from_pixels (engine, 6, 2, gradient, sizeof gradient, &b, NULL) ==
+         GLIMS_STATUS_OK && b != 0,
+         "the two variations fixtures exist");
+  if (! a || ! b)
+    return;
+  layer_a = first_layer (a);
+  layer_b = first_layer (b);
+  depth = undo_depth (a);
+  before = variations_bytes (a, &count);   /* the source */
+
+  CHECK (api->image_variations_apply (engine, a, layer_a, &settings, &error) ==
+         GLIMS_STATUS_OK,
+         "Variations applies%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (a) == depth + 1 &&
+         api->image_undo_info (engine, a, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Variations") == 0,
+         "Variations is one undo step named Variations (next: %s)", undo.next_undo);
+  after = variations_bytes (a, &count);    /* the applied result */
+
+  CHECK (variations_filter_chain (b, layer_b, &settings, &error) == GLIMS_STATUS_OK,
+         "the filter oracle runs%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  CHECK (undo_depth (b) == depth + 2,
+         "the two filter commits are two undo steps (%d)", undo_depth (b));
+  check = variations_bytes (b, &count);
+  CHECK (variations_same (after, check, count),
+         "Variations and the equivalent filter chain render identical pixels");
+  free (check);
+  check = NULL;
+
+  CHECK (api->image_undo (engine, a) == GLIMS_STATUS_OK &&
+         undo_depth (a) == depth,
+         "undo leaves the variations step");
+  check = variations_bytes (a, &count);
+  CHECK (variations_same (before, check, count),
+         "undo restores the variations source");
+  free (check);
+  check = NULL;
+  CHECK (api->image_redo (engine, a) == GLIMS_STATUS_OK &&
+         undo_depth (a) == depth + 1,
+         "redo reapplies Variations");
+  check = variations_bytes (a, &count);
+  CHECK (variations_same (after, check, count),
+         "redo restores the applied pixels");
+  free (check);
+  check = NULL;
+  free (before);
+  free (after);
+  before = after = NULL;
+  api->image_close (engine, b);
+  b = 0;
+
+  /* A selection bounds the destructive edit. */
+  CHECK (api->image_from_pixels (engine, 6, 2, gradient, sizeof gradient, &sel_image, NULL) ==
+         GLIMS_STATUS_OK && sel_image != 0, "the selection fixture exists");
+  if (sel_image)
+    {
+      GlimsItemID        layer = first_layer (sel_image);
+      GlimsSelectOptions replace = { .struct_size = sizeof replace,
+                                     .operation = GLIMS_SELECT_REPLACE };
+      before = variations_bytes (sel_image, &count);
+      CHECK (api->select_shape (engine, sel_image, GLIMS_SHAPE_RECTANGLE,
+                                (GlimsPoint[]) { { 0, 0 }, { 3, 2 } }, 2, &replace) ==
+             GLIMS_STATUS_OK, "the bounding selection is ready");
+      depth = undo_depth (sel_image);
+      CHECK (api->image_variations_apply (engine, sel_image, layer, &settings, NULL) ==
+             GLIMS_STATUS_OK && undo_depth (sel_image) == depth + 1,
+             "a selection-bounded Variations applies as one step");
+      after = variations_bytes (sel_image, &count);
+      CHECK (after && count >= 6 * 2 * 4 &&
+             memcmp (after + 3 * 4, before + 3 * 4,
+                     (size_t) (6 - 3) * 2 * 4) == 0,
+             "pixels outside the selection are unchanged");
+      free (before);
+      free (after);
+      before = after = NULL;
+      api->image_close (engine, sel_image);
+      sel_image = 0;
+    }
+
+  /* Refusals change nothing. */
+  CHECK (api->image_from_pixels (engine, 6, 2, gradient, sizeof gradient, &refuse, NULL) ==
+         GLIMS_STATUS_OK && refuse != 0, "the refusal fixture exists");
+  if (refuse)
+    {
+      GlimsItemID layer = first_layer (refuse);
+
+      before = variations_bytes (refuse, &count);
+      depth = undo_depth (refuse);
+      CHECK (api->image_variations_apply (engine, refuse, layer, &identity, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && error &&
+             strstr (error, "no change") != NULL,
+             "identity settings are refused with the no-change reason");
+      api->free_string (error);
+      error = NULL;
+
+      {
+        GlimsVariationsSettings bad = settings;
+        bad.shadows.cyan_red = 1.5;
+        CHECK (api->image_variations_apply (engine, refuse, layer, &bad, &error) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && error,
+               "an out-of-range correction is refused");
+        api->free_string (error);
+        error = NULL;
+        bad = settings;
+        bad.midtones.magenta_green = NAN;
+        CHECK (api->image_variations_apply (engine, refuse, layer, &bad, &error) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && error,
+               "a NaN correction is refused");
+        api->free_string (error);
+        error = NULL;
+        bad = identity;
+        bad.struct_size = offsetof (GlimsVariationsSettings, lightness);
+        CHECK (api->image_variations_apply (engine, refuse, layer, &bad, &error) ==
+               GLIMS_STATUS_INVALID_ARGUMENT && error,
+               "a short settings struct is refused");
+        api->free_string (error);
+        error = NULL;
+      }
+
+      CHECK (api->image_variations_apply (engine, refuse, 99999, &settings, NULL) ==
+             GLIMS_STATUS_NOT_FOUND &&
+             api->image_variations_apply (engine, 99999, layer, &settings, NULL) ==
+             GLIMS_STATUS_NOT_FOUND,
+             "an unknown layer or image is NOT_FOUND");
+
+      /* A non-RGB base type is UNSUPPORTED. */
+      CHECK (api->image_convert_mode (engine, refuse, GLIMS_COLOR_MODE_GRAYSCALE, NULL) ==
+             GLIMS_STATUS_OK, "the grayscale fixture converts");
+      after = variations_bytes (refuse, &count);
+      CHECK (api->image_variations_apply (engine, refuse, layer, &settings, &error) ==
+             GLIMS_STATUS_UNSUPPORTED && error,
+             "a grayscale image is refused");
+      api->free_string (error);
+      error = NULL;
+      CHECK (variations_same (after, variations_bytes (refuse, &count), count),
+             "the grayscale refusal changes nothing");
+      free (after);
+      after = NULL;
+
+      /* Back to RGB for the group and selection refusals. */
+      CHECK (api->image_convert_mode (engine, refuse, GLIMS_COLOR_MODE_RGB, NULL) ==
+             GLIMS_STATUS_OK, "the refusal fixture returns to RGB");
+      free (before);
+      before = variations_bytes (refuse, &count);
+      CHECK (api->create_group (engine, refuse, 0, 0, "Group", &group, NULL) ==
+             GLIMS_STATUS_OK && group != 0, "the group is created");
+      if (group)
+        {
+          int32_t group_depth = undo_depth (refuse);
+          CHECK (api->image_variations_apply (engine, refuse, group, &settings, &error) !=
+                 GLIMS_STATUS_OK && undo_depth (refuse) == group_depth,
+                 "a group layer is refused and changes nothing");
+          api->free_string (error);
+          error = NULL;
+        }
+
+      /* Move the single layer away from a selection on the right. */
+      CHECK (api->layer_move (engine, refuse, layer, -4, 0) == GLIMS_STATUS_OK,
+             "the layer moves away from the selection");
+      {
+        GlimsSelectOptions replace = { .struct_size = sizeof replace,
+                                       .operation = GLIMS_SELECT_REPLACE };
+        CHECK (api->select_shape (engine, refuse, GLIMS_SHAPE_RECTANGLE,
+                                  (GlimsPoint[]) { { 3, 0 }, { 6, 2 } }, 2, &replace) ==
+               GLIMS_STATUS_OK,
+               "the missing-selection rectangle is selected");
+        depth = undo_depth (refuse);
+        CHECK (api->image_variations_apply (engine, refuse, layer, &settings, &error) !=
+               GLIMS_STATUS_OK && undo_depth (refuse) == depth,
+               "a selection that misses the layer is refused and changes nothing");
+        api->free_string (error);
+        error = NULL;
+      }
+
+      after = variations_bytes (refuse, &count);
+      CHECK (variations_same (before, after, count),
+             "every refusal leaves the pixels unchanged");
+      free (before);
+      free (after);
+      before = after = NULL;
+      api->image_close (engine, refuse);
+      refuse = 0;
+    }
+
+  /* Preview. */
+  CHECK (api->image_from_pixels (engine, 6, 2, gradient, sizeof gradient, &refuse, NULL) ==
+         GLIMS_STATUS_OK && refuse != 0, "the preview fixture exists");
+  if (refuse)
+    {
+      GlimsItemID layer = first_layer (refuse);
+
+      CHECK (api->image_variations_preview (engine, refuse, layer, &identity, 8,
+                                            NULL, 0, NULL, 0, &w, &h, NULL) ==
+             GLIMS_STATUS_OK && w == 6 && h == 2,
+             "a NULL pixel buffer queries the thumbnail size");
+
+      plain = malloc (8 * 8 * 4);
+      got = malloc (8 * 8 * 4);
+      CHECK (plain && got &&
+             api->drawable_thumbnail (engine, refuse, layer, 8, plain, 8 * 8 * 4,
+                                      &pw, &ph) == GLIMS_STATUS_OK,
+             "the plain thumbnail renders");
+      memset (clipping, 0xAA, sizeof clipping);
+      CHECK (api->image_variations_preview (engine, refuse, layer, &identity, 8,
+                                            got, 8 * 8 * 4, clipping, sizeof clipping,
+                                            &w, &h, NULL) == GLIMS_STATUS_OK &&
+             w == pw && h == ph &&
+             memcmp (plain, got, (size_t) w * h * 4) == 0,
+             "the identity preview equals the plain layer thumbnail");
+      {
+        int identity_clear = 1;
+        for (int i = 0; i < w * h; i++)
+          if (clipping[i] != 0) identity_clear = 0;
+        CHECK (identity_clear, "the identity preview leaves the clipping mask clear");
+      }
+      free (plain);
+      free (got);
+      plain = got = NULL;
+
+      /* A strong red correction reaches the 8-bit ceiling. Upstream both
+       * operations clamp their output, so the documented half-step rule
+       * keeps the mask at zero; this checks the mask's shape contract
+       * rather than a saturation upstream cannot produce. */
+      {
+        GlimsVariationsSettings red = { .struct_size = sizeof red };
+        red.shadows.cyan_red = 1.0;
+        red.midtones.cyan_red = 1.0;
+        red.highlights.cyan_red = 1.0;
+        plain = malloc (8 * 8 * 4);
+        got = malloc (8 * 8 * 4);
+        CHECK (plain && got &&
+               api->image_variations_preview (engine, refuse, layer, &red, 8,
+                                              got, 8 * 8 * 4, clipping,
+                                              sizeof clipping, &w, &h, NULL) ==
+               GLIMS_STATUS_OK,
+               "the strong red preview renders");
+        for (int i = 0; i < w * h; i++)
+          {
+            if (clipping[i] == 255) clipped_count++;
+            else if (clipping[i] == 0) zero_count++;
+          }
+        CHECK (clipped_count + zero_count == w * h,
+               "every clipping byte is 0 or 255");
+        free (plain);
+        free (got);
+        plain = got = NULL;
+      }
+
+      CHECK (api->image_variations_preview (engine, refuse, layer, &identity, 8,
+                                            NULL, 0, clipping, sizeof clipping,
+                                            &w, &h, NULL) ==
+             GLIMS_STATUS_OK && w == 6 && h == 2,
+             "a size query ignores the clipping buffer");
+      got = malloc (8 * 8 * 4);
+      CHECK (got &&
+             api->image_variations_preview (engine, refuse, layer, &identity, 0,
+                                            got, 8 * 8 * 4, NULL, 0, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+             api->image_variations_preview (engine, refuse, layer, &identity, 257,
+                                            got, 8 * 8 * 4, NULL, 0, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a max size outside 1...256 is refused");
+      CHECK (api->image_variations_preview (engine, refuse, layer, &identity, 8,
+                                            got, 6 * 2 * 4 - 1, NULL, 0, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a short pixel buffer is refused");
+      CHECK (api->image_variations_preview (engine, refuse, layer, &identity, 8,
+                                            got, 6 * 2 * 4, clipping,
+                                            6 * 2 - 1, &w, &h, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a short clipping buffer is refused");
+      free (got);
+      got = NULL;
+      api->image_close (engine, refuse);
+      refuse = 0;
+    }
+
+  api->image_close (engine, a);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -16697,6 +17083,7 @@ main (int argc, char **argv)
   test_image_crop_resize ();
   test_layer_matting ();
   test_edit_purge ();
+  test_image_variations ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

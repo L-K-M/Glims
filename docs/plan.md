@@ -7205,3 +7205,29 @@ recording. `swift test` covers the target bits, the ownership rule and the
 menu wiring; the `purge` smoke case (`GLIMS_SMOKE_CASE=purge`) drives two
 documents' histories, the confirmation's Cancel, both clipboard cases and
 a recording.
+
+### Image > Adjust > Variations (2026-11-23)
+
+Image > Adjust > Variations… accumulates Color Balance corrections for
+one tonal range plus master lightness and saturation, shows every click as
+a thumbnail and applies the set as one undo step named "Variations".
+The mapping lives in the pure `VariationsModel` (six color directions,
+Lighter/Darker on the whole tonal range, a Saturation mode, and a
+seven-position Fine-to-Coarse step table). Facade slots 255/256 carry the
+command: `Engine/variations.c` runs gimp:color-balance with Preserve
+Luminosity on and then gimp:hue-saturation through
+`gimp_drawable_apply_operation` inside one undo group, so the selection
+bounds both operations; identity settings, bad targets, locks, a missing
+selection overlap, a floating selection and a busy engine refuse before
+any mutation. The preview slot renders the layer's own thumbnail exactly
+as the Layers palette does and repeats the chain on a float copy with an
+8-bit intermediate, ignoring the selection and allowing identity. The
+sheet requests thumbnails off the main thread with a generation counter,
+and Show Clipping overlays pixels whose final channel leaves the
+representable range by more than half a step. The Recorder writes
+`applyVariations` at format version 35 with the three ranges, lightness
+and saturation, requires a layer binding and refuses the identity.
+`swift test` covers the model and the codec; the `variations` smoke case
+(`GLIMS_SMOKE_CASE=variations`) drives the sheet's clicks, Cancel, OK,
+the twin-pixel oracle, undo/redo, the grayscale refusal and a
+save/load/replay comparison.

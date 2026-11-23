@@ -84,6 +84,10 @@ enum SemanticImageCommand {
     /// explicit layer lives in the document's runtime binding; the
     /// command is layer-wide and ignores the selection.
     case matting(EngineSession.Matting, width: Int)
+    /// Image > Adjust > Variations: the accumulated Color Balance ranges
+    /// and master lightness/saturation. The explicit layer lives in the
+    /// document's runtime binding; the command honors the selection.
+    case applyVariations(EngineSession.VariationsSettings)
     /// Select ▸ Similar: threshold, antialiasing and sample-merged. The
     /// sample-merged form needs no target; the drawable form binds the
     /// captured paint target context.
@@ -154,7 +158,7 @@ enum SemanticImageCommand {
     var isLayerAdjustment: Bool {
         switch self {
         case .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast,
-             .applyGaussianBlur, .applyUnsharpMask: return true
+             .applyGaussianBlur, .applyUnsharpMask, .applyVariations: return true
         default: return false
         }
     }
@@ -162,7 +166,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .matting, .completeStroke, .completeTabletStroke: return true
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .matting, .applyVariations, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties, .selectSimilar: return false
         case .adjustment: return true
         }
@@ -212,6 +216,7 @@ enum SemanticImageCommand {
         case .mergeVisible: return "Merge Visible"
         case .addLayerMask: return "Add Layer Mask"
         case .matting(let operation, _): return operation.title
+        case .applyVariations: return "Variations"
         case .selectSimilar: return "Select Similar"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
@@ -294,7 +299,7 @@ enum SemanticImageCommand {
             options.antialias = antialias
             options.sampleMerged = sampleMerged
             try session.selectSimilar(image, options: options)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .applyVariations:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
@@ -424,6 +429,9 @@ enum SemanticImageCommand {
         case .matting(let operation, let width):
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.applyMatting(image, layer: layer, operation: operation, width: width)
+        case .applyVariations(let settings):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.applyVariations(image, layer: layer, settings: settings)
         case .duplicateLayers:
             guard layer > 0 else { throw MissingLayerBinding() }
             let copies = try session.duplicateLayers(image, layers: [layer])

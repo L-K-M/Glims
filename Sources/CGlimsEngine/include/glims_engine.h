@@ -913,6 +913,19 @@ typedef struct GlimsHueSaturationSettings {
   GlimsHueSaturationRange magenta;
 } GlimsHueSaturationSettings;
 
+/* Image > Adjust > Variations' accumulated corrections. The dialog's
+ * color ring and its Lighter/Darker column accumulate into these owned
+ * values; every correction is a finite fraction of the native slider's
+ * range. Preserve Luminosity is fixed on, so it has no field here. */
+typedef struct GlimsVariationsSettings {
+  uint32_t struct_size;           /* >= sizeof(GlimsVariationsSettings) */
+  GlimsColorBalanceRange shadows;
+  GlimsColorBalanceRange midtones;
+  GlimsColorBalanceRange highlights;
+  double lightness;               /* finite -1..1; positive is lighter */
+  double saturation;              /* finite -1..1; positive is more saturated */
+} GlimsVariationsSettings;
+
 typedef struct GlimsLevelsChannel {
   double low_input;         /* finite 0..1; default 0 */
   double high_input;        /* finite 0..1; default 1 */
@@ -4759,6 +4772,42 @@ typedef struct GlimsEngineAPI {
    * do; the dirty state follows upstream gimp_image_undo_free. */
   GlimsStatus (*edit_purge) (GlimsEngine *engine, GlimsImageID image, uint32_t targets,
                              char **error);
+  /* Slot 255: Image > Adjust > Variations. Applies the accumulated
+   * Color Balance ranges and the master lightness/saturation to one
+   * layer as ONE undo step named "Variations": gimp:color-balance with
+   * Preserve Luminosity on, then gimp:hue-saturation with the master
+   * range, skipping either when its part of `settings` is all zero.
+   * `settings` needs struct_size >= sizeof and every value finite inside
+   * -1...1, else INVALID_ARGUMENT; identity settings are INVALID_ARGUMENT
+   * with "Variations has no change to apply.". An unknown image or
+   * layer, or an id that is not an attached layer of that image, is
+   * NOT_FOUND; a group, unrasterized text, link or vector layer, or a
+   * non-RGB base type is UNSUPPORTED; pixel locks are LOCKED; a selection
+   * that does not overlap the layer, a floating selection, disabled
+   * undo, an open undo group or a busy engine is BUSY. The selection
+   * bounds the edit, as gimp_drawable_apply_operation honors it. Every
+   * refusal changes nothing. */
+  GlimsStatus (*image_variations_apply) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                         const GlimsVariationsSettings *settings, char **error);
+  /* Slot 256: Image > Adjust > Variations' thumbnails. Renders the
+   * layer's own thumbnail exactly as drawable_thumbnail does (at most
+   * `max_size`, 1...256, on the long side, never upscaled), then applies
+   * the same two operations in the same order as image_variations_apply
+   * on a float copy, quantizing to 8 bits between them so the preview
+   * matches the destructive result on an 8-bit layer. The preview ignores
+   * the selection and allows identity settings (the Original thumbnail).
+   * Output is straight-alpha sRGB RGBA 8-bit. `pixels` NULL queries the
+   * size only (`clipping` is ignored); otherwise `byte_count` must
+   * hold the whole thumbnail and `clipping` is either NULL or
+   * `clipping_byte_count` wide, one byte per pixel, 255 where any final
+   * color channel lies below -0.5/255 or above 1+0.5/255 before 8-bit
+   * conversion. Wrong buffer sizes are INVALID_ARGUMENT; an unknown image
+   * or drawable is NOT_FOUND. Read-only: no locks, no undo step. */
+  GlimsStatus (*image_variations_preview) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
+                                           const GlimsVariationsSettings *settings,
+                                           int32_t max_size, uint8_t *pixels, size_t byte_count,
+                                           uint8_t *clipping, size_t clipping_byte_count,
+                                           int32_t *width, int32_t *height, char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */

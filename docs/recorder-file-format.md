@@ -24,12 +24,12 @@ mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
 `applyUnsharpMask` 26, `scaleWithInterpolation` 27, `rotateCanvas` 28,
 `smoothSelection` 29, `adjustment` 30, `setResolution` or `resize` 31,
 `cropResize` 32, `moveLayer`, `duplicateLayers`, `deleteLayers`,
-`mergeVisible`, `addLayerMask` or `selectSimilar` 33, and `matting` 34.
-A file declaring one of those versions must contain at least one
-successful command from that version's family. It may also contain
-commands from all earlier versions. Failure/cancelled rows do not raise
-the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...34 refuse the file.
+`mergeVisible`, `addLayerMask` or `selectSimilar` 33, `matting` 34, and
+`applyVariations` 35. A file declaring one of those versions must contain
+at least one successful command from that version's family. It may also
+contain commands from all earlier versions. Failure/cancelled rows do not
+raise the version. With no extended successful commands, the writer uses
+version 1. Integers outside 1...35 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -85,6 +85,7 @@ Commands have an owned `tag` and the following exact fields:
 | `addLayerMask` | `source`, `edit` (version 33) |
 | `selectSimilar` | `threshold`, `antialias`, `sampleMerged` (version 33) |
 | `matting` | `operation`, `width` on Defringe only (version 34) |
+| `applyVariations` | `settings` with `shadows`, `midtones`, `highlights`, `lightness`, `saturation` (version 35) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -117,7 +118,8 @@ symbol for a layer adjustment or a context for an editing-mask adjustment.
 Select Alpha, color selection with `sampleMerged:false`, mask Levels, Curves or Brightness/Contrast,
 and one-click adjustments require context; `mergeVisible` and sample-merged
 `selectSimilar` require none; `moveLayer`, `duplicateLayers`, `deleteLayers`,
-`addLayerMask` and `matting` require a layer symbol; non-sample-merged
+`addLayerMask`, `matting` and `applyVariations` require a layer symbol;
+non-sample-merged
 `selectSimilar` requires the captured context. Other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
 arrays, `target`, `masks` and
@@ -729,3 +731,14 @@ refused, as is a missing or out-of-range Defringe width. It requires a
 `layer` binding and replays on that explicit layer through facade slot
 253. Version 34 requires at least one successful matting row; earlier
 versions reject the tag.
+
+## Image > Adjust > Variations (version 35)
+
+`applyVariations` stores a `settings` object with three tonal ranges and
+two master corrections: `shadows`, `midtones` and `highlights`, each with
+`cyanRed`, `magentaGreen` and `yellowBlue`, plus `lightness` and
+`saturation`. Every value must be finite inside -1...1, and an identity
+(all ten values zero) is refused because it changes nothing. It requires
+a `layer` binding and replays on that explicit layer through facade slots
+255/256. Version 35 requires at least one successful Variations row;
+earlier versions reject the tag.

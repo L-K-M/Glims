@@ -108,6 +108,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, layerEditsVersion)
             case .success(.matting, _):
                 fileVersion = max(fileVersion, mattingVersion)
+            case .success(.applyVariations, _):
+                fileVersion = max(fileVersion, variationsVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -443,6 +445,18 @@ extension RecorderFileCodec {
                 "shadows": try rangeJSON(balance.shadows), "midtones": try rangeJSON(balance.midtones),
                 "highlights": try rangeJSON(balance.highlights),
                 "preserveLuminosity": .bool(balance.preserveLuminosity)])])
+        case .applyVariations(let variations):
+            let variations = try variations.validated()
+            func rangeJSON(_ range: RecorderVariationsValue.Range) throws -> RecorderJSON {
+                .object(["cyanRed": try d(range.cyanRed), "magentaGreen": try d(range.magentaGreen),
+                    "yellowBlue": try d(range.yellowBlue)])
+            }
+            return .object(["tag": .string("applyVariations"), "settings": .object([
+                "shadows": try rangeJSON(variations.shadows),
+                "midtones": try rangeJSON(variations.midtones),
+                "highlights": try rangeJSON(variations.highlights),
+                "lightness": try d(variations.lightness),
+                "saturation": try d(variations.saturation)])
         case .applyHueSaturation(let hueSaturation):
             let hueSaturation = try hueSaturation.validated()
             func rangeJSON(_ range: RecorderHueSaturationValue.Range) throws -> RecorderJSON {

@@ -254,3 +254,5 @@ GLIMS_FACADE(channel_transform_matrix_captured, api_channel_transform_matrix_cap
 GLIMS_FACADE(image_crop_resize, api_image_crop_resize, IMAGE, ORDINARY)
 GLIMS_FACADE(layer_matting, api_layer_matting, IMAGE, ORDINARY)
 GLIMS_FACADE(edit_purge, api_edit_purge, NONE, GLOBAL)
+GLIMS_FACADE(image_variations_apply, api_image_variations_apply, IMAGE, ORDINARY)
+GLIMS_FACADE(image_variations_preview, api_image_variations_preview, IMAGE, ORDINARY)

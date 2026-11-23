@@ -131,8 +131,10 @@ canvas rotation with its background fill version 28. Smooth Selection uses
 version 29, one-click adjustments version 30, Image Size with a resolution
 version 31, a crop to a target size version 32, the six layer edits
 version 33: a Move Layer offset, Duplicate Layers, Delete Layers, Merge
-Visible, Add Layer Mask and Select Similar, and Layer > Matting version
-34: Defringe, Remove Black Matte and Remove White Matte. See
+Visible, Add Layer Mask and Select Similar, Layer > Matting version 34:
+Defringe, Remove Black Matte and Remove White Matte, and Image > Adjust
+> Variations version 35 with its three tonal ranges, lightness and
+saturation. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

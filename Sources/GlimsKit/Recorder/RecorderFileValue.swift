@@ -411,6 +411,10 @@ enum RecorderFileCommand: Equatable {
     /// record's `layer` binding; the command carries no native
     /// filter/effect identity.
     case applyHueSaturation(RecorderHueSaturationValue)
+    /// Image > Adjust > Variations: the accumulated tonal ranges and
+    /// master lightness/saturation. The explicit layer is the record's
+    /// `layer` binding; the command carries no native filter identity.
+    case applyVariations(RecorderVariationsValue)
     /// A newly applied Brightness/Contrast adjustment with its whole
     /// accepted settings. The explicit layer is the record's `layer`
     /// binding; the command carries no native filter/effect identity.
@@ -426,7 +430,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .applyVariations: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectSimilar(_, _, let sampleMerged): return sampleMerged
         case .selectCommand(.fromAlpha, _): return false

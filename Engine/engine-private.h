@@ -759,6 +759,16 @@ GlimsStatus glims_image_crop_resize (GlimsEngine *e, GlimsImageID image, GlimsRe
                                      uint32_t interpolation, char **error);
 GlimsStatus glims_layer_matting (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                  uint32_t operation, uint32_t width, char **error);
+/* variations.c: facade slots 255/256. Apply runs the Color Balance and
+ * Hue-Saturation operations as one undo step named "Variations"; preview
+ * renders the drawable thumbnail and applies the same chain off-thread. */
+GlimsStatus glims_image_variations_apply (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                          const GlimsVariationsSettings *settings, char **error);
+GlimsStatus glims_image_variations_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                            const GlimsVariationsSettings *settings, int32_t max_size,
+                                            uint8_t *pixels, size_t byte_count,
+                                            uint8_t *clipping, size_t clipping_byte_count,
+                                            int32_t *width, int32_t *height, char **error);
 GlimsStatus glims_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
                                       int32_t count, GlimsItemID reference, uint32_t alignment,
                                       char **error);

@@ -39,7 +39,9 @@ enum RecorderFileCodec {
     static let layerEditsVersion = 33
     /// Layer > Matting; renumber if another branch takes 34 first.
     static let mattingVersion = 34
-    static let latestVersion = mattingVersion
+    /// Image > Adjust > Variations; renumber if another branch takes 35 first.
+    static let variationsVersion = 35
+    static let latestVersion = variationsVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -166,6 +168,7 @@ enum RecorderFileCodec {
         var hasCropResize = false
         var hasLayerEdits = false
         var hasMatting = false
+        var hasVariations = false
         var usedSymbols: Set<UUID> = []
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
@@ -202,6 +205,7 @@ enum RecorderFileCodec {
                 if case .resize = command { hasImageResolution = true }
                 if case .cropResize = command { hasCropResize = true }
                 if case .matting = command { hasMatting = true }
+                if case .applyVariations = command { hasVariations = true }
                 if case .moveLayer = command { hasLayerEdits = true }
                 if case .duplicateLayers = command { hasLayerEdits = true }
                 if case .deleteLayers = command { hasLayerEdits = true }
@@ -351,6 +355,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == mattingVersion, !hasMatting {
             throw RecorderFileError.invalid("Version 34 requires a successful matting command.")
+        }
+        if fileVersion == variationsVersion, !hasVariations {
+            throw RecorderFileError.invalid("Version 35 requires a successful Variations command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -975,6 +982,10 @@ enum RecorderFileCodec {
             guard version >= hueSaturationVersion else { throw RecorderFileError.invalid("A Hue/Saturation command needs recording version 9.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyHueSaturation(try hueSaturation(value.get("settings")))
+        case "applyVariations":
+            guard version >= variationsVersion else { throw RecorderFileError.invalid("A Variations command needs recording version 35.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyVariations(try variations(value.get("settings")))
         case "applyBrightnessContrast":
             guard version >= brightnessContrastVersion else { throw RecorderFileError.invalid("A Brightness/Contrast command needs recording version 10.") }
             let value = try Object(node, required: ["tag", "settings"])
@@ -1145,6 +1156,23 @@ enum RecorderFileCodec {
         return try RecorderColorBalanceValue(shadows: range("shadows"), midtones: range("midtones"),
             highlights: range("highlights"),
             preserveLuminosity: bool(value.get("preserveLuminosity"))).validated()
+    }
+
+    /// Whole Variations values: all three tonal ranges plus the master
+    /// lightness and saturation. Every correction follows the same finite
+    /// −1...1 contract as the native typed settings, and an identity is
+    /// refused because it changes nothing.
+    private static func variations(_ node: RecorderJSON) throws -> RecorderVariationsValue {
+        let value = try Object(node, required: ["shadows", "midtones", "highlights", "lightness", "saturation"])
+        func range(_ key: String) throws -> RecorderVariationsValue.Range {
+            let source = try Object(value.get(key), required: ["cyanRed", "magentaGreen", "yellowBlue"])
+            return try RecorderVariationsValue.Range(cyanRed: number(source.get("cyanRed")),
+                magentaGreen: number(source.get("magentaGreen")),
+                yellowBlue: number(source.get("yellowBlue"))).validated()
+        }
+        return try RecorderVariationsValue(shadows: range("shadows"), midtones: range("midtones"),
+            highlights: range("highlights"), lightness: number(value.get("lightness")),
+            saturation: number(value.get("saturation"))).validated()
     }
 
     /// Whole Hue/Saturation values: the global overlap plus every named
@@ -1408,6 +1436,9 @@ enum RecorderFileCodec {
             return
         case (.matting, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A matting command needs a layer description.") }
+            return
+        case (.applyVariations, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Variations command needs a layer description.") }
             return
         case (.mergeVisible, .none): return
         case (.selectSimilar(_, _, let sampleMerged), .none) where sampleMerged: return
