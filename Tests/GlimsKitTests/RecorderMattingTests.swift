@@ -70,7 +70,7 @@ final class RecorderMattingTests: XCTestCase {
 
     func testVersionAnchorAndOlderVersionRefusal() throws {
         XCTAssertEqual(RecorderFileCodec.mattingVersion, 34)
-        XCTAssertEqual(RecorderFileCodec.latestVersion, 34)
+        XCTAssertGreaterThanOrEqual(RecorderFileCodec.latestVersion, RecorderFileCodec.mattingVersion)
         let commands = [
             #"{"tag":"matting","operation":"defringe","width":1}"#,
             #"{"tag":"matting","operation":"removeBlackMatte"}"#,

@@ -14216,14 +14216,6 @@ test_layer_matting (void)
   layer = first_layer (image);
   depth = undo_depth (image);
 
-  /* A selection that excludes the partial pixels does not bound the
-   * command: the halo is a layer-wide edge property. */
-  GlimsSelectOptions replace = { .struct_size = sizeof replace,
-                                 .operation = GLIMS_SELECT_REPLACE };
-  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
-                            (GlimsPoint[]) { { 3, 0 }, { 4, 1 } }, 2, &replace) ==
-         GLIMS_STATUS_OK, "the matting selection is ready");
-
   CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_REMOVE_BLACK_MATTE,
                              0, &error) == GLIMS_STATUS_OK &&
          undo_depth (image) == depth + 1,
@@ -14448,6 +14440,30 @@ test_layer_matting (void)
                "the no-partial refusal changes nothing");
         api->image_close (engine, opaque_image);
       }
+  }
+
+  /* A selection that excludes the partial pixels does not bound the
+   * command: the halo is a layer-wide edge property. The selection is
+   * cleared before reading, because a layer copy honors it. */
+  {
+    GlimsSelectOptions replace = { .struct_size = sizeof replace,
+                                   .operation = GLIMS_SELECT_REPLACE };
+    CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                              (GlimsPoint[]) { { 3, 0 }, { 4, 1 } }, 2, &replace) ==
+           GLIMS_STATUS_OK, "the matting selection is ready");
+    depth = undo_depth (image);
+    CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_REMOVE_BLACK_MATTE,
+                               0, NULL) == GLIMS_STATUS_OK &&
+           undo_depth (image) == depth + 1,
+           "Remove Black Matte with a selection is one undo step");
+    CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+           "the matting selection is cleared");
+    bytes = matting_bytes (image, &count);
+    CHECK (bytes && count == sizeof source &&
+           matting_close (bytes + 0 * 4, (uint8_t[]) { 199, 100, 0, 128 }, 1),
+           "a selection that excludes the partial pixels does not bound the matting");
+    free (bytes);
+    bytes = NULL;
   }
 
   /* No opaque pixels for Defringe: FAILED with the opaque reason. */

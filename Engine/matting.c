@@ -125,14 +125,23 @@ glims_layer_matting (GlimsEngine  *engine,
 
   if (error) *error = NULL;
   if (operation < GLIMS_MATTING_DEFRINGE || operation > GLIMS_MATTING_REMOVE_WHITE_MATTE)
-    return GLIMS_STATUS_INVALID_ARGUMENT;
+    {
+      if (error) *error = strdup ("Unknown matting operation.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
   if (operation == GLIMS_MATTING_DEFRINGE)
     {
       if (width < 1 || width > GLIMS_MATTING_MAX_WIDTH)
-        return GLIMS_STATUS_INVALID_ARGUMENT;
+        {
+          if (error) *error = strdup ("Choose a Defringe width from 1 to 200 pixels.");
+          return GLIMS_STATUS_INVALID_ARGUMENT;
+        }
     }
   else if (width != 0)
-    return GLIMS_STATUS_INVALID_ARGUMENT;
+    {
+      if (error) *error = strdup ("Remove Black Matte and Remove White Matte take no width.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
 
   open = glims_lookup_image (engine, id);
   if (! open)
@@ -141,7 +150,10 @@ glims_layer_matting (GlimsEngine  *engine,
   if (engine->busy || engine->progress || g_hash_table_size (engine->strokes) ||
       g_hash_table_size (engine->filters) || ! gimp_image_undo_is_enabled (image) ||
       gimp_image_get_undo_group_count (image))
-    return GLIMS_STATUS_BUSY;
+    {
+      if (error) *error = strdup ("Finish the stroke or close the filter dialog first.");
+      return GLIMS_STATUS_BUSY;
+    }
 
   layer = NULL;
   {
@@ -479,6 +491,7 @@ glims_layer_matting (GlimsEngine  *engine,
       gimp_drawable_get_buffer (drawable) != source ||
       ! gimp_image_undo_is_enabled (image) || gimp_image_get_undo_group_count (image))
     {
+      if (error) *error = strdup ("The layer changed while the matting ran; nothing was changed.");
       status = GLIMS_STATUS_BUSY;
       goto done;
     }
