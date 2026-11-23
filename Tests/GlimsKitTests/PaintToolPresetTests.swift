@@ -290,8 +290,8 @@ final class PaintToolPresetTests: XCTestCase {
                 ("fade", #""fade":{"steps":5,"target":"transparent"}"#),
             ]
             for (name, extra) in extras {
-                let data = Data("{\"schemaVersion\":1,\"presets\":[{\"id\":\(id),\"tool\":\"paintbrush\","
-                    + "\"name\":\"x\",\"settings\":{\(fields),\(extra)}}]}".utf8)
+                let data = Data(("{\"schemaVersion\":1,\"presets\":[{\"id\":\(id),\"tool\":\"paintbrush\","
+                    + "\"name\":\"x\",\"settings\":{\(fields),\(extra)}}]}").utf8)
                 defaults.set(data, forKey: PaintToolPresetStore.presetsKey)
                 let store = PaintToolPresetStore(defaults: defaults)
                 assertPresetError({ _ = try store.load() }) {
@@ -354,8 +354,8 @@ final class PaintToolPresetTests: XCTestCase {
                  { if case .outOfRange(let field, _, _) = $0 { return field == "settings.spacing" }; return false }),
             ]
             for (name, extra, check) in seeds {
-                let data = Data("{\"schemaVersion\":2,\"presets\":[{\"id\":\(id),\"tool\":\"paintbrush\","
-                    + "\"name\":\"x\",\"settings\":{\(fields),\(extra)}}]}".utf8)
+                let data = Data(("{\"schemaVersion\":2,\"presets\":[{\"id\":\(id),\"tool\":\"paintbrush\","
+                    + "\"name\":\"x\",\"settings\":{\(fields),\(extra)}}]}").utf8)
                 defaults.set(data, forKey: PaintToolPresetStore.presetsKey)
                 let store = PaintToolPresetStore(defaults: defaults)
                 assertPresetError({ _ = try store.load() }, check)
@@ -397,8 +397,8 @@ final class PaintToolPresetTests: XCTestCase {
         }
     }
 
-    func testFutureSchemaVersionMessageNamesTheReadRange() {
-        withDefaults { defaults in
+    func testFutureSchemaVersionMessageNamesTheReadRange() throws {
+        try withDefaults { defaults in
             let seed = Data(#"{"schemaVersion":3,"presets":[]}"#.utf8)
             defaults.set(seed, forKey: PaintToolPresetStore.presetsKey)
             let store = PaintToolPresetStore(defaults: defaults)
