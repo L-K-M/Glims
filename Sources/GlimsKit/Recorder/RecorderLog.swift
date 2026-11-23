@@ -170,6 +170,18 @@ struct RecorderLog<Command> {
         }
     }
 
+    /// Takes back the newest unresolved reservation, for a command that ended
+    /// without changing anything. An earlier reservation keeps its ordinal and
+    /// must still resolve, so this answers false for it.
+    mutating func withdraw(_ reservation: Reservation) throws -> Bool {
+        guard reservation.epoch == epoch else { throw Refusal.staleReservation }
+        guard unresolved.contains(reservation.ordinal) else { throw Refusal.alreadyResolved }
+        guard reservation.ordinal == nextOrdinal - 1 else { return false }
+        unresolved.remove(reservation.ordinal)
+        nextOrdinal -= 1
+        return true
+    }
+
     var replayRefusal: Refusal? {
         if isReplaying { return .replaying }
         if isRecording { return .alreadyRecording }
