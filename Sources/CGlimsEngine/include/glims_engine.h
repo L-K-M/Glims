@@ -4600,7 +4600,8 @@ typedef struct GlimsEngineAPI {
    * "Transform Channel". A stale box or an empty channel is FAILED with
    * an explanation; a non-finite matrix, one that flattens the box or
    * crosses a perspective horizon over it, an unknown interpolation, a
-   * short request or a box without area is INVALID_ARGUMENT; ids are
+   * short request, a box without area, or a canvas-sized result over
+   * 512 MiB (GLIMS_MAX_PIXEL_BUFFER_BYTES) is INVALID_ARGUMENT; ids are
    * resolved as by channel_bounds; a component layout is UNSUPPORTED;
    * BUSY during a stroke, preview or plug-in. Every refusal changes
    * nothing. No request memory is retained. */

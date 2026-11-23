@@ -1860,7 +1860,8 @@ glims_channel_transform_matrix_captured (GlimsEngine *engine, GlimsImageID id, G
   GimpChannel           *channel;
   GimpMatrix3            transform;
   GimpInterpolationType  type;
-  gint                   x, y, width, height, offset_x, offset_y;
+  gint                   x, y, width, height, offset_x, offset_y, bpp;
+  guint64                pixels;
   const gdouble          coordinate_limit = 2.0 * GIMP_MAX_IMAGE_SIZE;
 
   if (! request || request->struct_size < sizeof *request || channel_id <= 0 ||
@@ -1913,6 +1914,13 @@ glims_channel_transform_matrix_captured (GlimsEngine *engine, GlimsImageID id, G
           fabs (out_x) > coordinate_limit || fabs (out_y) > coordinate_limit)
         return invalid_transform (error, "The transformed channel would exceed the supported coordinates.");
     }
+  /* CLIP writes the result into a new canvas-sized buffer. Bound it as
+   * the layer path bounds its destinations (GlimsMatrix): 512 MiB. */
+  bpp = babl_format_get_bytes_per_pixel (gimp_drawable_get_format (GIMP_DRAWABLE (channel)));
+  pixels = (guint64) gimp_item_get_width (GIMP_ITEM (channel)) *
+           (guint64) gimp_item_get_height (GIMP_ITEM (channel));
+  if (bpp < 1 || pixels > GLIMS_MAX_PIXEL_BUFFER_BYTES / (guint64) bpp)
+    return invalid_transform (error, "The transformed channel would exceed the 512 MiB output limit.");
 
   gimp_item_transform (GIMP_ITEM (channel), gimp_get_user_context (engine->gimp), &transform,
                        GIMP_TRANSFORM_FORWARD, type, GIMP_TRANSFORM_RESIZE_CLIP, NULL);
