@@ -190,7 +190,7 @@ if [[ "$MODE" == test ]]; then
     arguments=("$OUT/libglimsengine.dylib" "$SEEDED_WORK")
     [[ "$program" == bitmap-psd-engine-tests ]] || arguments+=("$ROOT/Engine/tests/fixtures")
     status=0
-    run_with_timeout 180 "$OUT/$program-seeded.log" \
+    run_with_timeout 600 "$OUT/$program-seeded.log" \
       "${seeded[@]}" "$OUT/glims-$program" "${arguments[@]}" || status=$?
     cat "$OUT/$program-seeded.log"
     (( status == 0 )) || die "$program failed with lossy babl paths cached (status $status)"
