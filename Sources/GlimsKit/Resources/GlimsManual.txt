@@ -447,6 +447,21 @@ background color; other layers leave them transparent. It is offered
 for layered RGB, grayscale and indexed images and is one undo step.
 The Recorder saves the angle, direction and background color.
 
+Image > Image Size… changes the pixel dimensions, the print size and the
+resolution together. Print width and height accept inches, centimeters,
+millimeters, points or picas; the resolution accepts pixels per inch or
+per centimeter. With Resample image on, the print size and resolution
+drive the pixel dimensions and the image is resampled with the chosen
+method. With it off, the pixels stay fixed and the print size and
+resolution move inversely. Constrain proportions keeps width and height
+in step. The whole change is one undo step. File > New… takes a
+resolution with its own unit and a width and height unit (pixels,
+inches, centimeters or millimeters), defaulting to 72 ppi. Image >
+Image Information… shows the resolution and the print size. Changing a
+unit converts the numbers. Image Size needs an ordinary layered image:
+CMYK, Lab and Multichannel documents keep the resolution they were
+created with. An older engine keeps the pixel-only Image Size sheet.
+
 Layer > Align moves the selected layers so the edges or centers of
 their visible pixels line up: Top Edges, Vertical Centers, Bottom
 Edges, Left Edges, Horizontal Centers or Right Edges. With a selection

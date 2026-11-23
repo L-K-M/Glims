@@ -13932,6 +13932,160 @@ test_image_new_filled (void)
          "image_new_filled refuses a missing or non-finite color, unknown contents, a bad size and no output");
 }
 
+/* Slots 246-248: Image > Image Size. A new image carries the engine's
+ * 300 ppi template default. Setting the resolution is one undo step and
+ * leaves the pixels alone; a clean set leaves no step; the combined
+ * resize is one step and undo restores both the size and the resolution. */
+static void
+test_image_resolution (const char *work)
+{
+  GlimsImageID image = 0, fresh = 0, reopened = 0, imported = 0;
+  GlimsImageInfo info;
+  double         x = -1.0, y = -1.0;
+  int32_t        depth;
+  char           xcf[1024], png[1024];
+  char          *error = NULL;
+
+  if ((size_t) api->struct_size < offsetof (GlimsEngineAPI, image_resize) + sizeof api->image_resize ||
+      ! api->image_resolution || ! api->image_set_resolution || ! api->image_resize)
+    {
+      CHECK (false, "the adapter exports slots 246-248 image resolution");
+      return;
+    }
+
+  CHECK (api->image_new (engine, 1200, 900, &image, NULL) == GLIMS_STATUS_OK &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         x == 300.0 && y == 300.0,
+         "a new image reads the engine's 300 x 300 ppi default");
+  depth = undo_depth (image);
+
+  CHECK (api->image_set_resolution (engine, image, 150.0, 150.0,
+                                     GLIMS_RESOLUTION_UNDOABLE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK && x == 150.0 &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 1200 && info.height == 900,
+         "setting the resolution is one undo step and keeps the pixels");
+  CHECK (api->image_set_resolution (engine, image, 150.0, 150.0,
+                                     GLIMS_RESOLUTION_UNDOABLE, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "setting the same resolution again adds no undo step");
+  CHECK (api->image_set_resolution (engine, image, 150.0, 150.0,
+                                     GLIMS_RESOLUTION_CLEAN, &error) == GLIMS_STATUS_FAILED &&
+         undo_depth (image) == depth + 1,
+         "a clean resolution set refuses an image with history");
+  api->free_string (error);
+  error = NULL;
+
+  CHECK (api->image_resize (engine, image, 1200, 900, 150.0, 150.0,
+                            GLIMS_INTERPOLATION_DEFAULT, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 1,
+         "a resize that changes nothing adds no undo step");
+  CHECK (api->image_resize (engine, image, 1800, 1350, 300.0, 300.0,
+                            GLIMS_INTERPOLATION_CUBIC, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 2 &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 1800 && info.height == 1350 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         x == 300.0 && y == 300.0,
+         "a combined resize is one undo step and sets size and resolution");
+  CHECK (api->image_resize (engine, image, 1800, 1350, 150.0, 150.0,
+                            GLIMS_INTERPOLATION_LINEAR, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth + 3 &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 1800 && info.height == 1350 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK && x == 150.0,
+         "a resolution-only resize keeps the new pixel size");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 1800 && info.height == 1350 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK && x == 300.0,
+         "undo restores the resolution of a combined resize");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_info (engine, image, &info) == GLIMS_STATUS_OK &&
+         info.width == 1200 && info.height == 900 &&
+         api->image_resolution (engine, image, &x, &y, NULL) == GLIMS_STATUS_OK && x == 150.0 &&
+         undo_depth (image) == depth + 1,
+         "undo restores the pixel size of a combined resize");
+
+  CHECK (api->image_new (engine, 5, 7, &fresh, NULL) == GLIMS_STATUS_OK &&
+         api->image_set_resolution (engine, fresh, 150.0, 150.0,
+                                     GLIMS_RESOLUTION_CLEAN, NULL) == GLIMS_STATUS_OK &&
+         undo_depth (fresh) == 0 &&
+         api->image_resolution (engine, fresh, &x, &y, NULL) == GLIMS_STATUS_OK && x == 150.0,
+         "a clean resolution set on a new image leaves no undo step");
+  api->image_close (engine, fresh);
+
+  CHECK (api->image_set_resolution (engine, image, 0.0, 150.0,
+                                     GLIMS_RESOLUTION_UNDOABLE, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a resolution below the minimum is refused with a reason");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_set_resolution (engine, image, NAN, 150.0,
+                                     GLIMS_RESOLUTION_UNDOABLE, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_set_resolution (engine, image, 150.0, 1e9,
+                                     GLIMS_RESOLUTION_UNDOABLE, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_set_resolution (engine, image, 150.0, 150.0, 99, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+         "a non-finite or out-of-range resolution and an unknown edit are refused");
+  CHECK (api->image_resize (engine, image, 0, 900, 150.0, 150.0,
+                            GLIMS_INTERPOLATION_DEFAULT, &error) ==
+             GLIMS_STATUS_INVALID_ARGUMENT && error,
+         "a zero pixel size is refused with a reason");
+  api->free_string (error);
+  error = NULL;
+  CHECK (api->image_resize (engine, image, 1200, 900, 150.0, 150.0, 99, NULL) ==
+             GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_resize (engine, image, 1200, 900, 1e9, 150.0,
+                            GLIMS_INTERPOLATION_DEFAULT, NULL) == GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_resolution (engine, image, NULL, &y, NULL) == GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown interpolation, an out-of-range resolution and a missing output are refused");
+
+  for (int lab = 0; lab < 2; lab++)
+    {
+      GlimsImageID component = 0;
+      GlimsStatus  made = lab
+        ? api->image_new_lab (engine, 8, 8, GLIMS_COLOR_COMPONENT_U8, &component, NULL)
+        : api->image_new_multichannel (engine, 8, 8, GLIMS_COLOR_COMPONENT_U8, 4, &component, NULL);
+      const char  *name = lab ? "Lab" : "Multichannel";
+
+      CHECK (made == GLIMS_STATUS_OK &&
+             api->image_set_resolution (engine, component, 144.0, 144.0,
+                                        GLIMS_RESOLUTION_CLEAN, NULL) == GLIMS_STATUS_OK &&
+             undo_depth (component) == 0 &&
+             api->image_resolution (engine, component, &x, &y, NULL) == GLIMS_STATUS_OK &&
+             x == 144.0 && y == 144.0,
+             "a new %s document takes a resolution without an undo step", name);
+      CHECK (api->image_set_resolution (engine, component, 200.0, 200.0,
+                                        GLIMS_RESOLUTION_UNDOABLE, &error) == GLIMS_STATUS_UNSUPPORTED &&
+             undo_depth (component) == 0,
+             "an existing %s document refuses a resolution edit", name);
+      api->free_string (error);
+      error = NULL;
+      if (component) api->image_close (engine, component);
+    }
+
+  snprintf (xcf, sizeof xcf, "%s/resolution.xcf", work);
+  snprintf (png, sizeof png, "%s/resolution.png", work);
+  CHECK (api->image_save (engine, image, xcf, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, xcf, &reopened, NULL) == GLIMS_STATUS_OK &&
+         api->image_resolution (engine, reopened, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         x == 150.0 && y == 150.0,
+         "the resolution survives XCF save and reopen");
+  api->image_close (engine, reopened);
+  CHECK (api->image_export (engine, image, png, NULL) == GLIMS_STATUS_OK &&
+         api->image_open (engine, png, &imported, NULL) == GLIMS_STATUS_OK &&
+         api->image_resolution (engine, imported, &x, &y, NULL) == GLIMS_STATUS_OK &&
+         fabs (x - 150.0) <= 1.0 && fabs (y - 150.0) <= 1.0,
+         "the resolution survives PNG export and import (%.3f x %.3f ppi)", x, y);
+  api->image_close (engine, imported);
+
+  api->image_close (engine, image);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -16036,6 +16190,7 @@ main (int argc, char **argv)
   test_selection_similar ();
   test_everyday_adjustments ();
   test_image_new_filled ();
+  test_image_resolution (argv[2]);
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

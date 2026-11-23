@@ -7094,3 +7094,25 @@ file-pcx.c wraps the bytes per line at 65535, and EPS and PDF above
 `scripts/test-bitmap-export.py` decodes PCX and renders PDF with Core
 Graphics to compare pixels, and checks the EPS bounding box. EPS pixels
 are not decoded: macOS has no PostScript interpreter.
+
+### Image resolution and print size (2026-11-22)
+
+Additive facade slots 246-248: `image_resolution` reads the ppi pair,
+`image_set_resolution` sets it (UNDOABLE pushes GIMP's own "Change Image
+Resolution" step, CLEAN is the File > New path and refuses an image that
+already has undo or redo history; component documents accept CLEAN only,
+so every mode of File > New takes a resolution), and `image_resize` sets the resolution and resamples
+to new pixel dimensions inside one "Scale Image" undo group, following
+GIMP's `image_scale_callback` in app/actions/image-commands.c. The bounds
+GIMP_MIN_RESOLUTION..GIMP_MAX_RESOLUTION are owned at the facade as
+GLIMS_MIN_RESOLUTION/GLIMS_MAX_RESOLUTION; no-op changes add no undo step.
+The sheet (ImageSizeForm over the pure ImageSizeModel) covers pixels, print
+width/height in five units, resolution in two units, Constrain proportions
+and Resample; File > New takes a resolution unit and a size unit at a 72 ppi
+default; Image Information shows resolution and print size. The Recorder
+captures both commands at format version 31. Verified on the four engine
+sets by `scripts/build-adapter.sh --test` (resolution read/set, one-undo
+grouping, undo/redo of size and resolution, refusals, XCF round trip, PNG
+export and import within the pixels-per-metre rounding) and by `swift test`
+on the ImageSizeModel and recorder codec suites. The `image-resolution`
+smoke case exercises the menu validation and document commands.

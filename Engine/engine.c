@@ -1542,6 +1542,15 @@ MARSHAL (image_scale, return glims_image_scale (e, a->image, a->width, a->height
 MARSHAL (image_scale_with_interpolation,
          return glims_image_scale_with_interpolation (e, a->image, a->width, a->height,
                                                       (uint32_t) a->n, a->error);)
+MARSHAL (image_resolution,
+         return glims_image_resolution (e, a->image, (double *) a->out, (double *) a->in_out,
+                                      a->error);)
+MARSHAL (image_set_resolution,
+         return glims_image_set_resolution (e, a->image, a->number, a->number2,
+                                             (uint32_t) a->n, a->error);)
+MARSHAL (image_resize,
+         return glims_image_resize (e, a->image, a->width, a->height, a->number, a->number2,
+                                     (uint32_t) a->n, a->error);)
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2491,6 +2500,38 @@ api_image_scale_with_interpolation (GlimsEngine *e, GlimsImageID image, int32_t 
   return glims_facade_call (e, GLIMS_FACADE_OP_image_scale_with_interpolation,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_scale_with_interpolation_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_resolution (GlimsEngine *e, GlimsImageID image, double *x_resolution,
+                     double *y_resolution, char **error)
+{
+  GlimsArgs a = { .image = image, .out = x_resolution, .in_out = y_resolution, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_resolution,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_resolution_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_set_resolution (GlimsEngine *e, GlimsImageID image, double x_resolution,
+                         double y_resolution, uint32_t edit, char **error)
+{
+  GlimsArgs a = { .image = image, .number = x_resolution, .number2 = y_resolution,
+                  .n = edit, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_set_resolution,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_set_resolution_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_resize (GlimsEngine *e, GlimsImageID image, int32_t width, int32_t height,
+                  double x_resolution, double y_resolution, uint32_t interpolation, char **error)
+{
+  GlimsArgs a = { .image = image, .width = width, .height = height, .number = x_resolution,
+                  .number2 = y_resolution, .n = interpolation, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_resize,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_resize_on_engine, &a, error);
 }
 
 static GlimsStatus

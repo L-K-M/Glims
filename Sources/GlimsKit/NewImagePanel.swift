@@ -48,6 +48,11 @@ struct NewImageSettings: Equatable {
 
     let width: Int
     let height: Int
+    /// The resolution the new image is created with, in pixels per inch.
+    /// File > New defaults to 72 ppi, which the engine's own template does
+    /// not: creation sets it cleanly, with no undo step.
+    let resolutionX: Double
+    let resolutionY: Double
     let kind: Kind
     let component: EngineSession.ColorComponent
     let channelCount: Int
@@ -60,12 +65,19 @@ struct NewImageSettings: Equatable {
     /// Lab always has three physical axes and no supplied source profile.
     init?(width: String, height: String, kind: Kind = .rgb,
           component: EngineSession.ColorComponent = .u8, channelCount: String = "4", profileICC: Data? = nil,
-          contents: Contents = .white) {
-        guard let w = Int(width.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let h = Int(height.trimmingCharacters(in: .whitespacesAndNewlines)),
-              (1...524_288).contains(w), (1...524_288).contains(h) else { return nil }
+          contents: Contents = .white,
+          sizeUnit: ImageSizeModel.SizeUnit = .pixels,
+          resolution: String = "72",
+          resolutionUnit: ImageSizeModel.ResolutionUnit = .pixelsPerInch) {
+        guard let resolutionValue = ImageSizeModel.number(resolution), resolutionValue > 0 else { return nil }
+        let ppi = resolutionValue * resolutionUnit.pixelsPerInchPerUnit
+        guard ImageSizeModel.isValidResolution(ppi) else { return nil }
+        guard let w = Self.pixels(width, unit: sizeUnit, resolution: ppi),
+              let h = Self.pixels(height, unit: sizeUnit, resolution: ppi) else { return nil }
         self.width = w
         self.height = h
+        self.resolutionX = ppi
+        self.resolutionY = ppi
         self.kind = kind
         self.contents = kind == .rgb ? contents : .white
         switch kind {
@@ -94,6 +106,18 @@ struct NewImageSettings: Equatable {
         }
     }
 
+    /// One width or height text as a whole pixel dimension. Pixels stay
+    /// strict integers; the length units round at the chosen resolution.
+    private static func pixels(_ text: String, unit: ImageSizeModel.SizeUnit, resolution: Double) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if unit == .pixels {
+            guard let value = Int(trimmed), (1...524_288).contains(value) else { return nil }
+            return value
+        }
+        guard let value = ImageSizeModel.number(trimmed) else { return nil }
+        return unit.pixels(value, resolution: resolution)
+    }
+
     /// The engine's contents for this image, with `background` (the tool
     /// background color) captured for Background Color.
     func engineContents(background: NSColor) throws -> EngineSession.NewImageContents {
@@ -109,6 +133,14 @@ struct NewImageSettings: Equatable {
 final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private let widthField = NSTextField(string: "1600")
     private let heightField = NSTextField(string: "1200")
+    private let widthLabel = NSTextField(labelWithString: "Width (px):")
+    private let heightLabel = NSTextField(labelWithString: "Height (px):")
+    private let sizeUnitPopup = NSPopUpButton()
+    private let resolutionField = NSTextField(string: "72")
+    private let resolutionUnitPopup = NSPopUpButton()
+    /// The units the fields' numbers are in, until a unit change converts them.
+    private var displayedSizeUnit = ImageSizeModel.SizeUnit.pixels
+    private var displayedResolutionUnit = ImageSizeModel.ResolutionUnit.pixelsPerInch
     private let modePopup = NSPopUpButton()
     private let precisionPopup = NSPopUpButton()
     private let channelField = NSTextField(string: "4")
@@ -126,16 +158,18 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     private var profileRows: [NSGridRow] = []
     private let profileLoader: any PsdCmykProfileCatalogLoading
     private let supportsLab: Bool
+    private let supportsResolution: Bool
     private let errorLabel = NSTextField(wrappingLabelWithString: "")
     private let createButton = NSButton(title: "Create", target: nil, action: nil)
     var onCreate: ((NewImageSettings) -> Void)?
     var onClose: (() -> Void)?
 
     init(profileLoader: any PsdCmykProfileCatalogLoading = LivePsdCmykProfileCatalogLoader(),
-         supportsLab: Bool = false, supportsContents: Bool = false) {
+         supportsLab: Bool = false, supportsContents: Bool = false, supportsResolution: Bool = true) {
         self.profileLoader = profileLoader
         self.supportsLab = supportsLab
         self.supportsContents = supportsContents
+        self.supportsResolution = supportsResolution
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 395),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         panel.title = "New Image"
@@ -146,12 +180,26 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         createButton.target = self
         createButton.action = #selector(create(_:))
         createButton.keyEquivalent = "\r"
-        for (field, label) in [(widthField, "Width in pixels"), (heightField, "Height in pixels"),
-                               (channelField, "Ink channels")] {
+        for (field, label) in [(widthField, "Width"), (heightField, "Height"),
+                               (channelField, "Ink channels"), (resolutionField, "Resolution")] {
             field.delegate = self
             field.setAccessibilityLabel(label)
             field.widthAnchor.constraint(equalToConstant: 100).isActive = true
         }
+        sizeUnitPopup.setAccessibilityLabel("Width and height unit")
+        sizeUnitPopup.target = self
+        sizeUnitPopup.action = #selector(sizeUnitChanged(_:))
+        for unit in ImageSizeModel.SizeUnit.allCases {
+            sizeUnitPopup.addItem(withTitle: unit.title)
+        }
+        sizeUnitPopup.selectItem(at: 0)
+        resolutionUnitPopup.setAccessibilityLabel("Resolution unit")
+        resolutionUnitPopup.target = self
+        resolutionUnitPopup.action = #selector(resolutionUnitChanged(_:))
+        for unit in ImageSizeModel.ResolutionUnit.allCases {
+            resolutionUnitPopup.addItem(withTitle: unit.title)
+        }
+        resolutionUnitPopup.selectItem(at: 0)
         modePopup.addItems(withTitles: NewImageSettings.Kind.choices(supportsLab: supportsLab).map(\.title))
         modePopup.target = self
         modePopup.action = #selector(modeChanged(_:))
@@ -167,8 +215,11 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         profileButton.target = self
         profileButton.action = #selector(chooseProfile(_:))
         rebuildProfiles()
-        let grid = NSGridView(views: [[NSTextField(labelWithString: "Width (px):"), widthField],
-                                     [NSTextField(labelWithString: "Height (px):"), heightField],
+        let grid = NSGridView(views: [[widthLabel, widthField],
+                                     [heightLabel, heightField],
+                                     [NSTextField(labelWithString: "Width/Height unit:"), sizeUnitPopup],
+                                     [NSTextField(labelWithString: "Resolution:"), resolutionField],
+                                     [NSTextField(labelWithString: "Resolution unit:"), resolutionUnitPopup],
                                      [NSTextField(labelWithString: "Mode:"), modePopup],
                                      [NSTextField(labelWithString: "Precision:"), precisionPopup],
                                      [NSTextField(labelWithString: "Ink channels:"), channelField],
@@ -176,9 +227,11 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
                                      [NSView(), profileButton],
                                      [NSTextField(labelWithString: "Contents:"), contentsPopup]])
         grid.column(at: 0).xPlacement = .trailing
-        channelRow = grid.row(at: 4)
-        profileRows = [grid.row(at: 5), grid.row(at: 6)]
-        contentsRow = grid.row(at: 7)
+        channelRow = grid.row(at: 7)
+        profileRows = [grid.row(at: 8), grid.row(at: 9)]
+        contentsRow = grid.row(at: 10)
+        let resolutionRows = [grid.row(at: 2), grid.row(at: 3), grid.row(at: 4)]
+        resolutionRows.forEach { $0.isHidden = !supportsResolution }
         let buttons = NSStackView(views: [cancel, createButton])
         buttons.orientation = .horizontal
         let stack = NSStackView(views: [grid, profileNote, errorLabel, buttons])
@@ -221,6 +274,36 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         if kind == .cmyk { loadProfilesIfNeeded() }
         updateValidation()
     }
+    /// A new unit describes the same image, so the numbers are converted.
+    @objc private func sizeUnitChanged(_ sender: Any?) {
+        let old = displayedSizeUnit, new = sizeUnit
+        displayedSizeUnit = new
+        let typed = ImageSizeModel.number(resolutionText).map { $0 * displayedResolutionUnit.pixelsPerInchPerUnit }
+        let ppi = typed.flatMap { ImageSizeModel.isValidResolution($0) ? $0 : nil } ?? ImageSizeModel.defaultResolution
+        for field in [widthField, heightField] {
+            guard let value = ImageSizeModel.number(field.stringValue) else { continue }
+            let inches = value / (old.perInch ?? ppi)
+            let converted = inches * (new.perInch ?? ppi)
+            field.stringValue = Self.text(new == .pixels ? converted.rounded() : converted)
+        }
+        updateValidation()
+    }
+
+    @objc private func resolutionUnitChanged(_ sender: Any?) {
+        let old = displayedResolutionUnit, new = resolutionUnit
+        displayedResolutionUnit = new
+        if let value = ImageSizeModel.number(resolutionField.stringValue) {
+            resolutionField.stringValue = Self.text(value * old.pixelsPerInchPerUnit / new.pixelsPerInchPerUnit)
+        }
+        updateValidation()
+    }
+
+    /// A converted number with at most six decimals and no grouping.
+    private static func text(_ value: Double) -> String {
+        let rounded = (value * 1_000_000).rounded() / 1_000_000
+        guard let whole = Int(exactly: rounded) else { return String(rounded) }
+        return String(whole)
+    }
     func windowWillClose(_ notification: Notification) { onClose?() }
     func controlTextDidChange(_ notification: Notification) { updateValidation() }
 
@@ -236,7 +319,31 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         let component = components.indices.contains(index) ? components[index] : .u8
         return NewImageSettings(width: widthField.stringValue, height: heightField.stringValue,
                                 kind: kind, component: component, channelCount: channelField.stringValue,
-                                profileICC: selectedProfile?.iccData, contents: contents)
+                                profileICC: selectedProfile?.iccData, contents: contents,
+                                sizeUnit: sizeUnit, resolution: resolutionText,
+                                resolutionUnit: effectiveResolutionUnit)
+    }
+
+    /// The resolution controls are hidden on adapters without the slots, so
+    /// their text cannot contribute a value; the settings keep the default.
+    private var resolutionText: String {
+        supportsResolution ? resolutionField.stringValue : String(ImageSizeModel.defaultResolution)
+    }
+
+    private var effectiveResolutionUnit: ImageSizeModel.ResolutionUnit {
+        supportsResolution ? resolutionUnit : .pixelsPerInch
+    }
+
+    private var sizeUnit: ImageSizeModel.SizeUnit {
+        let cases = ImageSizeModel.SizeUnit.allCases
+        guard cases.indices.contains(sizeUnitPopup.indexOfSelectedItem) else { return .pixels }
+        return cases[sizeUnitPopup.indexOfSelectedItem]
+    }
+
+    private var resolutionUnit: ImageSizeModel.ResolutionUnit {
+        let cases = ImageSizeModel.ResolutionUnit.allCases
+        guard cases.indices.contains(resolutionUnitPopup.indexOfSelectedItem) else { return .pixelsPerInch }
+        return cases[resolutionUnitPopup.indexOfSelectedItem]
     }
 
     /// The Contents choice, White when the adapter or the mode has none.
@@ -246,6 +353,8 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
     }
 
     private func updateValidation() {
+        widthLabel.stringValue = "Width (\(sizeUnit.title)):"
+        heightLabel.stringValue = "Height (\(sizeUnit.title)):"
         let selectedKind = kind
         let multichannel = selectedKind == .multichannel
         let cmyk = selectedKind == .cmyk
@@ -270,8 +379,10 @@ final class NewImagePanel: NSWindowController, NSWindowDelegate, NSTextFieldDele
         createButton.isEnabled = settings != nil
         guard settings == nil else { errorLabel.stringValue = ""; return }
         let dimensionsValid = NewImageSettings(width: widthField.stringValue,
-                                               height: heightField.stringValue) != nil
-        if !dimensionsValid { errorLabel.stringValue = "Enter whole numbers from 1 to 524288." }
+                                               height: heightField.stringValue,
+                                               sizeUnit: sizeUnit, resolution: resolutionText,
+                                               resolutionUnit: effectiveResolutionUnit) != nil
+        if !dimensionsValid { errorLabel.stringValue = "Enter whole pixel numbers or valid lengths, and a resolution from 0.005 to 1048576." }
         else if cmyk {
             errorLabel.stringValue = profileLoading ? "Reading installed CMYK profiles…" : "Choose a valid CMYK source profile no larger than 4 MB."
         } else if lab {

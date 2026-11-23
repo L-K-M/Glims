@@ -50,6 +50,12 @@ enum SemanticImageCommand {
     case scale(width: Int, height: Int)
     /// Image Size with an explicitly chosen resampling method.
     case scaleWithInterpolation(width: Int, height: Int, interpolation: EngineSession.Interpolation)
+    /// Image Size with Resample off: a new resolution, the pixels fixed.
+    case setResolution(x: Double, y: Double)
+    /// Image Size with Resample on: a new resolution and pixel size as one
+    /// undo step.
+    case resize(width: Int, height: Int, xResolution: Double, yResolution: Double,
+                interpolation: EngineSession.Interpolation)
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
     case crop(CGRect)
     case layerProperties(LayerProperties)
@@ -126,7 +132,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties: return false
         case .adjustment: return true
         }
@@ -165,7 +171,8 @@ enum SemanticImageCommand {
             case .flipHorizontal: return "Flip Image Horizontally"
             case .flipVertical: return "Flip Image Vertically"
             }
-        case .scale, .scaleWithInterpolation: return "Scale Image"
+        case .scale, .scaleWithInterpolation, .resize: return "Scale Image"
+        case .setResolution: return "Change Image Resolution"
         case .rotateCanvas: return "Rotate Canvas"
         case .resizeCanvas: return "Resize Canvas"
         case .crop: return "Crop Image"
@@ -215,6 +222,12 @@ enum SemanticImageCommand {
             try session.scaleImage(image, width: width, height: height)
         case .scaleWithInterpolation(let width, let height, let interpolation):
             try session.scaleImage(image, width: width, height: height, interpolation: interpolation)
+        case .setResolution(let x, let y):
+            try session.setResolution(image, x: x, y: y, edit: .undoable)
+        case .resize(let width, let height, let xResolution, let yResolution, let interpolation):
+            try session.resizeImage(image, width: width, height: height,
+                                   resolution: .init(x: xResolution, y: yResolution),
+                                   interpolation: interpolation)
         case .rotateCanvas(let degrees, let fill):
             try session.rotateImageArbitrary(image, degrees: degrees, fill: fill)
         case .resizeCanvas(let width, let height, let offset, let fill):

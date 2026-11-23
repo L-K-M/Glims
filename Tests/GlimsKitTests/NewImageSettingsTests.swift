@@ -152,6 +152,31 @@ final class NewImageSettingsTests: XCTestCase {
         XCTAssertEqual(NewImageSettings.Contents.allCases.map(\.title), ["White", "Background Color", "Transparent"])
     }
 
+    @MainActor
+    func testHiddenResolutionControlsKeepTheDefaultResolution() throws {
+        _ = NSApplication.shared
+        let panel = NewImagePanel(supportsResolution: false)
+        defer { panel.close() }
+        let content = try XCTUnwrap(panel.window?.contentView)
+        func findField(_ view: NSView, _ label: String) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable, field.accessibilityLabel() == label {
+                return field
+            }
+            return view.subviews.lazy.compactMap { findField($0, label) }.first
+        }
+        func findButton(_ view: NSView, _ title: String) -> NSButton? {
+            if let button = view as? NSButton, button.title == title { return button }
+            return view.subviews.lazy.compactMap { findButton($0, title) }.first
+        }
+        let field = try XCTUnwrap(findField(content, "Resolution"))
+        field.stringValue = "300"
+        var settings: NewImageSettings?
+        panel.onCreate = { settings = $0 }
+        try XCTUnwrap(findButton(content, "Create")).performClick(nil)
+        XCTAssertEqual(settings?.resolutionX, ImageSizeModel.defaultResolution)
+        XCTAssertEqual(settings?.resolutionY, ImageSizeModel.defaultResolution)
+    }
+
     func testEngineContentsCaptureTheBackgroundColor() throws {
         let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
         let white = try XCTUnwrap(NewImageSettings(width: "10", height: "10"))

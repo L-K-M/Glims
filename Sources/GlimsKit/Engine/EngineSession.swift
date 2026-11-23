@@ -5345,6 +5345,84 @@ final class EngineSession: @unchecked Sendable {
         try check(scale(engine, image, Int32(width), Int32(height), interpolation.rawValue, &error), error)
     }
 
+    /// An image's resolution in pixels per inch.
+    struct ImageResolution: Equatable {
+        let x: Double
+        let y: Double
+    }
+
+    /// How `setResolution` records its change, mirroring the facade's
+    /// GlimsResolutionEdit.
+    enum ResolutionEdit: UInt32 {
+        case undoable = 0
+        case clean = 1
+    }
+
+    /// Whether this adapter has the image resolution slots (246-248).
+    /// Older adapters keep the pixel-only Image Size sheet and refuse the
+    /// resolution commands cleanly.
+    var supportsImageResolution: Bool {
+        guard let read = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_resolution),
+              let set = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_set_resolution),
+              let resize = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_resize) else { return false }
+        let size = Int(api.struct_size)
+        return size >= read + MemoryLayout.size(ofValue: api.image_resolution)
+            && size >= set + MemoryLayout.size(ofValue: api.image_set_resolution)
+            && size >= resize + MemoryLayout.size(ofValue: api.image_resize)
+            && api.image_resolution != nil && api.image_set_resolution != nil && api.image_resize != nil
+    }
+
+    /// Reads the image resolution in pixels per inch. Refuses on adapters
+    /// without slot 246.
+    func imageResolution(_ image: Int32) throws -> ImageResolution {
+        guard supportsImageResolution, let read = api.image_resolution else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot read the image resolution.")
+        }
+        var x: Double = 0
+        var y: Double = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(read(engine, image, &x, &y, &error), error)
+        return ImageResolution(x: x, y: y)
+    }
+
+    /// Sets the image resolution in pixels per inch, leaving the pixel
+    /// dimensions alone. `.clean` is the File > New creation path and
+    /// refuses an image that already has undo history. One undo step on
+    /// `.undoable`, none when the value is unchanged.
+    func setResolution(_ image: Int32, x: Double, y: Double, edit: ResolutionEdit) throws {
+        guard supportsImageResolution, let set = api.image_set_resolution else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot change the image resolution.")
+        }
+        guard ImageSizeModel.isValidResolution(x), ImageSizeModel.isValidResolution(y) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "The resolution must be between 0.005 and 1048576 pixels per inch.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(set(engine, image, x, y, edit.rawValue, &error), error)
+    }
+
+    /// Image > Image Size: sets the resolution and, when the pixel
+    /// dimensions also change, resamples them, as one undo step. A change
+    /// that leaves both untouched adds none.
+    func resizeImage(_ image: Int32, width: Int, height: Int, resolution: ImageResolution,
+                     interpolation: Interpolation) throws {
+        guard supportsImageResolution, let resize = api.image_resize else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot resize the image and its resolution together.")
+        }
+        guard ImageSizeModel.isValidPixelWidth(width), ImageSizeModel.isValidPixelWidth(height),
+              ImageSizeModel.isValidResolution(resolution.x),
+              ImageSizeModel.isValidResolution(resolution.y) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid pixel size and resolution.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(resize(engine, image, Int32(width), Int32(height), resolution.x, resolution.y,
+                         interpolation.rawValue, &error), error)
+    }
+
     /// Whether this adapter offers Layer > Merge Visible (facade slot 235).
     var supportsMergeVisible: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_merge_visible) else { return false }

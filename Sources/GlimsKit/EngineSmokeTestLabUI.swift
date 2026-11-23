@@ -129,8 +129,8 @@ extension EngineSmokeTest {
             guard let window = panel.window, let root = window.contentView else {
                 throw NSError(domain: "LabUISmoke", code: 5, userInfo: [NSLocalizedDescriptionKey: "New Image window missing"])
             }
-            try draft(control(NSTextField.self, label: "Width in pixels", in: root), "32", in: window)
-            try draft(control(NSTextField.self, label: "Height in pixels", in: root), "24", in: window)
+            try draft(control(NSTextField.self, label: "Width", in: root), "32", in: window)
+            try draft(control(NSTextField.self, label: "Height", in: root), "24", in: window)
             let mode = try control(NSPopUpButton.self, label: "Image mode", in: root)
             let precision = try control(NSPopUpButton.self, label: "Precision", in: root)
             try require(mode.indexOfItem(withTitle: "Lab (D50)") >= 0, "New Image exposes Lab (D50)")
