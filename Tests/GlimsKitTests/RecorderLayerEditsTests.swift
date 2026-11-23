@@ -7,7 +7,10 @@ import CoreGraphics
 final class RecorderLayerEditsTests: XCTestCase {
     private let recordingID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
     private let symbol = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+    private let produced = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+    private let producedSymbolJSON = #"{"id":"44444444-4444-4444-4444-444444444444","description":{"name":"Copy","kind":"pixel","ancestors":[],"siblingIndex":1,"bounds":{"x":0,"y":0,"width":10,"height":10}}}"#
     private let layerSymbolJSON = #"{"id":"22222222-2222-2222-2222-222222222222","description":{"name":"Layer","kind":"pixel","ancestors":[],"siblingIndex":0,"bounds":{"x":0,"y":0,"width":10,"height":10}}}"#
+    private var bothSymbolsJSON: String { layerSymbolJSON + "," + producedSymbolJSON }
     private let channelSymbolJSON = #"{"id":"33333333-3333-3333-3333-333333333333","description":{"name":"Channel","kind":"channel","ancestors":[],"siblingIndex":0,"bounds":{"x":0,"y":0,"width":10,"height":10}}}"#
     private let layerBinding = #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#
     private let contextBinding = #"{"kind":"context","context":{"layers":["22222222-2222-2222-2222-222222222222"],"channels":[],"target":{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"},"masks":[{"owner":"22222222-2222-2222-2222-222222222222","isPresent":false,"enabled":false,"editing":false,"showing":false}],"quickMask":{"enabled":false,"inverted":false,"color":{"space":"srgb","red":1,"green":0,"blue":0,"alpha":1}}}}"#
@@ -18,31 +21,55 @@ final class RecorderLayerEditsTests: XCTestCase {
             + #","recordingID":"11111111-1111-1111-1111-111111111111","name":"Layer edits","origin":{"imageLabel":"A","initialWidth":200,"initialHeight":150},"symbols":["#
             + symbols + #"],"records":["# + records + "]}"
     }
-    private func success(_ command: String, binding: String, ordinal: Int = 0) -> String {
-        "{\"ordinal\":\(ordinal),\"outcome\":\"success\",\"command\":\(command),\"binding\":\(binding)}"
+    private func success(_ command: String, binding: String, ordinal: Int = 0, produces: String? = nil) -> String {
+        var text = "{\"ordinal\":\(ordinal),\"outcome\":\"success\",\"command\":\(command),\"binding\":\(binding)}"
+        if let produces {
+            text.insert(contentsOf: ",\"produces\":\"\(produces)\"", at: text.index(before: text.endIndex))
+        }
+        return text
     }
     private func document(_ command: String, version: Int = 33, binding: String = #"{"kind":"none"}"#,
-                          symbols: String = "") -> String {
-        file(version: version, symbols: symbols, records: success(command, binding: binding))
+                          symbols: String = "", produces: String? = nil) -> String {
+        file(version: version, symbols: symbols, records: success(command, binding: binding, produces: produces))
     }
 
     func testLayerEditsRoundTripThroughTheCodec() throws {
-        let cases: [(String, String, String)] = [
-            (#"{"tag":"moveLayer","offset":{"x":3,"y":-2}}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON),
-            (#"{"tag":"duplicateLayers"}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON),
-            (#"{"tag":"deleteLayers"}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON),
-            (#"{"tag":"mergeVisible"}"#, #"{"kind":"none"}"#, ""),
-            (#"{"tag":"addLayerMask","source":"alphaTransfer","edit":true}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON),
-            (#"{"tag":"selectSimilar","threshold":0.25,"antialias":false,"sampleMerged":true}"#, #"{"kind":"none"}"#, ""),
-            (#"{"tag":"selectSimilar","threshold":0.25,"antialias":false,"sampleMerged":false}"#, contextBinding, layerSymbolJSON),
+        let cases: [(String, String, String, String?)] = [
+            (#"{"tag":"moveLayer","offset":{"x":3,"y":-2}}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON, nil),
+            (#"{"tag":"duplicateLayers"}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, bothSymbolsJSON, produced.uuidString),
+            (#"{"tag":"deleteLayers"}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON, nil),
+            (#"{"tag":"mergeVisible"}"#, #"{"kind":"none"}"#, producedSymbolJSON, produced.uuidString),
+            (#"{"tag":"addLayerMask","source":"alphaTransfer","edit":true}"#, #"{"kind":"layer","symbol":"22222222-2222-2222-2222-222222222222"}"#, layerSymbolJSON, nil),
+            (#"{"tag":"selectSimilar","threshold":0.25,"antialias":false,"sampleMerged":true}"#, #"{"kind":"none"}"#, "", nil),
+            (#"{"tag":"selectSimilar","threshold":0.25,"antialias":false,"sampleMerged":false}"#, contextBinding, layerSymbolJSON, nil),
         ]
-        for (command, binding, symbols) in cases {
-            let value = try RecorderFileCodec.decode(bytes(document(command, binding: binding, symbols: symbols)))
+        for (command, binding, symbols, produces) in cases {
+            let value = try RecorderFileCodec.decode(bytes(document(command, binding: binding, symbols: symbols,
+                                                                produces: produces)))
             let encoded = try RecorderFileCodec.encode(value)
             XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":33"#), command)
             XCTAssertEqual(try RecorderFileCodec.decode(encoded), value, command)
             _ = try RecorderFileSemanticBridge.prepare(value)
         }
+
+        let duplicated = try RecorderFileCodec.decode(bytes(document(
+            #"{"tag":"duplicateLayers"}"#, binding: layerBinding, symbols: bothSymbolsJSON,
+            produces: produced.uuidString)))
+        guard case .success(.duplicateLayers, .layer)? = duplicated.records.first?.outcome else {
+            return XCTFail("Duplicate Layers was lost")
+        }
+        XCTAssertEqual(duplicated.records.first?.produces, produced)
+        let encodedDuplicate = try RecorderFileCodec.encode(duplicated)
+        let duplicateText = String(decoding: encodedDuplicate, as: UTF8.self)
+        XCTAssertTrue(duplicateText.contains(#""produces":"\#(produced.uuidString)""#), duplicateText)
+        XCTAssertTrue(duplicateText.contains("\"name\":\"Copy\""), duplicateText)
+        let merged = try RecorderFileCodec.decode(bytes(document(
+            #"{"tag":"mergeVisible"}"#, binding: #"{"kind":"none"}"#, symbols: producedSymbolJSON,
+            produces: produced.uuidString)))
+        guard case .success(.mergeVisible, .none)? = merged.records.first?.outcome else {
+            return XCTFail("Merge Visible was lost")
+        }
+        XCTAssertEqual(merged.records.first?.produces, produced)
 
         let moved = try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"moveLayer","offset":{"x":3,"y":-2}}"#, binding: layerBinding, symbols: layerSymbolJSON)))
@@ -118,6 +145,52 @@ final class RecorderLayerEditsTests: XCTestCase {
         }
     }
 
+    func testProducedSymbolRules() throws {
+        let producer = #"{"tag":"duplicateLayers"}"#
+        let producedID = produced.uuidString
+        // Missing produces.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+            producer, binding: layerBinding, symbols: bothSymbolsJSON))))
+        // Another command cannot produce.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+            #"{"tag":"moveLayer","offset":{"x":1,"y":0}}"#, binding: layerBinding,
+            symbols: bothSymbolsJSON, produces: producedID))))
+        // Unknown symbol.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+            producer, binding: layerBinding, symbols: layerSymbolJSON, produces: producedID))))
+        // Channel-kind description.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+            producer, binding: layerBinding, symbols: layerSymbolJSON + "," + channelSymbolJSON,
+            produces: "33333333-3333-3333-3333-333333333333"))))
+        // A failed row cannot carry produces.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+            records: #"{"ordinal":0,"outcome":"failure","reason":"Failed","produces":"\#(producedID)"}"#))))
+        // Same-row use.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+            producer, binding: #"{"kind":"layer","symbol":"\#(producedID)"}"#,
+            symbols: bothSymbolsJSON, produces: producedID))))
+        // Two producers of one symbol.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+            records: success(producer, binding: layerBinding, produces: producedID)
+                + "," + success(producer, binding: layerBinding, ordinal: 1, produces: producedID)))))
+        // Use before production: row 0 binds the produced symbol, row 1 creates it.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+            records: success(#"{"tag":"layerProperties","properties":{"opacity":0.5}}"#,
+                           binding: #"{"kind":"layer","symbol":"\#(producedID)"}"#)
+                + "," + success(producer, binding: layerBinding, ordinal: 1, produces: producedID)))))
+        // Valid later use.
+        let valid = try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+            records: success(producer, binding: layerBinding, produces: producedID)
+                + "," + success(#"{"tag":"deleteLayers"}"#,
+                                binding: #"{"kind":"layer","symbol":"\#(producedID)"}"#, ordinal: 1))))
+        XCTAssertEqual(valid.records.first?.produces, produced)
+        XCTAssertNil(valid.records.last?.produces)
+        guard case .success(.deleteLayers, .layer(let bound))? = valid.records.last?.outcome else {
+            return XCTFail("The later row lost its produced-layer binding")
+        }
+        XCTAssertEqual(bound, produced)
+    }
+
     func testBindingPairingRules() {
         let layerCommands = [
             #"{"tag":"moveLayer","offset":{"x":1,"y":0}}"#,
@@ -171,8 +244,10 @@ final class RecorderLayerEditsTests: XCTestCase {
 
         let description = RecorderTargetDescription(name: "Layer", kind: .pixel, ancestors: [],
                                                     siblingIndex: 0, bounds: .init(x: 0, y: 0, width: 10, height: 10))
+        let producedDescription = RecorderTargetDescription(name: "Copy", kind: .pixel, ancestors: [],
+                                                            siblingIndex: 1, bounds: .init(x: 0, y: 0, width: 10, height: 10))
         var catalog = RecorderDescriptionCatalog()
-        catalog.acceptFirst([symbol: .available(description)])
+        catalog.acceptFirst([symbol: .available(description), produced: .available(producedDescription)])
         var log = RecorderLog<SemanticImageCommand>()
         try log.startRecording()
         let first = try log.reserve()
@@ -182,14 +257,20 @@ final class RecorderLayerEditsTests: XCTestCase {
         try log.stopRecording()
         let snapshot = try RecorderFileCodec.snapshot(log, recordingID: recordingID, name: "Layer edits",
                                                        origin: .init(imageLabel: "A", initialWidth: 200, initialHeight: 150),
-                                                       descriptions: catalog, bindings: [0: .layer(symbol)])
+                                                       descriptions: catalog, bindings: [0: .layer(symbol)],
+                                                       produced: [1: produced])
         XCTAssertEqual(snapshot.records.count, 2)
         let encoded = try RecorderFileCodec.encode(snapshot)
         XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":33"#))
         XCTAssertEqual(try RecorderFileCodec.decode(encoded), snapshot)
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(produced.uuidString))
         guard case .success(.moveLayer(let offset), .layer)? = snapshot.records.first?.outcome else {
             return XCTFail("The snapshot lost the layer move")
         }
         XCTAssertEqual(offset, .init(x: 2, y: 1))
+        guard case .success(.mergeVisible, .none)? = snapshot.records.last?.outcome else {
+            return XCTFail("The snapshot lost the merged layer")
+        }
+        XCTAssertEqual(snapshot.records.last?.produces, produced)
     }
 }

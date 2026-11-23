@@ -170,6 +170,12 @@ use specific layers, masks or channels, choose each target in the binding
 sheet. A matching name is a description; it does not select a target. Loading
 installs the command list. Use **Replay** separately to edit the image.
 
+Layers that a recorded command creates are bound automatically on replay. A
+recording can duplicate a layer and then edit or delete the copy, or merge
+visible layers and then edit the result, all in one installation. The binding
+sheet never offers those created layers as choices; their captured
+descriptions still travel in the file.
+
 Before replacing an unsaved recording or removing it through Close, Quit or
 Revert, Glims offers Save, Discard Changes or Cancel. Discard Changes grants
 permission for the pending action. Cancelling the next panel or image prompt

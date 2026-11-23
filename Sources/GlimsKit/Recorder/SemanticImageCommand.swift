@@ -236,6 +236,12 @@ enum SemanticImageCommand {
     /// Execute only on the document's engine queue. The image handle is supplied
     /// for this execution and is never retained in the semantic command.
     func apply(session: EngineSession, image: Int32) throws {
+        _ = try applyCreating(session: session, image: image)
+    }
+
+    /// `apply`, returning the runtime id of the layer a layer-creating
+    /// command made (Merge Visible) and nil for every other command.
+    func applyCreating(session: EngineSession, image: Int32) throws -> Int32? {
         switch self {
         case .labSelection(let command): try command.apply(session: session, image: image)
         case .selectionShape(let shape, let options):
@@ -276,7 +282,7 @@ enum SemanticImageCommand {
             try session.cropResize(image, rect: rect, width: width, height: height,
                                    resolution: resolution, interpolation: interpolation)
         case .mergeVisible:
-            _ = try session.mergeVisible(image)
+            return try session.mergeVisible(image)
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             var options = EngineSession.SelectOptions()
             options.threshold = threshold
@@ -288,6 +294,7 @@ enum SemanticImageCommand {
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
         }
+        return nil
     }
 
     var isMaskAdjustment: Bool {
@@ -306,6 +313,12 @@ enum SemanticImageCommand {
     /// The caller freshly confirms this runtime layer against the owning image.
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
+        _ = try applyCreating(session: session, image: image, layer: layer)
+    }
+
+    /// `apply`, returning the runtime id of the layer a layer-creating
+    /// command made (Duplicate Layers, Merge Visible) and nil otherwise.
+    func applyCreating(session: EngineSession, image: Int32, layer: Int32) throws -> Int32? {
         switch self {
         case .completeLabLayerStroke, .fillLabLayer, .adjustment:
             // A logical Lab layer needs its captured UUID, not just a
@@ -405,7 +418,8 @@ enum SemanticImageCommand {
             try session.moveLayer(layer, image: image, by: offset)
         case .duplicateLayers:
             guard layer > 0 else { throw MissingLayerBinding() }
-            _ = try session.duplicateLayers(image, layers: [layer])
+            let copies = try session.duplicateLayers(image, layers: [layer])
+            return copies.first
         case .deleteLayers:
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.deleteLayers(image, layers: [layer])
@@ -420,8 +434,9 @@ enum SemanticImageCommand {
             }
             _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
         default:
-            try apply(session: session, image: image)
+            return try applyCreating(session: session, image: image)
         }
+        return nil
     }
 
     /// Both v4 affine and v6 projective replay use the captured native API:

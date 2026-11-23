@@ -76,6 +76,10 @@ extension EngineSmokeTest {
         settle(a)
         a.mergeVisible()
         settle(a)
+        // A later row edits the merged layer, so replay must bind the layer
+        // Merge Visible creates.
+        a.moveActiveLayer(by: CGSize(width: 2, height: 1))
+        settle(a)
         a.select(.rectangle(CGRect(x: 8, y: 8, width: 20, height: 20)), options: .init())
         settle(a)
         var similar = EngineSession.SelectOptions()
@@ -86,7 +90,7 @@ extension EngineSmokeTest {
         settle(a)
 
         let rows = a.recorder.records
-        check(rows.count == 8
+        check(rows.count == 9
               && rows.allSatisfy({ if case .success = $0.resolution { return true }; return false })
               && a.recorder.replayRefusal == nil,
               "every layer edit records one successful row (\(rows.count) rows)")
@@ -109,7 +113,7 @@ extension EngineSmokeTest {
             check(true, "Merge Visible records a row without fields")
         } else { check(false, "the sixth row is Merge Visible") }
         if case .success(.selectSimilar(let threshold, let antialias, let sampleMerged))?
-            = rows.dropFirst(7).first?.resolution {
+            = rows.dropFirst(8).first?.resolution {
             check(threshold == 15.0 / 255.0 && antialias && sampleMerged,
                   "Select Similar stores threshold, antialias and sample-merged")
         } else { check(false, "the last row is Select Similar") }
@@ -127,50 +131,38 @@ extension EngineSmokeTest {
         guard let loaded, let file = try? loaded.get().file else {
             return check(false, "the layer-edit recording loads")
         }
-        check(file.records.count == 8, "the saved recording keeps every layer-edit row")
+        check(file.records.count == 9, "the saved recording keeps every layer-edit row")
 
-        // The Delete row binds the copy the Duplicate row creates, so a fresh
-        // image cannot resolve it during one install. Replay the saved rows
-        // in two installs: the prefix through Duplicate, then the rest with
-        // the copy present.
-        var prefix = file
-        for index in [7, 6, 5, 4, 3] { prefix = try prefix.removingRecord(at: index) }
-        var suffix = file
-        for _ in 0..<3 { suffix = try suffix.removingRecord(at: 0) }
-        check(prefix.records.count == 3 && suffix.records.count == 5,
-              "the saved recording splits into a duplicate prefix and its suffix")
+        // Duplicate Layers (row 2) and Merge Visible (row 5) each produce a
+        // symbol, and every produced description is saved as a symbol.
+        let producedIDs = Set(file.records.compactMap(\.produces))
+        guard let duplicateProduced = file.records[2].produces,
+              let mergeProduced = file.records[5].produces,
+              producedIDs.contains(duplicateProduced), producedIDs.contains(mergeProduced) else {
+            return check(false, "Duplicate Layers and Merge Visible record produced symbols")
+        }
+        check(file.records.compactMap(\.produces).allSatisfy { id in
+              file.symbols.contains { $0.id == id }
+          }, "every produced symbol's description is saved as a symbol")
+        if case .success(.deleteLayers, .layer(let deleted)) = file.records[3].outcome,
+           case .success(.moveLayer, .layer(let moved)) = file.records[6].outcome {
+            check(deleted == duplicateProduced && moved == mergeProduced,
+                  "Delete binds the duplicate's copy and the later move binds the merged layer")
+        } else { check(false, "rows 3 and 6 bind produced layers") }
 
-        let (b, baseB, layerB) = try fixture("Layer edits replay")
+        let (b, _, _) = try fixture("Layer edits replay")
         defer { close(b) }
-        var prefixInstalled: Result<Void, Error>?
-        let prefixChoices = try RecorderBatchBindings.resolve(
-            file: prefix, candidates: b.recorderBatchCandidates(), policy: .matchingNamesAndKinds)
-        b.installRecording(try RecorderFileSemanticBridge.prepare(prefix),
+        // One install binds only the load-time input, the pasted layer. The
+        // produced copy and merged layer resolve during replay itself.
+        let choices = try RecorderBatchBindings.resolve(
+            file: file, candidates: b.recorderBatchCandidates(), policy: .matchingNamesAndKinds)
+        check(choices.count == 1, "only the pasted layer needs an install choice (\(choices.count))")
+        var installed: Result<Void, Error>?
+        b.installRecording(try RecorderFileSemanticBridge.prepare(file),
                            checkpoint: try b.recorderInstallCheckpoint(),
-                           choices: prefixChoices) { prefixInstalled = $0 }
+                           choices: choices) { installed = $0 }
         settle(b)
-        try prefixInstalled!.get()
-        try b.startReplay()
-        settle(b)
-
-        try b.reload()
-        settle(b)
-        guard let copyB = try session.layers(b.image).first(where: { $0.id != baseB && $0.id != layerB })?.id else {
-            return check(false, "the replayed duplicate exists in the second document")
-        }
-        let copyName = try session.layers(b.image).first { $0.id == copyB }!.name
-        let layerName = try session.layers(b.image).first { $0.id == layerB }!.name
-        var suffixChoices: [UUID: ImageDocument.RecorderInstallChoice] = [:]
-        for symbol in suffix.symbols {
-            if symbol.description.name == copyName { suffixChoices[symbol.id] = .layer(copyB) }
-            if symbol.description.name == layerName { suffixChoices[symbol.id] = .layer(layerB) }
-        }
-        var suffixInstalled: Result<Void, Error>?
-        b.installRecording(try RecorderFileSemanticBridge.prepare(suffix),
-                           checkpoint: try b.recorderInstallCheckpoint(),
-                           choices: suffixChoices) { suffixInstalled = $0 }
-        settle(b)
-        try suffixInstalled!.get()
+        try installed!.get()
         try b.startReplay()
         settle(b)
 

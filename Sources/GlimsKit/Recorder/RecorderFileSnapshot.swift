@@ -7,7 +7,7 @@ extension RecorderFileCodec {
     /// triggers a late lookup or a successfully encoded prefix.
     static func snapshot(_ log: RecorderLog<SemanticImageCommand>, recordingID: UUID, name: String,
                          origin: RecorderFileValue.Origin, descriptions: RecorderDescriptionCatalog,
-                         bindings: [Int: RecorderBindingDescription]) throws -> RecorderFileValue {
+                         bindings: [Int: RecorderBindingDescription], produced: [Int: UUID] = [:]) throws -> RecorderFileValue {
         guard !log.isRecording, !log.isReplaying, log.pendingCount == 0 else {
             throw RecorderFileError.invalid("Stop recording/replay and wait for every accepted command before saving.")
         }
@@ -46,12 +46,16 @@ extension RecorderFileCodec {
                 else if value.isTargetIndependent { binding = .none }
                 else { throw RecorderFileError.invalid("This older command has no capture-time binding description; record it again.") }
                 required.formUnion(try referencedSymbols(binding))
+                // A produced symbol's description is captured with its
+                // row, so it joins the emitted symbols without becoming an
+                // input anyone has to bind.
+                if let symbol = produced[record.ordinal] { required.insert(symbol) }
                 guard required.count <= RecorderFileLimits.symbols else { throw RecorderFileError.invalid("Too many recording symbols.") }
                 outcome = .success(value, binding)
             case .failure(let reason): outcome = .failure(reason)
             case .cancelled(let reason): outcome = .cancelled(reason)
             }
-            return .init(ordinal: record.ordinal, outcome: outcome)
+            return .init(ordinal: record.ordinal, outcome: outcome, produces: produced[record.ordinal])
         }
         let symbols = try required.sorted { $0.uuidString < $1.uuidString }.map { id -> RecorderFileValue.Symbol in
             guard let observation = descriptions.values[id] else { throw RecorderFileError.invalid("An original target description is missing; record it again.") }

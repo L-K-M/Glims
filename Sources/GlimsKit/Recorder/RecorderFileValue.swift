@@ -22,6 +22,16 @@ struct RecorderFileValue: Equatable {
     struct Record: Equatable {
         let ordinal: Int
         let outcome: Outcome
+        /// A successful layer-creating command names the symbol its new
+        /// layer was described under, so later rows can bind it. Only
+        /// Duplicate Layers and Merge Visible produce a symbol.
+        let produces: UUID?
+
+        init(ordinal: Int, outcome: Outcome, produces: UUID? = nil) {
+            self.ordinal = ordinal
+            self.outcome = outcome
+            self.produces = produces
+        }
     }
 
     let recordingID: UUID
@@ -40,7 +50,9 @@ struct RecorderFileValue: Equatable {
         }
         var remaining = records
         remaining.remove(at: index)
-        let renumbered = remaining.enumerated().map { Record(ordinal: $0.offset, outcome: $0.element.outcome) }
+        let renumbered = remaining.enumerated().map {
+            Record(ordinal: $0.offset, outcome: $0.element.outcome, produces: $0.element.produces)
+        }
         return RecorderFileValue(recordingID: recordingID, name: name, origin: origin,
                                  symbols: symbols, records: renumbered)
     }

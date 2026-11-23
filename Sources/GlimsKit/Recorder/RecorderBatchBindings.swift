@@ -66,6 +66,9 @@ enum RecorderBatchBindings {
                 maskOwners.formUnion(context.masks.filter(\.isPresent).map(\.owner))
             }
         }
+        // Layers a recorded command creates are bound automatically at
+        // replay; their symbols are outputs, never matchable inputs.
+        required.subtract(file.records.compactMap(\.produces))
         if case .requireNoTargets = policy {
             guard required.isEmpty else { throw MatchError.matchingRequired }
             return [:]

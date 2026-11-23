@@ -140,6 +140,7 @@ extension RecorderFileCodec {
                 fields["outcome"] = .string("success")
                 fields["command"] = try commandJSON(command)
                 fields["binding"] = try bindingJSON(binding)
+                if let produces = record.produces { fields["produces"] = id(produces) }
             case .failure(let reason): fields["outcome"] = .string("failure"); fields["reason"] = .string(reason)
             case .cancelled(let reason): fields["outcome"] = .string("cancelled"); fields["reason"] = .string(reason)
             }

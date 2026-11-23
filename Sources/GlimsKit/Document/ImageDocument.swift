@@ -37,6 +37,16 @@ final class ImageDocument {
     private(set) var recorderDescriptions = RecorderDescriptionCatalog()
     private(set) var recorderBindingDescriptions: [Int: RecorderBindingDescription] = [:]
     private var recorderSymbols: [RecorderRuntimeTarget: UUID] = [:]
+    /// A successful layer-creating row names the symbol its new layer was
+    /// described under, keyed by row ordinal. Produced symbols are bound by
+    /// replay itself and are never offered for an install choice.
+    private var recorderProducedSymbols: [Int: UUID] = [:]
+    /// The installed file's explicit choices, keyed by symbol, kept so a
+    /// deferred row can resolve its non-produced inputs at replay time.
+    private var recorderInstalledTargets: [UUID: RecorderRuntimeTarget] = [:]
+    /// The layer each replayed producing step actually created, keyed by its
+    /// produced symbol. Filled only after that step's native work succeeds.
+    private var recorderProducedLayers: [UUID: Int32] = [:]
     private(set) var recorderLoadedFile: RecorderFileValue?
     private(set) var recorderFileMetadata: RecorderFileMetadata
     private var recorderRevision = UUID()
@@ -110,6 +120,10 @@ final class ImageDocument {
         case ink(channel: Int32, identity: RecorderInkIdentity?)
         case lab(axis: EngineSession.LabAxis, identity: RecorderLabIdentity?)
         case unavailable(String)
+        /// An installed row whose binding names a layer an earlier replayed
+        /// step produces. The input queue resolves it to a concrete context
+        /// through the produced layer map just before the command applies.
+        case deferred(RecorderBindingDescription)
     }
 
     private struct RecorderCapture {
@@ -166,12 +180,22 @@ final class ImageDocument {
         let descriptions: RecorderDescriptionCatalog
         let bindings: [Int: RecorderBindingDescription]
         let symbols: [RecorderRuntimeTarget: UUID]
+        let produced: [Int: UUID]
+        let targets: [UUID: RecorderRuntimeTarget]
     }
 
     private struct ConfirmedRecorderCapture {
         let context: RecorderContext?
         let binding: RecorderBindingDescription
         let descriptions: [UUID: RecorderDescriptionObservation]
+    }
+
+    /// The layer a successful layer-creating command just made, described
+    /// from fresh engine rows for the file's symbol table.
+    private struct ProducedLayerCapture {
+        let symbol: UUID
+        let layer: Int32
+        let description: RecorderTargetDescription
     }
 
     /// Lives only on inputQueue. AppKit and the semantic log never own
@@ -3208,10 +3232,22 @@ final class ImageDocument {
         }
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            let result = Result { _ = try session.duplicateLayers(image, layers: captured) }
+            let result = Result { try session.duplicateLayers(image, layers: captured) }
             if case .failure(let error) = result { self.report(error) }
             if let capture, let command {
-                self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+                var recorded = result.map { _ in command }
+                var produced: ProducedLayerCapture? = nil
+                if case .success(let copies) = result {
+                    // The new copy becomes a produced symbol for later rows.
+                    // The edit stays even when the description cannot be
+                    // captured; the row alone reports the failed capture.
+                    do {
+                        produced = try Self.producedLayerCapture(copies.first, session: session, image: image)
+                    } catch {
+                        recorded = .failure(error)
+                    }
+                }
+                self.settleRecording(capture, result: recorded, confirmed: confirmed, produced: produced)
             }
         }, completion: completion)
         if capture != nil { notifyRecorderChanged() }
@@ -3531,10 +3567,22 @@ final class ImageDocument {
         let capture = reserveRecordedCommand(command, explicitLayer: nil, fallback: "Merge Visible")
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
-            let result = Result { _ = try session.mergeVisible(image) }
+            let result = Result { try session.mergeVisible(image) }
             if case .failure(let error) = result { self.report(error) }
             if let capture {
-                self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
+                var recorded = result.map { _ in command }
+                var produced: ProducedLayerCapture? = nil
+                if case .success(let merged) = result {
+                    // The merged layer becomes a produced symbol for later
+                    // rows. The edit stays even when the description cannot
+                    // be captured; the row alone reports the failed capture.
+                    do {
+                        produced = try Self.producedLayerCapture(merged, session: session, image: image)
+                    } catch {
+                        recorded = .failure(error)
+                    }
+                }
+                self.settleRecording(capture, result: recorded, confirmed: confirmed, produced: produced)
             }
         })
         if capture != nil { notifyRecorderChanged() }
@@ -7845,6 +7893,9 @@ final class ImageDocument {
         recorderSymbols.removeAll()
         recorderDescriptions = RecorderDescriptionCatalog()
         recorderBindingDescriptions.removeAll()
+        recorderProducedSymbols.removeAll()
+        recorderInstalledTargets.removeAll()
+        recorderProducedLayers.removeAll()
         recorderLoadedFile = nil
         recorderFileMetadata = RecorderFileMetadata(origin: .init(imageLabel: name,
             initialWidth: info.width, initialHeight: info.height))
@@ -7891,6 +7942,7 @@ final class ImageDocument {
 
         let contexts = try removing(recorderTargetContexts)
         let bindings = try removing(recorderBindingDescriptions)
+        let produced = try removing(recorderProducedSymbols)
         let editedFile: RecorderFileValue?
         if let loaded = recorderLoadedFile {
             guard loaded.records.count == count else {
@@ -7904,6 +7956,7 @@ final class ImageDocument {
         recorder = updatedLog
         recorderTargetContexts = contexts
         recorderBindingDescriptions = bindings
+        recorderProducedSymbols = produced
         recorderLoadedFile = editedFile
         recorderRevision = UUID()
         recorderReplayGeneration = UUID()
@@ -7957,6 +8010,7 @@ final class ImageDocument {
         let log = recorder
         let descriptions = recorderDescriptions
         let bindings = recorderBindingDescriptions
+        let produced = recorderProducedSymbols
         let loaded = recorderLoadedFile
         pendingWork += 1
         Self.recorderFileQueue.async {
@@ -7968,7 +8022,8 @@ final class ImageDocument {
                     // recording keeps accepting commands while the file writes.
                     let stopped = log.isRecording ? try RecorderLog(settledRecords: log.records) : log
                     file = try RecorderFileCodec.snapshot(stopped, recordingID: metadata.recordingID, name: metadata.name,
-                                                          origin: metadata.origin, descriptions: descriptions, bindings: bindings)
+                                                          origin: metadata.origin, descriptions: descriptions, bindings: bindings,
+                                                          produced: produced)
                 }
                 try RecorderFileStore.save(file, to: url)
             }
@@ -8016,6 +8071,9 @@ final class ImageDocument {
                     self.recorderDescriptions = installation.descriptions
                     self.recorderBindingDescriptions = installation.bindings
                     self.recorderSymbols = installation.symbols
+                    self.recorderInstalledTargets = installation.targets
+                    self.recorderProducedSymbols = installation.produced
+                    self.recorderProducedLayers = [:]
                     self.recorderLoadedFile = installation.file
                     self.recorderFileMetadata = RecorderFileMetadata(file: installation.file)
                     self.recorderRevision = UUID()
@@ -8086,12 +8144,18 @@ final class ImageDocument {
                                                   choices: [UUID: RecorderInstallChoice],
                                                   session: EngineSession, image: Int32) throws -> RecorderInstallation {
         let file = prepared.file
+        let producedByRow = file.records.reduce(into: [Int: UUID]()) { result, row in
+            if let symbol = row.produces { result[row.ordinal] = symbol }
+        }
+        let produced = Set(producedByRow.values)
         var required: Set<UUID> = []
         for row in file.records {
             if case .success(_, let binding) = row.outcome {
                 required.formUnion(try RecorderFileCodec.referencedSymbols(binding))
             }
         }
+        // Produced symbols are bound by replay itself, never by a load choice.
+        required.subtract(produced)
         guard Set(choices.keys) == required else { throw RecorderInstallError.incompleteChoices }
         _ = try session.info(image)
 
@@ -8156,6 +8220,12 @@ final class ImageDocument {
         for row in file.records {
             guard case .success(let command, let binding) = row.outcome else { continue }
             bindings[row.ordinal] = binding
+            // A binding that names a produced layer resolves on the input
+            // queue at replay, where the created runtime id is known.
+            if !produced.isDisjoint(with: try RecorderFileCodec.referencedSymbols(binding)) {
+                contexts[row.ordinal] = .deferred(binding)
+                continue
+            }
             switch binding {
             case .none: break
             case .unavailable(let reason): throw RecorderFileError.invalid(reason)
@@ -8239,7 +8309,8 @@ final class ImageDocument {
         // A prepared candidate can be reused. Each install needs its own epoch.
         let log = try RecorderLog(settledRecords: prepared.log.records)
         return RecorderInstallation(log: log, file: file, contexts: contexts,
-                                    descriptions: descriptions, bindings: bindings, symbols: symbols)
+                                    descriptions: descriptions, bindings: bindings, symbols: symbols,
+                                    produced: producedByRow, targets: targets)
     }
 
     /// Replay uses this document's current native image only. Each step keeps
@@ -8249,6 +8320,7 @@ final class ImageDocument {
         endPendingUserEdits()
         if let reason = recorderReplayBlockReason() { throw RecorderReplayError(message: reason) }
         try recorder.beginReplay()
+        recorderProducedLayers = [:]
         recorderReplayGeneration = UUID()
         recorderReplayWaitingGeneration = nil
         recorderReplayEngineWaitingGeneration = nil
@@ -8332,6 +8404,10 @@ final class ImageDocument {
                 guard let context else { throw RecorderReplayError(message: "This command has no captured target context; record it again.") }
                 switch context {
                 case .unavailable(let reason): throw RecorderReplayError(message: reason)
+                case .deferred:
+                    // The input queue resolves a produced symbol to the layer
+                    // this document actually created for it.
+                    break
                 case .layer(let layer):
                     guard layers.contains(where: { $0.id == layer }) else {
                         throw RecorderReplayError(message: "The recorded layer is no longer in this image.")
@@ -8369,21 +8445,32 @@ final class ImageDocument {
                 }
             }
         } catch {
-            settleRecorderReplay(step.token, generation: generation, result: .failure(error))
+            settleRecorderReplay(step.token, generation: generation, index: step.index, result: .failure(error))
             return
         }
         // This private route bypasses only the live-edit replay gate. All other
         // admission gates above and native target checks below remain in force.
+        // A deferred row reads the produced map as it stands just before its
+        // own step; each continuation captures the next step's current state.
+        let installedTargets = recorderInstalledTargets
+        let producedLayers = recorderProducedLayers
         enqueue(on: inputQueue, input: true, afterFinish: { [weak self] in
             DispatchQueue.main.async { self?.continueRecorderReplay(generation: generation) }
         }) { [session, image] in
-            let result = Result {
+            let result = Result<Int32?, Error> {
+                let effectiveContext: RecorderContext?
+                if case .deferred(let binding)? = context {
+                    effectiveContext = try Self.resolveDeferredContext(binding, installed: installedTargets,
+                                                                       produced: producedLayers,
+                                                                       session: session, image: image)
+                } else { effectiveContext = context }
                 if step.command.requiresResolvedFloatingSelection,
                    let reason = FloatingControlsLogic.resolveFirstGate(try session.floatingSelection(image)) {
                     throw RecorderReplayError(message: reason)
                 }
-                if let context { try Self.requireRecorderContext(context, session: session, image: image) }
-                if case .layer(let layer)? = context {
+                if let effectiveContext { try Self.requireRecorderContext(effectiveContext, session: session, image: image) }
+                var createdLayer: Int32? = nil
+                if case .layer(let layer)? = effectiveContext {
                     if step.command.isOrdinaryRecordedStroke {
                         try self.requireRasterizedPaintTarget(.layer(layer))
                         let selectedLayers = try session.selectedLayers(image)
@@ -8433,40 +8520,45 @@ final class ImageDocument {
                             throw RecorderReplayError(message: "Finish editing the channel or layer mask before replaying this \(step.command.title) adjustment.")
                         }
                     }
-                    try step.command.apply(session: session, image: image, layer: layer)
-                } else if case .target(let target)? = context,
+                    createdLayer = try step.command.applyCreating(session: session, image: image, layer: layer)
+                } else if case .target(let target)? = effectiveContext,
                           case .mask(_, let drawable) = target.target,
                           step.command.isMaskAdjustment {
                     try step.command.applyMaskAdjustment(session: session, image: image, drawable: drawable)
-                } else if case .labLayer(let root, let identity)? = context, let identity {
+                } else if case .labLayer(let root, let identity)? = effectiveContext, let identity {
                     try step.command.apply(session: session, image: image,
                         labLayerTarget: .init(root: root, uuid: identity))
-                } else if case .labLayerProperty(let root, let identity)? = context, let identity {
+                } else if case .labLayerProperty(let root, let identity)? = effectiveContext, let identity {
                     try step.command.apply(session: session, image: image,
                         labLayerTarget: .init(root: root, uuid: identity))
-                } else if case .channel(let channel)? = context {
+                } else if case .channel(let channel)? = effectiveContext {
                     try step.command.apply(session: session, image: image, channel: channel)
-                } else if case .ink(let channel, let identity)? = context {
+                } else if case .ink(let channel, let identity)? = effectiveContext {
                     guard let identity else { throw RecorderReplayError(message: "The bound ink identity is missing.") }
                     try step.command.apply(session: session, image: image, channel: channel, inkIdentity: identity)
-                } else if case .lab(let axis, _)? = context {
+                } else if case .lab(let axis, _)? = effectiveContext {
                     try step.command.apply(session: session, image: image, labAxis: axis)
                 } else {
-                    try step.command.apply(session: session, image: image)
+                    createdLayer = try step.command.applyCreating(session: session, image: image)
                 }
+                return createdLayer
             }
             DispatchQueue.main.async {
-                self.settleRecorderReplay(step.token, generation: generation, result: result)
+                self.settleRecorderReplay(step.token, generation: generation, index: step.index, result: result)
             }
         }
     }
 
     private func settleRecorderReplay(_ token: RecorderLog<SemanticImageCommand>.ReplayToken,
-                                      generation: UUID, result: Result<Void, Error>) {
+                                      generation: UUID, index: Int, result: Result<Int32?, Error>) {
         // Cancellation/close do not interrupt already accepted native work.
         // Its result still reaches the error channel but cannot restart replay.
         if case .failure(let error) = result { onError?(String(describing: error)) }
         guard generation == recorderReplayGeneration, recorder.isReplaying, !isClosing else { return }
+        if case .success(.some(let created)) = result,
+           let symbol = recorderProducedSymbols[index] {
+            recorderProducedLayers[symbol] = created
+        }
         let outcome: RecorderLog<SemanticImageCommand>.ReplayOutcome
         switch result {
         case .success: outcome = .success
@@ -8683,6 +8775,65 @@ final class ImageDocument {
         }
     }
 
+    /// Resolve an installed row whose binding names a layer an earlier replayed
+    /// step created. Every other symbol comes from the load-time choices; the
+    /// produced map holds only layers whose producing steps have succeeded.
+    private nonisolated static func resolveDeferredContext(_ binding: RecorderBindingDescription,
+                                                           installed: [UUID: RecorderRuntimeTarget],
+                                                           produced: [UUID: Int32],
+                                                           session: EngineSession, image: Int32) throws -> RecorderContext {
+        func layer(_ symbol: UUID) throws -> Int32 {
+            if let id = produced[symbol] { return id }
+            guard case .layer(let id)? = installed[symbol], id > 0 else {
+                throw RecorderReplayError(message: "The layer an earlier step created is not available.")
+            }
+            return id
+        }
+        func channel(_ symbol: UUID) throws -> Int32 {
+            guard case .channel(let id)? = installed[symbol], id > 0 else {
+                throw RecorderInstallError.incompleteChoices
+            }
+            return id
+        }
+        switch binding {
+        case .layer(let symbol):
+            return .layer(try layer(symbol))
+        case .context(let saved):
+            var masks: [Int32: EngineSession.MaskState] = [:]
+            for mask in saved.masks {
+                let owner = try layer(mask.owner)
+                var id: Int32 = 0
+                if mask.isPresent {
+                    id = try session.layerMask(owner, image: image).mask
+                    guard id > 0 else { throw RecorderInstallError.missingMask("recorded layer") }
+                }
+                masks[owner] = .init(mask: id, enabled: mask.enabled, editing: mask.editing, showing: mask.showing)
+            }
+            let target: PaintTarget
+            switch saved.target {
+            case .layer(let symbol): target = .layer(try layer(symbol))
+            case .channel(let symbol), .quickMask(let symbol): target = .channel(try channel(symbol))
+            case .mask(let symbol):
+                let owner = try layer(symbol)
+                guard let mask = masks[owner], mask.mask > 0 else {
+                    throw RecorderInstallError.missingMask("recorded layer")
+                }
+                target = .mask(layer: owner, drawable: mask.mask)
+            }
+            let color = saved.quickMask.color
+            let quickMask = EngineSession.QuickMaskState(enabled: saved.quickMask.enabled,
+                channel: try saved.quickMask.symbol.map(channel) ?? 0, inverted: saved.quickMask.inverted,
+                color: NSColor(srgbRed: CGFloat(color.red), green: CGFloat(color.green),
+                               blue: CGFloat(color.blue), alpha: CGFloat(color.alpha)))
+            return .target(.init(layers: try saved.layers.map(layer),
+                channels: try saved.channels.map(channel), target: target, masks: masks, quickMask: quickMask))
+        case .channel(let symbol):
+            return .channel(try channel(symbol))
+        default:
+            throw RecorderReplayError(message: "This recording has no executable target binding.")
+        }
+    }
+
     /// Reserves and settles the explicit unsupported Recorder row for one
     /// admitted command this slice does not capture. One failed row makes
     /// replay refuse the whole log, so this runs at admission, below every
@@ -8809,7 +8960,7 @@ final class ImageDocument {
             case .channel(let channel): targets.append(.channel(channel))
             }
             if target.quickMask.enabled { targets.append(.channel(target.quickMask.channel)) }
-        case .unavailable?, nil: break
+        case .deferred?, .unavailable?, nil: break
         }
         var symbols: [RecorderRuntimeTarget: UUID] = [:]
         for target in targets {
@@ -8915,6 +9066,18 @@ final class ImageDocument {
         }
     }
 
+    /// The layer a recorded Duplicate Layers or Merge Visible just created
+    /// becomes a produced symbol: a fresh UUID described right after the
+    /// command from the engine's layer rows, like any captured target.
+    private nonisolated static func producedLayerCapture(_ layer: Int32?, session: EngineSession,
+                                                         image: Int32) throws -> ProducedLayerCapture {
+        guard let layer, layer > 0 else {
+            throw RecorderReplayError(message: "The engine did not report the layer this command created.")
+        }
+        return ProducedLayerCapture(symbol: UUID(), layer: layer,
+            description: try describeRecordedLayer(layer, in: session.layers(image)))
+    }
+
     private nonisolated static func describeRecordedLayer(_ id: Int32, in layers: [EngineSession.Layer]) throws -> RecorderTargetDescription {
         guard let row = layers.first(where: { $0.id == id }) else {
             throw RecorderReplayError(message: "The original layer description was unavailable.")
@@ -8959,6 +9122,7 @@ final class ImageDocument {
         }
         switch context {
         case .unavailable(let reason): return .unavailable(reason)
+        case .deferred(let binding): return binding
         case .layer(let layer): return .layer(try symbol(.layer(layer)))
         case .labLayer(let root, let identity):
             guard identity != nil else { throw RecorderReplayError(message: "The original Lab layer identity was unavailable.") }
@@ -8999,7 +9163,8 @@ final class ImageDocument {
     }
 
     private nonisolated func settleRecording(_ capture: RecorderCapture?, result: Result<SemanticImageCommand, Error>,
-                                             confirmed: ConfirmedRecorderCapture) {
+                                             confirmed: ConfirmedRecorderCapture,
+                                             produced: ProducedLayerCapture? = nil) {
         guard let capture else { return }
         let resolution: RecorderLog<SemanticImageCommand>.Resolution
         switch result {
@@ -9007,7 +9172,7 @@ final class ImageDocument {
         case .failure(let error): resolution = .failure(String(describing: error))
         }
         DispatchQueue.main.async {
-            self.resolveRecording(capture.reservation, with: resolution, confirmed: confirmed)
+            self.resolveRecording(capture.reservation, with: resolution, confirmed: confirmed, produced: produced)
         }
     }
 
@@ -9075,7 +9240,8 @@ final class ImageDocument {
 
     private func resolveRecording(_ reservation: RecorderLog<SemanticImageCommand>.Reservation,
                                   with resolution: RecorderLog<SemanticImageCommand>.Resolution,
-                                  confirmed: ConfirmedRecorderCapture, notifies: Bool = true) {
+                                  confirmed: ConfirmedRecorderCapture,
+                                  produced: ProducedLayerCapture? = nil, notifies: Bool = true) {
         do {
             try recorder.resolve(reservation, with: resolution)
             // Resolve verifies the epoch first; stale callbacks must never
@@ -9083,6 +9249,13 @@ final class ImageDocument {
             if let context = confirmed.context { recorderTargetContexts[reservation.ordinal] = context }
             recorderDescriptions.acceptFirst(confirmed.descriptions)
             recorderBindingDescriptions[reservation.ordinal] = confirmed.binding
+            if let produced, case .success = resolution {
+                // Later rows bind the created layer under this symbol, and
+                // the row records it as its produced output.
+                recorderDescriptions.acceptFirst([produced.symbol: .available(produced.description)])
+                recorderSymbols[.layer(produced.layer)] = produced.symbol
+                recorderProducedSymbols[reservation.ordinal] = produced.symbol
+            }
             recorderRevision = UUID()
             if notifies { notifyRecorderChanged() }
         } catch RecorderLog<SemanticImageCommand>.Refusal.staleReservation {

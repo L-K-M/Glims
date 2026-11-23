@@ -163,6 +163,7 @@ enum RecorderFileCodec {
         var hasImageResolution = false
         var hasCropResize = false
         var hasLayerEdits = false
+        var usedSymbols: Set<UUID> = []
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
         let records = try array(root.get("records"), maximum: RecorderFileLimits.records).enumerated().map { index, node -> RecorderFileValue.Record in
@@ -170,9 +171,10 @@ enum RecorderFileCodec {
             let outcomeName = try string(outcome)
             let row: Object
             let result: RecorderFileValue.Outcome
+            let produces: UUID?
             switch outcomeName {
             case "success":
-                row = try Object(node, required: ["ordinal", "outcome", "command", "binding"])
+                row = try Object(node, required: ["ordinal", "outcome", "command", "binding"], optional: ["produces"])
                 let command = try command(row.get("command"), version: fileVersion, points: &points)
                 if case .completeStroke = command { hasStroke = true }
                 if case .completeTabletStroke = command { hasTabletStroke = true }
@@ -245,9 +247,35 @@ enum RecorderFileCodec {
                     }
                     labIdentities[symbol] = identity
                 }
+                // A produced symbol names the layer this row's command
+                // creates; it exists only after the row runs, so a same-row
+                // or earlier binding must not name it, and producing the
+                // same symbol twice is refused the same way.
+                usedSymbols.formUnion(try referencedSymbols(binding))
+                if let produced = try row.optional("produces").map({ try uuid($0) }) {
+                    guard command == .duplicateLayers || command == .mergeVisible else {
+                        throw RecorderFileError.invalid("Only Duplicate Layers and Merge Visible produce a layer.")
+                    }
+                    guard let description = descriptions[produced] else {
+                        throw RecorderFileError.invalid("A produced symbol is missing.")
+                    }
+                    guard description.kind != .channel, description.kind != .quickMask else {
+                        throw RecorderFileError.invalid("A produced symbol must describe a layer.")
+                    }
+                    guard usedSymbols.insert(produced).inserted else {
+                        throw RecorderFileError.invalid("A produced symbol was already bound or produced.")
+                    }
+                    produces = produced
+                } else {
+                    guard command != .duplicateLayers, command != .mergeVisible else {
+                        throw RecorderFileError.invalid("Duplicate Layers and Merge Visible need a produced layer symbol.")
+                    }
+                    produces = nil
+                }
                 result = .success(command, binding)
             case "failure", "cancelled":
                 row = try Object(node, required: ["ordinal", "outcome", "reason"])
+                produces = nil
                 let reason = try string(row.get("reason"))
                 result = outcomeName == "failure" ? .failure(reason) : .cancelled(reason)
             default: throw RecorderFileError.invalid("Unknown record outcome.")
@@ -255,7 +283,7 @@ enum RecorderFileCodec {
             guard try integer(row.get("ordinal"), range: 0...RecorderFileLimits.records) == index else {
                 throw RecorderFileError.invalid("Record ordinals must be contiguous from zero.")
             }
-            return .init(ordinal: index, outcome: result)
+            return .init(ordinal: index, outcome: result, produces: produces)
         }
         guard Set(labIdentities.keys).isDisjoint(with: inkIdentities.keys) else {
             throw RecorderFileError.invalid("A symbol cannot bind both Lab and ink commands.")
