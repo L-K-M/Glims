@@ -26,7 +26,7 @@ extension EngineSmokeTest {
         let originalGradientStore = state.gradientStore
         let originalFonts = state.fontNames
         let originalTextSettings = state.textSettings
-        let suite = "ch.lkmc.Glims.smoke.brush-palette-sync.\(UUID().uuidString)"
+        let suite = ScratchDefaults.suiteName("smoke-brush-palette-sync")
         let defaults = UserDefaults(suiteName: suite)!
         state.brushStore = BrushSelectionStore(defaults: defaults)
         state.gradientStore = GradientToolStore(defaults: defaults)

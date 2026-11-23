@@ -111,7 +111,7 @@ extension DocumentWindowController {
         canvas.tools.finishTextEditing()
         if imageDocument.strokeIsActive { imageDocument.endStroke() }
         let background = ToolState.shared.background
-        imageDocument.runOnPaintTarget { session, image in try session.clearPixels(image, background: background) }
+        imageDocument.runOnPaintTarget("Clear") { session, image in try session.clearPixels(image, background: background) }
     }
 
     func canPerformClipboardCommand(_ action: Selector?) -> Bool {

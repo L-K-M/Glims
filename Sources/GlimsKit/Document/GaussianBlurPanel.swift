@@ -11,11 +11,14 @@ final class GaussianBlurPanel: FilterPreviewPanel {
     nonisolated static let operation = "gegl:gaussian-blur"
     static let maximumRadius = 100.0
 
-    private let slider = NSSlider(value: 4, minValue: 0, maxValue: maximumRadius, target: nil, action: nil)
+    private let slider: NSSlider
     private let field = NSTextField()
-    private var appliedRadius = 4.0
+    private var appliedRadius: Double
 
-    init(document imageDocument: ImageDocument, filter: Int32) {
+    init(document imageDocument: ImageDocument, filter: Int32, initialDeviation: Double? = nil) {
+        let radius = initialDeviation ?? 4
+        slider = NSSlider(value: radius, minValue: 0, maxValue: Self.maximumRadius, target: nil, action: nil)
+        appliedRadius = radius
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 110),
                             styleMask: [.titled, .closable, .utilityWindow],
                             backing: .buffered, defer: false)

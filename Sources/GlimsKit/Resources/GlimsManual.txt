@@ -36,6 +36,14 @@ These palettes hold the controls:
   Recorder     the recorded commands and their replay.
   Color        sliders and a color bar for the foreground and background.
   Swatches     saved colors for the foreground and background.
+  Navigator    a small view of the image that pans and zooms the window.
+  Info         readings for the pointer and the current selection.
+
+The default layout has Tool Options under Tools at the left, and two
+groups of tabs at the right: Layers, Channels, Paths, History and
+Recorder, with Color, Swatches, Navigator and Info under them. An
+arrangement you already have is kept; Window > Reset Palettes gives
+you the default one.
 
 In Swatches, click a swatch to make it the foreground color and
 Option-click one for the background color. Click the empty space after
@@ -208,6 +216,7 @@ What the tools do:
   corner and Escape drops the polygon. Magic Wand selects the similar colors around a
   click; Select by Color takes every similar pixel in the image.
   Eyedropper sets the foreground color from the pixel you click.
+  Option-click sets the background color instead.
 
   Line draws a straight line in the foreground color on the selected
   layer when you drag, inside the selection if there is one. Shift keeps
@@ -236,8 +245,8 @@ What the tools do:
   ordinary RGB layers, including opaque Background layers.
 
   Gradient drags out a gradient between the foreground and background
-  colors; Paint Bucket fills similar colors around the click, or the
-  whole selection.
+  colors (hold Shift to keep it at a multiple of 45 degrees); Paint
+  Bucket fills similar colors around the click, or the whole selection.
 
   Hand drags the view; Zoom clicks to zoom in and Option-clicks to zoom
   out.
@@ -360,10 +369,16 @@ says why (for example "needs a second layer as its source").
 Glims also runs the engine's plug-in commands. They appear at the end
 of the Image, Layer, Select and Filter menus and open their own
 settings windows; one command runs at a time. Filter > Last Filter
-(Command-F) runs the last plug-in command again with the settings it
-last used, and Last Filter Settings… (Option-Command-F) opens its
-settings window. Recently Used lists the plug-in commands you ran,
-most recent first.
+(Command-F) runs the last native filter you applied from the Filter
+menu, or plug-in command from any menu, again with the settings it
+last committed, and Last Filter Settings… (Option-Command-F) opens
+that filter's own settings window at those settings. A filter that cannot
+run again without its settings window, such as one that reads a
+layer, mask or channel you choose as its source, is still named but
+Last Filter stays disabled. Recently Used lists native filters and
+plug-in commands together, most recent first. Commands under Image >
+Adjust are adjustments, not filters, so applying one does not change
+Last Filter.
 
 Image > Adjust carries one-click commands that act on the active layer,
 its mask while you edit it, or the selected channel. Auto Levels
@@ -490,11 +505,15 @@ Invert Selection are also recordable. These root-mask commands require a Lab
 destination but do not depend on its selected axis.
 
 Not every edit is recorded: other layer changes, other effects and file
-operations stay outside the capture. Editing an existing adjustment effect or
-applying a recorded adjustment to a mask/channel adds an explicit unsupported row;
-the live edit still works. A live recording belongs to one
-open image; to reuse a saved recording in another image, load it
-there.
+operations stay outside the capture. While a recording runs, such an edit
+still adds one explicit unsupported row that names it, so the recording
+never looks complete while leaving an edit out, and Replay refuses it. An
+edit refused before it starts, a preview and its Cancel, a cancelled file
+import, a target pick, a view change, a save, an export and a read add no
+row, and Replay adds no row of its own. A plug-in keeps its row even when
+you cancel it, because it may already have changed the image. A live
+recording belongs to one open image; to reuse a saved recording in another
+image, load it there.
 
 Save Recording… writes a .glimsrecording file with the commands,
 their settings, outcomes and original target descriptions. The file
