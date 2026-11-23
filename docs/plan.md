@@ -6916,6 +6916,25 @@ the session, like the source point and Aligned. No facade change.
 `GLIMS_SMOKE_CASE=clone-pattern` drives the menu, the chooser and
 strokes through the canvas.
 
+### Presets keep paint options (2026-11-23)
+
+Paint tool presets now keep the paint mode, spacing and fade, in schema
+version 2 of the preset document (`docs/paint-tool-presets.md`). The
+store reads versions 1 and 2 and writes the lowest one its presets
+need, so a document without paint options stays version 1 and older
+Glims versions keep reading it; they refuse a version 2 document and
+leave its bytes alone, as they refuse any document they cannot read.
+Each version rejects the fields it does not know: the store reads the
+version first and hands it to the nested decoders. A mode is kept only
+for the tools whose engine core honors one and a fade only for
+Paintbrush, Pencil and Airbrush, as in Tool Options. Applying a preset
+without them returns the tool to Normal at the default spacing without
+a fade. Clone's Image or Pattern source and the pattern stay tool state
+shared with Edit > Fill, and the fade background is the background at
+each press, so neither is a preset setting.
+`GLIMS_SMOKE_CASE=tool-presets` checks Update and Apply through the
+panel.
+
 ### Gradient and Eyedropper modifiers (2026-11-22)
 
 Gradient ignored Shift, and the Eyedropper ignored Option. Shift now

@@ -41,6 +41,21 @@ struct PaintToolPreset: Identifiable, Equatable {
         var tones: ToneRange
         /// Eraser: restore erased opacity instead.
         var antiErase: Bool
+        /// The blend mode nick from `EngineSession.PaintModes.all`; normal
+        /// needs no stored key and every other value must be honored by the
+        /// tool (`PaintModes.applies(to:)`).
+        var paintMode = EngineSession.PaintModes.normal
+        /// Distance between dabs as a fraction of the brush size, or nil for
+        /// the engine's default.
+        var spacing: Double?
+        /// Fade over the stroke's dabs, or nil for none; only the fade tools
+        /// keep it (`PaintModes.fadeTools`).
+        var fade: PaintToolPreset.Fade?
+
+        /// Any paint option other than its default.
+        var hasPaintOptions: Bool {
+            paintMode != EngineSession.PaintModes.normal || spacing != nil || fade != nil
+        }
     }
 
     /// The tonal range as Glims's own tag, never the engine's raw number.
@@ -62,6 +77,48 @@ struct PaintToolPreset: Identifiable, Equatable {
             case .shadows: self = .shadows
             case .highlights: self = .highlights
             }
+        }
+    }
+
+    /// A fade's target as Glims's own tag, never the engine's raw number.
+    enum FadeTarget: String, Equatable {
+        case transparent, background
+
+        /// The engine-side value this tag stands for.
+        var brushTarget: EngineSession.Brush.Fade.Target {
+            switch self {
+            case .transparent: return .transparent
+            case .background: return .background
+            }
+        }
+
+        init(brushTarget: EngineSession.Brush.Fade.Target) {
+            switch brushTarget {
+            case .transparent: self = .transparent
+            case .background: self = .background
+            }
+        }
+    }
+
+    /// A fade over `steps` dabs to a target, as Glims's own value. The
+    /// engine's background color is transient and derived when a tool reads
+    /// its brush, so it is not part of this snapshot.
+    struct Fade: Equatable {
+        var steps: Int
+        var target: FadeTarget
+
+        init(steps: Int, target: FadeTarget) {
+            self.steps = steps
+            self.target = target
+        }
+
+        /// The engine-side value this stands for.
+        var brushFade: EngineSession.Brush.Fade {
+            EngineSession.Brush.Fade(steps: steps, target: target.brushTarget)
+        }
+
+        init(brushFade: EngineSession.Brush.Fade) {
+            self.init(steps: brushFade.steps, target: FadeTarget(brushTarget: brushFade.target))
         }
     }
 
@@ -124,7 +181,7 @@ struct PaintToolPreset: Identifiable, Equatable {
 
     /// Validates the whole value; every initializer and the decoder run it.
     func validate() throws {
-        guard tool.paintTool != nil else { throw PaintToolPresetError.nonPaintTool(tool) }
+        guard let paintTool = tool.paintTool else { throw PaintToolPresetError.nonPaintTool(tool) }
         guard !name.isEmpty else { throw PaintToolPresetError.emptyName }
         guard name.count <= PaintToolPresetLimits.maxNameLength else {
             throw PaintToolPresetError.nameTooLong(length: name.count, max: PaintToolPresetLimits.maxNameLength)
@@ -133,6 +190,13 @@ struct PaintToolPreset: Identifiable, Equatable {
             throw PaintToolPresetError.malformed("preset name is not stored trimmed: \(name)")
         }
         try settings.validate()
+        if settings.paintMode != EngineSession.PaintModes.normal,
+           !EngineSession.PaintModes.applies(to: paintTool) {
+            throw PaintToolPresetError.optionNotForTool(option: "a blend mode", tool: tool)
+        }
+        if settings.fade != nil, !EngineSession.PaintModes.fadeTools.contains(paintTool) {
+            throw PaintToolPresetError.optionNotForTool(option: "a fade", tool: tool)
+        }
         try brushResource?.validate()
         try foregroundColor?.validate()
     }
@@ -162,6 +226,14 @@ struct PresetCodingKey: CodingKey {
         self.stringValue = "\(intValue)"
         self.intValue = intValue
     }
+}
+
+extension CodingUserInfoKey {
+    /// The schema version of the document being decoded. The store sets it
+    /// before the strict document decode, so each nested object accepts
+    /// exactly the fields that version knows; absent, the newest version is
+    /// assumed.
+    static let presetSchemaVersion = CodingUserInfoKey(rawValue: "ch.lkmc.Glims.presetSchemaVersion")!
 }
 
 /// Reject extensions at every object boundary before decoding values.
@@ -222,11 +294,30 @@ extension PaintToolPreset.BrushResource {
 extension PaintToolPreset.Settings: Codable {
     enum CodingKeys: String, CodingKey, CaseIterable {
         case size, opacity, pressureSize, hardness, rate, flow, exposure, tones, antiErase
+        case paintMode, spacing, fade
+    }
+
+    /// The schema version that decides which fields this object accepts.
+    private static func schemaVersion(from decoder: Decoder) -> Int {
+        decoder.userInfo[.presetSchemaVersion] as? Int ?? PaintToolPresetStore.schemaVersion
     }
 
     init(from decoder: Decoder) throws {
-        try rejectUnknownPresetKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
+        let schemaVersion = Self.schemaVersion(from: decoder)
+        var allowed = Set(CodingKeys.allCases.map(\.rawValue))
+        if schemaVersion < 2 {
+            allowed.subtract(["paintMode", "spacing", "fade"])
+        }
+        try rejectUnknownPresetKeys(decoder, allowed: allowed)
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        var paintMode = EngineSession.PaintModes.normal
+        var spacing: Double?
+        var fade: PaintToolPreset.Fade?
+        if schemaVersion >= 2 {
+            paintMode = try container.decodeIfPresent(String.self, forKey: .paintMode) ?? EngineSession.PaintModes.normal
+            spacing = try container.decodeIfPresent(Double.self, forKey: .spacing)
+            fade = try container.decodeIfPresent(PaintToolPreset.Fade.self, forKey: .fade)
+        }
         self.init(size: try container.decode(Double.self, forKey: .size),
                   opacity: try container.decode(Double.self, forKey: .opacity),
                   pressureSize: try container.decode(Bool.self, forKey: .pressureSize),
@@ -235,7 +326,8 @@ extension PaintToolPreset.Settings: Codable {
                   flow: try container.decodeIfPresent(Double.self, forKey: .flow),
                   exposure: try container.decodeIfPresent(Double.self, forKey: .exposure),
                   tones: try container.decode(PaintToolPreset.ToneRange.self, forKey: .tones),
-                  antiErase: try container.decode(Bool.self, forKey: .antiErase))
+                  antiErase: try container.decode(Bool.self, forKey: .antiErase),
+                  paintMode: paintMode, spacing: spacing, fade: fade)
         try validate()
     }
 
@@ -251,6 +343,13 @@ extension PaintToolPreset.Settings: Codable {
         try container.encodeIfPresent(exposure, forKey: .exposure)
         try container.encode(tones, forKey: .tones)
         try container.encode(antiErase, forKey: .antiErase)
+        // Absent unless they differ from the default, like the schema-1
+        // optionals: a preset without paint options keeps its bytes.
+        if paintMode != EngineSession.PaintModes.normal {
+            try container.encode(paintMode, forKey: .paintMode)
+        }
+        try container.encodeIfPresent(spacing, forKey: .spacing)
+        try container.encodeIfPresent(fade, forKey: .fade)
     }
 
     func validate() throws {
@@ -260,6 +359,11 @@ extension PaintToolPreset.Settings: Codable {
         try PaintToolPresetLimits.validateOptionalPercent(rate, field: "settings.rate")
         try PaintToolPresetLimits.validateOptionalPercent(flow, field: "settings.flow")
         try PaintToolPresetLimits.validateOptionalPercent(exposure, field: "settings.exposure")
+        guard EngineSession.PaintModes.all.contains(paintMode) else {
+            throw PaintToolPresetError.unknownPaintMode(paintMode)
+        }
+        try PaintToolPresetLimits.validateOptionalSpacing(spacing)
+        try fade?.validate()
     }
 }
 
@@ -270,6 +374,35 @@ extension PaintToolPreset.ToneRange: Codable {
             throw PaintToolPresetError.unknownToneRange(raw)
         }
         self = tone
+    }
+}
+
+extension PaintToolPreset.Fade: Codable {
+    enum CodingKeys: String, CodingKey, CaseIterable { case steps, target }
+
+    init(from decoder: Decoder) throws {
+        try rejectUnknownPresetKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let targetTag = try container.decode(String.self, forKey: .target)
+        guard let target = PaintToolPreset.FadeTarget(rawValue: targetTag) else {
+            throw PaintToolPresetError.unknownFadeTarget(targetTag)
+        }
+        self.init(steps: try container.decode(Int.self, forKey: .steps), target: target)
+        try validate()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(steps, forKey: .steps)
+        try container.encode(target.rawValue, forKey: .target)
+    }
+
+    func validate() throws {
+        guard (1...EngineSession.PaintModes.maxFadeSteps).contains(steps) else {
+            throw PaintToolPresetError.outOfRange(field: "settings.fade.steps",
+                                                  value: Double(steps),
+                                                  range: 1...Double(EngineSession.PaintModes.maxFadeSteps))
+        }
     }
 }
 
@@ -377,6 +510,17 @@ enum PaintToolPresetLimits {
     static func validateOptionalPercent(_ value: Double?, field: String) throws {
         if let value { try validatePercent(value, field: field) }
     }
+
+    /// Spacing, a fraction of the brush size: finite and inside the engine's
+    /// range, or nil for the engine's default.
+    static func validateOptionalSpacing(_ value: Double?, field: String = "settings.spacing") throws {
+        guard let value else { return }
+        guard value.isFinite else { throw PaintToolPresetError.nonFinite(field: field) }
+        guard EngineSession.PaintModes.spacingRange.contains(value) else {
+            throw PaintToolPresetError.outOfRange(field: field, value: value,
+                                                  range: EngineSession.PaintModes.spacingRange)
+        }
+    }
 }
 
 /// Every way a preset value or a stored preset document can be invalid.
@@ -388,6 +532,12 @@ enum PaintToolPresetError: Error, LocalizedError, Equatable, CustomStringConvert
     case nonPaintTool(ToolID)
     /// A persisted `tones` tag that is not a `ToneRange`.
     case unknownToneRange(String)
+    /// A persisted `paintMode` nick that is not in `PaintModes.all`.
+    case unknownPaintMode(String)
+    /// A persisted fade `target` tag that is not a `FadeTarget`.
+    case unknownFadeTarget(String)
+    /// A paint option stored on a tool whose engine core ignores it.
+    case optionNotForTool(option: String, tool: ToolID)
     /// The name is empty after trimming.
     case emptyName
     /// The name is longer than `PaintToolPresetLimits.maxNameLength`.
@@ -423,6 +573,12 @@ enum PaintToolPresetError: Error, LocalizedError, Equatable, CustomStringConvert
             return "\"\(tool.name)\" is not a paint tool; presets exist for paint tools only."
         case .unknownToneRange(let tag):
             return "Unknown tonal range tag \"\(tag)\" in a stored preset."
+        case .unknownPaintMode(let tag):
+            return "Unknown paint mode \"\(tag)\" in a paint tool preset."
+        case .unknownFadeTarget(let tag):
+            return "Unknown fade target \"\(tag)\" in a paint tool preset."
+        case .optionNotForTool(let option, let tool):
+            return "The \(tool.name) tool cannot keep \(option)."
         case .emptyName:
             return "A preset name must not be empty."
         case .nameTooLong(let length, let max):
@@ -442,7 +598,7 @@ enum PaintToolPresetError: Error, LocalizedError, Equatable, CustomStringConvert
         case .invalidResourceIdentity(let reason):
             return "The brush resource identity is invalid: \(reason)."
         case .unsupportedSchemaVersion(let found, let supported):
-            return "The stored paint tool presets use schema version \(found); this version reads only \(supported). The stored data was left untouched."
+            return "The stored paint tool presets use schema version \(found); this version reads schema versions \(PaintToolPresetStore.minimumSchemaVersion) through \(supported). The stored data was left untouched."
         case .missingSchemaVersion:
             return "The stored paint tool presets have no schema version. The stored data was left untouched."
         case .malformed(let detail):

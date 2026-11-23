@@ -255,8 +255,8 @@ What the tools do:
   painting. A fade can be at most 32767 pixels long. These options do
   not paint in Lab, CMYK or multichannel images, and Edit > Stroke
   Selection paints in Normal at the default spacing without a fade.
-  Presets do not keep them yet, and Recorder keeps strokes that use
-  them as failed rows.
+  Presets keep them; Recorder keeps strokes that use them as failed
+  rows.
   Sponge requires RGB pixels; grayscale, indexed images, masks and channels
   cannot be painted with it. Brush color and gradient color dynamics are ignored;
   Sponge uses the brush mask. Save a preset for either Sponge tool to retain
