@@ -135,7 +135,11 @@ struct ClipboardImage {
             if let origin { item.setData(origin, forType: ClipboardImage.originType) }
             pasteboard.clearContents()
             guard pasteboard.writeObjects([item]) else { throw TransferError.clipboardUnavailable }
-            ClipboardImage.ownedChangeCount = pasteboard.changeCount
+            // Only the general pasteboard is the user's clipboard; a private
+            // board's change count must never mark it as Glims's own.
+            if pasteboard == NSPasteboard.general {
+                ClipboardImage.ownedChangeCount = pasteboard.changeCount
+            }
         }
     }
 

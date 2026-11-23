@@ -7,8 +7,9 @@ with four items and no shortcuts:
 - **Clipboard** clears the engine's clipboard image, clipboard buffer and
   named buffers.
 - **Histories** clears the undo and redo history of every open document.
-- **All** clears the key document's history, every open document's history
-  and the clipboard.
+- **All** clears every open document's history and the clipboard. It names
+  no document, so it cannot fail on one that closed while the confirmation
+  was open.
 
 None of these can be undone, so every item first asks for confirmation
 with "This cannot be undone." and **Purge** and **Cancel** buttons. The
@@ -51,14 +52,16 @@ Glims's own.
 
 ## Menu validation
 
-- **Undo** is disabled without an active document, on an adapter without
-  slot 254, when the document's undo and redo histories are both empty, or
-  while the document is closing or the engine is busy.
+- Every item is disabled on an adapter without slot 254.
+- **Undo** is disabled without an active document, when the document's
+  undo and redo histories are both empty, while it replays a recording,
+  or while it is closing, a preview or sheet is open or the engine is busy.
 - **Histories** is disabled when no open document has any undo or redo
-  step.
-- **Clipboard** is disabled when the pasteboard does not hold Glims's own
-  copy.
-- **All** is enabled when any of the three is.
+  step, or while any document replays a recording.
+- **Clipboard** is disabled when the general pasteboard does not hold
+  Glims's own copy. Only writes to the general pasteboard mark it as
+  Glims's own.
+- **All** is enabled when Histories or Clipboard would be.
 
 A disabled item's reason is its tool tip, as the adjustment items do.
 

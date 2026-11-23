@@ -1792,7 +1792,7 @@ typedef enum GlimsAdjustment {
   GLIMS_ADJUSTMENT_REMOVE_ALPHA = 5  /* Layer > Transparency > Remove Alpha Channel */
 } GlimsAdjustment;
 
-/* Edit > Purge (slot 253): which memory a purge frees. The bits are the
+/* Edit > Purge (slot 254): which memory a purge frees. The bits are the
  * facade's own; no GIMP value crosses. */
 typedef enum GlimsPurgeTarget {
   GLIMS_PURGE_UNDO      = 1u << 0, /* one image's undo and redo history */

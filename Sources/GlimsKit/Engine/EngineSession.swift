@@ -5518,7 +5518,7 @@ final class EngineSession: @unchecked Sendable {
     /// Edit > Purge: clears the requested undo histories or the engine's
     /// clipboard state, never pixels, and is itself not undoable. `image`
     /// is the document for `.undo`; pass nil for the app-wide targets. An
-    /// adapter without slot 253 is UNSUPPORTED.
+    /// adapter without slot 254 is UNSUPPORTED.
     func purge(_ targets: PurgeTargets, image: Int32?) throws {
         guard supportsPurge, let purge = api.edit_purge else {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),

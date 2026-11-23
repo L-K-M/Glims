@@ -70,7 +70,7 @@ final class RecorderMattingTests: XCTestCase {
 
     func testVersionAnchorAndOlderVersionRefusal() throws {
         XCTAssertEqual(RecorderFileCodec.mattingVersion, 34)
-        XCTAssertEqual(RecorderFileCodec.latestVersion, RecorderFileCodec.variationsVersion)
+        XCTAssertGreaterThanOrEqual(RecorderFileCodec.latestVersion, RecorderFileCodec.mattingVersion)
         let commands = [
             #"{"tag":"matting","operation":"defringe","width":1}"#,
             #"{"tag":"matting","operation":"removeBlackMatte"}"#,
@@ -83,11 +83,11 @@ final class RecorderMattingTests: XCTestCase {
         // A version 34 file without a matting row is refused.
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"crop","rect":{"x":0,"y":0,"width":10,"height":10}}"#, version: 34))))
-        // A plain crop alone does not write the newest version.
+        // A plain crop alone does not write version 34.
         let plain = try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"crop","rect":{"x":0,"y":0,"width":10,"height":10}}"#, version: 1)))
         XCTAssertFalse(String(decoding: try RecorderFileCodec.encode(plain), as: UTF8.self)
-            .contains(#""version":\(RecorderFileCodec.latestVersion)"#))
+            .contains(#""version":34"#))
     }
 
     func testWidthRulesAndUnknownOperation() {

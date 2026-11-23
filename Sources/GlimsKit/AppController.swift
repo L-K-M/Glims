@@ -643,17 +643,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         }
     }
 
-    /// Edit > Purge > All: the undo history of the key document, every
-    /// open document's history and the clipboard. Without a document
-    /// window there is no undo history to name, so All clears the
-    /// clipboard and the open histories.
+    /// Edit > Purge > All: every open document's history and the
+    /// clipboard. Histories already covers the key document, so All names
+    /// no image and cannot fail on a document that closed while the
+    /// confirmation was open.
     @objc func purgeAll(_ sender: Any?) {
-        let targets: EngineSession.PurgeTargets = frontDocument == nil
-            ? [.clipboard, .histories] : [.undo, .clipboard, .histories]
-        let image = frontDocument?.image
-        confirmPurge(targets, image: image) { [weak self] in
+        let targets: EngineSession.PurgeTargets = [.clipboard, .histories]
+        confirmPurge(targets, image: nil) { [weak self] in
             guard let self, let session else { return }
-            self.purgeAllConfirmed(targets, image: image, session: session)
+            self.purgeAllConfirmed(targets, image: nil, session: session)
         }
     }
 
@@ -1557,21 +1555,41 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             // data leaves the item disabled.
             let owned = ClipboardImage.clipboardIsOwned(current: NSPasteboard.general.changeCount,
                                                         owned: ClipboardImage.ownedChangeCount)
+            guard session?.supportsPurge == true else {
+                menuItem.toolTip = "This image engine cannot purge memory."
+                return false
+            }
             menuItem.toolTip = owned ? nil : "The clipboard does not hold a copy from Glims."
-            return session != nil && !terminationRequested && owned
+            return !terminationRequested && owned
         case #selector(purgeHistories(_:)):
             let anyHistory = documents.contains {
                 $0.imageDocument.undoInfo.undoCount > 0 || $0.imageDocument.undoInfo.redoCount > 0
             }
+            guard session?.supportsPurge == true else {
+                menuItem.toolTip = "This image engine cannot purge memory."
+                return false
+            }
+            if documents.contains(where: { $0.imageDocument.recorder.isReplaying }) {
+                menuItem.toolTip = "Wait for the recording to finish replaying."
+                return false
+            }
             menuItem.toolTip = anyHistory ? nil : "No open image has an undo history to purge."
-            return session != nil && !terminationRequested && anyHistory
+            return !terminationRequested && anyHistory
         case #selector(purgeAll(_:)):
             let anyHistory = documents.contains {
                 $0.imageDocument.undoInfo.undoCount > 0 || $0.imageDocument.undoInfo.redoCount > 0
             }
             let clipboard = ClipboardImage.clipboardIsOwned(current: NSPasteboard.general.changeCount,
                                                             owned: ClipboardImage.ownedChangeCount)
-            let enabled = session != nil && !terminationRequested && (anyHistory || clipboard)
+            guard session?.supportsPurge == true else {
+                menuItem.toolTip = "This image engine cannot purge memory."
+                return false
+            }
+            if documents.contains(where: { $0.imageDocument.recorder.isReplaying }) {
+                menuItem.toolTip = "Wait for the recording to finish replaying."
+                return false
+            }
+            let enabled = !terminationRequested && (anyHistory || clipboard)
             menuItem.toolTip = enabled ? nil : "There is nothing to purge."
             return enabled
         case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
