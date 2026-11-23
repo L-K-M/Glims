@@ -4560,11 +4560,11 @@ final class ImageDocument {
     func crop(to rect: CGRect, target: CropTarget) {
         guard !refuseWhileEditingUnavailable() else { return }
         guard !refuseWhileFloatingActive() else { return }
-        let resolution = target.resolution ?? self.resolution
-            ?? .init(x: ImageSizeModel.defaultResolution, y: ImageSizeModel.defaultResolution)
+        // No resolution keeps the image's own, read when the command runs,
+        // in the recording too.
         let command = SemanticImageCommand.cropResize(rect: rect, width: target.width,
-                                                      height: target.height, xResolution: resolution.x,
-                                                      yResolution: resolution.y,
+                                                      height: target.height, xResolution: target.resolution?.x,
+                                                      yResolution: target.resolution?.y,
                                                       interpolation: target.interpolation)
         run(semantic: command, command.apply)
     }

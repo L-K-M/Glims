@@ -59,8 +59,11 @@ enum SemanticImageCommand {
     case resizeCanvas(width: Int, height: Int, offset: CGPoint, fill: RecorderColor)
     case crop(CGRect)
     /// The Crop tool's Fixed Target Size: a crop rectangle, the pixel
-    /// size to resample to and the resolution, as one undo step.
-    case cropResize(rect: CGRect, width: Int, height: Int, xResolution: Double, yResolution: Double,
+    /// size to resample to and the resolution, as one undo step. Nil
+    /// resolutions (always both) keep the image's own, read when the
+    /// command runs, so a replay keeps the receiving image's resolution
+    /// as the live command kept its own.
+    case cropResize(rect: CGRect, width: Int, height: Int, xResolution: Double?, yResolution: Double?,
                     interpolation: EngineSession.Interpolation)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine in absolute image pixels, y down.
@@ -239,9 +242,14 @@ enum SemanticImageCommand {
         case .crop(let rect):
             try session.crop(image: image, to: rect)
         case .cropResize(let rect, let width, let height, let xResolution, let yResolution, let interpolation):
+            let resolution: EngineSession.ImageResolution
+            if let xResolution, let yResolution {
+                resolution = .init(x: xResolution, y: yResolution)
+            } else {
+                resolution = try session.imageResolution(image)
+            }
             try session.cropResize(image, rect: rect, width: width, height: height,
-                                   resolution: .init(x: xResolution, y: yResolution),
-                                   interpolation: interpolation)
+                                   resolution: resolution, interpolation: interpolation)
         case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:

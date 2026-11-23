@@ -127,6 +127,28 @@ extension EngineSmokeTest {
                 && document.undoInfo.undoCount == undoBefore,
               "Undo restores 200x150 and the original resolution")
 
+        // An empty Resolution resamples and keeps the image's own.
+        target.resolution = ""
+        ToolState.shared.cropTarget = target
+        if let down = pointer(.leftMouseDown, CGPoint(x: 10, y: 10)),
+           let dragged = pointer(.leftMouseDragged, CGPoint(x: 40, y: 40)),
+           let up = pointer(.leftMouseUp, CGPoint(x: 40, y: 40)) {
+            controller.canvas.mouseDown(with: down)
+            controller.canvas.mouseDragged(with: dragged)
+            controller.canvas.mouseUp(with: up)
+            spin()
+        } else { return check(false, "the empty-resolution drag events exist") }
+        if let enter = key(36, character: "\r") { _ = controller.canvas.tools.keyDown(with: enter) }
+        settle(document)
+        check(document.info.width == 60 && document.info.height == 40
+                && document.resolution?.x == originalResolution?.x
+                && document.undoInfo.undoCount == undoBefore + 1,
+              "an empty Resolution resamples to 60x40 and keeps the image's resolution "
+              + "(\(document.info.width)x\(document.info.height), "
+              + "\(String(describing: document.resolution?.x)) ppi)")
+        document.undo()
+        settle(document)
+
         // With the option off the same gesture is the plain crop of the
         // dragged size.
         target.enabled = false

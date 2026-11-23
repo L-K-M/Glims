@@ -778,7 +778,8 @@ enum RecorderFileCodec {
             guard version >= cropResizeVersion else {
                 throw RecorderFileError.invalid("A crop to a target size needs recording version 32.")
             }
-            let value = try Object(node, required: ["tag", "rect", "width", "height", "xResolution", "yResolution", "interpolation"])
+            let value = try Object(node, required: ["tag", "rect", "width", "height", "interpolation"],
+                                   optional: ["xResolution", "yResolution"])
             guard let interpolation = RecorderFileCommand.LayerInterpolation(rawValue: try string(value.get("interpolation"))) else {
                 throw RecorderFileError.invalid("Unknown resampling method.")
             }
@@ -788,8 +789,13 @@ enum RecorderFileCodec {
             let cropWidth = abs(rectangle.width).rounded(), cropHeight = abs(rectangle.height).rounded()
             for coordinate in [cropX, cropY, cropWidth, cropHeight, cropX + cropWidth, cropY + cropHeight] { try nativeInteger(coordinate) }
             guard cropWidth >= 1, cropHeight >= 1 else { throw RecorderFileError.invalid("The rounded crop rectangle is empty.") }
-            let x = try number(value.get("xResolution")), y = try number(value.get("yResolution"))
-            guard ImageSizeModel.isValidResolution(x), ImageSizeModel.isValidResolution(y) else {
+            // Both resolutions or neither: neither keeps the image's own.
+            let x = try value.optional("xResolution").map { try number($0) }
+            let y = try value.optional("yResolution").map { try number($0) }
+            guard (x == nil) == (y == nil) else {
+                throw RecorderFileError.invalid("A crop to a target size needs both resolutions or neither.")
+            }
+            if let x, let y, !ImageSizeModel.isValidResolution(x) || !ImageSizeModel.isValidResolution(y) {
                 throw RecorderFileError.invalid("A recorded resolution is outside the engine's range.")
             }
             return .cropResize(rect: rectangle,

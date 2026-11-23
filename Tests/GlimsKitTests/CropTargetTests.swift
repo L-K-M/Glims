@@ -115,16 +115,31 @@ final class CropTargetTests: XCTestCase {
     func testCropResizeRoundTrips() throws {
         let command = #"{"tag":"cropResize","rect":{"x":10,"y":10,"width":100,"height":80},"width":60,"height":40,"xResolution":144,"yResolution":144,"interpolation":"cubic"}"#
         let value = try RecorderFileCodec.decode(bytes(document(command)))
-        guard case .success(.cropResize(_, 60, 40, 144, 144, .cubic), .none) = value.records[0].outcome else {
+        guard case .success(.cropResize(_, 60, 40, 144?, 144?, .cubic), .none) = value.records[0].outcome else {
             return XCTFail("The crop target command was lost")
         }
         let encoded = try RecorderFileCodec.encode(value)
         XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":32"#))
         XCTAssertEqual(try RecorderFileCodec.decode(encoded), value)
         let prepared = try RecorderFileSemanticBridge.prepare(value)
-        guard case .success(.cropResize(_, 60, 40, 144, 144, .cubic)) = prepared.log.records[0].resolution else {
+        guard case .success(.cropResize(_, 60, 40, 144?, 144?, .cubic)) = prepared.log.records[0].resolution else {
             return XCTFail("The prepared crop target command was lost")
         }
+    }
+
+    func testAbsentResolutionKeepsTheImagesOwn() throws {
+        // No resolution in the file means the receiving image keeps its own.
+        let command = #"{"tag":"cropResize","rect":{"x":10,"y":10,"width":100,"height":80},"width":60,"height":40,"interpolation":"cubic"}"#
+        let value = try RecorderFileCodec.decode(bytes(document(command)))
+        guard case .success(.cropResize(_, 60, 40, nil, nil, .cubic), .none) = value.records[0].outcome else {
+            return XCTFail("The crop target command without a resolution was lost")
+        }
+        let encoded = String(decoding: try RecorderFileCodec.encode(value), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("xResolution"))
+        XCTAssertEqual(try RecorderFileCodec.decode(Data(encoded.utf8)), value)
+        // One resolution without the other is refused.
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+            #"{"tag":"cropResize","rect":{"x":0,"y":0,"width":10,"height":10},"width":10,"height":10,"xResolution":144,"interpolation":"cubic"}"#))))
     }
 
     func testVersionRules() throws {
