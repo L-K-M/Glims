@@ -147,8 +147,9 @@ extension EngineSmokeTest {
         cancel?.performClick(nil)
         wait { window.attachedSheet == nil }
         settle(fringe)
-        check(try session.undoInfo(fringe.image).undoCount == fringeUndo
-              && try pixels(fringe.image) == fringeBytes,
+        let cancelUndo = try session.undoInfo(fringe.image).undoCount
+        let cancelBytes = try pixels(fringe.image)
+        check(cancelUndo == fringeUndo && cancelBytes == fringeBytes,
               "cancelling the Defringe sheet changes nothing")
 
         fringeController.defringe(nil)

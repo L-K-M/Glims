@@ -14320,16 +14320,24 @@ test_layer_matting (void)
              "Defringe width 2 reaches two pixels and no further");
       free (bytes);
       bytes = NULL;
-      /* Alpha is never written. */
       CHECK (api->image_undo (engine, fringe_image) == GLIMS_STATUS_OK,
              "undo restores the width 2 source");
       CHECK (api->layer_matting (engine, fringe_image, fringe_layer,
-                                 GLIMS_MATTING_DEFRINGE, 4, NULL) == GLIMS_STATUS_OK);
+                                 GLIMS_MATTING_DEFRINGE, 4, NULL) == GLIMS_STATUS_OK,
+             "Defringe width 4 applies");
       bytes = matting_bytes (fringe_image, &count);
-      CHECK (bytes && count == sizeof fringe &&
-             bytes[4] == 128 && bytes[2 * 4 + 4] == 128 &&
-             bytes[4 * 4 + 4] == 128,
-             "Defringe leaves every alpha value unchanged");
+      {
+        /* Alpha is never written: every pixel keeps its source alpha, and
+         * width 4 reaches every partial pixel. */
+        int alpha_kept = bytes && count == sizeof fringe;
+        for (int i = 0; alpha_kept && i < 8; i++)
+          alpha_kept = bytes[i * 4 + 3] == fringe[i * 4 + 3];
+        CHECK (alpha_kept, "Defringe leaves every alpha value unchanged");
+        CHECK (bytes && count == sizeof fringe &&
+               matting_close (bytes + 4 * 4, (uint8_t[]) { 10, 20, 30, 128 }, 0) &&
+               matting_close (bytes + 5 * 4, (uint8_t[]) { 0, 0, 0, 0 }, 0),
+               "Defringe width 4 reaches the farthest partial pixel and no transparent one");
+      }
       free (bytes);
       bytes = NULL;
       api->image_close (engine, fringe_image);
