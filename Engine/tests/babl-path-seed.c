@@ -125,18 +125,36 @@ seed (const char *path)
   babl_init ();
   failed = describe_routes (&text);
   babl_exit ();
-  if (failed) return failed;
+  /* babl_exit wrote the file even on failure. Remove it, or the next
+   * attempt would refuse it as an existing cache. */
+  if (failed)
+    {
+      unlink (path);
+      return failed;
+    }
 
   file = fopen (path, "r");
   ok = file && fgets (header, sizeof header, file) && header[0] == '#';
   if (file) fclose (file);
-  if (!ok) return fail ("babl wrote no cache header to", path);
+  if (!ok)
+    {
+      unlink (path);
+      return fail ("babl wrote no cache header to", path);
+    }
 
   file = fopen (path, "w");
-  if (!file) return fail ("cannot write", path);
+  if (!file)
+    {
+      unlink (path);
+      return fail ("cannot write", path);
+    }
   ok = fputs (header, file) >= 0 && fputs (text.text, file) >= 0;
   ok = fclose (file) == 0 && ok;
-  if (!ok) return fail ("cannot write", path);
+  if (!ok)
+    {
+      unlink (path);
+      return fail ("cannot write", path);
+    }
   printf ("babl-path-seed: seeded %zu lossy paths into %s\n", N_ROUTES, path);
   return 0;
 }
