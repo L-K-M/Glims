@@ -108,7 +108,7 @@ extension EngineSmokeTest {
         var levels = Data()
         for y in 0..<8 {
             for x in 0..<8 {
-                let v: UInt8 = (x + y).isMultiple(of: 2) ? 200 : 50
+                let v: UInt8 = (x + y).isMultiple(of: 2) ? 50 : 200
                 levels.append(contentsOf: [v, v, v, 255])
             }
         }
@@ -128,7 +128,9 @@ extension EngineSmokeTest {
         settle(levelsDoc)
         let levelsPixels = try session.copyPixels(levelsImage, merged: true).pixels
         check((try? session.undoInfo(levelsImage).undoCount) == levelsUndo + 1
-              && levelsPixels[0] == 0 && levelsPixels[4] == 255,
+              // GIMP's stretch leaves the dark end a few levels above 0
+              // (3 on every engine set), as the conformance test allows.
+              && levelsPixels[0] <= 5 && levelsPixels[4] == 255,
               "Auto Levels stretches the range as one undo step (\(levelsPixels[0]), \(levelsPixels[4]))")
 
         var equalized = Data()
@@ -152,7 +154,12 @@ extension EngineSmokeTest {
         wait { equalizeOutcome != nil }
         settle(equalizeDoc)
         let equalizePixels = try session.copyPixels(equalizeImage, merged: true).pixels
-        check(equalizePixels[0] == 16 && equalizePixels[4] == 32 && equalizePixels[15 * 4] == 255,
+        // Sixteen equal levels map to k/16 of the range; GIMP 3.0 applies
+        // that in linear light, where sRGB of 1/16 is 71 and of 2/16 is 99.
+        let linearEqualize = session.version.hasPrefix("3.0.")
+        let equalizeFirst: UInt8 = linearEqualize ? 71 : 16, equalizeSecond: UInt8 = linearEqualize ? 99 : 32
+        check(equalizePixels[0] == equalizeFirst && equalizePixels[4] == equalizeSecond
+                && equalizePixels[15 * 4] == 255,
               "Equalize flattens the histogram (\(equalizePixels[0]), \(equalizePixels[4]), \(equalizePixels[15 * 4]))")
 
         // Add then Remove Transparency: the format state and the composite.
