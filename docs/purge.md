@@ -58,6 +58,8 @@ Glims's own.
   or while it is closing, a preview or sheet is open or the engine is busy.
 - **Histories** is disabled when no open document has any undo or redo
   step, or while any document replays a recording.
+- **Clipboard**, **Histories** and **All** are also disabled while a
+  plug-in runs, as New and Open are.
 - **Clipboard** is disabled when the general pasteboard does not hold
   Glims's own copy. Only writes to the general pasteboard mark it as
   Glims's own.

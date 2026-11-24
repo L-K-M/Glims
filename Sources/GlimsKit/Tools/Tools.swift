@@ -283,6 +283,7 @@ final class ToolState {
             return stored
         }
         set {
+            guard newValue != cropTarget else { return }
             cropStore.set(newValue)
             cropTargetCache = newValue
             notify()

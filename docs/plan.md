@@ -7121,8 +7121,10 @@ thing in the engine: it validates first, then wraps GIMP's own
 GIMP_UNDO_GROUP_IMAGE_CROP group, sets the resolution with GIMP's 1e-5
 change test and adds no undo step when nothing changes. The pure model
 `CropTargetSettings`/`CropTarget` owns the unit conversions, the
-proportion constraint and the Front Image fill; the settings persist
-through `CropTargetStore` like the gradient tool's preferences. The
+proportion constraint and the Front Image fill (a non-square image
+resolution leaves the single resolution field empty, so the crop keeps
+it); the settings persist through `CropTargetStore` like the gradient
+tool's preferences. The
 Recorder writes `cropResize` at format version 32 (the number moves if
 another branch takes it first), with the usual anchor rule: a version 32
 file must hold one and older versions refuse the tag. `swift test` covers

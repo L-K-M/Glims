@@ -577,7 +577,8 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
 
         let methods = EngineSession.Interpolation.allCases
         let resample = popUp("Resample", methods.map(\.name),
-                             selected: methods.firstIndex(of: settings.interpolation) ?? 2,
+                             selected: methods.firstIndex(of: settings.interpolation)
+                                 ?? methods.firstIndex(of: .cubic) ?? 0,
                              identifier: "cropTargetInterpolation") { index in
             var target = ToolState.shared.cropTarget
             target.interpolation = methods[index]
