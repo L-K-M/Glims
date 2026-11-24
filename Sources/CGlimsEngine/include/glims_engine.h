@@ -437,6 +437,18 @@ typedef struct GlimsLabCopySettings {
   uint32_t output_component; /* GLIMS_COLOR_COMPONENT_FLOAT only. */
 } GlimsLabCopySettings;
 
+/* Explicit pixel-only converted copy; settings may be unaligned and future
+ * tails are ignored. The complete known prefix is required. Borrowed input
+ * stays readable and unchanged until the synchronous call returns. */
+typedef struct GlimsCmykCopySettings {
+  uint32_t struct_size;
+  uint32_t destination_mode; /* GLIMS_COLOR_MODE_CMYK or GLIMS_COLOR_MODE_RGB. */
+  uint32_t output_component; /* GlimsColorComponent: U8, U16 or FLOAT. */
+  const uint8_t *profile_icc; /* CMYK destination profile, required for CMYK,
+                                 must be NULL for RGB. */
+  size_t profile_length;
+} GlimsCmykCopySettings;
+
 typedef struct GlimsPoint {
   double x, y;             /* image pixels */
 } GlimsPoint;
@@ -5161,6 +5173,28 @@ typedef struct GlimsEngineAPI {
                                              int32_t capacity,
                                              int32_t *width, int32_t *height,
                                              char **error);
+  /* Slot 265: creates a separate, fully constructed unsaved pixel-only image.
+   * Opaque standard-sRGB/linear-sRGB U8/U16/FLOAT RGB -> native CMYK planes at
+   * the requested U8/U16/FLOAT ink precision, through the supplied CMYK ICC
+   * profile; validated native CMYK -> one opaque RGB layer at the requested
+   * precision through the document's own source ICC. Both directions use a
+   * private relative-colorimetric transform with black-point compensation.
+   * FLOAT RGB output keeps linear sRGB; U8/U16 RGB output stores standard
+   * sRGB through babl encoding. Custom RGB profiles, linked-layer objects
+   * (including frozen ones), grayscale, indexed, same-mode copies and
+   * transparency refuse. A missing profile for CMYK or a non-NULL profile
+   * for RGB is INVALID_ARGUMENT; damaged CMYK storage or profile refuses.
+   * Full canvas regardless of selection; RGB merges visible layers. Copies
+   * only dimensions, resolution and pixels, with fresh identities, empty
+   * history and selection. No source pixel/metadata/history/file-state
+   * mutation. Global activity/strokes/filter previews, open Undo groups or
+   * disabled Undo refuse BUSY. Floating selection and Quick Mask refuse
+   * UNSUPPORTED. Cancellation or any failure leaves *result zero; no
+   * partial image is adopted. Clears *result and *error on entry; caller
+   * owns returned error via free_string. */
+  GlimsStatus (*image_convert_cmyk_copy) (GlimsEngine *engine, GlimsImageID image,
+                                          const GlimsCmykCopySettings *settings,
+                                          GlimsImageID *result, char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */

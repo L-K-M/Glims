@@ -27,4 +27,20 @@ gboolean glims_cmyk_transform_pixels (GlimsCmykTransform *transform,
                                        const gfloat *intensity, gsize count,
                                        gfloat *rgba, GError **error);
 
+/* Copies a bounded CMYK output/color-space profile and builds a private
+ * relative-colorimetric, black-point-compensated transform from linear sRGB,
+ * for converted-copy output. Device-link, abstract, named-color and non-CMYK
+ * profiles are refused, as are profiles without the direction's data.
+ * No process-global LittleCMS handlers, context or environment are changed. */
+GlimsCmykTransform *glims_cmyk_dest_transform_new (const guint8 *icc, gsize size,
+                                                   GError **error);
+
+/* At most MAX_PIXELS interleaved linear-sRGB R/G/B tuples -> interleaved
+ * C/M/Y/K ink intensity tuples: 0=full ink, 1=paper. Rejects nonfinite input
+ * before modifying any output. Input/output must not overlap. A zero-pixel
+ * call accepts NULL buffers. One instance is serialized by its owner. */
+gboolean glims_cmyk_dest_transform_pixels (GlimsCmykTransform *transform,
+                                           const gfloat *rgb, gsize count,
+                                           gfloat *intensity, GError **error);
+
 #endif

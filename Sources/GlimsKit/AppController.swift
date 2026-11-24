@@ -468,6 +468,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 NSAlert(error: error).runModal()
             }
         }
+        document.cmykCopyHandler = { [weak self] document, destination, component, profile in
+            self?.convertedCmykCopy(document, destination: destination, component: component, profile: profile)
+        }
         let controller = DocumentWindowController(document: document)
         controller.reserveWrite = { [weak self, weak controller] url in
             guard let self, let controller else { throw ImageDocument.DocumentError.closed }
@@ -1342,6 +1345,59 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         let name = "\(document.name) \(destination == .lab ? "Lab" : "RGB") copy"
         pendingFileOperations += 1
         document.convertedLabCopy(destination) { [weak self] result in
+            guard let self else {
+                if case .success(let image) = result {
+                    EngineActivity.shared.closeImage(image, session: session) { _ in }
+                }
+                return
+            }
+            let finish = {
+                self.pendingFileOperations -= 1
+                self.advanceDocumentClosing()
+            }
+            let discard = { (image: Int32) in
+                // A native link reload in another document may return BUSY.
+                // Retain both result ownership and the Quit hold until cleanup
+                // completes, using the same retry path as document destruction.
+                EngineActivity.shared.closeImage(image, session: session) { cleanup in
+                    if case .failure(let error) = cleanup, !document.isClosing {
+                        document.onError?(String(describing: error))
+                    }
+                    finish()
+                }
+            }
+            switch result {
+            case .success(let image):
+                guard !self.terminationRequested, !document.isClosing else {
+                    discard(image)
+                    return
+                }
+                do {
+                    let copy = try ImageDocument(session: session, image: image, name: name)
+                    copy.noteUnsavedConvertedCopy()
+                    self.open(copy)
+                    finish()
+                } catch {
+                    document.onError?(String(describing: error))
+                    discard(image)
+                }
+            case .failure(let error):
+                if !document.isClosing { document.onError?(String(describing: error)) }
+                finish()
+            }
+        }
+    }
+
+    /// Same converted-copy transaction as convertedLabCopy: a file operation
+    /// that counts toward Quit and must not leave an unowned native result.
+    func convertedCmykCopy(_ document: ImageDocument, destination: EngineSession.CmykCopyDestination,
+                           component: EngineSession.ColorComponent, profile: Data?) {
+        guard !terminationRequested else { return }
+        if let reason = document.cmykCopyRefusal(destination) { document.onError?(reason); return }
+        let session = document.session
+        let name = "\(document.name) \(destination == .cmyk ? "CMYK" : "RGB") copy"
+        pendingFileOperations += 1
+        document.convertedCmykCopy(destination, component: component, profile: profile) { [weak self] result in
             guard let self else {
                 if case .success(let image) = result {
                     EngineActivity.shared.closeImage(image, session: session) { _ in }
