@@ -136,6 +136,15 @@ typedef struct GlimsLayerInfo {
   int32_t     filter_count;  /* non-destructive filters on the layer */
 } GlimsLayerInfo;
 
+/* One row of the clipping report (slot 259). */
+typedef struct GlimsLayerClipping {
+  uint32_t    struct_size;  /* sizeof (GlimsLayerClipping) */
+  GlimsItemID layer;
+  uint32_t    role;         /* GlimsClippingRole */
+  GlimsItemID base;         /* the group's bottom layer, or 0 */
+  GlimsItemID group;        /* the clipping group, or 0 */
+} GlimsLayerClipping;
+
 /* Owned export choices. These values never encode an upstream enum. */
 typedef enum { GLIMS_EXPORT_PNG = 1, GLIMS_EXPORT_JPEG = 2,
                GLIMS_EXPORT_TIFF = 3, GLIMS_EXPORT_PSD = 4,
@@ -4928,6 +4937,50 @@ typedef struct GlimsEngineAPI {
                                       const GlimsColorRangeSettings *settings,
                                       int32_t max_size, uint8_t *mask, size_t byte_count,
                                       int32_t *width, int32_t *height, char **error);
+  /* Slot 259: the clipping-group role of every layer, in the same order
+   * image_layers reports (all depths, top of the stack first,
+   * depth-first). A clipping group is a layer group in normal mode whose
+   * bottom child is a non-group layer with a composite mode other than
+   * CLIP_TO_BACKDROP and at least one other child has composite mode
+   * CLIP_TO_BACKDROP; it is reported as GLIMS_CLIPPING_GROUP with its
+   * base, the base child as GLIMS_CLIPPING_BASE with its group, and each
+   * clipped child as GLIMS_CLIPPING_CLIPPED with its base and group.
+   * Every other layer is GLIMS_CLIPPING_NONE with base and group 0. The
+   * raw gimp_layer_get_composite_mode decides, not the resolved mode.
+   * `rows` NULL with `capacity` 0 counts only. Callers set struct_size in
+   * each row they pass. A NULL count or a negative capacity is
+   * INVALID_ARGUMENT; an unknown image is NOT_FOUND. Read-only. */
+  GlimsStatus (*image_layer_clipping) (GlimsEngine *engine, GlimsImageID image,
+                                       GlimsLayerClipping *rows, int32_t capacity,
+                                       int32_t *count);
+  /* Slot 260: Layer > Group with Previous, Ungroup and Merge Group.
+   * `command` is a GlimsClippingCommand naming the layer `layer` (0: the
+   * selected layer). Each call is ONE undo step named "Group with
+   * Previous", "Ungroup" or "Merge Clipping Group", or a refusal that
+   * changes nothing. `result` (may be NULL) receives the clipping group
+   * for Group with Previous and the merged layer for Merge Group, and 0
+   * for Ungroup. Group with Previous joins a clipping group directly
+   * below the layer, above that group's top clipped layer; otherwise it
+   * refuses when there is no sibling below, when either layer is a group
+   * or a genuine editable text, link or vector layer, when the layer is
+   * already clipped, or when its blend mode cannot change composite
+   * mode; position locks on either layer refuse LOCKED. Ungroup on the
+   * group or its base releases every clipped child, and on a clipped
+   * layer releases it and those above it; released layers move above the
+   * group with composite mode AUTO. The group dissolves when no clipped
+   * child remains, and Ungroup refuses rather than dissolve a group that
+   * also holds a layer that is not clipped. Merge
+   * Group merges the group with gimp_image_merge_group_layer, names the
+   * result after the base and selects it; any member locked against
+   * pixel or position changes refuses LOCKED. An unknown command is
+   * INVALID_ARGUMENT; an unknown image or layer is NOT_FOUND; a Lab,
+   * CMYK or multichannel document, an indexed image, a busy engine, a
+   * floating selection or an open undo group refuses BUSY or UNSUPPORTED
+   * as the existing layer-structure commands do. Every refusal changes
+   * nothing. */
+  GlimsStatus (*layer_clipping_edit) (GlimsEngine *engine, GlimsImageID image,
+                                      GlimsItemID layer, uint32_t command,
+                                      GlimsItemID *result, char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */
@@ -4938,6 +4991,21 @@ typedef enum {
 } GlimsMatting;
 
 #define GLIMS_MATTING_MAX_WIDTH 200
+
+/* A layer's place in a clipping group (slot 259). */
+typedef enum {
+  GLIMS_CLIPPING_NONE = 0,
+  GLIMS_CLIPPING_BASE = 1,
+  GLIMS_CLIPPING_CLIPPED = 2,
+  GLIMS_CLIPPING_GROUP = 3
+} GlimsClippingRole;
+
+/* Layer > Group with Previous, Ungroup and Merge Group (slot 260). */
+typedef enum {
+  GLIMS_CLIPPING_GROUP_WITH_PREVIOUS = 1,
+  GLIMS_CLIPPING_UNGROUP = 2,
+  GLIMS_CLIPPING_MERGE_GROUP = 3
+} GlimsClippingCommand;
 
 /* Returns NULL when the library cannot serve `api_version`. */
 const GlimsEngineAPI *glims_engine_get_api (uint32_t api_version);

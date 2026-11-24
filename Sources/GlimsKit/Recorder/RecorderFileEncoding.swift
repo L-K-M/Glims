@@ -108,6 +108,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, layerEditsVersion)
             case .success(.matting, _):
                 fileVersion = max(fileVersion, mattingVersion)
+            case .success(.clipping, _):
+                fileVersion = max(fileVersion, clippingVersion)
             case .success(.applyVariations, _):
                 fileVersion = max(fileVersion, variationsVersion)
             case .success(.colorRange, _):
@@ -402,6 +404,9 @@ extension RecorderFileCodec {
                                                   "operation": .string(operation.rawValue)]
             if let width { fields["width"] = j(width) }
             return .object(fields)
+        case .clipping(let command):
+            return .object(["tag": .string("clipping"),
+                            "command": .string(command.rawValue)])
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             return .object(["tag": .string("selectSimilar"), "threshold": try d(threshold),
                             "antialias": .bool(antialias), "sampleMerged": .bool(sampleMerged)])

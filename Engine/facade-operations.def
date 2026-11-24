@@ -258,3 +258,5 @@ GLIMS_FACADE(image_variations_apply, api_image_variations_apply, IMAGE, ORDINARY
 GLIMS_FACADE(image_variations_preview, api_image_variations_preview, IMAGE, ORDINARY)
 GLIMS_FACADE(selection_color_range, api_selection_color_range, IMAGE, ORDINARY)
 GLIMS_FACADE(color_range_preview, api_color_range_preview, IMAGE, ORDINARY)
+GLIMS_FACADE(image_layer_clipping, api_image_layer_clipping, IMAGE, ORDINARY)
+GLIMS_FACADE(layer_clipping_edit, api_layer_clipping_edit, IMAGE, ORDINARY)

@@ -98,6 +98,10 @@ enum SemanticImageCommand {
     /// explicit layer lives in the document's runtime binding; the
     /// command is layer-wide and ignores the selection.
     case matting(EngineSession.Matting, width: Int)
+    /// Layer > Group with Previous, Ungroup and Merge Group. The
+    /// explicit layer lives in the document's runtime binding; Merge
+    /// Group returns the merged layer as its produced symbol.
+    case clipping(EngineSession.ClippingCommand)
     /// Image > Adjust > Variations: the accumulated Color Balance ranges
     /// and master lightness/saturation. The explicit layer lives in the
     /// document's runtime binding; the command honors the selection.
@@ -184,7 +188,7 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .matting, .applyVariations, .completeStroke, .completeTabletStroke: return true
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .matting, .clipping, .applyVariations, .completeStroke, .completeTabletStroke: return true
         case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties, .selectSimilar, .colorRange: return false
         case .adjustment: return true
         }
@@ -234,6 +238,7 @@ enum SemanticImageCommand {
         case .mergeVisible: return "Merge Visible"
         case .addLayerMask: return "Add Layer Mask"
         case .matting(let operation, _): return operation.title
+        case .clipping(let command): return command.title
         case .applyVariations: return "Variations"
         case .selectSimilar: return "Select Similar"
         case .colorRange: return "Color Range"
@@ -324,7 +329,7 @@ enum SemanticImageCommand {
             try session.selectSimilar(image, options: options)
         case .colorRange(let settings):
             try session.selectColorRange(image, settings: settings)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .applyVariations:
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping, .applyVariations:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
@@ -454,6 +459,10 @@ enum SemanticImageCommand {
         case .matting(let operation, let width):
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.applyMatting(image, layer: layer, operation: operation, width: width)
+        case .clipping(let command):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            let created = try session.clippingEdit(image, layer: layer, command: command)
+            return command == .mergeGroup ? created : nil
         case .applyVariations(let settings):
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.applyVariations(image, layer: layer, settings: settings)

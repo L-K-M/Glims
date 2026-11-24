@@ -1579,6 +1579,14 @@ MARSHAL (color_range_preview, {
                                      a->stride, (int32_t *) a->count,
                                      (int32_t *) a->in_out, a->error);
 })
+MARSHAL (image_layer_clipping, {
+  return glims_image_layer_clipping (e, a->image, (GlimsLayerClipping *) a->out,
+                                     a->capacity, a->count);
+})
+MARSHAL (layer_clipping_edit, {
+  return glims_layer_clipping_edit (e, a->image, a->item, (uint32_t) a->width,
+                                    (GlimsItemID *) a->out, a->error);
+})
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2648,6 +2656,28 @@ api_color_range_preview (GlimsEngine *e, GlimsImageID image,
   return glims_facade_call (e, GLIMS_FACADE_OP_color_range_preview,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             color_range_preview_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_layer_clipping (GlimsEngine *e, GlimsImageID image, GlimsLayerClipping *rows,
+                          int32_t capacity, int32_t *count)
+{
+  GlimsArgs a = { .image = image, .out = rows, .capacity = capacity, .count = count };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_layer_clipping,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_layer_clipping_on_engine, &a, NULL);
+}
+
+static GlimsStatus
+api_layer_clipping_edit (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                         uint32_t command, GlimsItemID *result, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) command,
+                  .out = result, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_clipping_edit,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_clipping_edit_on_engine, &a, error);
 }
 
 static GlimsStatus

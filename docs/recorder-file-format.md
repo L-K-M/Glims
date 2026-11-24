@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 36
+# Recorder file format, versions 1 to 37
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,7 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `36`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `37`. `recordingID` is a file UUID. `origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -25,11 +25,11 @@ mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
 `smoothSelection` 29, `adjustment` 30, `setResolution` or `resize` 31,
 `cropResize` 32, `moveLayer`, `duplicateLayers`, `deleteLayers`,
 `mergeVisible`, `addLayerMask` or `selectSimilar` 33, `matting` 34,
-`applyVariations` 35, and `colorRange` 36. A file declaring one of those versions must contain
+`applyVariations` 35, `colorRange` 36, and `clipping` 37. A file declaring one of those versions must contain
 at least one successful command from that version's family. It may also
 contain commands from all earlier versions. Failure/cancelled rows do not
 raise the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...36 refuse the file.
+version 1. Integers outside 1...37 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -88,6 +88,7 @@ Commands have an owned `tag` and the following exact fields:
 | `matting` | `operation`, `width` on Defringe only (version 34) |
 | `applyVariations` | `settings` with `shadows`, `midtones`, `highlights`, `lightness`, `saturation` (version 35) |
 | `colorRange` | `mode`, `fuzziness`, `invert`, `samples` (version 36) |
+| `clipping` | `command` (`groupWithPrevious`, `ungroup`, `mergeGroup`) (version 37) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -120,7 +121,7 @@ symbol for a layer adjustment or a context for an editing-mask adjustment.
 Select Alpha, color selection with `sampleMerged:false`, mask Levels, Curves or Brightness/Contrast,
 and one-click adjustments require context; `mergeVisible` and sample-merged
 `selectSimilar` require none; `moveLayer`, `duplicateLayers`, `deleteLayers`,
-`addLayerMask`, `matting` and `applyVariations` require a layer symbol;
+`addLayerMask`, `matting`, `clipping` and `applyVariations` require a layer symbol;
 `colorRange` requires none like the whole-image selection commands;
 non-sample-merged
 `selectSimilar` requires the captured context. Other non-ink commands require none. Native ink commands require the `ink`
@@ -705,15 +706,17 @@ version 33 file must contain at least one successful command from the six.
   and Boolean `sampleMerged`. Sample-merged uses the `none` binding; the
   drawable form requires the captured context.
 
-A successful `duplicateLayers` or `mergeVisible` row carries a `produces` UUID
-naming a symbol in `symbols`; a row of either command without one is refused.
+A successful `duplicateLayers`, `mergeVisible` or `clipping` with
+`command:"mergeGroup"` row carries a `produces` UUID naming a symbol in
+`symbols`; a row of any of them without one is refused, and a `clipping` row
+with any other command may not carry one.
 The row stores only the symbol reference; the new layer's capture-time name,
 ancestry, sibling index and bounds live in that symbol's `description`, taken
 from the engine's layer rows immediately after the command. When the engine
 reports no new layer, recording keeps a failed row instead, and replay fails
 that row rather than a later row bound to the missing layer.
 
-Only those two commands may carry `produces`, and the named symbol's
+Only those three commands may carry `produces`, and the named symbol's
 description kind must be a layer kind, never `channel` or `quickMask`. A
 symbol has at most one producer. After a row's own binding symbols are
 accounted for, the produced symbol must not already have been used: a binding
@@ -762,3 +765,13 @@ is target independent and needs the `none` binding. It replays on the
 receiving image's merged projection through facade slots 257/258. Version
 36 requires at least one successful Color Range row; earlier versions
 reject the tag.
+
+## Layer > Group with Previous, Ungroup and Merge Group (version 37)
+
+`clipping` stores an owned `command` tag: `groupWithPrevious`, `ungroup`
+or `mergeGroup`. It requires a `layer` binding, replays on that explicit
+layer through facade slots 259/260, and raises the file to version 37.
+Only `mergeGroup` carries a `produces` symbol naming the layer the merge
+created, so a later recorded row can bind it; the other two commands may
+not carry one. Version 37 requires at least one successful clipping row;
+earlier versions reject the tag.

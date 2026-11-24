@@ -179,6 +179,8 @@ extension RecorderFileCommand {
             case .removeWhiteMatte: value = .removeWhiteMatte
             }
             self = .matting(value, width: operation == .defringe ? width : nil)
+        case .clipping(let command):
+            self = .clipping(RecorderFileCommand.Clipping(command))
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             guard threshold.isFinite, (0...1).contains(threshold) else {
                 throw RecorderFileError.invalid("A recorded Similar threshold is outside 0...1.")

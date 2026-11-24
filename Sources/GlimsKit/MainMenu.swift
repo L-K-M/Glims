@@ -205,6 +205,12 @@ enum MainMenu {
             .separator(),
             maskToSelection,
         ])
+        // Command-G and Shift-Command-G are free in this menu; they name
+        // the classic clipping pair.
+        let groupWithPrevious = item("Group with Previous",
+                                      #selector(DocumentWindowController.groupWithPrevious(_:)), "g")
+        let ungroup = item("Ungroup", #selector(DocumentWindowController.ungroup(_:)), "g")
+        ungroup.keyEquivalentModifierMask = [.command, .shift]
         add(menu, "Layer", [
             newLayer,
             item("New Layer Group", #selector(DocumentWindowController.newLayerGroup(_:))),
@@ -250,6 +256,9 @@ enum MainMenu {
             adjustmentItem("Remove Transparency", selector: #selector(DocumentWindowController.removeTransparency(_:)),
                            key: "", adjustment: .removeAlpha),
             .separator(),
+            groupWithPrevious,
+            ungroup,
+            item("Merge Group", #selector(DocumentWindowController.mergeGroup(_:))),
             item("Merge Down", #selector(DocumentWindowController.mergeDown(_:))),
             item("Merge Visible", #selector(DocumentWindowController.mergeVisible(_:))),
         ])

@@ -7336,3 +7336,26 @@ codec, and the `color-range` smoke case (`GLIMS_SMOKE_CASE=color-range`)
 opens the panel, samples, checks the mask, applies, cancels, proves a
 canvas press samples instead of painting and replays a saved recording
 onto a twin.
+
+### Clipping groups (2026-11-23)
+
+Layer > Group with Previous, Ungroup and Merge Group add the classic clip-to-
+the-layer-below workflow. A clipping group is a normal-mode layer group whose
+bottom child is the base and whose other children carry
+GIMP_LAYER_COMPOSITE_CLIP_TO_BACKDROP, the model GIMP's own PSD loader builds;
+XCF stores it and the conformance test round-trips it. Facade slots 259/260
+append the feature: `image_layer_clipping` reports every layer's role in one
+read-only call, and `layer_clipping_edit` runs each command as one undo step
+through `Engine/clipping.c`. The clip composite keeps the base's alpha while
+the clipped layer's opacity and blend mode apply, so the engine test pins the
+exact pixels for half opacity, Difference and a half-opaque base. The Layers
+palette keeps the real tree, marks a clipped row, underlines the base name,
+and Option-clicks a row's lower boundary to toggle the clip; the Layer menu
+adds Command-G, Shift-Command-G and Merge Group beside Merge Down, with the
+cached refusal as the tool tip. The Recorder writes `clipping` at format
+version 37 with an owned command tag, and Merge Group names its merged layer
+as a produced symbol. `swift test` covers the pure structural rules, the
+palette presentation and the codec; the `clipping-groups` smoke case
+(`GLIMS_SMOKE_CASE=clipping-groups`) drives the menu action, the palette
+marker and Option-click toggle, Merge Group, and a save/load/replay
+comparison. Not checked here: a PSD export/import round trip.
