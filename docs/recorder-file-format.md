@@ -740,7 +740,7 @@ versions reject the tag.
 two master corrections: `shadows`, `midtones` and `highlights`, each with
 `cyanRed`, `magentaGreen` and `yellowBlue`, plus `lightness` and
 `saturation`. Every value must be finite inside -1...1, and an identity
-(all ten values zero) is refused because it changes nothing. It requires
+(all eleven values zero) is refused because it changes nothing. It requires
 a `layer` binding and replays on that explicit layer through facade slots
 255/256. Version 35 requires at least one successful Variations row;
 earlier versions reject the tag.
