@@ -7256,8 +7256,9 @@ refuse. Its three eyedroppers map Shift to add and Option to subtract, and
 its preview renders off the main thread behind a generation counter. The
 Recorder writes `colorRange` at format version 36 with the mode,
 fuzziness, Invert and samples, target-independent and bound to `none`.
-`scripts/test-color-range-math.py` compiles the kernel standalone under the
-sanitizers, `swift test` covers the settings rules and the codec, and the
-`color-range` smoke case (`GLIMS_SMOKE_CASE=color-range`) opens the panel,
-samples, checks the mask, applies, cancels, proves a canvas press samples
-instead of painting and replays a saved recording onto a twin.
+`scripts/test-color-range-math.py` compiles the kernel standalone, optimized
+and under the sanitizers, `swift test` covers the settings rules and the
+codec, and the `color-range` smoke case (`GLIMS_SMOKE_CASE=color-range`)
+opens the panel, samples, checks the mask, applies, cancels, proves a
+canvas press samples instead of painting and replays a saved recording
+onto a twin.

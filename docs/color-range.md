@@ -22,7 +22,9 @@ documents (CMYK, Lab, ink) are refused by the facade's ordinary policy.
 
 The pure kernel lives in `Engine/color-range-math.{h,c}` and has no GEGL or
 GIMP dependency. `scripts/test-color-range-math.py` compiles it with its
-standalone harness under the sanitizers.
+standalone harness optimized and under the address and undefined behavior
+sanitizers. CI runs both on Linux and the optimized build on macOS, whose
+hosted runners stall starting sanitizer binaries.
 
 Sampled Colors maps Fuzziness F in 0...200 to a tolerance
 `t = max(F / 200, 1 / 512)`, so F = 0 still matches an exact color. For a

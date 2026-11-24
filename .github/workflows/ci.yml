@@ -175,7 +175,7 @@ jobs:
 
       - name: Check Color Range math
         timeout-minutes: 5
-        run: python3 scripts/test-color-range-math.py
+        run: python3 scripts/test-color-range-math.py optimized
 
       - name: Check Lab samples
         timeout-minutes: 5
