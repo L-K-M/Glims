@@ -53,8 +53,10 @@ extension EngineSmokeTest {
             documents.items.removeAll { doc in owned.contains { $0 === doc } }
         }
 
+        let previousMainMenu = NSApp.mainMenu
         let mainMenu = MainMenu.make()
         NSApp.mainMenu = mainMenu
+        defer { NSApp.mainMenu = previousMainMenu }
         let operations = try session.filterOperations()
         NativeFilterCatalog.shared.install(operations)
         NativeFilterMenus.install(operations, in: mainMenu)

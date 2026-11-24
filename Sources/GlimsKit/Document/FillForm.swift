@@ -118,6 +118,8 @@ enum FillForm {
                     return
                 }
                 PatternFillStore.shared.set(identity)
+                // Clone's Pattern source shares the choice; its button follows.
+                ToolState.shared.notifyChange()
                 var settings = EngineSession.PatternFillSettings()
                 settings.mode = .selection
                 settings.opacity = opacity

@@ -16,8 +16,11 @@ final class PaintToolPresetStore {
     /// The defaults key; internal so tests can inspect and seed the raw form.
     static let presetsKey = "editor.paintToolPresets"
 
-    /// The schema version this store reads and writes.
-    static let schemaVersion = 1
+    /// The newest schema version this store reads and writes.
+    static let schemaVersion = 2
+
+    /// The oldest schema version this store still reads.
+    static let minimumSchemaVersion = 1
 
     private let defaults: UserDefaults
 
@@ -142,7 +145,16 @@ final class PaintToolPresetStore {
             throw PaintToolPresetError.malformed("the stored value is not a preset data document")
         }
         do {
-            let document = try JSONDecoder().decode(PresetDocument.self, from: data)
+            // Read the version first: nested decoders accept exactly the
+            // fields their document version knows.
+            let header = try JSONDecoder().decode(PresetSchemaHeader.self, from: data)
+            guard (Self.minimumSchemaVersion...Self.schemaVersion).contains(header.schemaVersion) else {
+                throw PaintToolPresetError.unsupportedSchemaVersion(found: header.schemaVersion,
+                                                                   supported: Self.schemaVersion)
+            }
+            let decoder = JSONDecoder()
+            decoder.userInfo[.presetSchemaVersion] = header.schemaVersion
+            let document = try decoder.decode(PresetDocument.self, from: data)
             try Self.validateCollection(document.presets)
             return document
         } catch let error as PaintToolPresetError {
@@ -178,14 +190,20 @@ private extension Array where Element == PaintToolPreset {
     }
 }
 
-/// Strict schema-one envelope. Unknown fields require a compatible reader;
-/// every failure leaves the original bytes untouched.
+/// Strict, versioned envelope. It reads schema versions
+/// `minimumSchemaVersion ... schemaVersion`, rejects unknown fields at its
+/// boundary and writes the lowest version that can express its presets.
+/// Every failure leaves the original bytes untouched.
 private struct PresetDocument: Codable {
     let schemaVersion: Int
     let presets: [PaintToolPreset]
 
     init(presets: [PaintToolPreset]) {
-        self.schemaVersion = PaintToolPresetStore.schemaVersion
+        // Older Glims versions read schema 1; only a preset with paint options
+        // needs the version 2 fields, so documents without them stay readable.
+        self.schemaVersion = presets.contains(where: { $0.settings.hasPaintOptions })
+            ? PaintToolPresetStore.schemaVersion
+            : PaintToolPresetStore.minimumSchemaVersion
         self.presets = presets
     }
 
@@ -195,11 +213,26 @@ private struct PresetDocument: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         guard container.contains(.schemaVersion) else { throw PaintToolPresetError.missingSchemaVersion }
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        guard schemaVersion == PaintToolPresetStore.schemaVersion else {
+        guard (PaintToolPresetStore.minimumSchemaVersion...PaintToolPresetStore.schemaVersion).contains(schemaVersion) else {
             throw PaintToolPresetError.unsupportedSchemaVersion(found: schemaVersion,
                                                                 supported: PaintToolPresetStore.schemaVersion)
         }
         try rejectUnknownPresetKeys(decoder, allowed: ["schemaVersion", "presets"])
         presets = try container.decode([PaintToolPreset].self, forKey: .presets)
+    }
+}
+
+/// Reads only the envelope's `schemaVersion`, so the store can choose the
+/// strictness of the full document decode before it runs. Unknown envelope
+/// fields are rejected by `PresetDocument`.
+private struct PresetSchemaHeader: Decodable {
+    let schemaVersion: Int
+
+    enum CodingKeys: String, CodingKey { case schemaVersion }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.schemaVersion) else { throw PaintToolPresetError.missingSchemaVersion }
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
     }
 }

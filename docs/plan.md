@@ -6944,6 +6944,80 @@ column's width and height; `palette-keyboard-focus` checks the front tabs
 and that the groups do not cover each other. An arrangement saved by an
 earlier build keeps its groups until Window > Reset Palettes.
 
+### Paint modes, spacing and fade (2026-11-23)
+
+The paint tools inherited GIMP's paint defaults: Normal mode, the
+brush's spacing and no fade. `GlimsBrushSettings` gains one optional
+tail (`GLIMS_BRUSH_FEATURE_PAINT_OPTIONS`), read whole or not at all:
+a paint mode nick from a fixed allowlist (the 34 non-legacy layer modes
+the app lists, plus Behind and Color Erase), spacing as a fraction of
+the brush size (0.01 to 10), a fade over 1 to 9999 dabs to transparent
+or to a given background, and a pattern source for Clone, aligned
+(GIMP's Registered alignment, one tiling of the drawable) or not
+(None from 0,0, the pattern's center under each stroke's first point).
+The fade uses a private copy of the stroke's dynamics with one output
+listening to the fade alone: opacity through `fade-reverse`, or color
+through the FG to BG (RGB) gradient with the background pinned on the
+stroke's own context, so the shared user context never changes. GIMP's
+cores honor the paint mode only in the Paintbrush family and Clone, so
+the engine refuses a mode elsewhere, a fade outside Paintbrush, Pencil
+and Airbrush, any option on CMYK and multichannel documents, and any
+option in Stroke Selection. Strokes with an option return no capture
+facts, so the Recorder keeps them as failed rows until the codec stores
+them; presets do not keep them yet.
+
+The fade's output switches off every input its class has and then
+turns on the fade: GIMP 3.0.8 and 3.2.0 have no `use-rotation`, and
+`g_object_set` stops at the first name a class lacks, which left the
+fade off there in the first draft (found in review). "Default spacing"
+is GIMP's paint default of 10%: GIMP links spacing to the brush only
+for its interface's tool options (`gimp_paint_options_brush_notify`),
+and linking it here would change existing strokes and their recorded
+fingerprints.
+
+Tool Options gain Mode, Spacing (with Default spacing) and Fade
+rows.
+`test_paint_options` in the conformance tests checks each mode where it
+differs exactly from Normal, spacing gaps, both fades, aligned and
+unaligned pattern clones against a tiled oracle, every refusal with no
+undo or pixel change, partial tails and the capture facts;
+`GLIMS_SMOKE_CASE=paint-options` paints them through the canvas.
+
+### Clone from a pattern (2026-11-23)
+
+Clone's Tool Options gain Source (Image or Pattern) and, for Pattern,
+a button that opens the Fill sheet's pattern picker in a small panel.
+The pattern is the one current pattern Edit > Fill already persists
+(`PatternFillStore`), as an editor's defined pattern serves both its
+fill and its pattern stamp, and as GIMP's context pattern serves both
+Bucket Fill and Clone. Aligned keeps its meaning: on, the pattern stays
+one tiling of the layer across strokes (the engine's aligned pattern
+source); off, each stroke starts it again. A pattern stroke needs no
+Option-click; with no pattern chosen the press is refused before any
+paint. Heal still copies from the image. The source choice lasts for
+the session, like the source point and Aligned. No facade change.
+`GLIMS_SMOKE_CASE=clone-pattern` drives the menu, the chooser and
+strokes through the canvas.
+
+### Presets keep paint options (2026-11-23)
+
+Paint tool presets now keep the paint mode, spacing and fade, in schema
+version 2 of the preset document (`docs/paint-tool-presets.md`). The
+store reads versions 1 and 2 and writes the lowest one its presets
+need, so a document without paint options stays version 1 and older
+Glims versions keep reading it; they refuse a version 2 document and
+leave its bytes alone, as they refuse any document they cannot read.
+Each version rejects the fields it does not know: the store reads the
+version first and hands it to the nested decoders. A mode is kept only
+for the tools whose engine core honors one and a fade only for
+Paintbrush, Pencil and Airbrush, as in Tool Options. Applying a preset
+without them returns the tool to Normal at the default spacing without
+a fade. Clone's Image or Pattern source and the pattern stay tool state
+shared with Edit > Fill, and the fade background is the background at
+each press, so neither is a preset setting.
+`GLIMS_SMOKE_CASE=tool-presets` checks Update and Apply through the
+panel.
+
 ### Gradient and Eyedropper modifiers (2026-11-22)
 
 Gradient ignored Shift, and the Eyedropper ignored Option. Shift now

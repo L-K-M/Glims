@@ -9,6 +9,21 @@ extension EngineSmokeTest {
                           userInfo: [NSLocalizedDescriptionKey: "Missing layered Lab fixture path"])
         }
         let image = try session.openImage(path: path)
+        // Layered Lab documents became editable after this case was written,
+        // and no current adapter reports read-only storage. The checks below
+        // only mean something against one that does.
+        let storage: EngineSession.ImageStorage
+        do {
+            storage = try session.imageStorage(image)
+        } catch {
+            try? session.closeImage(image)
+            return check(false, "the layered Lab fixture reports its storage: \(error)")
+        }
+        guard storage.readOnly else {
+            try? session.closeImage(image)
+            return check(true, "layered-lab-readonly skipped: the adapter opens this layered Lab document "
+                         + "editable, and no current adapter reports read-only storage (supported skip)")
+        }
         var document: ImageDocument?
         var controller: DocumentWindowController?
         let palette = LayersPaletteController()

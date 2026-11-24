@@ -118,7 +118,7 @@ glims_layer_matting (GlimsEngine  *engine,
   const Babl      *format;
   const char      *undo_name;
   gint             layer_width, layer_height;
-  guint            n_components, component_bytes;
+  guint            n_components, pixel_bytes;
   gboolean         any_partial = FALSE, any_opaque = FALSE, changed = FALSE;
   GeglRectangle    damage = { 0, 0, 0, 0 };
   MattingProgress  progress = { .engine = engine };
@@ -216,7 +216,7 @@ glims_layer_matting (GlimsEngine  *engine,
       goto done;
     }
   n_components = babl_format_get_n_components (format);
-  component_bytes = n_components * sizeof (float);
+  pixel_bytes = n_components * sizeof (float);
   layer_width = gimp_item_get_width (GIMP_ITEM (drawable));
   layer_height = gimp_item_get_height (GIMP_ITEM (drawable));
   if (layer_width < 1 || layer_height < 1 || n_components < 2)
@@ -269,7 +269,7 @@ glims_layer_matting (GlimsEngine  *engine,
           region_height = band_height;
         }
       region_pixels = (guint) layer_width * region_height;
-      pixels = g_try_malloc ((size_t) region_pixels * component_bytes);
+      pixels = g_try_malloc ((size_t) region_pixels * pixel_bytes);
       if (! pixels)
         {
           if (error) *error = strdup ("The matting could not allocate its band buffer.");

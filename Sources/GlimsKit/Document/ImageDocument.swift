@@ -1360,6 +1360,9 @@ final class ImageDocument {
         var isV2: Bool { if case .tablet = self { return true }; return false }
     }
 
+    static let paintOptionsNeedRGB = "Blend modes, spacing, fade and patterns do not paint in Lab, CMYK or multichannel images. "
+        + "Set the tool back to Normal, Default spacing and no Fade to paint here."
+
     func beginStroke(at point: EngineSession.StrokePoint, brush: EngineSession.Brush = EngineSession.Brush()) {
         beginStroke(input: .v1(point), brush: brush)
     }
@@ -1370,6 +1373,13 @@ final class ImageDocument {
     }
 
     private func beginStroke(input: StrokeInput, brush: EngineSession.Brush) {
+        // Lab and ink-channel images paint through their own engine paths,
+        // which take no paint options: refuse rather than drop them.
+        if brush.hasPaintOptions, storage.layout == .layeredLab || colorInfo.mode == .lab || colorInfo.mode.usesInkChannels {
+            onError?(Self.paintOptionsNeedRGB)
+            NSSound.beep()
+            return
+        }
         if storage.layout == .layeredLab {
             beginLabLayerBrushStroke(input: input, brush: brush)
             return
@@ -3233,7 +3243,6 @@ final class ImageDocument {
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try session.duplicateLayers(image, layers: captured) }
-            if case .failure(let error) = result { self.report(error) }
             if let capture, let command {
                 var recorded = result.map { _ in command }
                 var produced: ProducedLayerCapture? = nil
@@ -3249,6 +3258,8 @@ final class ImageDocument {
                 }
                 self.settleRecording(capture, result: recorded, confirmed: confirmed, produced: produced)
             }
+            // The target command reports the failure and completes with it.
+            _ = try result.get()
         }, completion: completion)
         if capture != nil { notifyRecorderChanged() }
     }
@@ -3278,10 +3289,11 @@ final class ImageDocument {
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try session.deleteLayers(image, layers: captured) }
-            if case .failure(let error) = result { self.report(error) }
             if let capture, let command {
                 self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
             }
+            // The target command reports the failure and completes with it.
+            _ = try result.get()
         }, completion: completion)
         if capture != nil { notifyRecorderChanged() }
     }
@@ -3568,7 +3580,6 @@ final class ImageDocument {
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try session.mergeVisible(image) }
-            if case .failure(let error) = result { self.report(error) }
             if let capture {
                 var recorded = result.map { _ in command }
                 var produced: ProducedLayerCapture? = nil
@@ -3584,6 +3595,8 @@ final class ImageDocument {
                 }
                 self.settleRecording(capture, result: recorded, confirmed: confirmed, produced: produced)
             }
+            // The target command reports the failure and completes with it.
+            _ = try result.get()
         })
         if capture != nil { notifyRecorderChanged() }
     }
@@ -4771,6 +4784,8 @@ final class ImageDocument {
                                                                    alpha: recorderBackground.alpha))
             }
             self.settleRecording(capture, result: answer.map { command }, confirmed: confirmed)
+            // The target command reports a failure and completes with it.
+            try answer.get()
         }, completion: { result in
             completion?(result)
         })
@@ -5228,10 +5243,11 @@ final class ImageDocument {
                     try session.selectLayer(layer, image: image)
                     _ = try session.addLayerMask(layer, image: image, source: source, edit: true)
                 }
-                if case .failure(let error) = result { self.report(error) }
                 if let capture {
                     self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
                 }
+                // The target command reports the failure and completes with it.
+                _ = try result.get()
             })
             if capture != nil { notifyRecorderChanged() }
         } else {
@@ -5340,6 +5356,7 @@ final class ImageDocument {
             }
             self.dispatchReadWhenReady { try? self.reload() }
         }
+        if capture != nil { notifyRecorderChanged() }
     }
 
     /// Mask commands that remove the target drawable queue as target
@@ -5361,10 +5378,11 @@ final class ImageDocument {
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try work(session, image) }
-            if case .failure(let error) = result { self.report(error) }
             if let capture, let semantic {
                 self.settleRecording(capture, result: result.map { _ in semantic }, confirmed: confirmed)
             }
+            // The target command reports the failure and completes with it.
+            _ = try result.get()
         })
         if capture != nil { notifyRecorderChanged() }
     }
@@ -6398,10 +6416,11 @@ final class ImageDocument {
         enqueueTargetCommand({ session, image in
             let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
             let result = Result { try session.selectSimilar(image, options: options) }
-            if case .failure(let error) = result { self.report(error) }
             if let capture {
                 self.settleRecording(capture, result: result.map { _ in command }, confirmed: confirmed)
             }
+            // The target command reports the failure and completes with it.
+            _ = try result.get()
         }, completion: completion)
         if capture != nil { notifyRecorderChanged() }
     }
