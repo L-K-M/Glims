@@ -125,6 +125,11 @@ enum MainMenu {
                 // the generated adjustment entries.
                 item("Variations…", #selector(DocumentWindowController.variations(_:))),
             ]),
+            // The two destructive blends sit beside the adjustment
+            // commands rather than inside Adjust: they read another open
+            // image or write a channel, selection or new document.
+            item("Blend With Image…", #selector(DocumentWindowController.blendWithImage(_:))),
+            item("Blend Channels…", #selector(DocumentWindowController.blendChannels(_:))),
             .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),
             item("Canvas Size…", #selector(DocumentWindowController.canvasSize(_:))),

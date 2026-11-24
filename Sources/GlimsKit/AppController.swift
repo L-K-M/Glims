@@ -455,6 +455,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
         document.labCopyHandler = { [weak self] document, destination in
             self?.convertedLabCopy(document, destination: destination)
         }
+        document.blendChannelsHandler = { [weak self] document, image in
+            guard let self, !self.terminationRequested, !document.isClosing else {
+                try? document.session.closeImage(image)
+                return
+            }
+            do {
+                self.open(try ImageDocument(session: document.session, image: image,
+                                            name: "Untitled"))
+            } catch {
+                try? document.session.closeImage(image)
+                NSAlert(error: error).runModal()
+            }
+        }
         let controller = DocumentWindowController(document: document)
         controller.reserveWrite = { [weak self, weak controller] url in
             guard let self, let controller else { throw ImageDocument.DocumentError.closed }

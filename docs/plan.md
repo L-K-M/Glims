@@ -7387,3 +7387,55 @@ compiles the kernel standalone, optimized and under the sanitizers,
 (`GLIMS_SMOKE_CASE=replace-color`) opens the panel, samples, sets hue, checks
 the live composite, applies, cancels and replays a saved recording onto a
 twin.
+
+### Blend With Image and Blend Channels, engine half (2026-11-23)
+
+Image > Blend With Image blends one channel (or the composite) of an open image
+into a raster layer or saved channel of another open image, limited by the
+current selection, as one undo step named "Blend With Image". Image >
+Blend Channels blends two single channels into a new saved channel, a new
+selection or a new grayscale image, as one undo step named "Blend Channels".
+The engine half lands in facade slots 261-264 with the append-only structs
+`GlimsChannelRef`, `GlimsApplyImageSettings` and
+`GlimsCalculationsSettings`, plus the shared `GlimsBlendMode` and
+`GlimsChannelKind` enums. `Engine/apply-image-math.{h,c}` owns the pure
+kernel on straight nonlinear sRGB floats; its separable formulas follow the
+W3C Compositing and Blending Level 1 specification, Add and Subtract add
+the scale and offset extensions, and the per-pixel weight is opacity times
+mask times selection times source alpha with the target alpha unchanged.
+`Engine/apply-image.c` resolves every reference to an owned snapshot
+(layers with effects through the filter-input path, merged images through
+the projection, saved channels and selections through the linear mask
+path), writes only inside the selection as one drawable undo over the
+changed bounds, and refuses indexed documents, component documents,
+group or editable targets, locks, busy sessions, malformed settings and
+size mismatches without touching anything. A result identical to the input
+adds no step. Both previews are read-only scaled renders that change no
+history. `scripts/test-apply-image-math.py` compiles the kernel standalone,
+optimized and under the sanitizers, with hand-written oracle values; `test_apply_image`
+and `test_calculations` pin exact bytes for every mode family, Invert, a
+mask, the selection limit, a saved-channel target, all three Blend Channels
+destinations, undo accounting, the refusals and both previews.
+
+### Blend With Image and Blend Channels (2026-11-23)
+
+Image > Blend With Image… blends one channel or the composite color of an
+open image into the active layer or a saved channel of another open image,
+limited by the selection, as one undo step named "Blend With Image". Image
+> Blend Channels… blends two single channels into a new saved channel, a
+new selection or a new grayscale document, as one undo step named "Blend
+Channels". Both names avoid the other product's command names. The panels
+sit in the Image menu beside Adjust: modeless utility panels in the Color
+Range style, listing same-size open documents with the front one first,
+layers including Merged, built-in channels and saved channels by name, the
+twelve modes, opacity, scale/offset for Add and Subtract, an optional mask,
+and off-main-thread previews behind generation counters. `EngineSession`
+mirrors the facade settings and validation and throws the engine's error
+strings; `ImageDocument` queues each edit on the counted input queue like
+Color Range and reserves an explicit unsupported Recorder row because the
+Recorder cannot bind a foreign image id. A New Document result is adopted
+through `AppController.open` as an untitled document. The `blend-image`
+smoke case (`GLIMS_SMOKE_CASE=blend-image`) drives both commands through
+the real menus and panels: Multiply over a second 8x8 document within one
+level, the named undo step, Undo restoring the exact bytes, a red/green
+Normal blend creating the Alpha 1 channel, and a new grayscale document.

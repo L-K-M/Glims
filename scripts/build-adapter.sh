@@ -167,6 +167,13 @@ if [[ "$MODE" == test ]]; then
     python3 "$ROOT/scripts/test-replace-color-math.py" || status=$?
   cat "$OUT/replace-color-math-test.log"
   (( status == 0 )) || die "the Replace Color math tests failed (status $status)"
+  # The Apply Image kernel is pure C too; its harness includes the facade
+  # header for GlimsBlendMode.
+  status=0
+  run_with_timeout 120 "$OUT/apply-image-math-test.log" \
+    python3 "$ROOT/scripts/test-apply-image-math.py" || status=$?
+  cat "$OUT/apply-image-math-test.log"
+  (( status == 0 )) || die "the Apply Image math tests failed (status $status)"
   # Each native runner below starts the engine cold with a fresh home, so
   # GIMP queries every plug-in before the first check. On a loaded Mac that
   # start alone has taken about three minutes; the checks take seconds.

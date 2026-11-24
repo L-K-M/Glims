@@ -1896,6 +1896,105 @@ typedef enum GlimsPurgeTarget {
   GLIMS_PURGE_HISTORIES = 1u << 2  /* every open image's undo and redo history */
 } GlimsPurgeTarget;
 
+/* Image > Blend With Image's blend modes. These values are the facade's own;
+ * they never encode a native GIMP enum. The pure kernel in
+ * Engine/apply-image-math.h and the Swift panel read them here. */
+typedef enum GlimsBlendMode {
+  GLIMS_BLEND_NORMAL = 0,
+  GLIMS_BLEND_MULTIPLY,
+  GLIMS_BLEND_SCREEN,
+  GLIMS_BLEND_OVERLAY,
+  GLIMS_BLEND_SOFT_LIGHT,
+  GLIMS_BLEND_HARD_LIGHT,
+  GLIMS_BLEND_DARKEN,
+  GLIMS_BLEND_LIGHTEN,
+  GLIMS_BLEND_DIFFERENCE,
+  GLIMS_BLEND_EXCLUSION,
+  GLIMS_BLEND_ADD,
+  GLIMS_BLEND_SUBTRACT
+} GlimsBlendMode;
+
+/* One channel of one open image, as Blend With Image and Blend Channels name
+ * it. COMPOSITE is the RGB color of a layer or of the merged visible
+ * image. RED, GREEN, BLUE, GRAY and ALPHA pick one plane. SELECTION
+ * reads the image's selection mask. SAVED reads a saved channel by its
+ * `item`. NONE is meaningful only for an optional mask and means "no
+ * mask". The values are the facade's own and never encode a native
+ * enum. */
+typedef enum GlimsChannelKind {
+  GLIMS_CHANNEL_COMPOSITE = 0,
+  GLIMS_CHANNEL_RED = 1,
+  GLIMS_CHANNEL_GREEN = 2,
+  GLIMS_CHANNEL_BLUE = 3,
+  GLIMS_CHANNEL_GRAY = 4,
+  GLIMS_CHANNEL_ALPHA = 5,
+  GLIMS_CHANNEL_SELECTION = 6,
+  GLIMS_CHANNEL_SAVED = 7,
+  GLIMS_CHANNEL_NONE = 255
+} GlimsChannelKind;
+
+/* The previews' long-side cap. */
+#define GLIMS_APPLY_IMAGE_PREVIEW_MAX 1024
+
+/* A channel of an open image. `image` must be an open image of the same
+ * pixel size as the command's target image. `layer` 0 means the merged
+ * visible image (the projection); otherwise it names a layer of `image`.
+ * `item` names a saved channel when `channel` is GLIMS_CHANNEL_SAVED and
+ * is ignored otherwise, as `layer` is for SELECTION and SAVED. */
+typedef struct GlimsChannelRef {
+  uint32_t    struct_size;  /* >= sizeof(GlimsChannelRef) */
+  GlimsImageID image;
+  GlimsItemID  layer;
+  uint32_t     channel;     /* GlimsChannelKind */
+  GlimsItemID  item;
+  uint32_t     invert;      /* exactly 0 or 1 */
+} GlimsChannelRef;
+
+/* Image > Blend With Image's borrowed settings. `source` may be any channel
+ * kind except NONE, including COMPOSITE. `mask` is an optional mask
+ * channel: NONE means no mask, any other kind is read as one scalar
+ * value per pixel (COMPOSITE contributes its luma). Scale and offset are
+ * finite and in range for every mode, including the modes that ignore
+ * them, so a settings struct is either wholly usable or refused. */
+typedef struct GlimsApplyImageSettings {
+  uint32_t         struct_size;  /* >= sizeof(GlimsApplyImageSettings) */
+  GlimsChannelRef  source;
+  uint32_t         mode;         /* GlimsBlendMode */
+  double           opacity;      /* finite (0,1] */
+  double           scale;        /* finite [1,2] */
+  double           offset;       /* finite [-1,1] */
+  GlimsChannelRef  mask;         /* GLIMS_CHANNEL_NONE: no mask */
+} GlimsApplyImageSettings;
+
+/* Where Image > Blend Channels puts its one-channel result. */
+typedef enum GlimsCalculationsDestination {
+  GLIMS_CALCULATIONS_NEW_CHANNEL   = 1,
+  GLIMS_CALCULATIONS_NEW_SELECTION = 2,
+  GLIMS_CALCULATIONS_NEW_IMAGE     = 3
+} GlimsCalculationsDestination;
+
+/* Image > Blend Channels' borrowed settings. `first` is the backdrop (cb)
+ * and `second` the source (cs); both must be single channels (GRAY, RED,
+ * GREEN, BLUE, ALPHA, SELECTION or SAVED), never COMPOSITE or NONE.
+ * `mask` follows Blend With Image's rule. `destination` decides where the
+ * result goes: NEW_CHANNEL and NEW_SELECTION use `destination_image`
+ * (which must be open and the same size), NEW_IMAGE ignores it and
+ * creates a new grayscale image. `channel_name` names the new channel
+ * and is ignored by the other destinations. */
+typedef struct GlimsCalculationsSettings {
+  uint32_t         struct_size;  /* >= sizeof(GlimsCalculationsSettings) */
+  GlimsChannelRef  first;
+  GlimsChannelRef  second;
+  uint32_t         mode;         /* GlimsBlendMode */
+  double           opacity;      /* finite (0,1] */
+  double           scale;        /* finite [1,2] */
+  double           offset;       /* finite [-1,1] */
+  GlimsChannelRef  mask;         /* GLIMS_CHANNEL_NONE: no mask */
+  uint32_t         destination;  /* GlimsCalculationsDestination */
+  GlimsImageID     destination_image;
+  const char      *channel_name; /* borrowed; NULL or empty: "Blend Channels" */
+} GlimsCalculationsSettings;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -4981,6 +5080,87 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*layer_clipping_edit) (GlimsEngine *engine, GlimsImageID image,
                                       GlimsItemID layer, uint32_t command,
                                       GlimsItemID *result, char **error);
+  /* Slot 261: Image > Blend With Image. Blends one channel (or the composite)
+   * of an open image into `target` of `image`: a raster layer, or a saved
+   * channel of that image. The source and mask images must be open and
+   * have exactly the same width and height as `image`, else FAILED with
+   * "Blend With Image needs images of the same pixel size.". The target is
+   * changed only inside the current selection; outside it, and where the
+   * selection value is zero, pixels are unchanged. A non-empty optional
+   * mask multiplies the weight per pixel after its own Invert. The blend
+   * follows Engine/apply-image-math.h on straight nonlinear sRGB floats:
+   * w = opacity * mask * source alpha, out = cb + w * (B(cb, cs) - cb),
+   * target alpha unchanged. One undo step named "Blend With Image" covers the
+   * changed bounds; a result identical to the input succeeds and adds no
+   * step. Refusals change nothing: malformed settings, an unknown mode,
+   * an opacity outside (0,1], scale outside [1,2], offset outside
+   * [-1,1], non-finite values, NONE as a source, COMPOSITE in Blend Channels
+   * and a short struct are INVALID_ARGUMENT; an unknown image, layer or
+   * saved channel is NOT_FOUND; indexed images and component documents
+   * are UNSUPPORTED; a group target, or a genuine editable text, link or
+   * vector target, is UNSUPPORTED; pixel locks are LOCKED; a busy engine,
+   * a running stroke or filter session, a floating selection or an open
+   * undo group is BUSY. */
+  GlimsStatus (*image_apply_image) (GlimsEngine *engine, GlimsImageID image,
+                                    GlimsItemID target,
+                                    const GlimsApplyImageSettings *settings,
+                                    char **error);
+  /* Slot 262: Image > Blend With Image's preview. Renders the target's blended
+   * result for display at most `max_side` (1...GLIMS_APPLY_IMAGE_PREVIEW_MAX)
+   * on the long side, never upscaled, as straight-alpha sRGB RGBA 8-bit.
+   * A saved-channel target is returned as gray replicated to RGB with
+   * alpha 255. The preview reads the target's raw pixels (existing layer
+   * effects are not part of the blended input), ignores the selection and
+   * changes no history. `rgba` NULL queries the size only; otherwise
+   * `capacity` must hold `width * height * 4` bytes. Wrong buffer sizes,
+   * a bad `max_side`, malformed settings, an unknown image, layer or
+   * channel, an indexed or component document and mismatched image sizes
+   * refuse with the same statuses as slot 261. Read-only. */
+  GlimsStatus (*image_apply_image_preview) (GlimsEngine *engine, GlimsImageID image,
+                                            GlimsItemID target,
+                                            const GlimsApplyImageSettings *settings,
+                                            int32_t max_side, uint8_t *rgba,
+                                            int32_t capacity,
+                                            int32_t *width, int32_t *height,
+                                            char **error);
+  /* Slot 263: Image > Blend Channels. Blends two single channels, `first`
+   * as the backdrop (cb) and `second` as the source (cs), with the mode,
+   * opacity, scale, offset and optional mask of the shared kernel. Every
+   * referenced image, including NEW_CHANNEL's and NEW_SELECTION's
+   * `destination_image`, must be open and the same pixel size, else FAILED
+   * with "Blend Channels needs images of the same pixel size.". NEW_CHANNEL
+   * adds a saved channel named `channel_name` ("Blend Channels" when NULL
+   * or empty) to `destination_image` and returns its id in `result_item`;
+   * NEW_SELECTION replaces that image's selection; NEW_IMAGE creates a new
+   * clean grayscale 8-bit image with one opaque layer holding the result,
+   * with no undo history and no dirty state, and returns its id in
+   * `result_image`. Each destination is ONE undo step named
+   * "Blend Channels"; a NEW_SELECTION whose result equals the current
+   * selection adds no step. `result_image` and `result_item` are zeroed
+   * first and on every failure. Refusals follow slot 261: malformed
+   * settings, COMPOSITE or NONE inputs, an unknown destination, non-finite
+   * numbers and short structs are INVALID_ARGUMENT; unknown images,
+   * layers or saved channels are NOT_FOUND; indexed images and component
+   * documents are UNSUPPORTED; a busy engine, a running stroke or filter
+   * session, a floating selection or an open undo group is BUSY. */
+  GlimsStatus (*image_calculations) (GlimsEngine *engine,
+                                    const GlimsCalculationsSettings *settings,
+                                    GlimsImageID *result_image,
+                                    GlimsItemID *result_item, char **error);
+  /* Slot 264: Image > Blend Channels' preview. The same blend as slot 263 at
+   * at most `max_side` (1...GLIMS_APPLY_IMAGE_PREVIEW_MAX) on the long
+   * side, as one byte per pixel, 0...255. It ignores the destination
+   * fields and changes no history. `gray` NULL queries the size only;
+   * otherwise `capacity` must hold `width * height` bytes. Malformed
+   * channel references, non-finite values, short structs, unknown
+   * images, indexed or component documents and mismatched sizes refuse
+   * like slot 263. Read-only. */
+  GlimsStatus (*image_calculations_preview) (GlimsEngine *engine,
+                                             const GlimsCalculationsSettings *settings,
+                                             int32_t max_side, uint8_t *gray,
+                                             int32_t capacity,
+                                             int32_t *width, int32_t *height,
+                                             char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */

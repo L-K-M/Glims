@@ -69,6 +69,8 @@ jobs:
         run: python3 scripts/test-color-range-math.py
       - name: Check optimized and sanitized Replace Color math
         run: python3 scripts/test-replace-color-math.py
+      - name: Check optimized and sanitized Apply Image math
+        run: python3 scripts/test-apply-image-math.py
       - name: Check optimized and sanitized Lab samples
         run: python3 scripts/test-lab-samples.py
       - name: Check optimized and sanitized physical Lab fills
@@ -182,6 +184,10 @@ jobs:
       - name: Check Replace Color math
         timeout-minutes: 5
         run: python3 scripts/test-replace-color-math.py optimized
+
+      - name: Check Apply Image math
+        timeout-minutes: 5
+        run: python3 scripts/test-apply-image-math.py optimized
 
       - name: Check Lab samples
         timeout-minutes: 5

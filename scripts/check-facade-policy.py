@@ -82,6 +82,14 @@ def check(root=ROOT):
         stroke = re.search(r'GlimsStrokeID\s+(\w+)\b', params)
         expected_kind = 'IMAGE' if image else 'FILTER' if session_filter else 'STROKE' if stroke else 'NONE'
         expected_id = (image or session_filter or stroke).group(1) if image or session_filter or stroke else '0'
+        # Calculations has no typed destination argument: its settings name
+        # the image, and that expression is the target owner.
+        resolver_overrides = {
+            'image_calculations': ('IMAGE', 'calculations_destination(settings)'),
+            'image_calculations_preview': ('IMAGE', 'calculations_destination(settings)'),
+        }
+        if name in resolver_overrides:
+            expected_kind, expected_id = resolver_overrides[name]
         if name == 'procedure_run':
             expected_kind = 'ALL_IMAGES'
         # edit_purge names an image only for the Undo target; its other
@@ -90,7 +98,8 @@ def check(root=ROOT):
             expected_kind, expected_id = 'NONE', '0'
         if kind != expected_kind:
             errors.append(f'{name}: {kind} resolver disagrees with typed {expected_kind} arguments')
-        target = re.findall(r'\(GlimsFacadeTarget\)\s*\{\s*GLIMS_FACADE_TARGET_(\w+)\s*,\s*(\w+)\s*,', body)
+        target = [(kind, ''.join(ident.split())) for kind, ident in
+                  re.findall(r'\(GlimsFacadeTarget\)\s*\{\s*GLIMS_FACADE_TARGET_(\w+)\s*,\s*([^,]+?)\s*,', body)]
         if target != [(expected_kind, expected_id)]:
             errors.append(f'{name}: captured owner differs from its typed ID argument')
         source_pairs = {
@@ -103,6 +112,14 @@ def check(root=ROOT):
             'filter_begin_with_source': ('source', '0'),
             'filter_begin_displace_with_sources': ('x_source', 'y_source'),
             'filter_begin_oilify_with_sources': ('radius_source', 'exponent_source'),
+            'image_apply_image': ('apply_image_source_item(settings)',
+                                  'apply_image_mask_item(settings)'),
+            'image_apply_image_preview': ('apply_image_source_item(settings)',
+                                          'apply_image_mask_item(settings)'),
+            'image_calculations': ('calculations_first_item(settings)',
+                                   'calculations_second_item(settings)'),
+            'image_calculations_preview': ('calculations_first_item(settings)',
+                                           'calculations_second_item(settings)'),
         }
         expected_sources = source_pairs.get(name, ('0', '0'))
         packed_target = f'(GlimsFacadeTarget){{GLIMS_FACADE_TARGET_{expected_kind},{expected_id},{{{expected_sources[0]},{expected_sources[1]}}}}}'
