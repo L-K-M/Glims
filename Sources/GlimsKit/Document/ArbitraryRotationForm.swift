@@ -46,8 +46,10 @@ struct ArbitraryRotationForm {
 
 /// Keeps exactly one of its radio buttons on.
 @MainActor
-private final class RadioGroup: NSObject {
+final class RadioGroup: NSObject {
     private let buttons: [NSButton]
+    /// Reports every selection change, including a programmatic one.
+    var onChange: (() -> Void)?
 
     init(_ buttons: [NSButton]) {
         self.buttons = buttons
@@ -60,5 +62,6 @@ private final class RadioGroup: NSObject {
 
     @objc func choose(_ sender: NSButton) {
         for button in buttons { button.state = button === sender ? .on : .off }
+        onChange?()
     }
 }

@@ -104,6 +104,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// open, so Create and the phase-2 editor act on that document, never
     /// on the front one. nil while none is open.
     private(set) var adjustmentSheet: AdjustmentLayerSheetController?
+    /// Image ▸ Adjust ▸ Variations…'s sheet content, retained while the
+    /// sheet is open so validation and the smoke test can read its model.
+    private(set) var variationsForm: VariationsForm?
     /// View ▸ Show Grid's cached per-window state, defaulting to off.
     private(set) var gridViewState = GridViewState()
 
@@ -2035,6 +2038,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func autoLevels(_ sender: Any?) { applyAdjustment(.autoLevels) }
     @objc func desaturate(_ sender: Any?) { applyAdjustment(.desaturate) }
     @objc func equalize(_ sender: Any?) { applyAdjustment(.equalize) }
+
+    /// Image ▸ Adjust ▸ Variations…: opens the sheet on this document's
+    /// window. The menu validation already read the cached refusal; the
+    /// sheet applies one queued command on OK only.
+    @objc func variations(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
+              let layer = imageDocument.activeLayer else { return }
+        if let reason = imageDocument.variationsRefusal() {
+            statusBar.message = reason
+            NSSound.beep()
+            return
+        }
+        endPendingEdits()
+        let form = VariationsForm()
+        form.attach(to: imageDocument, layer: layer)
+        variationsForm = form
+        form.present(on: window) { [weak self] in
+            self?.variationsForm = nil
+        }
+    }
     @objc func addTransparency(_ sender: Any?) { applyAdjustment(.addAlpha) }
     @objc func removeTransparency(_ sender: Any?) { applyAdjustment(.removeAlpha) }
 
@@ -3423,6 +3447,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let refusal = imageDocument.adjustmentRefusal(adjustment)
             menuItem.toolTip = refusal
             return refusal == nil && !editingBlocked && !previewBusy
+        case #selector(variations(_:)):
+            // Cached admission only, like the adjustments above; the engine
+            // revalidates the fresh target, lock and selection states. The
+            // sheet must not stack on another sheet of this window.
+            let refusal = imageDocument.variationsRefusal()
+            menuItem.toolTip = refusal
+            return refusal == nil && !closeStarted && !editingBlocked && !previewBusy
+                && window?.attachedSheet == nil
         case #selector(defringe(_:)), #selector(removeBlackMatte(_:)), #selector(removeWhiteMatte(_:)):
             // Cached admission only; the engine revalidates the alpha and
             // partial-pixel states the cache cannot see. The refusal

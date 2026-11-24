@@ -4857,6 +4857,88 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Variations
+
+    /// Image > Adjust > Variations: why the command cannot run now, or
+    /// nil. Reads only cached state, so menu validation never calls the
+    /// engine. Only RGB documents qualify; grayscale, indexed, Lab, CMYK
+    /// and ink-channel documents all take the same refusal. The engine
+    /// revalidates the fresh target, locks and selection states.
+    func variationsRefusal() -> String? {
+        guard session.supportsVariations else {
+            return "This image engine cannot apply Variations."
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Variations is available for ordinary layered images only."
+        }
+        guard colorInfo.mode == .rgb else {
+            return "Variations is available for RGB images only."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Variations") {
+            return reason
+        }
+        guard activeDrawable != nil else { return "Select a layer first." }
+        guard let layer = activeLayer, !isMaskTargetActive, !isChannelTargetActive else {
+            return "Variations works on a layer; stop editing the mask or channel first."
+        }
+        if let row = layers.first(where: { $0.id == layer }), row.kind == .group {
+            return "Variations works on a layer, not a group."
+        }
+        if let source = layerSources[layer], !source.isRasterized,
+           source.kind == .text || source.kind == .link || source.kind == .vector {
+            return "Rasterize the \(source.kind) layer before using Variations."
+        }
+        if layerLocks[layer]?.effective.contains(.pixels) == true {
+            return "Unlock the layer's pixels before using Variations."
+        }
+        return nil
+    }
+
+    /// Image > Adjust > Variations: applies `settings` to `previewed`,
+    /// the layer the sheet rendered its thumbnails from, as one queued
+    /// command and one undo step. The Layers palette stays usable while
+    /// the sheet is open, so a different active layer at OK is refused
+    /// rather than edited unseen. The Recorder binds the explicit layer;
+    /// Cancel never reaches this method.
+    func applyVariations(_ settings: EngineSession.VariationsSettings, layer previewed: Int32) {
+        if let reason = variationsRefusal() {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileTargetPending() else { return }
+        endPendingUserEdits()
+        guard let layer = activeLayer else { return }
+        guard layer == previewed else {
+            onError?("The active layer changed while Variations was open. Open Variations again.")
+            NSSound.beep()
+            return
+        }
+        let command = SemanticImageCommand.applyVariations(settings)
+        run(semantic: command, recorderLayer: layer) { session, image in
+            try session.applyVariations(image, layer: layer, settings: settings)
+        }
+    }
+
+    /// Renders one Variations thumbnail off the main thread, through the
+    /// document's counted read queue, and delivers it on the main thread.
+    /// A refused read delivers nil; the form drops stale generations itself.
+    func variationsPreview(layer: Int32,
+                           settings: EngineSession.VariationsSettings, maxSize: Int32,
+                           deliver: @escaping @MainActor (EngineSession.VariationsPreview?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let preview = try? session.variationsPreview(documentImage, layer: layer,
+                                                         settings: settings, maxSize: maxSize)
+            DispatchQueue.main.async { deliver(preview) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.
@@ -8664,7 +8746,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .applyVariations, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting: return true
         case .selectSimilar(_, _, let sampleMerged): return !sampleMerged
         default: return false
         }

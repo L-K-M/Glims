@@ -120,6 +120,10 @@ enum MainMenu {
                                key: "u", adjustment: .desaturate),
                 adjustmentItem("Equalize", selector: #selector(DocumentWindowController.equalize(_:)),
                                key: "", adjustment: .equalize),
+                // Variations is a dialog command of its own, not a catalog
+                // row; like the one-click commands above it stays ahead of
+                // the generated adjustment entries.
+                item("Variations…", #selector(DocumentWindowController.variations(_:))),
             ]),
             .separator(),
             item("Image Size…", #selector(DocumentWindowController.imageSize(_:))),

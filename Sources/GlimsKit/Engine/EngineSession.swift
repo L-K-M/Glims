@@ -3217,7 +3217,7 @@ final class EngineSession: @unchecked Sendable {
     }
 
     struct ColorBalanceSettings: Equatable {
-        struct Range: Equatable {
+        struct Range: Equatable, Codable {
             var cyanRed: Double = 0
             var magentaGreen: Double = 0
             var yellowBlue: Double = 0
@@ -3232,6 +3232,40 @@ final class EngineSession: @unchecked Sendable {
         var preserveLuminosity = true
 
         var isValid: Bool { shadows.isValid && midtones.isValid && highlights.isValid }
+    }
+
+    /// Image > Adjust > Variations' accumulated corrections. The dialog's
+    /// ring and Lighter/Darker column add to these values; the facade
+    /// applies them as one Color Balance plus Hue-Saturation undo step.
+    struct VariationsSettings: Equatable, Codable {
+        var shadows = ColorBalanceSettings.Range()
+        var midtones = ColorBalanceSettings.Range()
+        var highlights = ColorBalanceSettings.Range()
+        var lightness: Double = 0
+        var saturation: Double = 0
+
+        var isValid: Bool {
+            [shadows, midtones, highlights].allSatisfy(\.isValid)
+                && lightness.isFinite && (-1...1).contains(lightness)
+                && saturation.isFinite && (-1...1).contains(saturation)
+        }
+
+        var isIdentity: Bool {
+            shadows.cyanRed == 0 && shadows.magentaGreen == 0 && shadows.yellowBlue == 0
+                && midtones.cyanRed == 0 && midtones.magentaGreen == 0 && midtones.yellowBlue == 0
+                && highlights.cyanRed == 0 && highlights.magentaGreen == 0 && highlights.yellowBlue == 0
+                && lightness == 0 && saturation == 0
+        }
+    }
+
+    /// One rendered Variations thumbnail: straight-alpha sRGB RGBA and a
+    /// per-pixel clipping mask (255 where the corrections drove a color
+    /// channel of a visible pixel to 0 or 255 from somewhere else).
+    struct VariationsPreview {
+        let image: CGImage
+        let width: Int
+        let height: Int
+        let clipping: [UInt8]
     }
 
     func colorBalanceSettings(_ filter: Int32) throws -> ColorBalanceSettings {
@@ -5574,6 +5608,108 @@ final class EngineSession: @unchecked Sendable {
         }
         var error: UnsafeMutablePointer<CChar>?
         try check(purge(engine, image ?? 0, targets.rawValue, &error), error)
+    }
+
+    /// Whether this adapter has both Image > Adjust > Variations slots
+    /// (255/256). Older adapters keep their layer commands and refuse the
+    /// command cleanly.
+    var supportsVariations: Bool {
+        guard let applyOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_variations_apply),
+              let previewOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_variations_preview) else {
+            return false
+        }
+        return Int(api.struct_size) >= applyOffset + MemoryLayout.size(ofValue: api.image_variations_apply)
+            && Int(api.struct_size) >= previewOffset + MemoryLayout.size(ofValue: api.image_variations_preview)
+            && api.image_variations_apply != nil
+            && api.image_variations_preview != nil
+    }
+
+    /// Image > Adjust > Variations: applies `settings` to `layer` as one
+    /// undo step named "Variations". An identity is refused here too, so
+    /// a caller cannot queue an empty command. An adapter without slots
+    /// 255/256 is UNSUPPORTED.
+    func applyVariations(_ image: Int32, layer: Int32, settings: VariationsSettings) throws {
+        guard supportsVariations, let apply = api.image_variations_apply else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot apply Variations.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Variations values must be between −1 and 1.")
+        }
+        guard !settings.isIdentity else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Variations has no change to apply.")
+        }
+        var raw = Self.variationsRaw(settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(apply(engine, image, layer, &raw, &error), error)
+    }
+
+    /// Renders `layer`'s Variations thumbnail at most `maxSize` on its long
+    /// side. Identity settings are allowed and give the Original thumbnail.
+    /// An adapter without slots 255/256 is UNSUPPORTED.
+    func variationsPreview(_ image: Int32, layer: Int32, settings: VariationsSettings,
+                           maxSize: Int32) throws -> VariationsPreview {
+        guard supportsVariations, let preview = api.image_variations_preview else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot render Variations previews.")
+        }
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Variations values must be between −1 and 1.")
+        }
+        guard (1...256).contains(maxSize) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a Variations thumbnail size from 1 to 256 pixels.")
+        }
+        var raw = Self.variationsRaw(settings)
+        var pixels = [UInt8](repeating: 0, count: Int(maxSize) * Int(maxSize) * 4)
+        var clipping = [UInt8](repeating: 0, count: Int(maxSize) * Int(maxSize))
+        var width: Int32 = 0
+        var height: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try pixels.withUnsafeMutableBufferPointer { pixelBuffer in
+            try clipping.withUnsafeMutableBufferPointer { clipBuffer in
+                let status = preview(engine, image, layer, &raw, maxSize,
+                                     pixelBuffer.baseAddress, pixelBuffer.count,
+                                     clipBuffer.baseAddress, clipBuffer.count,
+                                     &width, &height, &error)
+                try check(status, error)
+            }
+        }
+        let w = Int(width), h = Int(height)
+        guard w > 0, h > 0, w * h * 4 <= pixels.count, w * h <= clipping.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Variations preview size was invalid.")
+        }
+        let data = Data(bytes: pixels, count: w * h * 4) as CFData
+        guard let provider = CGDataProvider(data: data),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let cgImage = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                                    bytesPerRow: w * 4, space: space,
+                                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                    provider: provider, decode: nil, shouldInterpolate: true,
+                                    intent: .defaultIntent) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Variations preview could not be built.")
+        }
+        return VariationsPreview(image: cgImage, width: w, height: h,
+                                 clipping: Array(clipping.prefix(w * h)))
+    }
+
+    private static func variationsRaw(_ settings: VariationsSettings) -> GlimsVariationsSettings {
+        func range(_ value: ColorBalanceSettings.Range) -> GlimsColorBalanceRange {
+            .init(cyan_red: value.cyanRed, magenta_green: value.magentaGreen, yellow_blue: value.yellowBlue)
+        }
+        var raw = GlimsVariationsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsVariationsSettings>.size)
+        raw.shadows = range(settings.shadows)
+        raw.midtones = range(settings.midtones)
+        raw.highlights = range(settings.highlights)
+        raw.lightness = settings.lightness
+        raw.saturation = settings.saturation
+        return raw
     }
 
     /// Whether this adapter offers Layer > Merge Visible (facade slot 235).

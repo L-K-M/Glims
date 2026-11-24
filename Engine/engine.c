@@ -1558,6 +1558,17 @@ MARSHAL (layer_matting,
          return glims_layer_matting (e, a->image, a->item, (uint32_t) a->width,
                                      (uint32_t) a->height, a->error);)
 MARSHAL (edit_purge, return glims_edit_purge (e, a->image, (uint32_t) a->n, a->error);)
+MARSHAL (image_variations_apply, {
+  const GlimsVariationsSettings *settings = a->in;
+  return glims_image_variations_apply (e, a->image, a->item, settings, a->error);
+})
+MARSHAL (image_variations_preview, {
+  const GlimsVariationsSettings *settings = a->in;
+  return glims_image_variations_preview (e, a->image, a->item, settings, a->width,
+                                         a->pixels, a->stride, (uint8_t *) a->out, a->n,
+                                         (int32_t *) a->count, (int32_t *) a->in_out,
+                                         a->error);
+})
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2573,6 +2584,34 @@ api_edit_purge (GlimsEngine *e, GlimsImageID image, uint32_t targets, char **err
   return glims_facade_call (e, GLIMS_FACADE_OP_edit_purge,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_NONE, 0, { 0, 0 } },
                             edit_purge_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_variations_apply (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                            const GlimsVariationsSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .item = layer, .in = settings, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_variations_apply,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_variations_apply_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_variations_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                              const GlimsVariationsSettings *settings, int32_t max_size,
+                              uint8_t *pixels, size_t byte_count,
+                              uint8_t *clipping, size_t clipping_byte_count,
+                              int32_t *width, int32_t *height, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .item = layer, .in = settings, .width = max_size,
+                  .pixels = pixels, .stride = byte_count, .out = clipping,
+                  .n = clipping_byte_count, .count = width, .in_out = height,
+                  .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_variations_preview,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_variations_preview_on_engine, &a, error);
 }
 
 static GlimsStatus
