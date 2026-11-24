@@ -871,6 +871,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (palette controls)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "channel-transform" {
+                try exerciseChannelTransform(session, documents: documents)
+                print(failures == 0 ? "PASSED (Channel Transform)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "line" {
                 try exerciseLine(session, documents: documents)
                 print(failures == 0 ? "PASSED (Line)" : "FAILED: \(failures) failure(s)")
@@ -1320,6 +1325,8 @@ enum EngineSmokeTest {
             try exerciseClonePattern(session, documents: documents)
             try exerciseToolModifiers(session, documents: documents)
             try exerciseEverydayAdjustments(session, work: work, documents: documents)
+            // Older adapters lack slots 250/251; the dedicated case requires them.
+            if session.supportsChannelTransform { try exerciseChannelTransform(session, documents: documents) }
             try exerciseImageAdjust(session, work: work, documents: documents)
             try exerciseExposureAdjust(session, work: work, documents: documents)
             try exerciseFade(session, documents: documents)

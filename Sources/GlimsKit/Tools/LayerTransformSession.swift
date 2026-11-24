@@ -114,8 +114,12 @@ struct LayerTransformSession: Equatable {
     /// Shift-rotation snaps to multiples of this.
     static let rotationStep: Double = .pi / 12
 
+    /// The drawable the session transforms: a layer, or a channel when
+    /// `targetsChannel` (the Quick Mask's or a saved selection).
     let layer: Int32
-    /// The layer's bounds when the session began.
+    let targetsChannel: Bool
+    /// The layer's bounds, or the box a channel's coverage fills, when the
+    /// session began.
     let original: CGRect
     private(set) var box: CGRect
     /// Radians; positive turns clockwise on screen.
@@ -128,9 +132,10 @@ struct LayerTransformSession: Equatable {
     /// frame edits keep the warped shape.
     private var warp: ProjectiveTransform = .identity
 
-    init(layer: Int32, bounds: CGRect) {
+    init(layer: Int32, bounds: CGRect, channel: Bool = false) {
         precondition(bounds.width > 0 && bounds.height > 0, "A layer to transform has an area")
         self.layer = layer
+        targetsChannel = channel
         original = bounds
         box = bounds
     }
