@@ -917,6 +917,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Image Resolution)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "crop-target" {
+                try exerciseCropTarget(session, documents: documents)
+                print(failures == 0 ? "PASSED (Crop Target)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "image-duplicate" {
                 try exerciseImageDuplicate(session, documents: documents)
                 print(failures == 0 ? "PASSED (Image Duplicate)" : "FAILED: \(failures) failure(s)")
@@ -1318,6 +1323,7 @@ enum EngineSmokeTest {
             try exerciseExportFormats(session, work: work, documents: documents)
             try exerciseRotateArbitrary(session, documents: documents)
             try exerciseImageResolution(session, documents: documents)
+            try exerciseCropTarget(session, documents: documents)
             try exerciseAlignLayers(session, documents: documents)
             try exerciseSmoothSelection(session, documents: documents)
             try exerciseCloneAlignment(session, documents: documents)

@@ -216,6 +216,12 @@ final class ToolState {
     /// The current pattern, shared by Edit ▸ Fill and Clone's Pattern
     /// source; tests inject a suite.
     let patternStore: PatternFillStore
+    /// Where the crop tool's target settings persist; tests inject a suite.
+    var cropStore: CropTargetStore {
+        didSet { cropTargetCache = nil }
+    }
+    /// The decoded settings, so a crop drag does not decode JSON per event.
+    private var cropTargetCache: CropTargetSettings?
 
     private(set) var current: ToolID = .paintbrush
     /// Explicit selection identity, including choosing the same tool again.
@@ -236,10 +242,11 @@ final class ToolState {
     private var brushes: [ToolID: EngineSession.Brush] = [:]
 
     init(brushStore: BrushSelectionStore = .shared, gradientStore: GradientToolStore = .shared,
-         patternStore: PatternFillStore = .shared) {
+         patternStore: PatternFillStore = .shared, cropStore: CropTargetStore = .shared) {
         self.brushStore = brushStore
         self.gradientStore = gradientStore
         self.patternStore = patternStore
+        self.cropStore = cropStore
     }
     var selectOptions = EngineSession.SelectOptions()
     var foreground = NSColor.black
@@ -269,6 +276,22 @@ final class ToolState {
     }
     var transformInterpolation = EngineSession.Interpolation.cubic {
         didSet { if oldValue != transformInterpolation { notify() } }
+    }
+    /// The Crop tool's Fixed Target Size settings, read through the store
+    /// once and cached; replacing the store (tests) drops the cache.
+    var cropTarget: CropTargetSettings {
+        get {
+            if let cached = cropTargetCache { return cached }
+            let stored = cropStore.preferences
+            cropTargetCache = stored
+            return stored
+        }
+        set {
+            guard newValue != cropTarget else { return }
+            cropStore.set(newValue)
+            cropTargetCache = newValue
+            notify()
+        }
     }
     /// How Stroke Path draws; its color is the foreground color.
     var pathLineWidth: Double = 2

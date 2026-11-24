@@ -124,6 +124,10 @@ enum RecorderFileSemanticBridge {
         case .resizeCanvas(let width, let height, let offset, let fill):
             return .resizeCanvas(width: width, height: height, offset: point(offset), fill: fill)
         case .crop(let value): return .crop(rect(value))
+        case .cropResize(let value, let width, let height, let xResolution, let yResolution, let interpolation):
+            return .cropResize(rect: rect(value), width: width, height: height,
+                               xResolution: xResolution, yResolution: yResolution,
+                               interpolation: interpolation.engine)
         case .layerProperties(let value):
             let change = EngineSession.LayerChange(name: value.name, isVisible: value.visible,
                                                    opacity: value.opacity, mode: value.mode?.name)

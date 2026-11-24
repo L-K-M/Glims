@@ -198,6 +198,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     private static func clonePresentation(of state: ToolState) -> ClonePresentation {
         ClonePresentation(from: state.cloneFrom, pattern: state.patternStore.identity)
     }
+    /// The Crop tool's settings the rows show; a change from a control,
+    /// Front Image or another window rebuilds them, so the fields' enabled
+    /// state and text never go stale.
+    private var shownCropTarget: CropTargetSettings?
     private var observer: UUID?
     /// Existing controls follow external changes without replacing the active
     /// field editor. Resource presentation rebuilds wait for editing to end.
@@ -292,8 +296,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             && shownGradient != Self.gradientPresentation(of: state)
         let moveTargetChanged = state.current == .move && shownMoveTargetMode != state.moveTargetMode
         let cloneChanged = state.current == .clone && shownClone != Self.clonePresentation(of: state)
+        let cropTargetChanged = state.current == .crop && shownCropTarget != state.cropTarget
         let presentationChanged = fontsArrived || brushChanged || gradientChanged || moveTargetChanged
-            || cloneChanged
+            || cloneChanged || cropTargetChanged
         // Keep presentation rows until the active field finishes its normal
         // commit. A tool switch still replaces the options immediately.
         if shownTool != state.current || (presentationChanged && !Self.hasFieldEditor(in: view)) {
@@ -420,6 +425,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
         shownMoveTargetMode = tool == .move ? state.moveTargetMode : nil
         shownClone = tool == .clone ? Self.clonePresentation(of: state) : nil
+        shownCropTarget = tool == .crop ? state.cropTarget : nil
         brushRefreshers.removeAll()
         transformRefreshers.removeAll()
         transformFieldEntries.removeAll()
@@ -501,9 +507,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                 ? "Drag to move the selected layer. Arrow keys nudge it 1 pixel, Shift-arrow 10. Guides take priority."
                 : "Drag to move the layer under the pointer. A press on another layer anchors a floating selection on release. Empty space does nothing. Guides take priority."
             stack.addArrangedSubview(hint(message))
+        } else if tool == .crop {
+            addCropRows(state)
         } else {
             let hints: [ToolID: String] = [
-                .crop: "Drag the area to keep, then press Return to crop or Escape to cancel.",
                 .eyedropper: "Click the image to pick the foreground color, or Option-click to pick the background color.",
                 .hand: "Drag to scroll. Hold Space with any tool for the hand.",
                 .zoom: "Click to zoom in; Option-click to zoom out.",
@@ -513,6 +520,107 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     }
 
     // MARK: Rows
+
+    /// The Crop tool's options: the Fixed Target Size section, as in
+    /// 1996-era editors: a target width, height and optional resolution;
+    /// the dragged rectangle keeps the target's proportions and Return
+    /// crops and resamples to it as one undo step. The values persist
+    /// through ToolState; an adapter without facade slot 252 disables the
+    /// section with a reason.
+    private func addCropRows(_ state: ToolState) {
+        let settings = state.cropTarget
+        let supported = document?.session.supportsCropResize ?? true
+        let fieldsEnabled = supported && settings.enabled
+
+        let fixed = checkbox("Fixed Target Size", settings.enabled) { on in
+            var target = ToolState.shared.cropTarget
+            target.enabled = on
+            ToolState.shared.cropTarget = target
+        }
+        (fixed as? NSControl)?.isEnabled = supported
+        if !supported {
+            fixed.toolTip = "This image engine cannot crop to a target size."
+        }
+        stack.addArrangedSubview(fixed)
+
+        func field(_ label: String, _ text: String,
+                   set: @escaping (inout CropTargetSettings, String) -> Void) -> NSView {
+            let field = NSTextField(frame: .zero)
+            field.isEditable = true
+            field.controlSize = .small
+            field.font = .systemFont(ofSize: 11)
+            (field.cell as? NSTextFieldCell)?.sendsActionOnEndEditing = true
+            field.setAccessibilityLabel("Crop target \(label)")
+            field.stringValue = text
+            field.isEnabled = fieldsEnabled
+            field.widthAnchor.constraint(equalToConstant: 95).isActive = true
+            return row(label, field) { control in
+                guard let field = control as? NSTextField else { return }
+                var target = ToolState.shared.cropTarget
+                set(&target, field.stringValue)
+                ToolState.shared.cropTarget = target
+            }
+        }
+        stack.addArrangedSubview(field("Width", settings.width) { $0.width = $1 })
+        stack.addArrangedSubview(field("Height", settings.height) { $0.height = $1 })
+
+        let units = ImageSizeModel.SizeUnit.allCases
+        let unitPopup = popUp("Unit", units.map(\.title),
+                              selected: units.firstIndex(of: settings.unit) ?? 0,
+                              identifier: "cropTargetUnit") { index in
+            var target = ToolState.shared.cropTarget
+            target.unit = units[index]
+            ToolState.shared.cropTarget = target
+        }
+        setRowEnabled(unitPopup, fieldsEnabled)
+        stack.addArrangedSubview(unitPopup)
+
+        stack.addArrangedSubview(field("Resolution", settings.resolution) { $0.resolution = $1 })
+
+        let resolutionUnits = ImageSizeModel.ResolutionUnit.allCases
+        let resolutionPopup = popUp("Resolution unit", resolutionUnits.map(\.title),
+                                    selected: resolutionUnits.firstIndex(of: settings.resolutionUnit) ?? 0,
+                                    identifier: "cropTargetResolutionUnit") { index in
+            var target = ToolState.shared.cropTarget
+            target.resolutionUnit = resolutionUnits[index]
+            ToolState.shared.cropTarget = target
+        }
+        setRowEnabled(resolutionPopup, fieldsEnabled)
+        stack.addArrangedSubview(resolutionPopup)
+
+        let methods = EngineSession.Interpolation.allCases
+        let resample = popUp("Resample", methods.map(\.name),
+                             selected: methods.firstIndex(of: settings.interpolation)
+                                 ?? methods.firstIndex(of: .cubic) ?? 0,
+                             identifier: "cropTargetInterpolation") { index in
+            var target = ToolState.shared.cropTarget
+            target.interpolation = methods[index]
+            ToolState.shared.cropTarget = target
+        }
+        setRowEnabled(resample, fieldsEnabled)
+        stack.addArrangedSubview(resample)
+
+        let front = NSButton(title: "Front Image", target: nil, action: nil)
+        front.bezelStyle = .rounded
+        front.controlSize = .small
+        front.font = .systemFont(ofSize: 11)
+        front.isEnabled = fieldsEnabled
+        actionBindings.append(ActionBinding(control: front) { [weak self] _ in
+            guard let self, let document = self.document else { return }
+            var target = ToolState.shared.cropTarget
+            target.fillFromImage(width: document.info.width, height: document.info.height,
+                                 resolution: document.resolution)
+            ToolState.shared.cropTarget = target
+        })
+        stack.addArrangedSubview(front)
+
+        stack.addArrangedSubview(hint("Drag the area to keep, then press Return to crop or Escape to cancel."))
+    }
+
+    /// Enables or disables the control inside a `row` label pair.
+    private func setRowEnabled(_ row: NSView, _ enabled: Bool) {
+        row.subviews.compactMap { $0 as? NSControl }.forEach { $0.isEnabled = enabled }
+    }
 
     /// The Transform tool's options: numeric X/Y/Width/Height (image
     /// pixels) and Angle (clockwise degrees) fields for the pending

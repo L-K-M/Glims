@@ -240,6 +240,14 @@ final class CanvasToolController {
     private var hintEventsStopped = false
     /// The crop rectangle waiting for Return (image pixels).
     private(set) var pendingCrop: CGRect?
+    /// The Crop tool's resolved Fixed Target Size, when the option is on
+    /// and its fields hold a valid size; nil drives the plain crop path.
+    /// A setting saved under a newer adapter stays inert on one without
+    /// slot 252.
+    private var cropTarget: CropTarget? {
+        guard document.session.supportsCropResize else { return nil }
+        return ToolState.shared.cropTarget.resolved(imageResolution: document.resolution)
+    }
     /// The Transform tool's pending transform, waiting for Return.
     private(set) var transformSession: LayerTransformSession?
     private var transformDrag: LayerTransformSession.Drag?
@@ -316,12 +324,22 @@ final class CanvasToolController {
         if tool == .polygonLasso, let polygon = openPolygon { phase = .polygonOpen(corners: polygon.corners.count) }
         else if acceptedTool != nil { phase = .dragging }
         else if tool == .text, textEditor != nil { phase = .textEditing }
-        else if tool == .crop, let crop = pendingCrop { phase = .cropReady(width: Int(crop.width), height: Int(crop.height)) }
+        else if tool == .crop, let crop = pendingCrop { phase = cropPhase(crop) }
         else if tool == .transform, transformSession?.isIdentity == false { phase = .transformReady }
         else { phase = .idle }
         return ToolHintPolicy.hint(tool: tool, phase: phase, flags: flags,
                                    mode: document.colorInfo.mode, layout: document.storage.layout,
                                    canSampleLayeredLab: document.session.supportsLayeredLabSampling)
+    }
+
+    /// The hint phase for a pending crop: the resampling message when the
+    /// Fixed Target Size resolves, else the plain crop's.
+    private func cropPhase(_ crop: CGRect) -> ToolHintPolicy.Phase {
+        if let target = cropTarget {
+            return .cropResizeReady(width: target.width, height: target.height,
+                                    resolution: target.resolution?.x)
+        }
+        return .cropReady(width: Int(crop.width), height: Int(crop.height))
     }
 
     private func hintChanged(_ reason: ToolHintPolicy.Refresh) {
@@ -658,8 +676,16 @@ final class CanvasToolController {
             return
         }
         switch tool {
-        case .rectangleSelect, .ellipseSelect, .crop:
+        case .rectangleSelect, .ellipseSelect:
             dragCurrent = point
+            selectionDragFlags = event.modifierFlags
+            canvas.needsDisplay = true
+        case .crop:
+            if let target = cropTarget, let start = dragStart {
+                dragCurrent = target.constrainedEnd(point, from: start)
+            } else {
+                dragCurrent = point
+            }
             selectionDragFlags = event.modifierFlags
             canvas.needsDisplay = true
         case .gradient:
@@ -835,11 +861,12 @@ final class CanvasToolController {
             document.drawLine(from: start, to: finish, settings: settings)
         case .crop:
             guard let start = dragStart else { return }
-            let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
-                              width: abs(end.x - start.x), height: abs(end.y - start.y)).integral
+            let finish = cropTarget?.constrainedEnd(end, from: start) ?? end
+            let rect = CGRect(x: min(start.x, finish.x), y: min(start.y, finish.y),
+                              width: abs(finish.x - start.x), height: abs(finish.y - start.y)).integral
             pendingCrop = rect.width >= 1 && rect.height >= 1 ? rect : nil
-            onStatus?(pendingCrop == nil ? "Drag the area to keep."
-                                         : "Return crops to \(Int(rect.width)) × \(Int(rect.height)) px; Escape cancels.")
+            onStatus?(pendingCrop.map { ToolHintPolicy.hint(tool: .crop, phase: cropPhase($0), flags: []) }
+                      ?? "Drag the area to keep.")
         case .rectangleSelect, .ellipseSelect:
             dragCurrent = end
             selectionDragFlags = event.modifierFlags
@@ -1549,7 +1576,11 @@ final class CanvasToolController {
             return true
         }
         if let rect = pendingCrop, Self.returnKeys.contains(keyCode) {
-            document.crop(to: rect)
+            if let target = cropTarget {
+                document.crop(to: rect, target: target)
+            } else {
+                document.crop(to: rect)
+            }
             pendingCrop = nil
             canvas.needsDisplay = true
             finishSpringInteractionIfReady()

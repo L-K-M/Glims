@@ -1594,6 +1594,74 @@ glims_image_resize (GlimsEngine  *engine,
   return GLIMS_STATUS_OK;
 }
 
+/* Slot 252: the Crop tool's Fixed Target Size. The outer group wraps
+ * the undo groups gimp_image_crop and gimp_image_scale open themselves
+ * into one "Crop Image" step, so the crop, the resample and the
+ * resolution commit and undo together. */
+GlimsStatus
+glims_image_crop_resize (GlimsEngine  *engine,
+                         GlimsImageID  id,
+                         GlimsRect     rect,
+                         int32_t       width,
+                         int32_t       height,
+                         double        x_resolution,
+                         double        y_resolution,
+                         uint32_t      interpolation,
+                         char        **error)
+{
+  GlimsStatus           status;
+  GimpImage            *image = writable_image (engine, id, &status);
+  GimpInterpolationType type;
+  GeglRectangle         bounds;
+  double                current_x, current_y;
+  gboolean              crop_needed, scale_needed, resolution_needed;
+
+  if (! image)
+    return status;
+  if (! native_interpolation (engine, interpolation, &type))
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  if (width < 1 || height < 1 || width > GIMP_MAX_IMAGE_SIZE || height > GIMP_MAX_IMAGE_SIZE)
+    {
+      if (error) *error = strdup ("The target size must be between 1 and 524288 pixels.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+  if (! isfinite (x_resolution) || ! isfinite (y_resolution) ||
+      x_resolution < GLIMS_MIN_RESOLUTION || x_resolution > GLIMS_MAX_RESOLUTION ||
+      y_resolution < GLIMS_MIN_RESOLUTION || y_resolution > GLIMS_MAX_RESOLUTION)
+    return invalid_resolution (error);
+
+  bounds = (GeglRectangle) { 0, 0, gimp_image_get_width (image), gimp_image_get_height (image) };
+  if (! gegl_rectangle_intersect (&bounds, &bounds, GEGL_RECTANGLE (rect.x, rect.y, rect.width, rect.height)) ||
+      bounds.width < 1 || bounds.height < 1)
+    {
+      if (error) *error = strdup ("The crop rectangle is outside the image.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
+
+  crop_needed = bounds.x != 0 || bounds.y != 0 ||
+    bounds.width != gimp_image_get_width (image) || bounds.height != gimp_image_get_height (image);
+  scale_needed = width != bounds.width || height != bounds.height;
+  gimp_image_get_resolution (image, &current_x, &current_y);
+  resolution_needed = ! same_resolution (x_resolution, current_x) ||
+    ! same_resolution (y_resolution, current_y);
+
+  if (! crop_needed && ! scale_needed && ! resolution_needed)
+    return GLIMS_STATUS_OK;
+
+  if (! gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_IMAGE_CROP, "Crop Image"))
+    return glims_fail (error, NULL, "The image history could not group the crop.");
+  if (crop_needed)
+    gimp_image_crop (image, gimp_get_user_context (engine->gimp), GIMP_FILL_TRANSPARENT,
+                     bounds.x, bounds.y, bounds.width, bounds.height, TRUE);
+  if (scale_needed)
+    gimp_image_scale (image, width, height, type, NULL);
+  if (resolution_needed)
+    gimp_image_set_resolution (image, x_resolution, y_resolution);
+  gimp_image_undo_group_end (image);
+  gimp_image_flush (image);
+  return GLIMS_STATUS_OK;
+}
+
 static GlimsStatus
 invalid_transform (char **error, const char *message)
 {

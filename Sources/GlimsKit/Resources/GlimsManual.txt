@@ -205,11 +205,15 @@ grouped tools. The letter of each group:
 What the tools do:
 
   Move drags the active layer. Crop drags a rectangle; Return applies
-  it and Escape cancels it. Transform has four modes in Tool Options
-  and Layer > Transform: Scale / Rotate, Skew, Distort and Perspective.
-  Skew slides an edge along its direction; Distort moves individual
-  corners; Perspective moves a corner pair symmetrically. The first
-  horizontal or vertical movement fixes a perspective drag's direction.
+  it and Escape cancels it. With Fixed Target Size on in Tool Options
+  the rectangle keeps the target's proportions and Return crops and
+  resamples to the set width, height and resolution as one undo step;
+  an empty Resolution keeps the image's own. Transform has four modes
+  in Tool Options and Layer > Transform: Scale / Rotate, Skew, Distort
+  and Perspective. Skew slides an edge along its direction; Distort
+  moves individual corners; Perspective moves a corner pair
+  symmetrically. The first horizontal or vertical movement fixes a
+  perspective drag's direction.
   Drag inside to move or outside to rotate; Shift snaps rotation to
   15-degree steps. Position, size and angle control the frame while
   preserving any warp. Return or Apply commits; Escape or Cancel drops
@@ -755,7 +759,9 @@ The mouse:
                          Perspective in Tool Options or Layer > Transform;
                          Shift snaps rotation to 15-degree steps.
   Crop tool:             drag a rectangle, Return applies it,
-                         Escape cancels it.
+                         Escape cancels it; Fixed Target Size in Tool
+                         Options resamples the crop to a set size and
+                         resolution.
   Layers palette:        click a row to target it, drag to reorder or
                          move into a group, click into a name to edit
                          it, click the checkbox to show or hide the

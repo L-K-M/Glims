@@ -32,7 +32,7 @@ struct ImageSizeModel: Equatable {
     }
 
     /// A resolution's unit, as Image > Image Size displays it.
-    enum ResolutionUnit: String, CaseIterable, Equatable {
+    enum ResolutionUnit: String, CaseIterable, Equatable, Codable {
         case pixelsPerInch, pixelsPerCentimeter
 
         var title: String {
@@ -52,7 +52,7 @@ struct ImageSizeModel: Equatable {
     }
 
     /// A width or height unit in File > New, where pixels are a choice too.
-    enum SizeUnit: String, CaseIterable, Equatable {
+    enum SizeUnit: String, CaseIterable, Equatable, Codable {
         case pixels, inches, centimeters, millimeters
 
         var title: String {

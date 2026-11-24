@@ -101,6 +101,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, scaleInterpolationVersion)
             case .success(.setResolution, _), .success(.resize, _):
                 fileVersion = max(fileVersion, imageResolutionVersion)
+            case .success(.cropResize, _):
+                fileVersion = max(fileVersion, cropResizeVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -358,6 +360,21 @@ extension RecorderFileCodec {
         case .resizeCanvas(let width, let height, let offset, let color):
             return .object(["tag": .string("resizeCanvas"), "width": j(width), "height": j(height), "offset": try pointJSON(offset), "fill": try colorJSON(color)])
         case .crop(let rect): return .object(["tag": .string("crop"), "rect": try rectJSON(rect)])
+        case .cropResize(let rect, let width, let height, let xResolution, let yResolution, let interpolation):
+            var fields: [String: RecorderJSON] = ["tag": .string("cropResize"), "rect": try rectJSON(rect),
+                                                  "width": j(width), "height": j(height),
+                                                  "interpolation": .string(interpolation.rawValue)]
+            switch (xResolution, yResolution) {
+            case let (x?, y?):
+                fields["xResolution"] = try d(x)
+                fields["yResolution"] = try d(y)
+            case (nil, nil):
+                break
+            default:
+                // The decoder refuses this too; never write it as "keep".
+                throw RecorderFileError.invalid("A crop to a target size needs both resolutions or neither.")
+            }
+            return .object(fields)
         case .layerProperties(let properties):
             var fields: [String: RecorderJSON] = [:]
             if let name = properties.name { fields["name"] = .string(name) }
