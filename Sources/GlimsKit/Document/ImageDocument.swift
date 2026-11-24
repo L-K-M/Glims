@@ -8579,7 +8579,7 @@ final class ImageDocument {
         // Its result still reaches the error channel but cannot restart replay.
         if case .failure(let error) = result { onError?(String(describing: error)) }
         guard generation == recorderReplayGeneration, recorder.isReplaying, !isClosing else { return }
-        if case .success(.some(let created)) = result,
+        if case .success(.some(let created)) = result, created > 0,
            let symbol = recorderProducedSymbols[index] {
             recorderProducedLayers[symbol] = created
         }
@@ -8807,7 +8807,7 @@ final class ImageDocument {
                                                            produced: [UUID: Int32],
                                                            session: EngineSession, image: Int32) throws -> RecorderContext {
         func layer(_ symbol: UUID) throws -> Int32 {
-            if let id = produced[symbol] { return id }
+            if let id = produced[symbol], id > 0 { return id }
             guard case .layer(let id)? = installed[symbol], id > 0 else {
                 throw RecorderReplayError(message: "The layer an earlier step created is not available.")
             }

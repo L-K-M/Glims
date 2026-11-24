@@ -28,7 +28,7 @@ final class RecorderLayerEditsTests: XCTestCase {
         }
         return text
     }
-    fileprivate func document(_ command: String, version: Int = 33, binding: String = #"{"kind":"none"}"#,
+    fileprivate func document(_ command: String, version: Int = RecorderFileCodec.layerEditsVersion, binding: String = #"{"kind":"none"}"#,
                           symbols: String = "", produces: String? = nil) -> String {
         file(version: version, symbols: symbols, records: success(command, binding: binding, produces: produces))
     }
@@ -47,7 +47,9 @@ final class RecorderLayerEditsTests: XCTestCase {
             let value = try RecorderFileCodec.decode(bytes(document(command, binding: binding, symbols: symbols,
                                                                 produces: produces)))
             let encoded = try RecorderFileCodec.encode(value)
-            XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":33"#), command)
+            XCTAssertNotNil(String(decoding: encoded, as: UTF8.self)
+                .range(of: #""version":\#(RecorderFileCodec.layerEditsVersion)[^0-9]"#,
+                       options: .regularExpression), command)
             XCTAssertEqual(try RecorderFileCodec.decode(encoded), value, command)
             _ = try RecorderFileSemanticBridge.prepare(value)
         }
@@ -119,12 +121,13 @@ final class RecorderLayerEditsTests: XCTestCase {
         }
         // A version 33 file without any of the six is refused.
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
-            #"{"tag":"crop","rect":{"x":0,"y":0,"width":10,"height":10}}"#, version: 33))))
+            #"{"tag":"crop","rect":{"x":0,"y":0,"width":10,"height":10}}"#, version: RecorderFileCodec.layerEditsVersion))))
         // A plain crop alone does not write version 33.
         let plain = try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"crop","rect":{"x":0,"y":0,"width":10,"height":10}}"#, version: 1)))
         XCTAssertFalse(String(decoding: try RecorderFileCodec.encode(plain), as: UTF8.self)
-            .contains(#""version":33"#))
+            .range(of: #""version":\#(RecorderFileCodec.layerEditsVersion)[^0-9]"#,
+                   options: .regularExpression) != nil)
     }
 
     func testStrictFieldsRefuse() {
@@ -180,7 +183,7 @@ final class RecorderLayerEditsTests: XCTestCase {
         var symbols: String
         var produces: String?
 
-        func document(_ command: String, version: Int = 33, in test: RecorderLayerEditsTests) -> String {
+        func document(_ command: String, version: Int = RecorderFileCodec.layerEditsVersion, in test: RecorderLayerEditsTests) -> String {
             test.document(command, version: version, binding: binding, symbols: symbols, produces: produces)
         }
     }
@@ -202,24 +205,28 @@ final class RecorderLayerEditsTests: XCTestCase {
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             producer, binding: layerBinding, symbols: layerSymbolJSON + "," + channelSymbolJSON,
             produces: "33333333-3333-3333-3333-333333333333"))))
-        // A failed row cannot carry produces.
-        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+        // A failed row cannot carry produces; the identical recording with
+        // the field removed decodes, so the refusal comes from `produces`.
+        _ = try RecorderFileCodec.decode(bytes(file(version: RecorderFileCodec.layerEditsVersion, symbols: bothSymbolsJSON,
+            records: success(#"{"tag":"moveLayer","offset":{"x":1,"y":0}}"#, binding: layerBinding)
+                + "," + #"{"ordinal":1,"outcome":"failure","reason":"Failed"}"#)))
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: RecorderFileCodec.layerEditsVersion, symbols: bothSymbolsJSON,
             records: #"{"ordinal":0,"outcome":"failure","reason":"Failed","produces":"\#(producedID)"}"#))))
         // Same-row use.
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             producer, binding: #"{"kind":"layer","symbol":"\#(producedID)"}"#,
             symbols: bothSymbolsJSON, produces: producedID))))
         // Two producers of one symbol.
-        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: RecorderFileCodec.layerEditsVersion, symbols: bothSymbolsJSON,
             records: success(producer, binding: layerBinding, produces: producedID)
                 + "," + success(producer, binding: layerBinding, ordinal: 1, produces: producedID)))))
         // Use before production: row 0 binds the produced symbol, row 1 creates it.
-        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+        XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(file(version: RecorderFileCodec.layerEditsVersion, symbols: bothSymbolsJSON,
             records: success(#"{"tag":"layerProperties","properties":{"opacity":0.5}}"#,
                            binding: #"{"kind":"layer","symbol":"\#(producedID)"}"#)
                 + "," + success(producer, binding: layerBinding, ordinal: 1, produces: producedID)))))
         // Valid later use.
-        let valid = try RecorderFileCodec.decode(bytes(file(version: 33, symbols: bothSymbolsJSON,
+        let valid = try RecorderFileCodec.decode(bytes(file(version: RecorderFileCodec.layerEditsVersion, symbols: bothSymbolsJSON,
             records: success(producer, binding: layerBinding, produces: producedID)
                 + "," + success(#"{"tag":"deleteLayers"}"#,
                                 binding: #"{"kind":"layer","symbol":"\#(producedID)"}"#, ordinal: 1))))
@@ -301,7 +308,9 @@ final class RecorderLayerEditsTests: XCTestCase {
                                                        produced: [1: produced])
         XCTAssertEqual(snapshot.records.count, 2)
         let encoded = try RecorderFileCodec.encode(snapshot)
-        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""version":33"#))
+        XCTAssertNotNil(String(decoding: encoded, as: UTF8.self)
+            .range(of: #""version":\#(RecorderFileCodec.layerEditsVersion)[^0-9]"#,
+                   options: .regularExpression))
         XCTAssertEqual(try RecorderFileCodec.decode(encoded), snapshot)
         XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(produced.uuidString))
         guard case .success(.moveLayer(let offset), .layer)? = snapshot.records.first?.outcome else {

@@ -156,7 +156,9 @@ final class RecorderBatchBindingsTests: XCTestCase {
                 .init(ordinal: 1, outcome: .success(.duplicateLayers, .layer(first)), produces: created),
             ])
         XCTAssertThrowsError(try Matcher.resolve(file: recording, candidates: [candidate(70)],
-                                                 policy: .matchingNamesAndKinds))
+                                                 policy: .matchingNamesAndKinds)) {
+            XCTAssertNotNil($0 as? RecorderFileError, "refusal must be a codec error, not \($0)")
+        }
     }
 
     func testIncompleteAndInvalidRecordingsRefuseBeforeMatching() {
