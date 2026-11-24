@@ -77,8 +77,12 @@ final class RecorderMattingTests: XCTestCase {
             #"{"tag":"matting","operation":"removeWhiteMatte"}"#,
         ]
         for command in commands {
-            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(command, version: 33))),
-                                 command)
+            // The same valid layer row decodes at 34, so only the version
+            // gate can refuse it at 33.
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(document(
+                command, version: 34, binding: layerBinding, symbols: layerSymbolJSON))), command)
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
+                command, version: 33, binding: layerBinding, symbols: layerSymbolJSON))), command)
         }
         // A version 34 file without a matting row is refused.
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
@@ -159,5 +163,19 @@ final class RecorderMattingTests: XCTestCase {
         }
         XCTAssertEqual(operation, .removeWhiteMatte)
         XCTAssertNil(width)
+
+        // A Defringe width the decoder would refuse is never saved: the
+        // snapshot encodes, which enforces the whole format contract.
+        for width in [0, 201] {
+            var bad = RecorderLog<SemanticImageCommand>()
+            try bad.startRecording()
+            let row = try bad.reserve()
+            try bad.resolve(row, with: .success(.matting(.defringe, width: width)))
+            try bad.stopRecording()
+            XCTAssertThrowsError(try RecorderFileCodec.snapshot(
+                bad, recordingID: recordingID, name: "Matting",
+                origin: .init(imageLabel: "A", initialWidth: 200, initialHeight: 150),
+                descriptions: catalog, bindings: [0: .layer(symbol)]), "width \(width)")
+        }
     }
 }

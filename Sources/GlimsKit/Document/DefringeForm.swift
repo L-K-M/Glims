@@ -1,12 +1,16 @@
 import AppKit
+import CGlimsEngine
 
 /// Layer > Matting > Defringe: a sheet asking for the halo width in
 /// pixels. OK applies the matting to the document's active layer; the
 /// command is layer-wide and ignores the selection.
 @MainActor
 enum DefringeForm {
+    /// The widest Defringe the engine accepts.
+    nonisolated static let maxWidth = Int(GLIMS_MATTING_MAX_WIDTH)
+
     static func present(in document: ImageDocument, on window: NSWindow) {
-        let slider = NSSlider(value: 1, minValue: 1, maxValue: 200, target: nil, action: nil)
+        let slider = NSSlider(value: 1, minValue: 1, maxValue: Double(maxWidth), target: nil, action: nil)
         slider.isContinuous = true
         slider.setAccessibilityLabel("Width")
         slider.widthAnchor.constraint(equalToConstant: 160).isActive = true
@@ -40,17 +44,17 @@ enum DefringeForm {
             _ = sync
             guard response == .alertFirstButtonReturn else { return }
             guard let width = DefringeForm.widthValue(field.stringValue) else {
-                document.onError?("Enter a width from 1 to 200 pixels.")
+                document.onError?("Enter a width from 1 to \(DefringeForm.maxWidth) pixels.")
                 return
             }
             document.applyMatting(.defringe, width: width)
         }
     }
 
-    /// A Defringe width typed into the sheet: a whole number 1 ... 200.
+    /// A Defringe width typed into the sheet: a whole number 1 ... maxWidth.
     nonisolated static func widthValue(_ text: String) -> Int? {
         guard let value = Int(text.trimmingCharacters(in: .whitespaces)),
-              (1...200).contains(value) else { return nil }
+              (1...maxWidth).contains(value) else { return nil }
         return value
     }
 }

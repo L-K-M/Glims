@@ -68,7 +68,7 @@ enum RecorderBatchBindings {
         }
         // Layers a recorded command creates are bound automatically at
         // replay; their symbols are outputs, never matchable inputs.
-        required.subtract(file.records.compactMap(\.produces))
+        required.subtract(file.producedSymbols)
         if case .requireNoTargets = policy {
             guard required.isEmpty else { throw MatchError.matchingRequired }
             return [:]

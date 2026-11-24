@@ -61,6 +61,7 @@ extension EngineSmokeTest {
                 controller.canvas.stopRendering { stopped = true }
                 let stopDeadline = Date().addingTimeInterval(20)
                 while !stopped && Date() < stopDeadline { spin(0.01) }
+                check(stopped, "the Variations canvas stops rendering in time")
             }
             for document in owned { document.closeImageWhenDrained() }
             wait { owned.allSatisfy { (try? session.info($0.image)) == nil } }

@@ -223,6 +223,19 @@ typedef enum GlimsToneRange {
 } GlimsToneRange;
 
 #define GLIMS_BRUSH_FEATURE_ERASER_BACKGROUND (UINT64_C (1) << 0)
+#define GLIMS_BRUSH_FEATURE_PAINT_OPTIONS     (UINT64_C (1) << 1)
+
+/* Where a fade ends (GlimsBrushSettings.fade_target). */
+typedef enum GlimsFadeTarget {
+  GLIMS_FADE_TO_TRANSPARENT = 0,  /* the stroke's opacity falls to nothing */
+  GLIMS_FADE_TO_BACKGROUND  = 1   /* the color moves to fade_background_* and stays there */
+} GlimsFadeTarget;
+
+/* What the Clone tool copies (GlimsBrushSettings.clone_source). */
+typedef enum GlimsCloneSource {
+  GLIMS_CLONE_FROM_IMAGE   = 0,   /* source_drawable at source_x, source_y */
+  GLIMS_CLONE_FROM_PATTERN = 1    /* the pattern clone_pattern */
+} GlimsCloneSource;
 
 typedef struct GlimsBrushSettings {
   uint32_t struct_size;     /* sizeof (GlimsBrushSettings) */
@@ -254,6 +267,39 @@ typedef struct GlimsBrushSettings {
    * in their recording and provide it again for replay. Absent on older
    * callers, so an opaque Eraser remains live but returns no capture facts. */
   bool        record_eraser_background;
+
+  /* Paint options. Set them only when the engine advertises
+   * GLIMS_BRUSH_FEATURE_PAINT_OPTIONS. The engine reads the tail only when
+   * all of it, through clone_pattern, is present; zero in every field
+   * paints exactly as before. A refused value is INVALID_ARGUMENT, and
+   * any option on a CMYK or multichannel document or an ink target is
+   * UNSUPPORTED, with no stroke, pixel or undo change. Strokes that set
+   * any of them return no capture facts, so a recording keeps them as
+   * unrecorded steps. */
+  char        paint_mode[64];  /* blend mode nick, as GlimsLayerInfo reports it,
+                                * "behind" or "color-erase"; "" is "normal".
+                                * Paintbrush, Pencil, Airbrush and Clone only. */
+  double      spacing;         /* distance between brush dabs as a fraction of
+                                * the brush size, 0.01 ... 10; 0 keeps GIMP's
+                                * paint default of 0.1 (not the brush's own
+                                * spacing). Every tool. */
+  uint32_t    fade_steps;      /* 0, or fade over this many dabs at the stroke's
+                                * spacing, 1 ... 9999, at most 32767 pixels.
+                                * Paintbrush, Pencil and Airbrush only. */
+  uint32_t    fade_target;     /* GlimsFadeTarget */
+  double      fade_background_red, fade_background_green, fade_background_blue;
+                               /* sRGB 0 ... 1, for GLIMS_FADE_TO_BACKGROUND */
+  uint32_t    clone_source;    /* GlimsCloneSource; Clone only */
+  bool        clone_pattern_aligned; /* true: the pattern tiles from a fixed
+                                * phase of the drawable, so strokes join up;
+                                * false: each stroke starts at the pattern's
+                                * center */
+  uint64_t    clone_pattern;   /* GlimsResourceID of a pattern, for
+                                * GLIMS_CLONE_FROM_PATTERN, validated as
+                                * fill_pattern validates its handle: 0 or an
+                                * ill-formed value is INVALID_ARGUMENT, a
+                                * stale handle or one naming another kind
+                                * of resource NOT_FOUND */
 } GlimsBrushSettings;
 
 typedef struct GlimsStrokePoint {
@@ -2801,7 +2847,9 @@ typedef struct GlimsEngineAPI {
    * no pixels and push no undo: INVALID_ARGUMENT for a missing or
    * short `settings`, an unknown `tool`, a non-finite or
    * non-positive `size`, a non-finite `opacity` or color component,
-   * and for the malformed `brush` handles above; NOT_FOUND for an
+   * any paint option other than its zero default (paint_mode through
+   * clone_pattern; a selection stroke always paints in "normal" at the
+   * default spacing), and for the malformed `brush` handles above; NOT_FOUND for an
    * unknown image or a stale brush handle; FAILED with `error` for an
    * empty selection ("There is no selection to stroke.", checked
    * before the native undo group opens), for a target that is no

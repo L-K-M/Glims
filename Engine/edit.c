@@ -1943,7 +1943,8 @@ transform_from_matrix (const GlimsMatrix *matrix, GimpMatrix3 *transform, char *
 }
 
 static GlimsStatus
-transform_interpolation (GlimsEngine *engine, uint32_t interpolation, GimpInterpolationType *type)
+transform_interpolation (GlimsEngine *engine, uint32_t interpolation, GimpInterpolationType *type,
+                         char **error)
 {
   switch (interpolation)
     {
@@ -1953,7 +1954,7 @@ transform_interpolation (GlimsEngine *engine, uint32_t interpolation, GimpInterp
     case GLIMS_INTERPOLATION_CUBIC:   *type = GIMP_INTERPOLATION_CUBIC;  break;
     case GLIMS_INTERPOLATION_NOHALO:  *type = GIMP_INTERPOLATION_NOHALO; break;
     case GLIMS_INTERPOLATION_LOHALO:  *type = GIMP_INTERPOLATION_LOHALO; break;
-    default:                          return GLIMS_STATUS_INVALID_ARGUMENT;
+    default:                          return invalid_transform (error, "The interpolation method is not supported.");
     }
   return GLIMS_STATUS_OK;
 }
@@ -1981,7 +1982,7 @@ transform_layer_matrix (GlimsEngine       *engine,
   status = transform_from_matrix (matrix, &transform, error);
   if (status != GLIMS_STATUS_OK)
     return status;
-  status = transform_interpolation (engine, interpolation, &type);
+  status = transform_interpolation (engine, interpolation, &type, error);
   if (status != GLIMS_STATUS_OK)
     return status;
 
@@ -2085,7 +2086,7 @@ glims_channel_transform_matrix_captured (GlimsEngine *engine, GlimsImageID id, G
   status = transform_from_matrix (&request->matrix, &transform, error);
   if (status != GLIMS_STATUS_OK)
     return status;
-  status = transform_interpolation (engine, request->interpolation, &type);
+  status = transform_interpolation (engine, request->interpolation, &type, error);
   if (status != GLIMS_STATUS_OK)
     return status;
 

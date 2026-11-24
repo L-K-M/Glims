@@ -40,6 +40,10 @@ struct RecorderFileValue: Equatable {
     let symbols: [Symbol]
     let records: [Record]
 
+    /// Symbols naming layers that recorded commands create. Replay binds
+    /// them itself, so they are outputs and never matchable inputs.
+    var producedSymbols: Set<UUID> { Set(records.compactMap(\.produces)) }
+
     /// Return an edited copy without losing the original target descriptions.
     /// Loaded files can intentionally include unused symbols, which remain part
     /// of their metadata even when a row is removed.

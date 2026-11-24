@@ -19,8 +19,16 @@ the tool, so `EngineSession.Brush.Tool` is not stored separately).
 
 Captured stable `EngineSession.Brush` settings (`PaintToolPreset.Settings`):
 `size`, `opacity`, `pressureSize`, `hardness`, `rate`, `flow`, `exposure`,
-`tones`, `antiErase`. `hardness`/`rate`/`flow`/`exposure` stay optional, nil
-meaning "the engine's default", exactly as in `Brush`. Additionally:
+`tones`, `antiErase`, plus the paint options `paintMode`, `spacing` and
+`fade`. `hardness`/`rate`/`flow`/`exposure` stay optional, nil meaning "the
+engine's default", exactly as in `Brush`. The paint options use Glims's own
+values: the engine nick for `paintMode`, a fraction of the brush size for
+`spacing` (nil keeps the engine default), and for `fade` a step count plus
+the tag `"transparent"` or `"background"`. `fadeBackground`,
+`clonePattern` and `source` are never captured: the fade background is
+the background color at each press, and Clone's
+Image/Pattern source choice and pattern are `ToolState` shared with Edit >
+Fill. Additionally:
 
 - `brushResource`: an optional typed wrapper around
   `EngineSession.ResourceIdentity`. The identity itself carries no resource
@@ -55,6 +63,10 @@ into storage).
 | `size` | finite, `1 <= size <= 10000` px | native `gimppaintoptions.c` brush-size GParamSpec minimum 1 and `GIMP_BRUSH_MAX_SIZE` 10000, checked on all supported engines |
 | `opacity`, `hardness`, sRGB components | finite, `0...1` | `glims_engine.h` (`opacity 0...1`, `hardness 0...1`, `red/green/blue` "sRGB, 0...1"); `Engine/paint.c` clamps opacity to `0...1`; UI sliders 0...100% |
 | `rate`, `flow`, `exposure` | finite, `0...100` (or nil) | `glims_engine.h` ("0 ... 100"); UI sliders `0...100` |
+| `paintMode` | a nick in `EngineSession.PaintModes.all`; a non-normal mode also needs `PaintModes.applies(to:)` for the tool | facade's `paint_mode`; `ToolPalettes.addPaintOptionRows` |
+| `spacing` | finite, `0.01 ... 10`, or nil | `glims_engine.h` (`GlimsBrushSettings.spacing`); `EngineSession.PaintModes.spacingRange` |
+| `fade.steps` | `1 ... 9999` | `glims_engine.h` (`fade_steps`); `PaintModes.maxFadeSteps` |
+| `fade.target` | `"transparent"` or `"background"` | Glims tag for the engine's `fade_target` |
 | name | trimmed, nonempty, ≤ 64 characters | this store's own rule (`PaintToolPresetLimits.maxNameLength`) |
 
 All numeric validation also requires finite values (no NaN/infinity).
@@ -91,6 +103,55 @@ array order is the stored order.
 Like `BrushSelectionStore`, the store is pure value storage: tests inject a
 suite's `UserDefaults`, the app uses `PaintToolPresetStore.shared`.
 
+## Persistence schema (version 2)
+
+Schema 2 adds the paint options to `settings` and changes nothing else. The
+store reads schemas 1 and 2 and writes the lowest version its data needs: a
+document whose presets all use the defaults is stored as schema 1 and stays
+byte-compatible with older Glims versions, while any preset with a
+non-default mode, spacing or fade makes the whole document schema 2.
+
+```json
+{
+  "schemaVersion": 2,
+  "presets": [
+    {
+      "id": "UUID",
+      "tool": "airbrush",
+      "name": "Faded screen",
+      "settings": {"size": 12, "opacity": 1, "pressureSize": true,
+                   "hardness": 0.5, "rate": 50, "flow": 10, "exposure": 50,
+                   "tones": "midtones", "antiErase": false,
+                   "paintMode": "screen", "spacing": 0.35,
+                   "fade": {"steps": 7, "target": "background"}},
+      "brushResource": {"kind": "brush",
+                        "identity": {"name": "2. Hardness 025", "isInternal": false}},
+      "foregroundColor": {"red": 0.25, "green": 0.5, "blue": 0.75}
+    }
+  ]
+}
+```
+
+**Absent-key rule:** `paintMode`, `spacing` and `fade` are written only when
+they differ from their default: no `paintMode` key for `"normal"`, no
+`spacing` key for nil and no `fade` key for nil. An explicit JSON `null`
+decodes to nil. A preset without options therefore encodes exactly the
+schema-1 fields.
+
+**Per-version strictness:** a schema 1 document rejects `paintMode`,
+`spacing` and `fade` as unsupported fields at the settings boundary, like
+any other future field; a schema 2 document accepts them. Both versions
+still reject unknown keys everywhere, including inside `fade` (`steps` and
+`target` only). The store reads the envelope's version first and passes it
+to the nested decoders through `decoder.userInfo`.
+
+**Tool restrictions:** a non-normal mode requires
+`EngineSession.PaintModes.applies(to:)` for the preset's engine paint tool
+(Paintbrush, Pencil, Airbrush and Clone); a fade requires membership in
+`PaintModes.fadeTools` (Paintbrush, Pencil and Airbrush). Spacing applies to
+every paint tool. A violation throws `optionNotForTool` at creation and at
+decoding, with a message such as "The Eraser tool cannot keep a blend mode."
+
 ## Store semantics
 
 - **Order:** deterministic creation order; create appends, rename/replace
@@ -102,9 +163,10 @@ suite's `UserDefaults`, the app uses `PaintToolPresetStore.shared`.
   match on the stored trimmed name); the same name on a different tool is
   allowed. Violations throw `duplicateName`.
 - **Errors:** every failure throws an actionable `PaintToolPresetError`
-  (unknown tool tag, non-paint tool, unknown tone tag, empty/overlong/
-  duplicate name, unknown preset UUID, non-finite or out-of-range field,
-  invalid resource kind/identity, unsupported/missing schema version,
+  (unknown tool tag, non-paint tool, unknown tone tag, unknown paint mode,
+  unknown fade target, a paint option on a tool that ignores it, empty/
+  overlong/duplicate name, unknown preset UUID, non-finite or out-of-range
+  field, invalid resource kind/identity, unsupported/missing schema version,
   malformed document). Unknown/malformed `tool` tags and non-paint `ToolID`s
   are rejected at both creation and decoding.
 
@@ -115,9 +177,9 @@ suite's `UserDefaults`, the app uses `PaintToolPresetStore.shared`.
   a compatible reader is required. This prevents both dropped fields and
   numeric precision loss during a rewrite. Extensions require a new schema.
 - **Unknown schema / corrupt data:** a stored document whose
-  `schemaVersion` is missing or not 1, or whose bytes are unreadable,
-  makes `load()` and every mutation **throw** — never silently reset to an
-  empty collection, and never clobber the stored bytes.
+  `schemaVersion` is missing or outside 1 ... 2, or whose bytes are
+  unreadable, makes `load()` and every mutation **throw**, never silently
+  reset to an empty collection, and never clobber the stored bytes.
 - **Atomicity:** each mutation re-reads the stored bytes (so externally
   changed data is picked up while it is readable), validates the new
   document in memory, encodes it, and only then writes the single key. Any

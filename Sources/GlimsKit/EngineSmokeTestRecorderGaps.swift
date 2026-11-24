@@ -35,6 +35,16 @@ extension EngineSmokeTest {
         let image = try session.newImage(width: 96, height: 96)
         let document = try ImageDocument(session: session, image: image, name: "Recorder gaps")
         documents.items.append(document)
+        var documentClosed = false
+        func closeDocument() {
+            guard !documentClosed else { return }
+            documentClosed = true
+            document.onError = nil
+            document.closeImageWhenDrained()
+            wait { (try? session.info(image)) == nil }
+            documents.items.removeAll { $0 === document }
+        }
+        defer { closeDocument() }
         try document.reload()
         settle(document)
         guard let layer = document.activeLayer else {
@@ -310,16 +320,19 @@ extension EngineSmokeTest {
         } catch {
             check(true, "replay of an incomplete recording is refused")
         }
-        document.onError = nil
-        document.closeImageWhenDrained()
-        wait { (try? session.info(image)) == nil }
-        documents.items.removeAll { $0 === document }
+        closeDocument()
 
         // A whole Move-tool drag is one command: several mouseDragged events
         // commit exactly one row on the release.
         let moveImage = try session.newImage(width: 64, height: 64)
         let moveDocument = try ImageDocument(session: session, image: moveImage, name: "Recorder gaps move")
         documents.items.append(moveDocument)
+        defer {
+            moveDocument.onError = nil
+            moveDocument.closeImageWhenDrained()
+            wait { (try? session.info(moveImage)) == nil }
+            documents.items.removeAll { $0 === moveDocument }
+        }
         try moveDocument.reload()
         settle(moveDocument)
         let movedLayer = try session.pastePixels(moveImage,
@@ -331,21 +344,17 @@ extension EngineSmokeTest {
         moveDocument.selectLayer(movedLayer)
         settle(moveDocument)
         let moveController = DocumentWindowController(document: moveDocument)
+        let previousTool = ToolState.shared.current
+        defer {
+            ToolState.shared.select(previousTool)
+            moveController.window?.orderOut(nil)
+        }
         moveController.showWindow(nil)
         moveController.window?.contentView?.layoutSubtreeIfNeeded()
         guard let moveWindow = moveController.window else {
             return check(false, "the move-drag window exists")
         }
         let moveCanvas = moveController.canvas
-        let previousTool = ToolState.shared.current
-        defer {
-            ToolState.shared.select(previousTool)
-            moveController.window?.orderOut(nil)
-            moveDocument.onError = nil
-            moveDocument.closeImageWhenDrained()
-            wait { (try? session.info(moveImage)) == nil }
-            documents.items.removeAll { $0 === moveDocument }
-        }
         func windowPoint(ofImagePoint p: CGPoint) -> CGPoint {
             moveCanvas.convert(CGPoint(x: p.x * moveCanvas.scale, y: p.y * moveCanvas.scale), to: nil)
         }
@@ -381,14 +390,15 @@ extension EngineSmokeTest {
         let replayImage = try session.newImage(width: 32, height: 32)
         let replayDocument = try ImageDocument(session: session, image: replayImage, name: "Recorder gaps replay")
         documents.items.append(replayDocument)
-        try replayDocument.reload()
-        settle(replayDocument)
-        replayDocument.onError = nil
         defer {
+            replayDocument.onError = nil
             replayDocument.closeImageWhenDrained()
             wait { (try? session.info(replayImage)) == nil }
             documents.items.removeAll { $0 === replayDocument }
         }
+        try replayDocument.reload()
+        settle(replayDocument)
+        replayDocument.onError = nil
         try replayDocument.startRecording()
         replayDocument.select(.all)
         settle(replayDocument)
@@ -485,19 +495,24 @@ extension EngineSmokeTest {
                 return "not a failed row"
             }
         }
-        func open(_ name: String) throws -> ImageDocument {
-            let document = try ImageDocument(session: session, image: session.newImage(width: 48, height: 48),
-                                             name: name)
-            documents.items.append(document)
-            try document.reload()
-            settle(document)
-            return document
-        }
         func close(_ document: ImageDocument) {
             document.onError = nil
             document.closeImageWhenDrained()
             wait { (try? session.info(document.image)) == nil }
             documents.items.removeAll { $0 === document }
+        }
+        func open(_ name: String) throws -> ImageDocument {
+            let document = try ImageDocument(session: session, image: session.newImage(width: 48, height: 48),
+                                             name: name)
+            documents.items.append(document)
+            do {
+                try document.reload()
+            } catch {
+                close(document)
+                throw error
+            }
+            settle(document)
+            return document
         }
 
         let frozen = try open("Recorder frozen undo")

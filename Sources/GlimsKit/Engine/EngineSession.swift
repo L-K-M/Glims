@@ -1484,6 +1484,83 @@ final class EngineSession: @unchecked Sendable {
         /// or removed resource fails explicitly instead of painting with
         /// a different brush after an engine restart.
         var resource: ResourceIdentity?
+
+        /// Fade over `steps` dabs (1 ... 9999) at the stroke's spacing,
+        /// to nothing or to `fadeBackground`.
+        struct Fade: Equatable {
+            enum Target: UInt32 { case transparent = 0, background }
+            var steps: Int
+            var target: Target
+        }
+
+        /// Clone from a pattern instead of an image source. The identity
+        /// resolves on the engine worker; `aligned` keeps one tiling of
+        /// the layer across strokes, otherwise each stroke starts at the
+        /// pattern's center.
+        struct ClonePattern: Equatable {
+            var resource: ResourceIdentity
+            var aligned: Bool
+        }
+
+        /// The blend mode nick for Paintbrush, Pencil, Airbrush and Clone
+        /// (`PaintModes.all`).
+        var paintMode = PaintModes.normal
+        /// Distance between dabs as a fraction of the size, 0.01 ... 10;
+        /// nil keeps GIMP's paint default of 0.1, whatever the brush's own
+        /// spacing.
+        var spacing: Double?
+        var fade: Fade?
+        /// The opaque sRGB background at the press, for a fade to it.
+        var fadeBackground: EraserBackground?
+        var clonePattern: ClonePattern?
+
+        /// Any paint option other than its default: such strokes need an
+        /// engine with GLIMS_BRUSH_FEATURE_PAINT_OPTIONS, paint only in RGB
+        /// and grayscale images, and are not recorded yet.
+        var hasPaintOptions: Bool {
+            paintMode != PaintModes.normal || spacing != nil || fade != nil || clonePattern != nil
+        }
+
+        /// Back to Normal at the engine's spacing, without fade or pattern.
+        mutating func clearPaintOptions() {
+            paintMode = PaintModes.normal
+            spacing = nil
+            fade = nil
+            fadeBackground = nil
+            clonePattern = nil
+        }
+    }
+
+    /// The blend modes a stroke can paint in, by their engine nicks, in
+    /// the order the layer mode menu groups them, with the two paint-only
+    /// modes after Dissolve (the facade's GlimsBrushSettings.paint_mode).
+    enum PaintModes {
+        static let normal = "normal"
+        /// Nick and menu title; the engine accepts exactly these nicks.
+        static let named: [(nick: String, title: String)] = [
+            ("normal", "Normal"), ("dissolve", "Dissolve"), ("behind", "Behind"), ("color-erase", "Color Erase"),
+            ("lighten-only", "Lighten Only"), ("luma-lighten-only", "Luma/Luminance Lighten Only"),
+            ("screen", "Screen"), ("dodge", "Dodge"), ("addition", "Addition"),
+            ("darken-only", "Darken Only"), ("luma-darken-only", "Luma/Luminance Darken Only"),
+            ("multiply", "Multiply"), ("burn", "Burn"), ("linear-burn", "Linear Burn"),
+            ("overlay", "Overlay"), ("softlight", "Soft Light"), ("hardlight", "Hard Light"),
+            ("vivid-light", "Vivid Light"), ("pin-light", "Pin Light"), ("linear-light", "Linear Light"),
+            ("hard-mix", "Hard Mix"),
+            ("difference", "Difference"), ("exclusion", "Exclusion"), ("subtract", "Subtract"),
+            ("grain-extract", "Grain Extract"), ("grain-merge", "Grain Merge"), ("divide", "Divide"),
+            ("hsv-hue", "HSV Hue"), ("hsv-saturation", "HSV Saturation"), ("hsl-color", "HSL Color"),
+            ("hsv-value", "HSV Value"),
+            ("lch-hue", "LCh Hue"), ("lch-chroma", "LCh Chroma"), ("lch-color", "LCh Color"),
+            ("lch-lightness", "LCh Lightness"), ("luminance", "Luminance"),
+        ]
+        static var all: [String] { named.map(\.nick) }
+        /// The tools whose engine paint core honors the mode.
+        static func applies(to tool: Brush.Tool) -> Bool {
+            [.paintbrush, .pencil, .airbrush, .clone].contains(tool)
+        }
+        static let fadeTools: [Brush.Tool] = [.paintbrush, .pencil, .airbrush]
+        static let maxFadeSteps = 9999
+        static let spacingRange = 0.01...10.0
     }
 
     // MARK: Selection types
@@ -2573,7 +2650,7 @@ final class EngineSession: @unchecked Sendable {
         }
 
         var target = inkStrokeTarget(channel: channel, identity: identity)
-        var settings = Self.nativeBrush(brush)
+        var settings = try nativeBrush(brush)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
         var stroke: Int32 = 0
@@ -2687,7 +2764,7 @@ final class EngineSession: @unchecked Sendable {
     /// take.
     func beginStroke(image: Int32, drawable: Int32, brush: Brush, first: StrokePoint) throws -> Int32 {
         try validateEraserBackground(brush)
-        var settings = Self.nativeBrush(brush)
+        var settings = try nativeBrush(brush)
         var point = Self.point(first)
         var stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
@@ -2716,7 +2793,7 @@ final class EngineSession: @unchecked Sendable {
         }
         let identity = expected?.brush ?? brush.resource
         let resource = try identity.map { try resolveResource($0, kind: .brush) } ?? 0
-        var settings = Self.nativeBrush(brush, recordsEraserBackground: true)
+        var settings = try nativeBrush(brush, recordsEraserBackground: true)
         var point = Self.point(first)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
@@ -2762,7 +2839,7 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue), message: "This image engine cannot accept tablet rotation or tangential pressure.")
         }
         let resource = try brush.resource.map { try resolveResource($0, kind: .brush) } ?? 0
-        var settings = Self.nativeBrush(brush), stroke: Int32 = 0
+        var settings = try nativeBrush(brush), stroke: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
         try withTabletPacket([first]) { packet in
             try check(begin(engine, image, drawable, resource, &settings, packet, &stroke, &error), error)
@@ -2800,7 +2877,7 @@ final class EngineSession: @unchecked Sendable {
             throw EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
                               message: "The brush could not be found for the captured tablet stroke.")
         }
-        var settings = Self.nativeBrush(brush, recordsEraserBackground: true)
+        var settings = try nativeBrush(brush, recordsEraserBackground: true)
         var facts = GlimsStrokeCaptureFacts()
         facts.struct_size = UInt32(MemoryLayout<GlimsStrokeCaptureFacts>.size)
         var stroke: Int32 = 0
@@ -3807,7 +3884,7 @@ final class EngineSession: @unchecked Sendable {
     /// a stroke, a filter session or a plug-in holds the image.
     func strokeSelection(image: Int32, drawable: Int32? = nil, brush: Brush) throws {
         try validateEraserBackground(brush)
-        var settings = Self.nativeBrush(brush)
+        var settings = try nativeBrush(brush)
         var error: UnsafeMutablePointer<CChar>?
         let resource: ResourceID
         if let identity = brush.resource {
@@ -7169,24 +7246,95 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// GLIMS_BRUSH_FEATURE_PAINT_OPTIONS, bit 1 of brush_settings_features.
+    private static let paintOptionsFeature: UInt64 = 1 << 1
+
+    /// Whether the engine reads GlimsBrushSettings' paint options tail
+    /// (mode, spacing, fade, clone pattern).
+    var supportsPaintOptions: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.brush_settings_features),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.brush_settings_features),
+              let features = api.brush_settings_features else { return false }
+        return features() & Self.paintOptionsFeature != 0
+    }
+
     /// A Brush's captured settings as the facade's GlimsBrushSettings:
     /// nil option numbers become -1 (the engine's default for that tool).
-    private static func nativeBrush(_ brush: Brush, recordsEraserBackground: Bool = false) -> GlimsBrushSettings {
-        GlimsBrushSettings(struct_size: UInt32(MemoryLayout<GlimsBrushSettings>.size),
-                           size: brush.size, opacity: brush.opacity,
-                           red: brush.red, green: brush.green, blue: brush.blue,
-                           pressure_size: brush.pressureSize,
-                           tool: brush.tool.rawValue,
-                           hardness: brush.hardness ?? -1, rate: brush.rate ?? -1,
-                           flow: brush.flow ?? -1, exposure: brush.exposure ?? -1,
-                           tones: brush.tones.rawValue, anti_erase: brush.antiErase,
-                           source_drawable: brush.source?.drawable ?? 0,
-                           source_x: brush.source?.x ?? 0, source_y: brush.source?.y ?? 0,
-                           has_eraser_background: brush.eraserBackground != nil,
-                           eraser_background_red: brush.eraserBackground?.red ?? 0,
-                           eraser_background_green: brush.eraserBackground?.green ?? 0,
-                           eraser_background_blue: brush.eraserBackground?.blue ?? 0,
-                           record_eraser_background: recordsEraserBackground && brush.tool == .eraser && brush.eraserBackground != nil)
+    /// Paint options need an engine that reads them, and a clone pattern's
+    /// identity resolves here, on the engine worker.
+    private func nativeBrush(_ brush: Brush, recordsEraserBackground: Bool = false) throws -> GlimsBrushSettings {
+        var native = GlimsBrushSettings()
+        native.struct_size = UInt32(MemoryLayout<GlimsBrushSettings>.size)
+        native.size = brush.size
+        native.opacity = brush.opacity
+        native.red = brush.red
+        native.green = brush.green
+        native.blue = brush.blue
+        native.pressure_size = brush.pressureSize
+        native.tool = brush.tool.rawValue
+        native.hardness = brush.hardness ?? -1
+        native.rate = brush.rate ?? -1
+        native.flow = brush.flow ?? -1
+        native.exposure = brush.exposure ?? -1
+        native.tones = brush.tones.rawValue
+        native.anti_erase = brush.antiErase
+        native.source_drawable = brush.source?.drawable ?? 0
+        native.source_x = brush.source?.x ?? 0
+        native.source_y = brush.source?.y ?? 0
+        native.has_eraser_background = brush.eraserBackground != nil
+        native.eraser_background_red = brush.eraserBackground?.red ?? 0
+        native.eraser_background_green = brush.eraserBackground?.green ?? 0
+        native.eraser_background_blue = brush.eraserBackground?.blue ?? 0
+        native.record_eraser_background = recordsEraserBackground && brush.tool == .eraser && brush.eraserBackground != nil
+        guard brush.hasPaintOptions else { return native }
+
+        guard supportsPaintOptions else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot paint with a blend mode, spacing, fade or pattern.")
+        }
+        let mode = Array(brush.paintMode.utf8)
+        guard mode.count < MemoryLayout.size(ofValue: native.paint_mode), !mode.contains(0) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: "The engine has no such paint mode.")
+        }
+        withUnsafeMutableBytes(of: &native.paint_mode) { bytes in
+            bytes.copyBytes(from: mode)
+        }
+        if let spacing = brush.spacing {
+            guard PaintModes.spacingRange.contains(spacing) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "Spacing must be from 1% to 1000% of the brush size.")
+            }
+            native.spacing = spacing
+        }
+        if let fade = brush.fade {
+            guard (1...PaintModes.maxFadeSteps).contains(fade.steps) else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "A fade must be from 1 to \(PaintModes.maxFadeSteps) steps.")
+            }
+            native.fade_steps = UInt32(fade.steps)
+            native.fade_target = fade.target.rawValue
+            if fade.target == .background {
+                guard let background = brush.fadeBackground else {
+                    throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                      message: "A fade to the background needs the background color.")
+                }
+                native.fade_background_red = background.red
+                native.fade_background_green = background.green
+                native.fade_background_blue = background.blue
+            }
+        }
+        if let pattern = brush.clonePattern {
+            let resource = try resolveResource(pattern.resource, kind: .pattern)
+            guard resource != 0 else {
+                throw EngineError(status: Int32(GLIMS_STATUS_NOT_FOUND.rawValue),
+                                  message: "The clone pattern \(pattern.resource.name) could not be found.")
+            }
+            native.clone_source = GLIMS_CLONE_FROM_PATTERN.rawValue
+            native.clone_pattern_aligned = pattern.aligned
+            native.clone_pattern = resource
+            native.source_drawable = 0
+        }
+        return native
     }
 
     private static func layer(_ row: GlimsLayerInfo) -> Layer {

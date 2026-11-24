@@ -517,7 +517,14 @@ final class CanvasToolController {
                 }
                 return
             }
-            if (paintTool == .clone || paintTool == .heal), ToolState.shared.cloneSource == nil {
+            let fromPattern = paintTool == .clone && ToolState.shared.cloneFrom == .pattern
+            if fromPattern, ToolState.shared.patternStore.identity == nil {
+                onStatus?("Choose a pattern in Tool Options first.")
+                NSSound.beep()
+                dragTool = nil
+                return
+            }
+            if (paintTool == .clone || paintTool == .heal), !fromPattern, ToolState.shared.cloneSource == nil {
                 onStatus?("Option-click the image to set the \(tool.name.lowercased()) source first.")
                 NSSound.beep()
                 dragTool = nil
@@ -525,7 +532,8 @@ final class CanvasToolController {
             }
             tabletStrokeCapture = TabletEraserProximity.shared.strokeCapture(for: event)
             var brush = ToolState.shared.brush(for: tool)
-            let picked = paintTool == .clone || paintTool == .heal ? brush.source : nil
+            // A pattern source has no picked point; its alignment is the engine's.
+            let picked = (paintTool == .clone || paintTool == .heal) && !fromPattern ? brush.source : nil
             if let picked {
                 brush.source = ToolState.shared.cloneAlignment.source(picked, strokeAtX: point.x, y: point.y)
             }
@@ -2028,9 +2036,10 @@ final class CanvasToolController {
             return
         }
         guard document.activeDrawable != nil else {
-            onStatus?(document.hasMultipleSelectedChannels
-                      ? "Select only one channel to transform."
-                      : "Select a layer to transform after the target change finishes.")
+            let channelMessage = document.hasMultipleSelectedChannels
+                ? "Select only one channel to transform." : "Select a channel to transform."
+            onStatus?(document.isChannelTargetActive
+                      ? channelMessage : "Select a layer to transform after the target change finishes.")
             dragTool = nil
             return
         }

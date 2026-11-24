@@ -11,7 +11,8 @@ extension EngineSmokeTest {
     /// Similar after a rectangle selection. Every row succeeds, and the
     /// recording replays into a second identical document with the same
     /// pixels and layer tree. Duplicate with two selected layers keeps its
-    /// failed row.
+    /// failed row, and a Duplicate or Delete the engine refuses completes
+    /// with its failure.
     static func exerciseRecorderLayerEdits(_ session: EngineSession, work: URL,
                                            documents: DocumentList) throws {
         func wait(_ condition: () -> Bool) {
@@ -131,17 +132,20 @@ extension EngineSmokeTest {
         guard let loaded, let file = try? loaded.get().file else {
             return check(false, "the layer-edit recording loads")
         }
-        check(file.records.count == 9, "the saved recording keeps every layer-edit row")
+        check(file.records.count == 9,
+              "the saved recording keeps every layer-edit row (\(file.records.count))")
+        // The row checks below index the recording, so stop on a wrong count.
+        guard file.records.count == 9 else { return }
 
         // Duplicate Layers (row 2) and Merge Visible (row 5) each produce a
         // symbol, and every produced description is saved as a symbol.
-        let producedIDs = Set(file.records.compactMap(\.produces))
+        let producedIDs = file.producedSymbols
         guard let duplicateProduced = file.records[2].produces,
               let mergeProduced = file.records[5].produces,
               producedIDs.contains(duplicateProduced), producedIDs.contains(mergeProduced) else {
             return check(false, "Duplicate Layers and Merge Visible record produced symbols")
         }
-        check(file.records.compactMap(\.produces).allSatisfy { id in
+        check(producedIDs.allSatisfy { id in
               file.symbols.contains { $0.id == id }
           }, "every produced symbol's description is saved as a symbol")
         if case .success(.deleteLayers, .layer(let deleted)) = file.records[3].outcome,
@@ -162,7 +166,8 @@ extension EngineSmokeTest {
                            checkpoint: try b.recorderInstallCheckpoint(),
                            choices: choices) { installed = $0 }
         settle(b)
-        try installed!.get()
+        guard let installed else { return check(false, "the layer-edit recording installs") }
+        try installed.get()
         try b.startReplay()
         settle(b)
 
@@ -186,5 +191,34 @@ extension EngineSmokeTest {
               "Duplicate with two selected layers keeps its failed row")
         try multi.stopRecording()
         settle(multi)
+
+        // A Duplicate or Delete the engine refuses after admission (here the
+        // selected layer was removed natively behind the cached state)
+        // completes with the failure, reports it once and records a failed
+        // row.
+        for command in ["Duplicate", "Delete"] {
+            let (refused, _, layerRefused) = try fixture("Layer edits refused \(command)")
+            defer { close(refused) }
+            var reported = 0
+            refused.onError = { _ in reported += 1 }
+            try refused.startRecording()
+            refused.selectLayer(layerRefused)
+            settle(refused)
+            try session.deleteLayers(refused.image, layers: [layerRefused])
+            var outcome: Result<Void, Error>?
+            if command == "Duplicate" { refused.duplicateSelectedLayers { outcome = $0 } }
+            else { refused.deleteSelectedLayers { outcome = $0 } }
+            settle(refused)
+            wait { outcome != nil }
+            if case .failure? = outcome { check(true, "a refused \(command) completes with its failure") }
+            else { check(false, "a refused \(command) completes with its failure") }
+            check(reported == 1, "a refused \(command) reports its error once (\(reported))")
+            let refusedRows = refused.recorder.records
+            check(refusedRows.count == 1
+                  && refusedRows.first.map({ if case .failure = $0.resolution { return true }; return false }) == true,
+                  "a refused \(command) records one failed row")
+            try refused.stopRecording()
+            settle(refused)
+        }
     }
 }
