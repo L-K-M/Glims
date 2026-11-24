@@ -449,6 +449,14 @@ typedef struct GlimsCmykCopySettings {
   size_t profile_length;
 } GlimsCmykCopySettings;
 
+/* Image > Trap (slot 266); settings may be unaligned and future tails are
+ * ignored. The complete known prefix is required. Borrowed input stays
+ * readable and unchanged until the synchronous call returns. */
+typedef struct GlimsTrapSettings {
+  uint32_t struct_size;
+  int32_t width; /* whole pixels, 1 ... 16 */
+} GlimsTrapSettings;
+
 typedef struct GlimsPoint {
   double x, y;             /* image pixels */
 } GlimsPoint;
@@ -5195,6 +5203,24 @@ typedef struct GlimsEngineAPI {
   GlimsStatus (*image_convert_cmyk_copy) (GlimsEngine *engine, GlimsImageID image,
                                           const GlimsCmykCopySettings *settings,
                                           GlimsImageID *result, char **error);
+  /* Slot 266: spreads the lighter cyan, magenta and yellow coverages of a
+   * native CMYK document under darker neighbours within a disk of width
+   * whole pixels (1 ... 16), hiding small plate misregistration. Darkness
+   * orders yellow lighter than cyan, cyan lighter than magenta and every
+   * color lighter than black; K is read for darkness but never changes.
+   * The current selection blends each affected scalar once; neighbours
+   * are read selected or not. Integer output rounds half up; finite
+   * extended float is retained. A nonfinite sample Trap reads (the
+   * processed pixels and their width margin) refuses atomically before
+   * publication. A changed result makes one Undo step
+   * named "Trap"; a byte-identical result makes none. Other planes,
+   * profile, names, visibility, precision and file identity remain
+   * unchanged. Settings require struct_size >= sizeof(GlimsTrapSettings)
+   * and width 1 ... 16, else INVALID_ARGUMENT. Non-CMYK documents refuse
+   * UNSUPPORTED; locked C, M or Y pixels refuse LOCKED; busy
+   * engine/strokes/filters refuse. Clears *error. */
+  GlimsStatus (*image_trap) (GlimsEngine *engine, GlimsImageID image,
+                             const GlimsTrapSettings *settings, char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */

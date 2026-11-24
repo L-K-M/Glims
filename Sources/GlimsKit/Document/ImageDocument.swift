@@ -3190,6 +3190,59 @@ final class ImageDocument {
         return accepted
     }
 
+    /// Cached admission only; the native operation independently revalidates
+    /// the CMYK plate storage, locks and selection after earlier input.
+    func trapRefusal() -> String? {
+        guard colorInfo.mode == .cmyk else { return "Trap is available for CMYK documents only." }
+        guard session.supportsTrap else { return "This image engine does not support Trap." }
+        if isClosing { return DocumentError.closed.localizedDescription }
+        guard acceptsEdits, !strokeIsActive else { return "Finish or cancel the current operation first." }
+        guard !targetCommandIsPending, pendingTargetPick == nil, pendingLayerSelection == nil,
+              pendingChannelSelection == nil, quickMaskIntent == nil, !rejectedTargetPick else {
+            return "Wait for the current selection to finish."
+        }
+        guard quickMaskState?.enabled != true, !floatingState.isActive else {
+            return "Anchor the floating selection and leave Quick Mask first."
+        }
+        return nil
+    }
+
+    @discardableResult
+    func trap(width: Int32, completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }) -> Bool {
+        func refuse(_ reason: String) {
+            let error = RecorderReplayError(message: reason)
+            onError?(reason)
+            completion(.failure(error))
+        }
+        guard (1...16).contains(width) else {
+            refuse("Trap width must be a whole number of pixels from 1 to 16.")
+            return false
+        }
+        if let reason = trapRefusal() { refuse(reason); return false }
+        endPendingUserEdits()
+        if let reason = trapRefusal() { refuse(reason); return false }
+        var rejection = "Wait for the current image operation to finish."
+        // The Recorder has no Trap row yet; like other unrecorded component
+        // commands the admitted queue records an explicit unsupported row.
+        let accepted = enqueueExclusive(label: "Trap", unsupported: "Trap", admission: {
+            if let reason = self.trapRefusal() { rejection = reason; return false }
+            return true
+        }, rejected: {
+            refuse(self.isClosing ? DocumentError.closed.localizedDescription : rejection)
+        }) { [session, image] in
+            let result = Result<Void, Error> { try session.trap(image: image, width: width) }
+            self.dispatchReadWhenReady {
+                if !self.isClosing {
+                    do { try self.reload() }
+                    catch { self.onError?("The document state could not be refreshed: \(error)") }
+                }
+                if case .failure(let error) = result { self.onError?(error.localizedDescription) }
+                completion(result)
+            }
+        }
+        return accepted
+    }
+
     func fill(at point: CGPoint, mode: EngineSession.FillMode, color: NSColor, threshold: Double,
               sampleMerged: Bool, opacity: Double = 1) {
         guard !refuseWhileEditingUnavailable() else { return }

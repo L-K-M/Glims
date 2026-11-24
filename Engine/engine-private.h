@@ -236,6 +236,8 @@ GlimsStatus      glims_edit_ready        (GlimsEngine *engine, GlimsOpenImage *o
 GlimsStatus      glims_image_edit_ink    (GlimsEngine *engine, GlimsImageID image,
                                          GlimsItemID channel, uint32_t operation,
                                          double intensity, double opacity, char **error);
+GlimsStatus      glims_image_trap        (GlimsEngine *engine, GlimsImageID image,
+                                         const GlimsTrapSettings *settings, char **error);
 GlimsStatus      glims_image_levels_ink  (GlimsEngine *engine, GlimsImageID image,
                                          GlimsItemID channel, const GlimsInkLevelsSettings *settings,
                                          char **error);

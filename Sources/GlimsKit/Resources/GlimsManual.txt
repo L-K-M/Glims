@@ -149,6 +149,14 @@ channel visibility only changes the view. Both directions run relative
 colorimetric with black-point compensation, regardless of the selection.
 Your original keeps its layers and edits; other metadata is not copied.
 
+For a CMYK image, choose Image > Trap… to spread the lighter cyan, magenta
+and yellow inks under darker neighboring ink. Enter a width from 1 to 16
+whole pixels: larger widths reach farther but take longer. Trap reads your
+selection, so only the selected area changes, while neighboring unselected
+pixels still count. Black never changes, and a changed result is one undo
+step; a result identical to the original adds none.
+Trap is not available for RGB, grayscale, Lab or multichannel images.
+
 # Editing and the Clipboard
 
 Edit > Undo (Command-Z) and Redo (Shift-Command-Z) step through the
