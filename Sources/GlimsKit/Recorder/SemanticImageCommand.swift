@@ -28,6 +28,13 @@ enum SemanticImageCommand {
         var errorDescription: String? { "This recorded edit has no explicit layer binding." }
     }
 
+    /// Replay refuses a producing command whose new layer the engine did
+    /// not report, as recording does, so the row that lost it fails
+    /// instead of a later row bound to it.
+    private struct MissingProducedLayer: LocalizedError {
+        var errorDescription: String? { "The engine did not report the layer this command created." }
+    }
+
     private struct MissingChannelBinding: LocalizedError {
         var errorDescription: String? { "This recorded edit has no explicit channel binding." }
     }
@@ -289,7 +296,8 @@ enum SemanticImageCommand {
             try session.cropResize(image, rect: rect, width: width, height: height,
                                    resolution: resolution, interpolation: interpolation)
         case .mergeVisible:
-            return try session.mergeVisible(image)
+            guard let merged = try session.mergeVisible(image), merged > 0 else { throw MissingProducedLayer() }
+            return merged
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             var options = EngineSession.SelectOptions()
             options.threshold = threshold
@@ -426,7 +434,8 @@ enum SemanticImageCommand {
         case .duplicateLayers:
             guard layer > 0 else { throw MissingLayerBinding() }
             let copies = try session.duplicateLayers(image, layers: [layer])
-            return copies.first
+            guard let copy = copies.first, copy > 0 else { throw MissingProducedLayer() }
+            return copy
         case .deleteLayers:
             guard layer > 0 else { throw MissingLayerBinding() }
             try session.deleteLayers(image, layers: [layer])

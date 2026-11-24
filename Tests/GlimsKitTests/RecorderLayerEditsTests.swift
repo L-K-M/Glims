@@ -28,7 +28,7 @@ final class RecorderLayerEditsTests: XCTestCase {
         }
         return text
     }
-    private func document(_ command: String, version: Int = 33, binding: String = #"{"kind":"none"}"#,
+    fileprivate func document(_ command: String, version: Int = 33, binding: String = #"{"kind":"none"}"#,
                           symbols: String = "", produces: String? = nil) -> String {
         file(version: version, symbols: symbols, records: success(command, binding: binding, produces: produces))
     }
@@ -98,16 +98,23 @@ final class RecorderLayerEditsTests: XCTestCase {
     func testVersionAnchorAndOlderVersionRefusal() throws {
         XCTAssertEqual(RecorderFileCodec.layerEditsVersion, 33)
         XCTAssertEqual(RecorderFileCodec.latestVersion, 33)
-        let commands = [
-            #"{"tag":"moveLayer","offset":{"x":1,"y":0}}"#,
-            #"{"tag":"duplicateLayers"}"#,
-            #"{"tag":"deleteLayers"}"#,
-            #"{"tag":"mergeVisible"}"#,
-            #"{"tag":"addLayerMask","source":"white","edit":false}"#,
-            #"{"tag":"selectSimilar","threshold":0.5,"antialias":true,"sampleMerged":true}"#,
+        // Each command decodes at version 33 with its valid binding, so the
+        // version 32 refusal comes from the version alone.
+        let layer = ValidBase(binding: layerBinding, symbols: layerSymbolJSON, produces: nil)
+        let none = ValidBase(binding: #"{"kind":"none"}"#, symbols: "", produces: nil)
+        let commands: [(ValidBase, String)] = [
+            (layer, #"{"tag":"moveLayer","offset":{"x":1,"y":0}}"#),
+            (ValidBase(binding: layerBinding, symbols: bothSymbolsJSON, produces: produced.uuidString),
+             #"{"tag":"duplicateLayers"}"#),
+            (layer, #"{"tag":"deleteLayers"}"#),
+            (ValidBase(binding: #"{"kind":"none"}"#, symbols: producedSymbolJSON, produces: produced.uuidString),
+             #"{"tag":"mergeVisible"}"#),
+            (layer, #"{"tag":"addLayerMask","source":"white","edit":false}"#),
+            (none, #"{"tag":"selectSimilar","threshold":0.5,"antialias":true,"sampleMerged":true}"#),
         ]
-        for command in commands {
-            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(command, version: 32))),
+        for (base, command) in commands {
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(base.document(command, in: self))), command)
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(base.document(command, version: 32, in: self))),
                                  command)
         }
         // A version 33 file without any of the six is refused.
@@ -123,25 +130,58 @@ final class RecorderLayerEditsTests: XCTestCase {
     func testStrictFieldsRefuse() {
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"moveLayer","offset":{"x":1,"y":0},"future":0}"#, binding: layerBinding, symbols: layerSymbolJSON))))
+        for edge in [524288, -524288] {
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(document(
+                #"{"tag":"moveLayer","offset":{"x":\#(edge),"y":\#(edge)}}"#, binding: layerBinding,
+                symbols: layerSymbolJSON))), "\(edge)")
+        }
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"moveLayer","offset":{"x":524289,"y":0}}"#, binding: layerBinding, symbols: layerSymbolJSON))))
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"moveLayer","offset":{"x":-524289,"y":0}}"#, binding: layerBinding, symbols: layerSymbolJSON))))
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"moveLayer","offset":{"x":1.5,"y":0}}"#, binding: layerBinding, symbols: layerSymbolJSON))))
-        for command in [
-            #"{"tag":"duplicateLayers","future":0}"#,
-            #"{"tag":"deleteLayers","future":0}"#,
-            #"{"tag":"mergeVisible","future":0}"#,
-            #"{"tag":"addLayerMask","source":"white","edit":false,"future":0}"#,
-            #"{"tag":"addLayerMask","source":"future","edit":false}"#,
-            #"{"tag":"addLayerMask","source":"white"}"#,
-            #"{"tag":"selectSimilar","threshold":0.5,"antialias":true}"#,
-            #"{"tag":"selectSimilar","threshold":1.5,"antialias":true,"sampleMerged":true}"#,
-            #"{"tag":"selectSimilar","threshold":-0.1,"antialias":true,"sampleMerged":true}"#,
-            #"{"tag":"selectSimilar","threshold":0.5,"antialias":true,"sampleMerged":true,"future":0}"#,
-        ] {
-            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(command))), command)
+        // Each refusal sits on a document that decodes without the bad
+        // field, so only that field can cause it.
+        let duplicate = ValidBase(binding: layerBinding, symbols: bothSymbolsJSON, produces: produced.uuidString)
+        let delete = ValidBase(binding: layerBinding, symbols: layerSymbolJSON, produces: nil)
+        let merge = ValidBase(binding: #"{"kind":"none"}"#, symbols: producedSymbolJSON, produces: produced.uuidString)
+        let mask = delete
+        let similar = ValidBase(binding: #"{"kind":"none"}"#, symbols: "", produces: nil)
+        let cases: [(base: ValidBase, valid: String, invalid: String)] = [
+            (duplicate, #"{"tag":"duplicateLayers"}"#, #"{"tag":"duplicateLayers","future":0}"#),
+            (delete, #"{"tag":"deleteLayers"}"#, #"{"tag":"deleteLayers","future":0}"#),
+            (merge, #"{"tag":"mergeVisible"}"#, #"{"tag":"mergeVisible","future":0}"#),
+            (mask, #"{"tag":"addLayerMask","source":"white","edit":false}"#,
+             #"{"tag":"addLayerMask","source":"white","edit":false,"future":0}"#),
+            (mask, #"{"tag":"addLayerMask","source":"white","edit":false}"#,
+             #"{"tag":"addLayerMask","source":"future","edit":false}"#),
+            (mask, #"{"tag":"addLayerMask","source":"white","edit":false}"#,
+             #"{"tag":"addLayerMask","source":"white"}"#),
+            (similar, #"{"tag":"selectSimilar","threshold":0.5,"antialias":true,"sampleMerged":true}"#,
+             #"{"tag":"selectSimilar","threshold":0.5,"antialias":true}"#),
+            (similar, #"{"tag":"selectSimilar","threshold":1,"antialias":true,"sampleMerged":true}"#,
+             #"{"tag":"selectSimilar","threshold":1.5,"antialias":true,"sampleMerged":true}"#),
+            (similar, #"{"tag":"selectSimilar","threshold":0,"antialias":true,"sampleMerged":true}"#,
+             #"{"tag":"selectSimilar","threshold":-0.1,"antialias":true,"sampleMerged":true}"#),
+            (similar, #"{"tag":"selectSimilar","threshold":0.5,"antialias":true,"sampleMerged":true}"#,
+             #"{"tag":"selectSimilar","threshold":0.5,"antialias":true,"sampleMerged":true,"future":0}"#),
+        ]
+        for (base, valid, invalid) in cases {
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(base.document(valid, in: self))), valid)
+            XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(base.document(invalid, in: self))), invalid)
+        }
+    }
+
+    /// The binding, symbols and produced symbol that make a command's
+    /// row valid, so a test can vary the command alone.
+    private struct ValidBase {
+        var binding: String
+        var symbols: String
+        var produces: String?
+
+        func document(_ command: String, version: Int = 33, in test: RecorderLayerEditsTests) -> String {
+            test.document(command, version: version, binding: binding, symbols: symbols, produces: produces)
         }
     }
 

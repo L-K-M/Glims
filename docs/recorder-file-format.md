@@ -40,12 +40,12 @@ file references, never native IDs, persistent native tattoos or Recorder epochs.
 
 Records remain in acceptance order with contiguous integer `ordinal` values
 starting at zero. A `success` outcome has exactly `ordinal`, `outcome`,
-`command` and `binding`, plus an optional `produces` symbol UUID that only
-`duplicateLayers` and `mergeVisible` carry. A `failure` or `cancelled` outcome
-instead has `reason`, including an empty reason. The codec preserves every
-settled row. Failed/cancelled rows do not contain an invented attempted command;
-the current log discards that payload. Their presence continues to prevent
-replay in the log model.
+`command` and `binding`, plus a `produces` symbol UUID that `duplicateLayers`
+and `mergeVisible` require and no other command may carry. A `failure` or
+`cancelled` outcome instead has `reason`, including an empty reason. The codec
+preserves every settled row. Failed/cancelled rows do not contain an invented
+attempted command; the current log discards that payload. Their presence
+continues to prevent replay in the log model.
 
 Snapshot export refuses active recording, active replay and unresolved work.
 Stop alone does not settle pending work. No partial successful prefix or pending
@@ -701,7 +701,9 @@ A successful `duplicateLayers` or `mergeVisible` row carries a `produces` UUID
 naming a symbol in `symbols`; a row of either command without one is refused.
 The row stores only the symbol reference; the new layer's capture-time name,
 ancestry, sibling index and bounds live in that symbol's `description`, taken
-from the engine's layer rows immediately after the command.
+from the engine's layer rows immediately after the command. When the engine
+reports no new layer, recording keeps a failed row instead, and replay fails
+that row rather than a later row bound to the missing layer.
 
 Only those two commands may carry `produces`, and the named symbol's
 description kind must be a layer kind, never `channel` or `quickMask`. A
