@@ -561,6 +561,11 @@ GlimsStatus glims_image_history_move (GlimsEngine *, GlimsImageID, uint64_t,
                                       int32_t, char **);
 GlimsStatus glims_image_duplicate (GlimsEngine *, GlimsImageID, GlimsImageID *, char **);
 
+/* purge.c: Edit > Purge (slot 254). Engine thread; every affected image is
+ * preflighted before any history or clipboard state is freed. */
+GlimsStatus glims_edit_purge (GlimsEngine *e, GlimsImageID image, uint32_t targets,
+                              char **error);
+
 /* layer-mask.c */
 GlimsStatus glims_layer_mask      (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                    GlimsMaskState *state);

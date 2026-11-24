@@ -13,6 +13,21 @@ struct ClipboardImage {
     private static let nativeType = NSPasteboard.PasteboardType("ch.lkmc.Glims.rgba8-v1")
     private static let maximumBytes = 512 * 1024 * 1024
 
+    /// The general pasteboard's change count right after Glims's last
+    /// successful write, or nil before one. Edit > Purge > Clipboard
+    /// clears the system pasteboard only while this still matches, so a
+    /// copy another application placed there is never destroyed.
+    @MainActor
+    static var ownedChangeCount: Int?
+
+    /// True when the pasteboard still holds what Glims last wrote. A nil
+    /// `owned` means Glims has not written in this process, so nothing is
+    /// its own copy.
+    static func clipboardIsOwned(current: Int, owned: Int?) -> Bool {
+        guard let owned else { return false }
+        return current == owned
+    }
+
     enum TransferError: LocalizedError {
         case invalidImage, tooLarge, clipboardUnavailable
         var errorDescription: String? {
@@ -120,6 +135,11 @@ struct ClipboardImage {
             if let origin { item.setData(origin, forType: ClipboardImage.originType) }
             pasteboard.clearContents()
             guard pasteboard.writeObjects([item]) else { throw TransferError.clipboardUnavailable }
+            // Only the general pasteboard is the user's clipboard; a private
+            // board's change count must never mark it as Glims's own.
+            if pasteboard == NSPasteboard.general {
+                ClipboardImage.ownedChangeCount = pasteboard.changeCount
+            }
         }
     }
 

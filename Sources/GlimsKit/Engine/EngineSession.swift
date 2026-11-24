@@ -5538,6 +5538,44 @@ final class EngineSession: @unchecked Sendable {
         try check(matting(engine, image, layer, operation.rawValue, UInt32(width), &error), error)
     }
 
+    /// The memory Edit > Purge frees. The raw values mirror the facade's
+    /// GlimsPurgeTarget bits, never a GIMP value.
+    struct PurgeTargets: OptionSet {
+        let rawValue: UInt32
+
+        static let undo = PurgeTargets(rawValue: 1)
+        static let clipboard = PurgeTargets(rawValue: 2)
+        static let histories = PurgeTargets(rawValue: 4)
+    }
+
+    /// Whether this adapter has the Edit > Purge slot (254). Older
+    /// adapters keep their histories and refuse the command cleanly.
+    var supportsPurge: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.edit_purge) else {
+            return false
+        }
+        return Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.edit_purge)
+            && api.edit_purge != nil
+    }
+
+    /// Edit > Purge: clears the requested undo histories or the engine's
+    /// clipboard state, never pixels, and is itself not undoable. `image`
+    /// is the document for `.undo`; pass nil for the app-wide targets. An
+    /// adapter without slot 254 is UNSUPPORTED.
+    func purge(_ targets: PurgeTargets, image: Int32?) throws {
+        guard supportsPurge, let purge = api.edit_purge else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot purge memory.")
+        }
+        let known = PurgeTargets.undo.rawValue | PurgeTargets.clipboard.rawValue | PurgeTargets.histories.rawValue
+        guard !targets.isEmpty, (targets.rawValue & ~known) == 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose what to purge.")
+        }
+        var error: UnsafeMutablePointer<CChar>?
+        try check(purge(engine, image ?? 0, targets.rawValue, &error), error)
+    }
+
     /// Whether this adapter offers Layer > Merge Visible (facade slot 235).
     var supportsMergeVisible: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_merge_visible) else { return false }

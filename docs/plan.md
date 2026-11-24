@@ -7258,3 +7258,26 @@ to the explicit layer. `swift test` covers the codec round trip, the
 version anchor, width rules and binding pairing; the `matting` smoke
 case (`GLIMS_SMOKE_CASE=matting`) drives the menu action, the real
 Defringe sheet, the group refusal and a save/load/replay comparison.
+
+### Edit > Purge (2026-11-23)
+
+Edit > Purge frees memory and cannot be undone: Undo clears the active
+document's history, Clipboard clears the engine's clipboard and named
+buffers, Histories clears every open document's history, and All does all
+three. Each item confirms first with "This cannot be undone." Facade slot
+254 `edit_purge` takes a `GlimsPurgeTarget` bitmask and preflights every
+affected image before freeing anything, so a stroke, filter, plug-in or
+open undo group refuses BUSY and leaves every history intact. Upstream
+`gimp_image_undo_free` emits the UNDO_FREE event that image.c already
+turns into UNDO_CHANGED, so the History palette and Fade follow without
+extra adapter work. The system pasteboard is Swift's clipboard, and
+clearing it would destroy another application's copy, so
+`ClipboardImage` records the change count after each write and Purge >
+Clipboard clears the pasteboard only while it still holds Glims's own
+copy; otherwise it leaves the pasteboard and says so. The engine is always
+asked to purge its clipboard state. Purge changes no pixels and adds no
+Recorder row, and purging undo history does not clear or alter a
+recording. `swift test` covers the target bits, the ownership rule and the
+menu wiring; the `purge` smoke case (`GLIMS_SMOKE_CASE=purge`) drives two
+documents' histories, the confirmation's Cancel, both clipboard cases and
+a recording.

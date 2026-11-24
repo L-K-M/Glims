@@ -59,6 +59,14 @@ enum MainMenu {
             item("Paste Into", #selector(DocumentWindowController.pasteInto(_:))),
             item("Paste as New Image", #selector(AppController.pasteAsNewImage(_:))),
             clearItem(),
+            // No shortcuts: a purge is confirmed and irreversible, so the
+            // items stay plain menu entries.
+            submenu("Purge", [
+                item("Undo", #selector(DocumentWindowController.purgeUndo(_:))),
+                item("Clipboard", #selector(AppController.purgeClipboard(_:))),
+                item("Histories", #selector(AppController.purgeHistories(_:))),
+                item("All", #selector(AppController.purgeAll(_:))),
+            ]),
             .separator(),
             item("Fill…", #selector(DocumentWindowController.fill(_:))),
             item("Stroke Selection…", #selector(DocumentWindowController.strokeSelection(_:))),

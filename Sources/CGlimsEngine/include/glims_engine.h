@@ -1825,6 +1825,14 @@ typedef enum GlimsAdjustment {
   GLIMS_ADJUSTMENT_REMOVE_ALPHA = 5  /* Layer > Transparency > Remove Alpha Channel */
 } GlimsAdjustment;
 
+/* Edit > Purge (slot 254): which memory a purge frees. The bits are the
+ * facade's own; no GIMP value crosses. */
+typedef enum GlimsPurgeTarget {
+  GLIMS_PURGE_UNDO      = 1u << 0, /* one image's undo and redo history */
+  GLIMS_PURGE_CLIPBOARD = 1u << 1, /* the engine's clipboard and named buffers */
+  GLIMS_PURGE_HISTORIES = 1u << 2  /* every open image's undo and redo history */
+} GlimsPurgeTarget;
+
 typedef struct GlimsEngineAPI {
   uint32_t api_version;     /* GLIMS_ENGINE_API_VERSION of the library */
   uint32_t struct_size;     /* sizeof (GlimsEngineAPI) of the library */
@@ -4783,6 +4791,22 @@ typedef struct GlimsEngineAPI {
    * partial pixels but changes no value succeeds with no undo step. */
   GlimsStatus (*layer_matting) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                                 uint32_t operation, uint32_t width, char **error);
+  /* Slot 254: Edit > Purge. Frees memory without changing pixels and is
+   * itself not undoable. `targets` is a GlimsPurgeTarget bitmask; 0 or an
+   * unknown bit is INVALID_ARGUMENT. UNDO takes `image`, which must name a
+   * known open image (0 or an unknown id is NOT_FOUND) and clears that
+   * image's undo and redo history. Without UNDO, `image` must be 0 (else
+   * INVALID_ARGUMENT). CLIPBOARD clears the engine's clipboard image,
+   * clipboard buffer and named buffers. HISTORIES clears the undo and redo
+   * history of every open image. A target image whose history is already
+   * empty succeeds and changes nothing. Every affected image is preflighted
+   * before anything is freed: an open undo group, disabled undo, a running
+   * stroke, filter, plug-in or progress, or a busy engine refuses BUSY and
+   * leaves every history intact, so a purge is never partial. A successful
+   * undo free reaches the app as GLIMS_EVENT_UNDO_CHANGED, as undo and redo
+   * do; the dirty state follows upstream gimp_image_undo_free. */
+  GlimsStatus (*edit_purge) (GlimsEngine *engine, GlimsImageID image, uint32_t targets,
+                             char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */
