@@ -787,6 +787,14 @@ GlimsStatus glims_color_range_preview (GlimsEngine *e, GlimsImageID image,
                                       const GlimsColorRangeSettings *settings, int32_t max_size,
                                       uint8_t *mask, size_t byte_count,
                                       int32_t *width, int32_t *height, char **error);
+/* clipping.c: facade slots 259/260. The read reports every layer's
+ * clipping-group role in image_layers order; the edit runs Group with
+ * Previous, Ungroup and Merge Group as one undo step each. */
+GlimsStatus glims_image_layer_clipping (GlimsEngine *e, GlimsImageID image,
+                                        GlimsLayerClipping *rows, int32_t capacity,
+                                        int32_t *count);
+GlimsStatus glims_layer_clipping_edit (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                       uint32_t command, GlimsItemID *result, char **error);
 GlimsStatus glims_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
                                       int32_t count, GlimsItemID reference, uint32_t alignment,
                                       char **error);

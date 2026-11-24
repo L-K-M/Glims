@@ -15779,6 +15779,465 @@ test_color_range (void)
     }
 }
 
+/* The clipping role report of slot 259, in image_layers order. */
+static int32_t
+clipping_rows (GlimsImageID image, GlimsLayerClipping *rows, int32_t capacity)
+{
+  int32_t count = 0;
+
+  for (int32_t i = 0; rows && i < capacity; i++)
+    rows[i].struct_size = sizeof rows[i];
+  if (api->image_layer_clipping (engine, image, rows, capacity, &count) != GLIMS_STATUS_OK)
+    return -1;
+  return count;
+}
+
+/* Clipping groups: a white-based fixture, Group with Previous, the role
+ * report, the composite (including opacity and blend mode), a second
+ * clipped layer joining the group, Ungroup of a middle child and of the
+ * base, Merge Group, every refusal, and an XCF round trip. */
+static void
+test_clipping_groups (const char *work)
+{
+  uint8_t base_pixels[8 * 2 * 4];
+  GlimsImageID image = 0;
+  GlimsItemID base = 0, red = 0, extra = 0, blue = 0, block = 0, group = 0, merged = 0;
+  GlimsItemID plain = 0;
+  GlimsLayerInfo rows[8];
+  GlimsLayerClipping clip[8];
+  int32_t n = 0, c = 0, before;
+  uint8_t pixel[4];
+  char *error = NULL;
+  char path[1024];
+  GlimsUndoInfo undo = { 0 };
+  GlimsFillSettings fill = { .struct_size = sizeof fill, .mode = GLIMS_FILL_SELECTION,
+                             .color = { 1, 0, 0, 1 }, .opacity = 1, .threshold = 0.1,
+                             .antialias = true };
+  GlimsLayerChange change = { .struct_size = sizeof change };
+
+  if ((size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, image_layer_clipping) + sizeof api->image_layer_clipping ||
+      ! api->image_layer_clipping ||
+      (size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, layer_clipping_edit) + sizeof api->layer_clipping_edit ||
+      ! api->layer_clipping_edit)
+    {
+      CHECK (false, "the adapter exports slots 259/260 image_layer_clipping/layer_clipping_edit");
+      return;
+    }
+
+  for (int y = 0; y < 2; y++)
+    for (int x = 0; x < 8; x++)
+      {
+        uint8_t *p = base_pixels + (y * 8 + x) * 4;
+
+        if (x < 4)
+          { p[0] = 255; p[1] = 255; p[2] = 255; p[3] = 255; }
+        else
+          { p[0] = 0; p[1] = 0; p[2] = 0; p[3] = 0; }
+      }
+
+  CHECK (api->image_from_pixels (engine, 8, 2, base_pixels, sizeof base_pixels, &image, NULL) ==
+         GLIMS_STATUS_OK && image != 0, "the clipping fixture exists");
+  if (! image)
+    return;
+  base = first_layer (image);
+  CHECK (base != 0, "the clipping fixture exposes its base layer");
+  if (! base)
+    return;
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &red, NULL) ==
+         GLIMS_STATUS_OK && red != 0, "the clipped layer exists");
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK,
+         "the clipped layer is filled red");
+
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 2 && clip[0].role == GLIMS_CLIPPING_NONE && clip[1].role == GLIMS_CLIPPING_NONE,
+         "a flat pair reports no clipping (%d rows)", c);
+
+  /* Every refusal changes nothing. */
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, 123456, red, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                   &group, NULL) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown image is NOT_FOUND");
+  CHECK (api->layer_clipping_edit (engine, image, 9999, GLIMS_CLIPPING_UNGROUP,
+                                   NULL, &error) == GLIMS_STATUS_NOT_FOUND,
+         "an unknown layer is NOT_FOUND");
+  api->free_string (error); error = NULL;
+  CHECK (api->layer_clipping_edit (engine, image, red, 99, NULL, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT,
+         "an unknown command is INVALID_ARGUMENT");
+  api->free_string (error); error = NULL;
+  CHECK (api->layer_clipping_edit (engine, image, base, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                   &group, &error) == GLIMS_STATUS_FAILED && error,
+         "the bottom layer has nothing below to clip to (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (api->layer_clipping_edit (engine, image, red, GLIMS_CLIPPING_UNGROUP,
+                                   NULL, &error) == GLIMS_STATUS_FAILED && error,
+         "an unclipped layer refuses Ungroup (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (api->layer_clipping_edit (engine, image, red, GLIMS_CLIPPING_MERGE_GROUP,
+                                   &merged, &error) == GLIMS_STATUS_FAILED && error,
+         "a layer outside a group refuses Merge Group (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (image) == before, "every refusal adds no undo step");
+
+  CHECK (api->create_group (engine, image, 0, 0, "Block", &block, NULL) == GLIMS_STATUS_OK &&
+         block != 0, "the blocking group exists");
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, block, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                   &group, &error) == GLIMS_STATUS_FAILED && error,
+         "a layer group cannot be clipped (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (image) == before, "the group refusal changes nothing");
+  CHECK (api->layer_command (engine, image, block, GLIMS_LAYER_DELETE, NULL, NULL) ==
+         GLIMS_STATUS_OK, "the blocking group is removed");
+
+  /* Group with Previous. */
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, red, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                   &group, &error) == GLIMS_STATUS_OK && group != 0,
+         "Group with Previous succeeds%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (image) == before + 1 &&
+         api->image_undo_info (engine, image, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Group with Previous") == 0,
+         "Group with Previous is one undo step named after itself (next: %s)", undo.next_undo);
+
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+         "the clipped tree reads");
+  CHECK (n == 3 && rows[0].id == group && rows[0].kind == GLIMS_LAYER_GROUP &&
+         strcmp (rows[0].name, "Clipping Group") == 0 &&
+         rows[1].id == red && rows[1].parent == group && rows[1].depth == 1 &&
+         rows[2].id == base && rows[2].parent == group && rows[2].depth == 1,
+         "the group holds the clipped layer above the base (n=%d)", n);
+
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 3 &&
+         clip[0].layer == group && clip[0].role == GLIMS_CLIPPING_GROUP &&
+         clip[0].base == base && clip[0].group == group &&
+         clip[1].layer == red && clip[1].role == GLIMS_CLIPPING_CLIPPED &&
+         clip[1].base == base && clip[1].group == group &&
+         clip[2].layer == base && clip[2].role == GLIMS_CLIPPING_BASE &&
+         clip[2].base == base && clip[2].group == group,
+         "the role report names the group, its clipped child and its base");
+
+  render_pixel (image, 0, 0, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255,
+         "the clipped red shows over the base's opaque half (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  render_pixel (image, 7, 0, pixel);
+  CHECK (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0,
+         "nothing shows where the base is transparent (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+
+  /* Undo restores the flat tree and pixels; redo rebuilds the group. */
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK &&
+         n == 2 && rows[0].id == red && rows[0].depth == 0 &&
+         rows[1].id == base && rows[1].depth == 0,
+         "undo restores the two top-level layers");
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 2 && clip[0].role == GLIMS_CLIPPING_NONE && clip[1].role == GLIMS_CLIPPING_NONE,
+         "undo clears the clipping roles");
+  render_pixel (image, 7, 0, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255,
+         "undo restores the unclipped red everywhere");
+  CHECK (api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == before + 1,
+         "redo rebuilds the clipping group");
+
+  /* Clipping an already clipped layer changes nothing. */
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, red, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                   NULL, &error) == GLIMS_STATUS_FAILED && error,
+         "an already clipped layer refuses Group with Previous (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (image) == before, "the already-clipped refusal adds no undo step");
+
+  /* The clipped layer's opacity blends in linear light inside the clip. */
+  change.properties = GLIMS_LAYER_OPACITY;
+  change.opacity    = 0.5;
+  CHECK (api->layer_change (engine, image, red, &change, NULL) == GLIMS_STATUS_OK,
+         "the clipped layer's opacity changes");
+  render_pixel (image, 0, 0, pixel);
+  CHECK (pixel[0] == 255 && pixel[3] == 255 &&
+         pixel[1] > 184 && pixel[1] < 192 && pixel[2] > 184 && pixel[2] < 192,
+         "half opacity blends in linear light inside the clip (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  change.opacity = 1.0;
+  CHECK (api->layer_change (engine, image, red, &change, NULL) == GLIMS_STATUS_OK,
+         "the clipped layer's opacity resets");
+
+  /* A non-normal blend mode still composites through the clip. */
+  change.properties = GLIMS_LAYER_MODE;
+  strcpy (change.mode, "difference");
+  CHECK (api->layer_change (engine, image, red, &change, NULL) == GLIMS_STATUS_OK,
+         "the clipped layer's blend mode changes");
+  render_pixel (image, 0, 0, pixel);
+  CHECK (pixel[0] == 0 && pixel[1] == 255 && pixel[2] == 255 && pixel[3] == 255,
+         "difference over white composites cyan inside the clip (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 3 && clip[1].layer == red && clip[1].role == GLIMS_CLIPPING_CLIPPED,
+         "a blend mode change keeps the layer clipped");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         clipping_rows (image, clip, 8) == 3 && clip[1].layer == red &&
+         clip[1].role == GLIMS_CLIPPING_CLIPPED &&
+         api->image_redo (engine, image) == GLIMS_STATUS_OK &&
+         clipping_rows (image, clip, 8) == 3 && clip[1].layer == red &&
+         clip[1].role == GLIMS_CLIPPING_CLIPPED,
+         "undo and redo of the blend mode keep the clip");
+  strcpy (change.mode, "normal");
+  CHECK (api->layer_change (engine, image, red, &change, NULL) == GLIMS_STATUS_OK,
+         "the clipped layer's mode resets");
+
+  /* The base's opacity scales the whole group's alpha. */
+  change.properties = GLIMS_LAYER_OPACITY;
+  change.opacity    = 0.5;
+  CHECK (api->layer_change (engine, image, base, &change, NULL) == GLIMS_STATUS_OK,
+         "the base opacity changes");
+  render_pixel (image, 0, 0, pixel);
+  CHECK (abs (pixel[0] - pixel[3]) <= 2 && pixel[3] > 124 && pixel[3] < 132,
+         "the base opacity scales the whole group's alpha (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  change.opacity = 1.0;
+  CHECK (api->layer_change (engine, image, base, &change, NULL) == GLIMS_STATUS_OK,
+         "the base opacity resets");
+
+  /* A second layer joins the same group when grouped inside it. */
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &extra, NULL) ==
+         GLIMS_STATUS_OK && extra != 0, "the second clipped layer exists");
+  fill.color = (GlimsColor) { 0, 1, 0, 1 };
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK,
+         "the second clipped layer is filled green");
+  CHECK (api->reparent_layer (engine, image, extra, group, 0, NULL) == GLIMS_STATUS_OK,
+         "the second layer moves into the clipping group");
+  before = undo_depth (image);
+  {
+    GlimsItemID same = 0;
+
+    CHECK (api->layer_clipping_edit (engine, image, extra, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                     &same, NULL) == GLIMS_STATUS_OK && same == group,
+           "Group with Previous joins the existing clipping group");
+    CHECK (undo_depth (image) == before + 1, "joining the group is one undo step");
+  }
+
+  /* A third layer above them makes the middle Ungroup partial. */
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &blue, NULL) ==
+         GLIMS_STATUS_OK && blue != 0, "the third clipped layer exists");
+  fill.color = (GlimsColor) { 0, 0, 1, 1 };
+  CHECK (api->fill (engine, image, (GlimsPoint) { 0, 0 }, &fill, NULL) == GLIMS_STATUS_OK,
+         "the third clipped layer is filled blue");
+  CHECK (api->reparent_layer (engine, image, blue, 0, 0, NULL) == GLIMS_STATUS_OK &&
+         api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK &&
+         n >= 2 && rows[0].id == blue && rows[0].depth == 0 && rows[1].id == group,
+         "the third layer sits directly above the clipping group");
+  {
+    GlimsItemID same = 0;
+
+    before = undo_depth (image);
+    CHECK (api->layer_clipping_edit (engine, image, blue, GLIMS_CLIPPING_GROUP_WITH_PREVIOUS,
+                                     &same, NULL) == GLIMS_STATUS_OK && same == group &&
+           undo_depth (image) == before + 1,
+           "from directly above, the third layer joins the group as one undo step");
+  }
+
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+         "the three-clip tree reads");
+  CHECK (n == 5 && rows[1].id == blue && rows[2].id == extra &&
+         rows[3].id == red && rows[4].id == base,
+         "the group holds three clipped layers above the base (n=%d)", n);
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 5 && clip[1].role == GLIMS_CLIPPING_CLIPPED &&
+         clip[2].role == GLIMS_CLIPPING_CLIPPED && clip[3].role == GLIMS_CLIPPING_CLIPPED &&
+         clip[4].role == GLIMS_CLIPPING_BASE,
+         "all three upper children report clipped");
+
+  /* Only layers that would move are checked for a position lock. */
+  api->set_layer_locks (engine, image, blue, GLIMS_LOCK_POSITION, GLIMS_LOCK_POSITION, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, extra, GLIMS_CLIPPING_UNGROUP,
+                                   NULL, &error) == GLIMS_STATUS_LOCKED &&
+         undo_depth (image) == before,
+         "a position-locked layer that would move refuses Ungroup with no change");
+  api->free_string (error); error = NULL;
+  api->set_layer_locks (engine, image, blue, GLIMS_LOCK_POSITION, 0, NULL);
+  api->set_layer_locks (engine, image, red, GLIMS_LOCK_POSITION, GLIMS_LOCK_POSITION, NULL);
+
+  /* Ungroup of the middle clipped layer releases it and those above; the
+   * position-locked red layer below it stays where it is. */
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, extra, GLIMS_CLIPPING_UNGROUP,
+                                   NULL, &error) == GLIMS_STATUS_OK,
+         "Ungroup of the middle clipped layer succeeds%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (image) == before + 1 &&
+         api->image_undo_info (engine, image, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Ungroup") == 0,
+         "Ungroup is one undo step named Ungroup (next: %s)", undo.next_undo);
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+         "the ungrouped tree reads");
+  CHECK (n == 5 && rows[0].id == blue && rows[0].depth == 0 &&
+         rows[1].id == extra && rows[1].depth == 0 &&
+         rows[2].id == group && rows[3].id == red && rows[4].id == base,
+         "the released layers move out above the surviving group (n=%d)", n);
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 5 && clip[0].role == GLIMS_CLIPPING_NONE && clip[1].role == GLIMS_CLIPPING_NONE &&
+         clip[2].role == GLIMS_CLIPPING_GROUP && clip[3].role == GLIMS_CLIPPING_CLIPPED &&
+         clip[4].role == GLIMS_CLIPPING_BASE,
+         "the released layers keep no clipping role");
+  render_pixel (image, 7, 0, pixel);
+  CHECK (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 255 && pixel[3] == 255,
+         "the released blue layer shows unclipped over the transparent half");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "undo restores the four-member group");
+  api->set_layer_locks (engine, image, red, GLIMS_LOCK_POSITION, 0, NULL);
+
+  /* A layer inside the group that is not clipped never goes with a
+   * dissolved group: Ungroup of the base refuses and changes nothing. */
+  before = undo_depth (image);
+  CHECK (api->layer_command (engine, image, 0, GLIMS_LAYER_NEW, &plain, NULL) ==
+         GLIMS_STATUS_OK && plain != 0 &&
+         api->reparent_layer (engine, image, plain, group, 0, NULL) == GLIMS_STATUS_OK,
+         "an unclipped layer joins the clipping group");
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 6 && clip[1].layer == plain && clip[1].role == GLIMS_CLIPPING_NONE &&
+         clip[5].layer == base && clip[5].role == GLIMS_CLIPPING_BASE,
+         "the unclipped member has no role while the group stays a clipping group");
+  {
+    int32_t depth = undo_depth (image);
+
+    CHECK (api->layer_clipping_edit (engine, image, base, GLIMS_CLIPPING_UNGROUP,
+                                     NULL, &error) == GLIMS_STATUS_FAILED &&
+           error && strstr (error, "not clipped") && undo_depth (image) == depth,
+           "Ungroup refuses to dissolve a group holding an unclipped layer (%s)",
+           error ? error : "");
+    api->free_string (error); error = NULL;
+  }
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK && n == 6 &&
+         rows[1].id == plain && rows[1].parent == group,
+         "the refused Ungroup keeps the unclipped layer in place (n=%d)", n);
+  while (undo_depth (image) > before)
+    if (api->image_undo (engine, image) != GLIMS_STATUS_OK)
+      break;
+  CHECK (undo_depth (image) == before &&
+         api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK && n == 5,
+         "undo removes the unclipped layer again (n=%d)", n);
+
+  /* Ungroup of the base dissolves the whole group. */
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, base, GLIMS_CLIPPING_UNGROUP,
+                                   NULL, &error) == GLIMS_STATUS_OK,
+         "Ungroup of the base succeeds%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (image) == before + 1, "dissolving is one undo step");
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+         "the dissolved tree reads");
+  CHECK (n == 4 && rows[0].id == blue && rows[0].depth == 0 &&
+         rows[1].id == extra && rows[1].depth == 0 &&
+         rows[2].id == red && rows[2].depth == 0 &&
+         rows[3].id == base && rows[3].depth == 0,
+         "the dissolved group leaves four top-level layers (n=%d)", n);
+  c = clipping_rows (image, clip, 8);
+  CHECK (c == 4 && clip[0].role == GLIMS_CLIPPING_NONE && clip[1].role == GLIMS_CLIPPING_NONE &&
+         clip[2].role == GLIMS_CLIPPING_NONE && clip[3].role == GLIMS_CLIPPING_NONE,
+         "the dissolved group leaves no clipping roles");
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "undo restores the group");
+
+  /* Ungroup with the group row acts as Ungroup of the base. */
+  CHECK (api->layer_clipping_edit (engine, image, group, GLIMS_CLIPPING_UNGROUP,
+                                   NULL, &error) == GLIMS_STATUS_OK,
+         "Ungroup of the group row succeeds%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+         "the tree after the group row Ungroup reads");
+  CHECK (n == 4 && rows[0].id == blue && rows[0].depth == 0 &&
+         rows[1].id == extra && rows[1].depth == 0 &&
+         rows[2].id == red && rows[2].depth == 0 &&
+         rows[3].id == base && rows[3].depth == 0,
+         "the group row Ungroup dissolves the group too (n=%d)", n);
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK,
+         "undo restores the group again");
+
+  /* XCF keeps the group and the roles. */
+  snprintf (path, sizeof path, "%s/clipping-groups.xcf", work);
+  CHECK (api->image_save (engine, image, path, NULL) == GLIMS_STATUS_OK &&
+         file_size (path) > 0, "the clipping group saves as XCF");
+  {
+    GlimsImageID reopened = 0;
+
+    CHECK (api->image_open (engine, path, &reopened, NULL) == GLIMS_STATUS_OK &&
+           reopened != 0, "the XCF reopens");
+    if (reopened)
+      {
+        CHECK (api->image_layers (engine, reopened, rows, 8, &n) == GLIMS_STATUS_OK,
+               "the reopened tree reads");
+        c = clipping_rows (reopened, clip, 8);
+        CHECK (n == 5 && rows[0].kind == GLIMS_LAYER_GROUP &&
+               rows[1].parent == rows[0].id && rows[2].parent == rows[0].id &&
+               rows[3].parent == rows[0].id && rows[4].parent == rows[0].id,
+               "the reopened tree keeps the group and its four children");
+        CHECK (c == 5 && clip[0].role == GLIMS_CLIPPING_GROUP &&
+               clip[1].role == GLIMS_CLIPPING_CLIPPED &&
+               clip[2].role == GLIMS_CLIPPING_CLIPPED &&
+               clip[3].role == GLIMS_CLIPPING_CLIPPED &&
+               clip[4].role == GLIMS_CLIPPING_BASE &&
+               clip[4].base == clip[3].base && clip[4].group == clip[0].group,
+               "the reopened roles survive the XCF round trip");
+        api->image_close (engine, reopened);
+      }
+  }
+
+  /* Merge Group bakes the group into one layer named after the base. */
+  api->set_layer_locks (engine, image, red, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION,
+                        GLIMS_LOCK_PIXELS, NULL);
+  before = undo_depth (image);
+  CHECK (api->layer_clipping_edit (engine, image, group, GLIMS_CLIPPING_MERGE_GROUP,
+                                   &merged, &error) == GLIMS_STATUS_LOCKED &&
+         merged == 0 && undo_depth (image) == before,
+         "a locked member refuses Merge Group with no change (%s)",
+         error ? error : "");
+  api->free_string (error); error = NULL;
+  api->set_layer_locks (engine, image, red, GLIMS_LOCK_PIXELS | GLIMS_LOCK_POSITION, 0, NULL);
+  before = undo_depth (image);
+
+  {
+    char base_name[256] = "";
+
+    CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+           "the tree before Merge Group reads");
+    for (int32_t i = 0; i < n; i++)
+      if (rows[i].id == base)
+        snprintf (base_name, sizeof base_name, "%s", rows[i].name);
+    CHECK (api->layer_clipping_edit (engine, image, group, GLIMS_CLIPPING_MERGE_GROUP,
+                                     &merged, &error) == GLIMS_STATUS_OK && merged != 0,
+           "Merge Group succeeds%s%s", error ? ": " : "", error ? error : "");
+    api->free_string (error); error = NULL;
+    CHECK (undo_depth (image) == before + 1 &&
+           api->image_undo_info (engine, image, &undo) == GLIMS_STATUS_OK &&
+           strcmp (undo.next_undo, "Merge Clipping Group") == 0,
+           "Merge Group is one undo step named Merge Clipping Group (next: %s)",
+           undo.next_undo);
+    CHECK (api->image_layers (engine, image, rows, 8, &n) == GLIMS_STATUS_OK,
+           "the merged tree reads");
+    CHECK (n == 1 && rows[0].id == merged && strcmp (rows[0].name, base_name) == 0,
+           "the merged layer replaces the group and takes the base's name (n=%d, %s)",
+           n, rows[0].name);
+    render_pixel (image, 0, 0, pixel);
+    CHECK (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 255 && pixel[3] == 255,
+           "the merged layer keeps the topmost clipped color over the base (%d,%d,%d,%d)",
+           pixel[0], pixel[1], pixel[2], pixel[3]);
+    render_pixel (image, 7, 0, pixel);
+    CHECK (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0,
+           "the merged layer stays transparent where the base was (%d,%d,%d,%d)",
+           pixel[0], pixel[1], pixel[2], pixel[3]);
+  }
+
+  api->image_close (engine, image);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -17891,6 +18350,7 @@ main (int argc, char **argv)
   test_edit_purge ();
   test_image_variations ();
   test_color_range ();
+  test_clipping_groups (argv[2]);
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

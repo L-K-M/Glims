@@ -23,8 +23,8 @@ struct RecorderFileValue: Equatable {
         let ordinal: Int
         let outcome: Outcome
         /// A successful layer-creating command names the symbol its new
-        /// layer was described under, so later rows can bind it. Only
-        /// Duplicate Layers and Merge Visible produce a symbol.
+        /// layer was described under, so later rows can bind it. Duplicate
+        /// Layers, Merge Visible and Merge Group produce a symbol.
         let produces: UUID?
 
         init(ordinal: Int, outcome: Outcome, produces: UUID? = nil) {
@@ -222,6 +222,9 @@ enum RecorderFileCommand: Equatable {
     /// Glims' owned Layer > Matting operation tags, not native enum ordinals.
     enum Matting: String { case defringe, removeBlackMatte, removeWhiteMatte }
 
+    /// Glims' owned clipping-group command tags, not native enum ordinals.
+    enum Clipping: String { case groupWithPrevious, ungroup, mergeGroup }
+
     /// Native scalar edits use paper intensity: zero is full ink, one paper.
     struct InkEdit: Equatable {
         enum Operation: String { case fill, clear, invert }
@@ -377,6 +380,10 @@ enum RecorderFileCommand: Equatable {
     /// (nil for the matte commands). The explicit layer is the record's
     /// `layer` binding.
     case matting(Matting, width: Int?)
+    /// Layer > Group with Previous, Ungroup and Merge Group: the owned
+    /// command tag. The explicit layer is the record's `layer` binding;
+    /// Merge Group also names the merged layer as its produced symbol.
+    case clipping(Clipping)
     /// Select ▸ Similar: threshold, antialiasing and sample-merged. The
     /// sample-merged form needs the `none` binding; the drawable form
     /// requires the captured context.
@@ -442,7 +449,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .applyVariations: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping, .applyVariations: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectSimilar(_, _, let sampleMerged): return sampleMerged
         case .selectCommand(.fromAlpha, _): return false
@@ -545,6 +552,26 @@ extension RecorderFileCommand.LayerInterpolation {
         case .cubic: return .cubic
         case .noHalo: return .noHalo
         case .loHalo: return .loHalo
+        }
+    }
+}
+
+extension RecorderFileCommand.Clipping {
+    /// The owned file name of a facade clipping command. Never store the
+    /// raw enum value: upstream can renumber it in a micro release.
+    init(_ value: EngineSession.ClippingCommand) {
+        switch value {
+        case .groupWithPrevious: self = .groupWithPrevious
+        case .ungroup: self = .ungroup
+        case .mergeGroup: self = .mergeGroup
+        }
+    }
+
+    var engine: EngineSession.ClippingCommand {
+        switch self {
+        case .groupWithPrevious: return .groupWithPrevious
+        case .ungroup: return .ungroup
+        case .mergeGroup: return .mergeGroup
         }
     }
 }

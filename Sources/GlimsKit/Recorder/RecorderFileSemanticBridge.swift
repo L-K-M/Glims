@@ -143,6 +143,8 @@ enum RecorderFileSemanticBridge {
             case .removeWhiteMatte: value = .removeWhiteMatte
             }
             return .matting(value, width: width ?? 0)
+        case .clipping(let command):
+            return .clipping(command.engine)
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             return .selectSimilar(threshold: threshold, antialias: antialias, sampleMerged: sampleMerged)
         case .layerProperties(let value):

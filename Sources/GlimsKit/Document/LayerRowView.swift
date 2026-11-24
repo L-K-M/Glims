@@ -37,9 +37,12 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     }
 
     /// The row's height; the palette's outline uses it too.
-    static let rowHeight: CGFloat = 22
+    nonisolated static let rowHeight: CGFloat = 22
     /// The thumbnails' square size inside the row.
     static let thumbnailSide: CGFloat = 20
+    /// How close to the bottom edge an Option-click still counts as the
+    /// row's lower boundary, the clipping toggle.
+    nonisolated static let lowerBoundaryHeight: CGFloat = 5
 
     let checkbox: NSButton
     /// The layer's color thumbnail; its ring marks the layer as the
@@ -51,12 +54,18 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
     let nameField: NSTextField
     /// The lock badge; nil when nothing locks the layer.
     let lockView: NSImageView?
+    /// The clipping marker before the name; hidden unless the layer is
+    /// clipped to the layer below.
+    let clipMarker: NSImageView
     /// Called after a name edit ends, so the palette can catch the list up
     /// after reloads were held off while typing.
     var onEditEnded: (() -> Void)?
     /// Called with a thumbnail pick and whether Option was held — the
     /// mask thumbnail's Option-click is View Mask, not Edit Mask.
     var onThumbnail: ((ThumbnailPick, Bool) -> Void)?
+    /// Called when Option-click lands on the row's lower boundary, the
+    /// clipping toggle between this row and the row below it.
+    var onLowerBoundaryOptionClick: (() -> Void)?
     /// Where the Option check reads; tests substitute a fixed answer
     /// because no event is being dispatched under XCTest.
     var optionIsDown: () -> Bool = {
@@ -129,6 +138,14 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
         }
         self.lockView = badge
 
+        let clipMarker = NSImageView()
+        clipMarker.image = NSImage(systemSymbolName: ClippingRowPresentation.markerSymbol,
+                                   accessibilityDescription: ClippingRowPresentation.markerAccessibility)
+        clipMarker.contentTintColor = .secondaryLabelColor
+        clipMarker.isHidden = true
+        clipMarker.widthAnchor.constraint(equalToConstant: 12).isActive = true
+        self.clipMarker = clipMarker
+
         super.init(frame: .zero)
 
         checkbox.target = self
@@ -143,7 +160,7 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
         alignment = .centerY
         spacing = 2
         edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 4)
-        for view in [checkbox, layerThumb, maskThumb, badge].compactMap({ $0 }) {
+        for view in [checkbox, layerThumb, maskThumb, badge, clipMarker].compactMap({ $0 }) {
             addArrangedSubview(view)
         }
         addArrangedSubview(nameField)
@@ -155,6 +172,49 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
             addArrangedSubview(detailsLabel)
         }
         heightAnchor.constraint(equalToConstant: Self.rowHeight).isActive = true
+
+        applyClippingRole(layer.clipping.role)
+    }
+
+    /// The row's clipping presentation: a clipped layer carries the marker
+    /// and the base layer's name is underlined, so the eye can read the
+    /// group without opening it.
+    func applyClippingRole(_ role: EngineSession.LayerClipping.Role) {
+        clipMarker.isHidden = !ClippingRowPresentation.showsMarker(role: role)
+        let attributes: [NSAttributedString.Key: Any]
+        if ClippingRowPresentation.underlinesName(role: role) {
+            attributes = [.underlineStyle: NSUnderlineStyle.single.rawValue]
+        } else {
+            attributes = [:]
+        }
+        nameField.attributedStringValue = NSAttributedString(string: shownName, attributes: attributes)
+    }
+
+    /// Whether a point in the row's own coordinates lies in the strip along
+    /// its lower edge that Option-click uses to toggle clipping.
+    nonisolated static func isInLowerBoundary(_ point: NSPoint, bounds: NSRect) -> Bool {
+        point.y >= bounds.minY && point.y <= bounds.minY + lowerBoundaryHeight
+    }
+
+    /// The checkbox, thumbnails and name field reach into the lower strip,
+    /// so an Option-click there would go to them. The row claims it first.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if onLowerBoundaryOptionClick != nil,
+           let event = NSApp.currentEvent, event.type == .leftMouseDown,
+           event.modifierFlags.contains(.option) {
+            let local = superview.map { convert(point, from: $0) } ?? point
+            if bounds.contains(local), Self.isInLowerBoundary(local, bounds: bounds) { return self }
+        }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.option),
+           Self.isInLowerBoundary(convert(event.locationInWindow, from: nil), bounds: bounds) {
+            onLowerBoundaryOptionClick?()
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     @available(*, unavailable)
@@ -284,6 +344,20 @@ final class LayerRowView: NSStackView, NSTextFieldDelegate {
               let field = editor.delegate as? NSTextField else { return false }
         return field.isDescendant(of: outline)
     }
+}
+
+/// The Layers palette's clipping presentation: which rows carry the clip
+/// marker and which name is underlined. Factored out so the decisions are
+/// pinned without a view.
+enum ClippingRowPresentation {
+    /// The SF Symbol drawn before a clipped layer's name.
+    static let markerSymbol = "arrow.turn.down.right"
+    /// What VoiceOver hears for the marker.
+    static let markerAccessibility = "Clipped to the layer below"
+
+    static func showsMarker(role: EngineSession.LayerClipping.Role) -> Bool { role == .clipped }
+
+    static func underlinesName(role: EngineSession.LayerClipping.Role) -> Bool { role == .base }
 }
 
 /// A row's drawable thumbnail: the image aspect-fit in the button, a

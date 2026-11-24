@@ -1228,7 +1228,18 @@ glims_layer_change (GlimsEngine            *engine,
                                    : "That blend mode is for painting, not for layers.");
           return GLIMS_STATUS_INVALID_ARGUMENT;
         }
-      gimp_layer_set_mode (layer, mode->value, TRUE);
+      {
+        /* GIMP resets the composite mode with every blend mode change,
+         * which would drop a clipped layer out of its clipping group.
+         * The mode undo records the composite mode too, so setting it
+         * back without its own undo step keeps undo and redo exact. */
+        gboolean clipped = gimp_layer_get_composite_mode (layer) ==
+                           GIMP_LAYER_COMPOSITE_CLIP_TO_BACKDROP;
+
+        gimp_layer_set_mode (layer, mode->value, TRUE);
+        if (clipped && gimp_layer_mode_is_composite_mode_mutable (mode->value))
+          gimp_layer_set_composite_mode (layer, GIMP_LAYER_COMPOSITE_CLIP_TO_BACKDROP, FALSE);
+      }
     }
   if ((change->properties & GLIMS_LAYER_NAME) &&
       ! gimp_item_rename (GIMP_ITEM (layer), change->name, &gerror))

@@ -43,7 +43,10 @@ enum RecorderFileCodec {
     static let variationsVersion = 35
     /// Select > Color Range; renumber if another branch takes 36 first.
     static let colorRangeVersion = 36
-    static let latestVersion = colorRangeVersion
+    /// Layer > Group with Previous, Ungroup and Merge Group; renumber if
+    /// another branch takes 37 first.
+    static let clippingVersion = 37
+    static let latestVersion = clippingVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -172,6 +175,7 @@ enum RecorderFileCodec {
         var hasMatting = false
         var hasVariations = false
         var hasColorRange = false
+        var hasClipping = false
         var usedSymbols: Set<UUID> = []
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
@@ -210,6 +214,7 @@ enum RecorderFileCodec {
                 if case .matting = command { hasMatting = true }
                 if case .applyVariations = command { hasVariations = true }
                 if case .colorRange = command { hasColorRange = true }
+                if case .clipping = command { hasClipping = true }
                 if case .moveLayer = command { hasLayerEdits = true }
                 if case .duplicateLayers = command { hasLayerEdits = true }
                 if case .deleteLayers = command { hasLayerEdits = true }
@@ -265,8 +270,9 @@ enum RecorderFileCodec {
                 // same symbol twice is refused the same way.
                 usedSymbols.formUnion(try referencedSymbols(binding))
                 if let produced = try row.optional("produces").map({ try uuid($0) }) {
-                    guard command == .duplicateLayers || command == .mergeVisible else {
-                        throw RecorderFileError.invalid("Only Duplicate Layers and Merge Visible produce a layer.")
+                    guard command == .duplicateLayers || command == .mergeVisible
+                        || command == .clipping(.mergeGroup) else {
+                        throw RecorderFileError.invalid("Only Duplicate Layers, Merge Visible and Merge Group produce a layer.")
                     }
                     guard let description = descriptions[produced] else {
                         throw RecorderFileError.invalid("A produced symbol is missing.")
@@ -279,8 +285,9 @@ enum RecorderFileCodec {
                     }
                     produces = produced
                 } else {
-                    guard command != .duplicateLayers, command != .mergeVisible else {
-                        throw RecorderFileError.invalid("Duplicate Layers and Merge Visible need a produced layer symbol.")
+                    guard command != .duplicateLayers, command != .mergeVisible,
+                          command != .clipping(.mergeGroup) else {
+                        throw RecorderFileError.invalid("Duplicate Layers, Merge Visible and Merge Group need a produced layer symbol.")
                     }
                     produces = nil
                 }
@@ -365,6 +372,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == colorRangeVersion, !hasColorRange {
             throw RecorderFileError.invalid("Version 36 requires a successful Color Range command.")
+        }
+        if fileVersion == clippingVersion, !hasClipping {
+            throw RecorderFileError.invalid("Version 37 requires a successful clipping command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -929,6 +939,15 @@ enum RecorderFileCodec {
                 }
             }
             return .matting(operation, width: width)
+        case "clipping":
+            guard version >= clippingVersion else {
+                throw RecorderFileError.invalid("A clipping command needs recording version 37.")
+            }
+            let value = try Object(node, required: ["tag", "command"])
+            guard let command = RecorderFileCommand.Clipping(rawValue: try string(value.get("command"))) else {
+                throw RecorderFileError.invalid("Unknown clipping command.")
+            }
+            return .clipping(command)
         case "layerProperties":
             let value = try Object(node, required: ["tag", "properties"])
             let properties = try Object(value.get("properties"), required: [], optional: ["name", "visible", "opacity", "mode"])
@@ -1459,6 +1478,9 @@ enum RecorderFileCodec {
             return
         case (.matting, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A matting command needs a layer description.") }
+            return
+        case (.clipping, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A clipping command needs a layer description.") }
             return
         case (.applyVariations, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("A Variations command needs a layer description.") }

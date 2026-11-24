@@ -1509,6 +1509,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
     @objc func removeBlackMatte(_ sender: Any?) { imageDocument.applyMatting(.removeBlackMatte, width: 0) }
     @objc func removeWhiteMatte(_ sender: Any?) { imageDocument.applyMatting(.removeWhiteMatte, width: 0) }
+    @objc func groupWithPrevious(_ sender: Any?) { imageDocument.clippingEdit(.groupWithPrevious) }
+    @objc func ungroup(_ sender: Any?) { imageDocument.clippingEdit(.ungroup) }
+    @objc func mergeGroup(_ sender: Any?) { imageDocument.clippingEdit(.mergeGroup) }
     @objc func mergeDown(_ sender: Any?) { imageDocument.layerCommand(.mergeDown) }
     @objc func flattenImage(_ sender: Any?) { imageDocument.layerCommand(.flatten) }
     @objc func mergeVisible(_ sender: Any?) { imageDocument.mergeVisible() }
@@ -3208,6 +3211,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(rotateImageArbitrary(_:)):
             return !editingBlocked && !previewBusy && imageDocument.canRotateArbitrary
                 && !imageDocument.floatingState.isActive
+        case #selector(groupWithPrevious(_:)), #selector(ungroup(_:)), #selector(mergeGroup(_:)):
+            // The clipping commands carry their own structural refusals;
+            // the tooltip shows why the cached state cannot run one.
+            guard !editingBlocked, !previewBusy else { return false }
+            let command: EngineSession.ClippingCommand
+            switch menuItem.action {
+            case #selector(groupWithPrevious(_:)): command = .groupWithPrevious
+            case #selector(ungroup(_:)): command = .ungroup
+            default: command = .mergeGroup
+            }
+            let reason = imageDocument.clippingRefusal(command)
+            menuItem.toolTip = reason
+            return reason == nil
         case #selector(mergeVisible(_:)):
             // The whole stack, not a layer: a multi-selection does not
             // matter, two visible top-level layers do.

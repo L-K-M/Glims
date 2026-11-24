@@ -282,6 +282,10 @@ final class ImageDocument {
     /// Image Size needs it.
     private(set) var resolution: EngineSession.ImageResolution?
     private(set) var layers: [EngineSession.Layer] = []
+    /// Every layer's clipping-group role, read once with the layer list
+    /// when the adapter has slot 259. Empty on older adapters and Lab
+    /// documents.
+    private(set) var layerClipping: [Int32: EngineSession.LayerClipping] = [:]
     /// Identities captured in the same native read as the displayed Lab rows.
     private(set) var labLayerIdentities: [Int32: UUID] = [:]
     private(set) var undoInfo = EngineSession.UndoInfo(undoCount: 0, redoCount: 0, nextUndo: "", nextRedo: "")
@@ -710,6 +714,18 @@ final class ImageDocument {
             labLayerIdentities = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.layer.id, $0.identity) })
         } else {
             layers = try session.layers(image)
+        }
+        // One clipping report per reload; the palette reads it from the
+        // cached rows rather than calling per row.
+        layerClipping = [:]
+        if storage.layout != .layeredLab, session.supportsClipping,
+           let clipping = try? session.layerClipping(image) {
+            layerClipping = clipping
+            layers = layers.map { row in
+                var row = row
+                row.clipping = clipping[row.id] ?? .none
+                return row
+            }
         }
         var locks: [Int32: EngineSession.LayerLockState] = [:]
         var masks: [Int32: EngineSession.MaskState] = [:]
@@ -4857,6 +4873,81 @@ final class ImageDocument {
         }
     }
 
+    // MARK: Clipping groups
+
+    /// Layer > Group with Previous, Ungroup and Merge Group: why
+    /// `command` cannot run on `layer` (nil: the active layer) now, or
+    /// nil. Reads only cached state, so menu validation never calls the
+    /// engine. The engine revalidates the fresh target, locks and the
+    /// structural rules, which the cache cannot see. Without an explicit
+    /// layer the single-selection policy gates the command.
+    func clippingRefusal(_ command: EngineSession.ClippingCommand, layer: Int32? = nil) -> String? {
+        guard session.supportsClipping else {
+            return "This image engine cannot edit clipping groups."
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "\(command.title) is available for ordinary layered images only."
+        }
+        guard colorInfo.mode != .indexed else {
+            return "Convert the image to RGB or grayscale before changing clipping groups."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive {
+            return "Anchor or cancel the floating selection first."
+        }
+        let target: Int32
+        if let layer {
+            guard layers.contains(where: { $0.id == layer }) else { return "Select a layer first." }
+            target = layer
+        } else {
+            if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: command.title) {
+                return reason
+            }
+            guard let active = activeLayer ?? selectedLayerIDs.first else { return "Select a layer first." }
+            target = active
+        }
+        return ClippingCommandRules.refusal(command: command, layerID: target, layers: layers)
+    }
+
+    /// Layer > Group with Previous, Ungroup or Merge Group on `layer`
+    /// (nil: the active layer), as one queued command and one undo step.
+    /// Merge Group's merged layer becomes a produced symbol for later
+    /// recorded rows. Recorder captures the owned command tag and binds
+    /// the explicit layer.
+    func clippingEdit(_ command: EngineSession.ClippingCommand, layer: Int32? = nil) {
+        if let reason = clippingRefusal(command, layer: layer) {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileTargetPending() else { return }
+        endPendingUserEdits()
+        guard let target = layer ?? activeLayer ?? selectedLayerIDs.first else { return }
+        let semantic = SemanticImageCommand.clipping(command)
+        let capture = reserveRecordedCommand(semantic, explicitLayer: target, fallback: command.title)
+        enqueueTargetCommand({ session, image in
+            let confirmed = Self.confirmRecordingCapture(capture, session: session, image: image)
+            let result = Result { try session.clippingEdit(image, layer: target, command: command) }
+            if case .failure(let error) = result { self.report(error) }
+            var recorded = result.map { _ in semantic }
+            var produced: ProducedLayerCapture? = nil
+            if case .success(let created) = result, command == .mergeGroup {
+                // The merged layer becomes a produced symbol for later
+                // rows; the edit stays even when the capture fails.
+                do {
+                    produced = try Self.producedLayerCapture(created, session: session, image: image)
+                } catch {
+                    recorded = .failure(error)
+                }
+            }
+            self.settleRecording(capture, result: recorded, confirmed: confirmed, produced: produced)
+        })
+        if capture != nil { notifyRecorderChanged() }
+    }
+
     // MARK: Variations
 
     /// Image > Adjust > Variations: why the command cannot run now, or
@@ -8822,7 +8913,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .applyVariations, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .applyVariations, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping: return true
         case .selectSimilar(_, _, let sampleMerged): return !sampleMerged
         default: return false
         }
@@ -8866,7 +8957,7 @@ final class ImageDocument {
             return .layer(layer)
         }
         switch command {
-        case .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting:
+        case .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping:
             guard let layer = explicitLayer, layer > 0 else {
                 return .unavailable("The explicit layer could not be identified when this \(command.title) was recorded.")
             }

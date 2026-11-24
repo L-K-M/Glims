@@ -421,6 +421,17 @@ Lab and ink-channel documents, and layers without transparency are
 refused with the reason in the menu's tool tip. Recorder saves the
 operation and width and replays it on the same target.
 
+Layer > Group with Previous clips the active layer to the layer directly
+below it: the clipped layer shows only where that base has pixels, while
+its own opacity and blend mode still apply. The two layers move into a
+clipping group named Clipping Group; Option-clicking the lower edge of a
+Layers palette row toggles the clip with the row below it. Ungroup releases
+the clipped layers, and Merge Group bakes the group into one layer named
+after the base. Each command is one undo step. Lab, CMYK, multichannel
+and indexed documents, a busy engine, a floating selection and locked
+members are refused with the reason in the menu's tool tip. Recorder
+saves the command tag and replays it on the same target.
+
 # Filters
 
 Filter > Blur > Gaussian Blur… opens a settings window with a live

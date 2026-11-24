@@ -334,6 +334,14 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         let group = NSMenuItem(title: "New Layer Group", action: #selector(newLayerGroup(_:)), keyEquivalent: "")
         group.target = self
         menu.addItem(group)
+        for (title, command) in [("Group with Previous", EngineSession.ClippingCommand.groupWithPrevious),
+                                 ("Ungroup", .ungroup),
+                                 ("Merge Group", .mergeGroup)] {
+            let item = NSMenuItem(title: title, action: #selector(runClippingCommand(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(command.rawValue)
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
         let mask = NSMenuItem(title: "Mask", action: nil, keyEquivalent: "")
         mask.submenu = NSMenu(title: "Mask")
@@ -464,6 +472,28 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     @objc private func newLayerGroup(_ sender: NSMenuItem) {
         guard document?.colorInfo.mode.usesNativeChannels != true else { return }
         document?.createGroup()
+    }
+
+    /// The palette menu's clipping commands run on the active layer, with
+    /// the same cached refusal as the Layer menu.
+    @objc private func runClippingCommand(_ sender: NSMenuItem) {
+        guard let command = EngineSession.ClippingCommand(rawValue: UInt32(sender.tag)) else { return }
+        document?.clippingEdit(command)
+    }
+
+    /// Option-click on a row's lower boundary toggles clipping between
+    /// that row and the sibling below it: Group with Previous when the
+    /// upper row is not clipped, Ungroup when it is. Both rows must be
+    /// layer siblings; effect rows and non-adjacent rows do nothing.
+    private func toggleClipping(for row: LayerRowView) {
+        guard let document, document.acceptsEdits,
+              let node = snapshot.tree.nodesByID[row.context.layerID] else { return }
+        let siblings = node.parent?.children ?? snapshot.tree.roots
+        guard let index = siblings.firstIndex(where: { $0 === node }),
+              index + 1 < siblings.count,
+              let upper = snapshot.layer(for: node, for: document, currentLayers: document.layers) else { return }
+        let command: EngineSession.ClippingCommand = upper.clipping.role == .clipped ? .ungroup : .groupWithPrevious
+        document.clippingEdit(command, layer: upper.id)
     }
 
     @objc private func toggleLock(_ sender: NSMenuItem) {
@@ -763,6 +793,12 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
             return menuItem.tag == Int(EngineSession.LayerCommand.new.rawValue) || document.activeLayer != nil
         case #selector(newLayerGroup(_:)):
             return document?.acceptsEdits == true
+        case #selector(runClippingCommand(_:)):
+            guard let document,
+                  let command = EngineSession.ClippingCommand(rawValue: UInt32(menuItem.tag)) else { return false }
+            let reason = document.clippingRefusal(command)
+            menuItem.toolTip = reason
+            return reason == nil
         case #selector(toggleLock(_:)):
             guard let document, let active = document.activeLayer else { return false }
             if document.hasMultipleSelectedLayers,
@@ -1083,7 +1119,7 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
     static func detailsSuffix(for layer: EngineSession.Layer, floating: Bool = false) -> String {
         var details: [String] = []
         switch layer.kind {
-        case .group: details.append("group")
+        case .group: details.append(layer.clipping.role == .group ? "Clipping Group" : "group")
         case .text: details.append("text")
         case .link: details.append("linked")
         case .vector: details.append("vector")
@@ -1153,6 +1189,10 @@ final class LayersPaletteController: NSViewController, PaletteContent, PaletteEd
         rowView.onThumbnail = { [weak self, weak rowView] pick, option in
             guard let self, let rowView else { return }
             self.thumbnailPicked(pick, option, row: rowView)
+        }
+        rowView.onLowerBoundaryOptionClick = { [weak self, weak rowView] in
+            guard let self, let rowView else { return }
+            self.toggleClipping(for: rowView)
         }
         rowView.onEditEnded = { [weak self] in
             DispatchQueue.main.async { self?.reload() }

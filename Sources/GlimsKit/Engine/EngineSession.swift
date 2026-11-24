@@ -1369,6 +1369,27 @@ final class EngineSession: @unchecked Sendable {
         case pixel, group, text, link, vector
     }
 
+    /// A layer's place in a clipping group, from slot 259. `none` is the
+    /// default for engines without the slot and for layers outside every
+    /// clipping group.
+    struct LayerClipping: Equatable {
+        enum Role: UInt32, Equatable {
+            case none = 0, base, clipped, group
+        }
+
+        let role: Role
+        let base: Int32
+        let group: Int32
+
+        static let none = LayerClipping(role: .none, base: 0, group: 0)
+
+        init(role: Role, base: Int32, group: Int32) {
+            self.role = role
+            self.base = base
+            self.group = group
+        }
+    }
+
     struct Layer: Equatable {
         let id: Int32
         let parent: Int32
@@ -1382,6 +1403,7 @@ final class EngineSession: @unchecked Sendable {
         let opacity: Double
         let bounds: CGRect
         let filterCount: Int
+        var clipping: LayerClipping = .none
     }
 
     /// The locks a layer or group can hold (GlimsLayerLock).
@@ -5597,6 +5619,20 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// Layer > Group with Previous, Ungroup and Merge Group
+    /// (GlimsClippingCommand). Each is one undo step.
+    enum ClippingCommand: UInt32, CaseIterable, Sendable {
+        case groupWithPrevious = 1, ungroup, mergeGroup
+
+        var title: String {
+            switch self {
+            case .groupWithPrevious: return "Group with Previous"
+            case .ungroup: return "Ungroup"
+            case .mergeGroup: return "Merge Group"
+            }
+        }
+    }
+
     /// Whether this adapter has the Layer > Matting slot (253). Older
     /// adapters keep the plain layer commands and refuse matting cleanly.
     var supportsMatting: Bool {
@@ -5629,6 +5665,61 @@ final class EngineSession: @unchecked Sendable {
         }
         var error: UnsafeMutablePointer<CChar>?
         try check(matting(engine, image, layer, operation.rawValue, UInt32(width), &error), error)
+    }
+
+    /// Whether this adapter has both clipping slots (259 and 260). Older
+    /// adapters keep the plain layer tree and refuse clipping cleanly.
+    var supportsClipping: Bool {
+        guard let readOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_layer_clipping),
+              let editOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.layer_clipping_edit) else {
+            return false
+        }
+        return Int(api.struct_size) >= readOffset + MemoryLayout.size(ofValue: api.image_layer_clipping)
+            && Int(api.struct_size) >= editOffset + MemoryLayout.size(ofValue: api.layer_clipping_edit)
+            && api.image_layer_clipping != nil && api.layer_clipping_edit != nil
+    }
+
+    /// One call reporting every layer's clipping-group role, keyed by
+    /// layer id. An adapter without slot 259 is UNSUPPORTED. The palette
+    /// reads this once per reload rather than calling per row.
+    func layerClipping(_ image: Int32) throws -> [Int32: LayerClipping] {
+        guard supportsClipping, let read = api.image_layer_clipping else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot report clipping groups.")
+        }
+        var count: Int32 = 0
+        try check(read(engine, image, nil, 0, &count), nil)
+        guard count > 0 else { return [:] }
+        var rows = [GlimsLayerClipping](repeating: GlimsLayerClipping(), count: Int(count))
+        var filled: Int32 = 0
+        try rows.withUnsafeMutableBufferPointer { buffer in
+            for index in buffer.indices {
+                buffer[index].struct_size = UInt32(MemoryLayout<GlimsLayerClipping>.size)
+            }
+            try check(read(engine, image, buffer.baseAddress, count, &filled), nil)
+        }
+        var result: [Int32: LayerClipping] = [:]
+        for row in rows.prefix(Int(min(count, filled))) {
+            guard let role = LayerClipping.Role(rawValue: row.role) else { continue }
+            result[row.layer] = LayerClipping(role: role, base: row.base, group: row.group)
+        }
+        return result
+    }
+
+    /// Layer > Group with Previous, Ungroup or Merge Group on `layer`, as
+    /// one undo step. Returns the clipping group for Group with Previous
+    /// and the merged layer for Merge Group; nil for Ungroup. An adapter
+    /// without slot 260 is UNSUPPORTED.
+    @discardableResult
+    func clippingEdit(_ image: Int32, layer: Int32, command: ClippingCommand) throws -> Int32? {
+        guard supportsClipping, let edit = api.layer_clipping_edit else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot edit clipping groups.")
+        }
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try check(edit(engine, image, layer, command.rawValue, &result, &error), error)
+        return result == 0 ? nil : result
     }
 
     /// The memory Edit > Purge frees. The raw values mirror the facade's
@@ -7351,7 +7442,7 @@ final class EngineSession: @unchecked Sendable {
                      hasMask: row.has_mask, isSelected: row.selected, opacity: row.opacity,
                      bounds: CGRect(x: Int(row.bounds.x), y: Int(row.bounds.y),
                                     width: Int(row.bounds.width), height: Int(row.bounds.height)),
-                     filterCount: Int(row.filter_count))
+                     filterCount: Int(row.filter_count), clipping: .none)
     }
 }
 
