@@ -110,7 +110,17 @@ final class RecorderVariationsTests: XCTestCase {
         XCTAssertTrue(command.isLayerAdjustment)
         XCTAssertTrue(command.requiresResolvedFloatingSelection)
         XCTAssertFalse(RecorderFileCommand.applyVariations(try RecorderVariationsValue(settings)).isTargetIndependent)
-        XCTAssertThrowsError(try RecorderVariationsValue(EngineSession.VariationsSettings()))
+        XCTAssertThrowsError(try RecorderVariationsValue(EngineSession.VariationsSettings())) { error in
+            XCTAssertEqual(error as? RecorderFileError,
+                           .invalid("A recorded Variations value changes nothing."))
+        }
+        // An out-of-range value names the range, not "changes nothing".
+        var outOfRange = settings
+        outOfRange.lightness = 2
+        XCTAssertThrowsError(try RecorderVariationsValue(outOfRange)) { error in
+            XCTAssertEqual(error as? RecorderFileError,
+                           .invalid("A recorded Variations value must be finite and between -1 and 1."))
+        }
 
         let description = RecorderTargetDescription(name: "Layer", kind: .pixel, ancestors: [],
                                                     siblingIndex: 0, bounds: .init(x: 0, y: 0, width: 10, height: 10))

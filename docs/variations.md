@@ -69,8 +69,11 @@ busy engine.
 `image_variations_preview` renders the layer's own thumbnail exactly as
 the Layers palette does, at most the requested size (1...256) on the long
 side, straight-alpha sRGB RGBA 8-bit, never upscaled. Passing a NULL pixel
-buffer queries the size only; `clipping` is then ignored. The preview ignores the selection and allows
-identity settings, which reproduce the plain thumbnail.
+buffer queries the size only; `clipping` is then ignored. The preview
+ignores the selection and allows identity settings, which reproduce the
+plain thumbnail. It admits only the layers Apply admits, size queries
+included, so a group, an unrasterized text, link or vector layer, or a
+non-RGB image is UNSUPPORTED here too.
 
 The same two operations run in the same order on a float copy, quantized
 back to the 8-bit grid between them so an 8-bit layer's destructive result

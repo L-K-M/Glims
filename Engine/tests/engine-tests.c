@@ -14964,6 +14964,15 @@ test_image_variations (void)
              "a grayscale image is refused");
       api->free_string (error);
       error = NULL;
+      {
+        int32_t qw = -1, qh = -1;
+        CHECK (api->image_variations_preview (engine, refuse, layer, &settings, 8,
+                                              NULL, 0, NULL, 0, &qw, &qh, &error) ==
+               GLIMS_STATUS_UNSUPPORTED && error && qw == 0 && qh == 0,
+               "the preview refuses a grayscale image as Apply does");
+        api->free_string (error);
+        error = NULL;
+      }
       check = variations_bytes (refuse, &count);
       CHECK (variations_same (after, check, count),
              "the grayscale refusal changes nothing");
@@ -14987,6 +14996,15 @@ test_image_variations (void)
                  "a group layer is UNSUPPORTED and changes nothing");
           api->free_string (error);
           error = NULL;
+          {
+            int32_t qw = -1, qh = -1;
+            CHECK (api->image_variations_preview (engine, refuse, group, &settings, 8,
+                                                  NULL, 0, NULL, 0, &qw, &qh, &error) ==
+                   GLIMS_STATUS_UNSUPPORTED && error && qw == 0 && qh == 0,
+                   "the preview refuses a group layer as Apply does");
+            api->free_string (error);
+            error = NULL;
+          }
         }
 
       /* Move the single layer away from a selection on the right. */

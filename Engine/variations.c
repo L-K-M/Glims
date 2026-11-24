@@ -179,7 +179,8 @@ glims_image_variations_apply (GlimsEngine                 *engine,
   GimpDrawable            *drawable;
   GlimsColorBalanceSettings balance;
   GlimsHueSaturationSettings hue;
-  GeglNode                *node = NULL;
+  GeglNode                *balance_node = NULL;
+  GeglNode                *hue_node = NULL;
   gboolean                 changed;
   GlimsStatus              status;
 
@@ -223,54 +224,61 @@ glims_image_variations_apply (GlimsEngine                 *engine,
   balance_from (settings, &balance);
   hue_saturation_from (settings, &hue);
 
-  if (! gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_DRAWABLE_MOD,
-                                     C_("undo-type", "Variations")))
-    return glims_fail (error, NULL, "The image history could not group Variations.");
-
+  /* Build and configure both operations before the undo group opens, so
+   * a failure leaves the layer untouched instead of half adjusted. */
   if (! zero_range (&settings->shadows) || ! zero_range (&settings->midtones) ||
       ! zero_range (&settings->highlights))
     {
-      node = gegl_node_new_child (NULL, "operation", "gimp:color-balance", NULL);
-      if (! node)
-        {
-          gimp_image_undo_group_end (image);
-          return glims_fail (error, NULL, "The Color Balance operation could not be created.");
-        }
-      status = glims_color_balance_config_prepare (node, error);
+      balance_node = gegl_node_new_child (NULL, "operation", "gimp:color-balance", NULL);
+      if (! balance_node)
+        return glims_fail (error, NULL, "The Color Balance operation could not be created.");
+      status = glims_color_balance_config_prepare (balance_node, error);
       if (status == GLIMS_STATUS_OK)
-        status = glims_color_balance_config_set (node, &balance, &changed, error);
-      if (status == GLIMS_STATUS_OK)
-        gimp_drawable_apply_operation (drawable, NULL, C_("undo-type", "Color Balance"), node);
-      g_object_unref (node);
-      node = NULL;
+        status = glims_color_balance_config_set (balance_node, &balance, &changed, error);
       if (status != GLIMS_STATUS_OK)
         {
-          gimp_image_undo_group_end (image);
+          g_object_unref (balance_node);
           return status;
         }
     }
 
   if (settings->lightness != 0.0 || settings->saturation != 0.0)
     {
-      node = gegl_node_new_child (NULL, "operation", "gimp:hue-saturation", NULL);
-      if (! node)
+      hue_node = gegl_node_new_child (NULL, "operation", "gimp:hue-saturation", NULL);
+      if (! hue_node)
         {
-          gimp_image_undo_group_end (image);
+          g_clear_object (&balance_node);
           return glims_fail (error, NULL, "The Hue-Saturation operation could not be created.");
         }
-      status = glims_hue_saturation_config_prepare (node, error);
+      status = glims_hue_saturation_config_prepare (hue_node, error);
       if (status == GLIMS_STATUS_OK)
-        status = glims_hue_saturation_config_set (node, &hue, &changed, error);
-      if (status == GLIMS_STATUS_OK)
-        gimp_drawable_apply_operation (drawable, NULL, C_("undo-type", "Hue/Saturation"), node);
-      g_object_unref (node);
-      node = NULL;
+        status = glims_hue_saturation_config_set (hue_node, &hue, &changed, error);
       if (status != GLIMS_STATUS_OK)
         {
-          gimp_image_undo_group_end (image);
+          g_object_unref (hue_node);
+          g_clear_object (&balance_node);
           return status;
         }
     }
+
+  if (! gimp_image_undo_group_start (image, GIMP_UNDO_GROUP_DRAWABLE_MOD,
+                                     C_("undo-type", "Variations")))
+    {
+      g_clear_object (&balance_node);
+      g_clear_object (&hue_node);
+      return glims_fail (error, NULL, "The image history could not group Variations.");
+    }
+
+  /* Two separate applications, so each stage lands in the layer's own
+   * buffer before the next reads it; the preview models exactly that. */
+  if (balance_node)
+    gimp_drawable_apply_operation (drawable, NULL, C_("undo-type", "Color Balance"),
+                                   balance_node);
+  if (hue_node)
+    gimp_drawable_apply_operation (drawable, NULL, C_("undo-type", "Hue/Saturation"),
+                                   hue_node);
+  g_clear_object (&balance_node);
+  g_clear_object (&hue_node);
 
   gimp_image_undo_group_end (image);
   gimp_image_flush (image);
@@ -358,7 +366,9 @@ glims_image_variations_preview (GlimsEngine                 *engine,
                                 char                       **error)
 {
   GlimsOpenImage     *open;
+  GimpLayer          *layer = NULL;
   GimpDrawable       *drawable;
+  GlimsStatus         status;
   GeglBuffer         *buffer = NULL;
   const GeglRectangle *extent;
   gint                w, h, out_w, out_h;
@@ -383,9 +393,15 @@ glims_image_variations_preview (GlimsEngine                 *engine,
   open = glims_lookup_image (engine, id);
   if (! open)
     return GLIMS_STATUS_NOT_FOUND;
-  drawable = glims_lookup_drawable (open, layer_id);
-  if (! drawable)
-    return GLIMS_STATUS_NOT_FOUND;
+  status = resolve_layer (engine, open, layer_id, &layer);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  /* Preview only what Apply accepts, so a preview never offers a
+   * result the commit then refuses. */
+  status = admit_layer (open->image, layer, error);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  drawable = GIMP_DRAWABLE (layer);
 
   w = gimp_item_get_width (GIMP_ITEM (drawable));
   h = gimp_item_get_height (GIMP_ITEM (drawable));

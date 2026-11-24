@@ -54,7 +54,10 @@ struct RecorderVariationsValue: Equatable {
 
     /// Bridge in: validates and detaches committed facade settings.
     init(_ settings: EngineSession.VariationsSettings) throws {
-        guard settings.isValid, !settings.isIdentity else {
+        guard settings.isValid else {
+            throw RecorderFileError.invalid("A recorded Variations value must be finite and between -1 and 1.")
+        }
+        guard !settings.isIdentity else {
             throw RecorderFileError.invalid("A recorded Variations value changes nothing.")
         }
         func range(_ source: EngineSession.ColorBalanceSettings.Range) -> Range {

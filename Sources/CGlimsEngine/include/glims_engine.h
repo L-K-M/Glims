@@ -4794,8 +4794,9 @@ typedef struct GlimsEngineAPI {
    * `max_size`, 1...256, on the long side, never upscaled), then applies
    * the same two operations in the same order as image_variations_apply
    * on a float copy, quantizing to 8 bits between them so the preview
-   * matches the destructive result on an 8-bit layer. The preview ignores
-   * the selection and allows identity settings (the Original thumbnail).
+   * matches the destructive result on an 8-bit layer; on a deeper layer
+   * it is that 8-bit approximation. The preview ignores the selection
+   * and allows identity settings (the Original thumbnail).
    * Output is straight-alpha sRGB RGBA 8-bit. `pixels` NULL queries the
    * size only (`clipping` is ignored); otherwise `byte_count` must
    * hold the whole thumbnail and `clipping` is either NULL or
@@ -4803,8 +4804,12 @@ typedef struct GlimsEngineAPI {
    * pixel (alpha above 0) has a color channel that the corrections drove
    * to 0 or 255 when the plain thumbnail's channel was not already there
    * (both operations clamp, so nothing leaves 0...1; reaching a new limit
-   * is the clipping). Wrong buffer sizes are INVALID_ARGUMENT; an unknown image
-   * or drawable is NOT_FOUND. Read-only: no locks, no undo step. */
+   * is the clipping). Wrong buffer sizes are INVALID_ARGUMENT. The layer
+   * admission is image_variations_apply's, size queries included: an
+   * unknown image or layer, or an id that is not an attached layer of
+   * that image, is NOT_FOUND, and a group, unrasterized text, link or
+   * vector layer, or a non-RGB base type is UNSUPPORTED. Read-only: no
+   * locks, no undo step. */
   GlimsStatus (*image_variations_preview) (GlimsEngine *engine, GlimsImageID image, GlimsItemID layer,
                                            const GlimsVariationsSettings *settings,
                                            int32_t max_size, uint8_t *pixels, size_t byte_count,

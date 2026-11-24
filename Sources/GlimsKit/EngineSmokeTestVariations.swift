@@ -57,8 +57,10 @@ extension EngineSmokeTest {
             for controller in controllers {
                 if let window = controller.window, let sheet = window.attachedSheet { window.endSheet(sheet) }
                 controller.window?.orderOut(nil)
-                var stopped = false; controller.canvas.stopRendering { stopped = true }
-                while !stopped { spin(0.01) }
+                var stopped = false
+                controller.canvas.stopRendering { stopped = true }
+                let stopDeadline = Date().addingTimeInterval(20)
+                while !stopped && Date() < stopDeadline { spin(0.01) }
             }
             for document in owned { document.closeImageWhenDrained() }
             wait { owned.allSatisfy { (try? session.info($0.image)) == nil } }
@@ -226,7 +228,8 @@ extension EngineSmokeTest {
                                 checkpoint: try replay.recorderInstallCheckpoint(),
                                 choices: choices) { installed = $0 }
         settle(replay)
-        try installed!.get()
+        guard let installed else { return check(false, "the Variations recording installs") }
+        try installed.get()
         try replay.startReplay()
         settle(replay)
         check(try pixels(record.image) == pixels(replay.image),
