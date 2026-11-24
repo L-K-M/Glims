@@ -99,7 +99,7 @@ final class RecorderLayerEditsTests: XCTestCase {
 
     func testVersionAnchorAndOlderVersionRefusal() throws {
         XCTAssertEqual(RecorderFileCodec.layerEditsVersion, 33)
-        XCTAssertEqual(RecorderFileCodec.latestVersion, 33)
+        XCTAssertGreaterThanOrEqual(RecorderFileCodec.latestVersion, RecorderFileCodec.layerEditsVersion)
         // Each command decodes at version 33 with its valid binding, so the
         // version 32 refusal comes from the version alone.
         let layer = ValidBase(binding: layerBinding, symbols: layerSymbolJSON, produces: nil)

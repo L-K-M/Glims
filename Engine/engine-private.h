@@ -759,6 +759,8 @@ GlimsStatus glims_image_crop_resize (GlimsEngine *e, GlimsImageID image, GlimsRe
                                      int32_t width, int32_t height,
                                      double x_resolution, double y_resolution,
                                      uint32_t interpolation, char **error);
+GlimsStatus glims_layer_matting (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
+                                 uint32_t operation, uint32_t width, char **error);
 GlimsStatus glims_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
                                       int32_t count, GlimsItemID reference, uint32_t alignment,
                                       char **error);

@@ -219,6 +219,9 @@ enum RecorderFileCommand: Equatable {
     /// Glims' owned layer-mask source tags, not native enum ordinals.
     enum MaskSource: String { case white, black, alpha, alphaTransfer, selection, grayscale }
 
+    /// Glims' owned Layer > Matting operation tags, not native enum ordinals.
+    enum Matting: String { case defringe, removeBlackMatte, removeWhiteMatte }
+
     /// Native scalar edits use paper intensity: zero is full ink, one paper.
     struct InkEdit: Equatable {
         enum Operation: String { case fill, clear, invert }
@@ -370,6 +373,10 @@ enum RecorderFileCommand: Equatable {
     /// starts as the edit target. The explicit layer is the record's
     /// `layer` binding.
     case addLayerMask(source: MaskSource, edit: Bool)
+    /// Layer > Matting: the owned operation tag and the Defringe width
+    /// (nil for the matte commands). The explicit layer is the record's
+    /// `layer` binding.
+    case matting(Matting, width: Int?)
     /// Select ▸ Similar: threshold, antialiasing and sample-merged. The
     /// sample-merged form needs the `none` binding; the drawable form
     /// requires the captured context.
@@ -428,7 +435,7 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectSimilar(_, _, let sampleMerged): return sampleMerged
         case .selectCommand(.fromAlpha, _): return false

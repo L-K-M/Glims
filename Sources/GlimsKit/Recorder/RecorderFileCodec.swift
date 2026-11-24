@@ -37,7 +37,9 @@ enum RecorderFileCodec {
     static let cropResizeVersion = 32
     /// Layer edits; renumber if another branch takes 33 first.
     static let layerEditsVersion = 33
-    static let latestVersion = layerEditsVersion
+    /// Layer > Matting; renumber if another branch takes 34 first.
+    static let mattingVersion = 34
+    static let latestVersion = mattingVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -163,6 +165,7 @@ enum RecorderFileCodec {
         var hasImageResolution = false
         var hasCropResize = false
         var hasLayerEdits = false
+        var hasMatting = false
         var usedSymbols: Set<UUID> = []
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
@@ -198,6 +201,7 @@ enum RecorderFileCodec {
                 if case .setResolution = command { hasImageResolution = true }
                 if case .resize = command { hasImageResolution = true }
                 if case .cropResize = command { hasCropResize = true }
+                if case .matting = command { hasMatting = true }
                 if case .moveLayer = command { hasLayerEdits = true }
                 if case .duplicateLayers = command { hasLayerEdits = true }
                 if case .deleteLayers = command { hasLayerEdits = true }
@@ -344,6 +348,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == layerEditsVersion, !hasLayerEdits {
             throw RecorderFileError.invalid("Version 33 requires a successful layer edit command.")
+        }
+        if fileVersion == mattingVersion, !hasMatting {
+            throw RecorderFileError.invalid("Version 34 requires a successful matting command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -888,6 +895,26 @@ enum RecorderFileCodec {
             }
             return .selectSimilar(threshold: threshold, antialias: try bool(value.get("antialias")),
                                   sampleMerged: try bool(value.get("sampleMerged")))
+        case "matting":
+            guard version >= mattingVersion else {
+                throw RecorderFileError.invalid("A matting command needs recording version 34.")
+            }
+            let value = try Object(node, required: ["tag", "operation"], optional: ["width"])
+            guard let operation = RecorderFileCommand.Matting(rawValue: try string(value.get("operation"))) else {
+                throw RecorderFileError.invalid("Unknown matting operation.")
+            }
+            let width = try value.optional("width").map { try integer($0, range: 1...200) }
+            switch operation {
+            case .defringe:
+                guard width != nil else {
+                    throw RecorderFileError.invalid("Defringe needs a width from 1 to 200.")
+                }
+            case .removeBlackMatte, .removeWhiteMatte:
+                guard width == nil else {
+                    throw RecorderFileError.invalid("Remove Black Matte and Remove White Matte take no width.")
+                }
+            }
+            return .matting(operation, width: width)
         case "layerProperties":
             let value = try Object(node, required: ["tag", "properties"])
             let properties = try Object(value.get("properties"), required: [], optional: ["name", "visible", "opacity", "mode"])
@@ -1378,6 +1405,9 @@ enum RecorderFileCodec {
             return
         case (.addLayerMask, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Add Layer Mask needs a layer description.") }
+            return
+        case (.matting, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A matting command needs a layer description.") }
             return
         case (.mergeVisible, .none): return
         case (.selectSimilar(_, _, let sampleMerged), .none) where sampleMerged: return

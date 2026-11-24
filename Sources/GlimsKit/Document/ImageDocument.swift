@@ -4794,6 +4794,69 @@ final class ImageDocument {
         if capture != nil { notifyRecorderChanged() }
     }
 
+    // MARK: Layer matting
+
+    /// Layer > Matting: why `operation` cannot run now, or nil. Reads only
+    /// cached state, so menu validation never calls the engine. The engine
+    /// revalidates the same gates and the alpha and partial-pixel
+    /// refusals, which the cache cannot see. The command is layer-wide and
+    /// ignores the selection, so no selection check appears here.
+    func mattingRefusal(_ operation: EngineSession.Matting) -> String? {
+        guard session.supportsMatting else {
+            return "This image engine cannot apply \(operation.title)."
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "\(operation.title) is available for ordinary layered images only."
+        }
+        guard colorInfo.mode != .lab else {
+            return "\(operation.title) is unavailable for Lab documents."
+        }
+        guard !colorInfo.mode.usesInkChannels else {
+            return "\(operation.title) is unavailable for ink-channel documents."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: operation.title) {
+            return reason
+        }
+        guard activeDrawable != nil else { return "Select a layer first." }
+        guard let layer = activeLayer, !isMaskTargetActive, !isChannelTargetActive else {
+            return "\(operation.title) works on a layer; stop editing the mask or channel first."
+        }
+        if let row = layers.first(where: { $0.id == layer }), row.kind == .group {
+            return "\(operation.title) works on a layer, not a group."
+        }
+        if let source = layerSources[layer], !source.isRasterized,
+           source.kind == .text || source.kind == .link || source.kind == .vector {
+            return "Rasterize the \(source.kind) layer before using \(operation.title)."
+        }
+        if layerLocks[layer]?.effective.contains(.pixels) == true {
+            return "Unlock the layer's pixels before using \(operation.title)."
+        }
+        return nil
+    }
+
+    /// Layer > Matting: applies `operation` to the active layer as one
+    /// queued command and one undo step. `width` is 1 ... 200 for Defringe
+    /// and 0 for the matte commands. Recorder captures the operation and
+    /// width and binds the explicit layer.
+    func applyMatting(_ operation: EngineSession.Matting, width: Int) {
+        if let reason = mattingRefusal(operation) {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard !refuseWhileTargetPending() else { return }
+        endPendingUserEdits()
+        guard let layer = activeLayer else { return }
+        let command = SemanticImageCommand.matting(operation, width: width)
+        run(semantic: command, recorderLayer: layer) { session, image in
+            try session.applyMatting(image, layer: layer, operation: operation, width: width)
+        }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.
@@ -8601,7 +8664,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting: return true
         case .selectSimilar(_, _, let sampleMerged): return !sampleMerged
         default: return false
         }
@@ -8645,7 +8708,7 @@ final class ImageDocument {
             return .layer(layer)
         }
         switch command {
-        case .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask:
+        case .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting:
             guard let layer = explicitLayer, layer > 0 else {
                 return .unavailable("The explicit layer could not be identified when this \(command.title) was recorded.")
             }

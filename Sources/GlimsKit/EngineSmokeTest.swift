@@ -922,6 +922,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Crop Target)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "matting" {
+                try exerciseMatting(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Matting)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "recorder-layer-edits" {
                 try exerciseRecorderLayerEdits(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Recorder Layer Edits)" : "FAILED: \(failures) failure(s)")
@@ -1329,6 +1334,7 @@ enum EngineSmokeTest {
             try exerciseRotateArbitrary(session, documents: documents)
             try exerciseImageResolution(session, documents: documents)
             try exerciseCropTarget(session, documents: documents)
+            try exerciseMatting(session, work: work, documents: documents)
             try exerciseAlignLayers(session, documents: documents)
             try exerciseSmoothSelection(session, documents: documents)
             try exerciseCloneAlignment(session, documents: documents)

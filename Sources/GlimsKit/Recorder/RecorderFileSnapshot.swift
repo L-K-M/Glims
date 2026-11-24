@@ -171,6 +171,14 @@ extension RecorderFileCommand {
         case .mergeVisible: self = .mergeVisible
         case .addLayerMask(let source, let edit):
             self = .addLayerMask(source: RecorderFileCommand.MaskSource(source), edit: edit)
+        case .matting(let operation, let width):
+            let value: RecorderFileCommand.Matting
+            switch operation {
+            case .defringe: value = .defringe
+            case .removeBlackMatte: value = .removeBlackMatte
+            case .removeWhiteMatte: value = .removeWhiteMatte
+            }
+            self = .matting(value, width: operation == .defringe ? width : nil)
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             guard threshold.isFinite, (0...1).contains(threshold) else {
                 throw RecorderFileError.invalid("A recorded Similar threshold is outside 0...1.")

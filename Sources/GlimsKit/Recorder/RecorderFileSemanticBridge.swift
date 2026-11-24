@@ -135,6 +135,14 @@ enum RecorderFileSemanticBridge {
         case .mergeVisible: return .mergeVisible
         case .addLayerMask(let source, let edit):
             return .addLayerMask(source: source.engine, edit: edit)
+        case .matting(let operation, let width):
+            let value: EngineSession.Matting
+            switch operation {
+            case .defringe: value = .defringe
+            case .removeBlackMatte: value = .removeBlackMatte
+            case .removeWhiteMatte: value = .removeWhiteMatte
+            }
+            return .matting(value, width: width ?? 0)
         case .selectSimilar(let threshold, let antialias, let sampleMerged):
             return .selectSimilar(threshold: threshold, antialias: antialias, sampleMerged: sampleMerged)
         case .layerProperties(let value):

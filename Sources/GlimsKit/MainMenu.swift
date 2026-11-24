@@ -228,6 +228,11 @@ enum MainMenu {
             ]),
             item("Layer to Image Size", #selector(DocumentWindowController.layerToImageSize(_:))),
             item("Trim Layer to Content", #selector(DocumentWindowController.trimLayerToContent(_:))),
+            submenu("Matting", [
+                item("Defringe…", #selector(DocumentWindowController.defringe(_:))),
+                item("Remove Black Matte", #selector(DocumentWindowController.removeBlackMatte(_:))),
+                item("Remove White Matte", #selector(DocumentWindowController.removeWhiteMatte(_:))),
+            ]),
             adjustmentItem("Add Transparency", selector: #selector(DocumentWindowController.addTransparency(_:)),
                            key: "", adjustment: .addAlpha),
             adjustmentItem("Remove Transparency", selector: #selector(DocumentWindowController.removeTransparency(_:)),

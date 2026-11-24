@@ -1554,6 +1554,9 @@ MARSHAL (image_resize,
 MARSHAL (image_crop_resize,
          return glims_image_crop_resize (e, a->image, a->area, a->width, a->height,
                                          a->number, a->number2, (uint32_t) a->n, a->error);)
+MARSHAL (layer_matting,
+         return glims_layer_matting (e, a->image, a->item, (uint32_t) a->width,
+                                     (uint32_t) a->height, a->error);)
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2548,6 +2551,17 @@ api_image_crop_resize (GlimsEngine *e, GlimsImageID image, GlimsRect rect, int32
   return glims_facade_call (e, GLIMS_FACADE_OP_image_crop_resize,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             image_crop_resize_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_layer_matting (GlimsEngine *e, GlimsImageID image, GlimsItemID layer, uint32_t operation,
+                   uint32_t width, char **error)
+{
+  GlimsArgs a = { .image = image, .item = layer, .width = (int32_t) operation,
+                  .height = (int32_t) width, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_layer_matting,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            layer_matting_on_engine, &a, error);
 }
 
 static GlimsStatus
