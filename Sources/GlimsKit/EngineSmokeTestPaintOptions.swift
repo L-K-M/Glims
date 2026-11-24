@@ -1,8 +1,8 @@
 import AppKit
 
 /// Tool Options' blend mode, spacing and fade through real canvas strokes:
-/// each changes the pixels as the engine paints them, and a recording
-/// keeps such a stroke as an explicit unrecorded row.
+/// each changes the pixels as the engine paints them, and a recording keeps
+/// a Paintbrush option stroke as a successful row that replays elsewhere.
 extension EngineSmokeTest {
     static func exercisePaintOptions(_ session: EngineSession, documents: DocumentList) throws {
         guard session.supportsPaintOptions else {
@@ -66,6 +66,51 @@ extension EngineSmokeTest {
         }
         func red(_ x: Int, _ y: Int) -> Int { Int(pixel(session, image, x: x, y: y)?.first ?? 128) }
 
+        // A Paintbrush stroke with a mode and a fade is a successful row
+        // and replays the same pixels on a new identical image.
+        state.select(.paintbrush)
+        state.foreground = .black
+        state.update(.paintbrush) {
+            $0.clearPaintOptions(); $0.size = 4; $0.opacity = 1; $0.pressureSize = false
+            $0.paintMode = "multiply"; $0.fade = .init(steps: 24, target: .transparent)
+        }
+        try document.startRecording()
+        gesture(line(75, from: 10, to: 150))
+        try document.stopRecording()
+        guard document.recorder.records.count == 1,
+              case .success(.completeStroke(let stroke)) = document.recorder.records[0].resolution else {
+            return check(false, "paint options: a recorded Multiply fade stroke settles as one successful row")
+        }
+        check(stroke.settings.paintMode == "multiply" && stroke.settings.fade == .init(steps: 24, target: .transparent),
+              "paint options: the row keeps the Multiply mode and the fade")
+        let recorded = try session.copyPixels(image, merged: true).pixels
+        let metadata = document.recorderFileMetadata
+        let file = try RecorderFileCodec.snapshot(document.recorder, recordingID: metadata.recordingID,
+            name: metadata.name, origin: metadata.origin, descriptions: document.recorderDescriptions,
+            bindings: document.recorderBindingDescriptions)
+        let copy = try session.newImage(width: 160, height: 100)
+        let replay = try ImageDocument(session: session, image: copy, name: "Paint Options Replay")
+        replay.onError = { errors.append($0) }
+        documents.items.append(replay)
+        defer {
+            var closed = false; replay.closeImageWhenDrained { closed = true }; wait { closed }
+            documents.items.removeAll { $0 === replay }
+        }
+        guard let symbol = file.symbols.first?.id, let copyLayer = try session.layers(copy).first?.id else {
+            return check(false, "paint options: the replay target offers its layer")
+        }
+        wait { replay.pendingWork == 0 }
+        var installed: Result<Void, Error>?
+        replay.installRecording(try RecorderFileSemanticBridge.prepare(file),
+            checkpoint: try replay.recorderInstallCheckpoint(),
+            choices: [symbol: .layer(copyLayer)]) { installed = $0 }
+        wait { installed != nil && replay.pendingWork == 0 }
+        _ = try installed?.get()
+        try replay.startReplay()
+        wait { replay.replayStatus == .finished(total: 1) && replay.pendingWork == 0 && !EngineActivity.shared.isBusy }
+        check(try replay.replayStatus == .finished(total: 1) && (try session.copyPixels(copy, merged: true).pixels) == recorded,
+              "paint options: replay on an identical image reproduces the recorded pixels")
+
         // The Mode menu lists every paint mode and sets the tool's brush.
         state.select(.pencil)
         state.foreground = .black
@@ -101,16 +146,6 @@ extension EngineSmokeTest {
         check(red(12, 60) < 40 && red(100, 60) > 250,
               "paint options: a faded stroke starts black and ends unpainted (\(red(12, 60)), \(red(100, 60)))")
 
-        // While recording, such a stroke is an explicit unrecorded row.
-        try document.startRecording()
-        gesture(line(75, from: 10, to: 150))
-        try document.stopRecording()
-        let rows = document.recorder.records.map { record -> String in
-            if case .failure(let reason) = record.resolution { return reason }
-            return "not a failed row"
-        }
-        check(rows == ["This stroke's brush, paint settings or target cannot be recorded."],
-              "paint options: a recording keeps a faded stroke as an unrecorded row (\(rows))")
         check(errors.isEmpty, "paint options: no errors (\(errors))")
     }
 }

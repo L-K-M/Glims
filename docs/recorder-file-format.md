@@ -1,4 +1,4 @@
-# Recorder file format, versions 1 to 37
+# Recorder file format, versions 1 to 39
 
 The pure codec produces and reads detached values for named `.glimsrecording`
 files. It performs no file I/O and holds no session state; file storage and the
@@ -7,7 +7,8 @@ not authorize execution or establish ownership of any open image.
 
 The UTF-8 JSON envelope has exactly `format`, `version`, `recordingID`, `name`,
 `origin`, `symbols` and `records`. `format` is `ch.lkmc.Glims.recording` and
-`version` is an integer from `1` through `37`. `recordingID` is a file UUID. `origin` contains
+`version` is an integer from `1` through `39`. `recordingID` is a file UUID.
+`origin` contains
 `imageLabel`, `initialWidth` and `initialHeight`; these are descriptive hints.
 Neither the label nor dimensions prove that a reopened image is the original.
 
@@ -25,11 +26,13 @@ mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
 `smoothSelection` 29, `adjustment` 30, `setResolution` or `resize` 31,
 `cropResize` 32, `moveLayer`, `duplicateLayers`, `deleteLayers`,
 `mergeVisible`, `addLayerMask` or `selectSimilar` 33, `matting` 34,
-`applyVariations` 35, `colorRange` 36, `clipping` 37, and `applyReplaceColor` 38. A file declaring one of those versions must contain
-at least one successful command from that version's family. It may also
-contain commands from all earlier versions. Failure/cancelled rows do not
-raise the version. With no extended successful commands, the writer uses
-version 1. Integers outside 1...37 refuse the file.
+`applyVariations` 35, `colorRange` 36, `clipping` 37, `applyReplaceColor` 38,
+and `completeStroke` or `completeTabletStroke` with paint options 39.
+A file declaring one of those versions must contain at least one successful
+command from that version's family. It may also contain commands from all
+earlier versions. Failure/cancelled rows do not raise the version. With no
+extended successful commands, the writer uses version 1. Integers outside
+1...39 refuse the file.
 
 Each symbol has an `id` UUID and `description`: `name`, owned `kind`, ordered
 `ancestors`, `siblingIndex` and `bounds`. Ancestors contain `name`, group `kind`
@@ -786,3 +789,26 @@ finite components and Boolean `subtract`, and finite `hue` inside -180...180,
 samples and needs at least one add. It requires a `layer` binding and replays
 on that explicit layer through a fresh filter session. Version 38 requires at
 least one successful Replace Color row; earlier versions reject the tag.
+
+## Paint options (version 39)
+
+An ordinary `completeStroke` or `completeTabletStroke` may record the
+brush's paint options in its `settings`. All fields are optional and are
+refused before version 39:
+
+- `paintMode` is a paint mode nick from the fixed allowlist Tool Options
+  offers. Absent means Normal, and an explicit `"normal"` reads back as
+  absent. Only `pencil` and `paintbrush` settings may carry it.
+- `spacing` is the dab distance as a fraction of the brush size, inside
+  0.01...10. `pencil`, `eraser` and `paintbrush` settings may carry it.
+- `fade` has exactly integer `steps` from 1 through 9999 and `target`,
+  `transparent` or `background`. A `background` target also carries
+  `background` with exactly `red`, `green` and `blue` finite components in
+  `0...1`, the captured background color; any other target forbids the
+  object. Only `pencil` and `paintbrush` settings may carry a fade.
+
+Ink and Lab stroke settings refuse these fields entirely, as they already
+refuse `eraserBackground`. Version 39 requires at least one successful
+stroke carrying an option. Guarded replay binds mode, spacing and fade
+into the native fingerprint and refuses a mismatch before painting or
+Undo.

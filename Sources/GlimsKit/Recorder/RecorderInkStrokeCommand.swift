@@ -10,7 +10,8 @@ struct RecorderInkStrokeCommand: Equatable {
 
     func validated() throws -> Self {
         guard settings.tool == .paintbrush || settings.tool == .pencil,
-              !settings.antiErase, settings.size.isFinite, (1...10_000).contains(settings.size),
+              !settings.antiErase, !settings.hasRecordedPaintOptions, settings.fadeBackground == nil,
+              settings.size.isFinite, (1...10_000).contains(settings.size),
               [settings.opacity, settings.red, settings.green, settings.blue].allSatisfy({
                   $0.isFinite && (0...1).contains($0)
               }), settings.hardness.map({ $0.isFinite && (0...1).contains($0) }) != false else {

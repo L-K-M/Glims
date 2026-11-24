@@ -813,10 +813,19 @@ capture_stroke_facts (GlimsEngine               *engine,
   GimpSymmetry *symmetry = gimp_image_get_active_symmetry (image);
   gboolean sponge = brush->tool == GLIMS_PAINT_SPONGE_DESATURATE ||
                      brush->tool == GLIMS_PAINT_SPONGE_SATURATE;
+  /* Pencil and Paintbrush record their effective mode, spacing and fade;
+   * the Eraser records only spacing. Sponge and ink strokes still refuse
+   * every option, and no recorded tool admits a clone source. */
+  gboolean record_options =
+    !ink && !sponge && brush->clone_source == GLIMS_CLONE_FROM_IMAGE &&
+    (brush->tool == GLIMS_PAINT_PAINTBRUSH || brush->tool == GLIMS_PAINT_PENCIL ||
+     (brush->tool == GLIMS_PAINT_ERASER && !brush->fade_steps &&
+      !(brush->paint_mode[0] && strcmp (brush->paint_mode, "normal") != 0)));
   if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
        brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER &&
        !(sponge && !ink)) ||
-      !recordable_first_point (first) || glims_brush_has_paint_options (brush) ||
+      !recordable_first_point (first) ||
+      (glims_brush_has_paint_options (brush) && !record_options) ||
       (ink ? (brush->tool == GLIMS_PAINT_ERASER || !GIMP_IS_CHANNEL (drawable)) :
              (G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
               !gimp_drawable_is_rgb (drawable) ||
@@ -825,18 +834,25 @@ capture_stroke_facts (GlimsEngine               *engine,
               gimp_drawable_get_active_mask (drawable) != GIMP_COMPONENT_MASK_ALL)) ||
       gimp_image_get_floating_selection (image) ||
       !symmetry || G_OBJECT_TYPE (symmetry) != GIMP_TYPE_SYMMETRY ||
-      (!ink && paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY) ||
+      (!ink && paint_mode != GIMP_LAYER_MODE_NORMAL && paint_mode != GIMP_LAYER_MODE_NORMAL_LEGACY &&
+       brush->tool != GLIMS_PAINT_PAINTBRUSH && brush->tool != GLIMS_PAINT_PENCIL) ||
       options->expand_use || options->jitter_options->use_jitter ||
       options->smoothing_options->use_smoothing ||
       (!ink && options->application_mode != GIMP_PAINT_CONSTANT &&
        options->application_mode != GIMP_PAINT_INCREMENTAL))
     return FALSE;
 
+  /* A fade stroke's private dynamics fails the pressure-only contract,
+   * so it gets its own; a stroke without a fade keeps the existing path. */
+  gboolean fading = brush->fade_steps != 0;
   g_autofree gchar *dynamics = NULL;
   if (gimp_paint_options_are_dynamics_enabled (options))
     {
-      dynamics = glims_stroke_dynamics_fingerprint (TRUE,
-                                                   gimp_context_get_dynamics (context));
+      dynamics = fading
+        ? glims_stroke_fade_dynamics_fingerprint (TRUE,
+                                                  gimp_context_get_dynamics (context))
+        : glims_stroke_dynamics_fingerprint (TRUE,
+                                             gimp_context_get_dynamics (context));
       if (!dynamics) return FALSE;
     }
 
@@ -891,8 +907,10 @@ capture_stroke_facts (GlimsEngine               *engine,
    * recordings additionally bind to the actual bounded native config. */
   if (dynamics)
     {
-      static const gchar dynamics_domain[] = "glims-stroke-pressure-size-v1";
-      g_checksum_update (hash, (const guchar *) dynamics_domain, sizeof dynamics_domain);
+      static const gchar pressure_domain[] = "glims-stroke-pressure-size-v1";
+      static const gchar fade_domain[] = "glims-stroke-fade-dynamics-v1";
+      g_checksum_update (hash, fading ? (const guchar *) fade_domain : (const guchar *) pressure_domain,
+                         fading ? sizeof fade_domain : sizeof pressure_domain);
       g_checksum_update (hash, (const guchar *) dynamics, strlen (dynamics) + 1);
     }
   /* Keep existing Pencil/Eraser digests unchanged. The added tool must
@@ -936,6 +954,64 @@ capture_stroke_facts (GlimsEngine               *engine,
       const guint8 identity[] = { brush->tool, gimp_drawable_has_alpha (drawable) != FALSE };
       g_checksum_update (hash, (const guchar *) sponge_domain, sizeof sponge_domain);
       g_checksum_update (hash, identity, sizeof identity);
+    }
+  /* Strokes with paint options bind the effective mode and the whole
+   * fade configuration, inert fields hashed as 0. The effective spacing
+   * needs no new bytes: options->brush_spacing is already in values[]. */
+  if (!ink && !sponge && glims_brush_has_paint_options (brush))
+    {
+      GEnumClass *modes = g_type_class_ref (GIMP_TYPE_LAYER_MODE);
+      GEnumValue *mode_value = g_enum_get_value (modes, paint_mode);
+      g_autofree gchar *mode_nick = mode_value ? g_strdup (mode_value->value_nick) : NULL;
+      g_type_class_unref (modes);
+      if (!mode_nick)
+        return FALSE;
+      static const gchar options_domain[] = "glims-stroke-paint-options-v1";
+      g_checksum_update (hash, (const guchar *) options_domain, sizeof options_domain);
+      g_checksum_update (hash, (const guchar *) mode_nick, strlen (mode_nick) + 1);
+      const gdouble fade_head[] = { brush->fade_steps,
+        brush->fade_steps ? options->fade_options->fade_length : 0 };
+      for (gsize i = 0; i < G_N_ELEMENTS (fade_head); i++)
+        {
+          gchar number[G_ASCII_DTOSTR_BUF_SIZE];
+          g_ascii_dtostr (number, sizeof number, fade_head[i] == 0 ? 0 : fade_head[i]);
+          g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+        }
+      if (brush->fade_steps)
+        {
+          /* apply_fade always paints the fade in pixels. */
+          if (options->fade_options->fade_unit != gimp_unit_pixel ())
+            return FALSE;
+          static const gchar unit_tag[] = "pixel";
+          g_checksum_update (hash, (const guchar *) unit_tag, sizeof unit_tag);
+        }
+      const gdouble fade_tail[] = {
+        brush->fade_steps && options->fade_options->fade_reverse ? 1 : 0,
+        brush->fade_steps ? options->fade_options->fade_repeat : 0,
+        brush->fade_steps ? brush->fade_target : 0 };
+      for (gsize i = 0; i < G_N_ELEMENTS (fade_tail); i++)
+        {
+          gchar number[G_ASCII_DTOSTR_BUF_SIZE];
+          g_ascii_dtostr (number, sizeof number, fade_tail[i] == 0 ? 0 : fade_tail[i]);
+          g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+        }
+      if (brush->fade_steps && brush->fade_target == GLIMS_FADE_TO_BACKGROUND)
+        {
+          const gdouble background[] = { brush->fade_background_red,
+            brush->fade_background_green, brush->fade_background_blue,
+            options->gradient_options->gradient_reverse ? 1 : 0, options->gradient_options->gradient_blend_color_space };
+          for (gsize i = 0; i < G_N_ELEMENTS (background); i++)
+            {
+              gchar number[G_ASCII_DTOSTR_BUF_SIZE];
+              g_ascii_dtostr (number, sizeof number, background[i] == 0 ? 0 : background[i]);
+              g_checksum_update (hash, (const guchar *) number, strlen (number) + 1);
+            }
+          GimpGradient *gradient = gimp_context_get_gradient (context);
+          const gchar *gradient_name = gradient ? gimp_object_get_name (GIMP_OBJECT (gradient)) : NULL;
+          if (!gradient_name)
+            return FALSE;
+          g_checksum_update (hash, (const guchar *) gradient_name, strlen (gradient_name) + 1);
+        }
     }
   facts->fingerprint = g_strdup (g_checksum_get_string (hash));
 

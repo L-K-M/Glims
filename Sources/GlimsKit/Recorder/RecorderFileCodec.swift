@@ -47,7 +47,8 @@ enum RecorderFileCodec {
     static let clippingVersion = 37
     /// Image > Adjust > Replace Color; renumber if another branch takes 38 first.
     static let replaceColorVersion = 38
-    static let latestVersion = replaceColorVersion
+    static let paintOptionsStrokeVersion = 39
+    static let latestVersion = paintOptionsStrokeVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -169,6 +170,7 @@ enum RecorderFileCodec {
         var hasScaleInterpolation = false
         var hasArbitraryRotation = false
         var hasSmoothSelection = false
+        var hasPaintOptions = false
         var hasAdjustment = false
         var hasImageResolution = false
         var hasCropResize = false
@@ -195,6 +197,8 @@ enum RecorderFileCodec {
                 if case .completeTabletStroke = command { hasTabletStroke = true }
                 if case .completeTabletStroke(let stroke) = command, stroke.settings.eraserBackground != nil { hasEraserBackground = true }
                 if case .completeStroke(let stroke) = command, stroke.settings.eraserBackground != nil { hasEraserBackground = true }
+                if case .completeTabletStroke(let stroke) = command, stroke.settings.hasRecordedPaintOptions { hasPaintOptions = true }
+                if case .completeStroke(let stroke) = command, stroke.settings.hasRecordedPaintOptions { hasPaintOptions = true }
                 if case .completeStroke(let stroke) = command, stroke.settings.tool.isSponge { hasSpongeStroke = true }
                 if case .channelToSelection = command { hasChannelSelection = true }
                 if case .transformLayer = command { hasLayerTransform = true }
@@ -382,6 +386,9 @@ enum RecorderFileCodec {
         if fileVersion == replaceColorVersion, !hasReplaceColor {
             throw RecorderFileError.invalid("Version 38 requires a successful Replace Color command.")
         }
+        if fileVersion == paintOptionsStrokeVersion, !hasPaintOptions {
+            throw RecorderFileError.invalid("Version 39 requires a successful stroke with paint options.")
+        }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
         }
@@ -477,17 +484,61 @@ enum RecorderFileCodec {
         return try .init(red: number(color.get("red")), green: number(color.get("green")), blue: number(color.get("blue")))
     }
 
+    /// The recorded paint option fields: absent stays absent, present
+    /// fields need version 39.
+    private static func paintOptions(_ settings: Object, version: Int) throws
+        -> (paintMode: String?, spacing: Double?, fade: EngineSession.Brush.Fade?,
+            fadeBackground: EngineSession.Brush.EraserBackground?) {
+        func field(_ key: String) throws -> RecorderJSON? {
+            guard let node = settings.optional(key) else { return nil }
+            guard version >= paintOptionsStrokeVersion else {
+                throw RecorderFileError.invalid("Recorded paint options need recording version 39.")
+            }
+            return node
+        }
+        let paintMode = try field("paintMode").map { try string($0) }
+        let spacing = try field("spacing").map { try number($0) }
+        var fade: EngineSession.Brush.Fade?
+        var fadeBackground: EngineSession.Brush.EraserBackground?
+        if let fadeNode = try field("fade") {
+            let value = try Object(fadeNode, required: ["steps", "target"], optional: ["background"])
+            let steps = try integer(value.get("steps"), range: 1...EngineSession.PaintModes.maxFadeSteps)
+            switch try string(value.get("target")) {
+            case "transparent":
+                guard value.optional("background") == nil else {
+                    throw RecorderFileError.invalid("A transparent fade carries no background color.")
+                }
+                fade = .init(steps: steps, target: .transparent)
+            case "background":
+                guard let node = value.optional("background") else {
+                    throw RecorderFileError.invalid("A fade to the background needs the background color.")
+                }
+                let color = try Object(node, required: ["red", "green", "blue"])
+                fadeBackground = try .init(red: number(color.get("red")), green: number(color.get("green")),
+                                           blue: number(color.get("blue")))
+                fade = .init(steps: steps, target: .background)
+            default:
+                throw RecorderFileError.invalid("Unknown recorded fade target.")
+            }
+        }
+        return (paintMode, spacing, fade, fadeBackground)
+    }
+
     private static func stroke(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderStrokeCommand {
         let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
         let settings = try Object(value.get("settings"),
-            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness", "eraserBackground"])
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"],
+            optional: ["hardness", "eraserBackground", "paintMode", "spacing", "fade"])
+        let options = try paintOptions(settings, version: version)
         guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))),
               let brush = try RecorderStrokeCommand.Settings(tool: tool, size: number(settings.get("size")),
                   opacity: number(settings.get("opacity")), red: number(settings.get("red")),
                   green: number(settings.get("green")), blue: number(settings.get("blue")),
                   hardness: settings.optional("hardness").map { try number($0) },
                   pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase")),
-                  eraserBackground: eraserBackground(settings.optional("eraserBackground"), version: version)) else {
+                  eraserBackground: eraserBackground(settings.optional("eraserBackground"), version: version),
+                  paintMode: options.paintMode, spacing: options.spacing,
+                  fade: options.fade, fadeBackground: options.fadeBackground) else {
             throw RecorderFileError.invalid("Invalid recorded brush settings.")
         }
         let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])
@@ -677,7 +728,9 @@ enum RecorderFileCodec {
     private static func tabletStroke(_ node: RecorderJSON, version: Int, points: inout Int) throws -> RecorderTabletStrokeCommand {
         let value = try Object(node, required: ["tag", "settings", "facts", "first", "batches"])
         let settings = try Object(value.get("settings"),
-            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"], optional: ["hardness", "eraserBackground"])
+            required: ["tool", "size", "opacity", "red", "green", "blue", "pressureSize", "antiErase"],
+            optional: ["hardness", "eraserBackground", "paintMode", "spacing", "fade"])
+        let options = try paintOptions(settings, version: version)
         guard let tool = RecorderStrokeCommand.Tool(rawValue: try string(settings.get("tool"))) else {
             throw RecorderFileError.invalid("Invalid recorded tablet brush tool.")
         }
@@ -686,7 +739,9 @@ enum RecorderFileCodec {
                   green: number(settings.get("green")), blue: number(settings.get("blue")),
                   hardness: settings.optional("hardness").map { try number($0) },
                   pressureSize: bool(settings.get("pressureSize")), antiErase: bool(settings.get("antiErase")),
-                  eraserBackground: eraserBackground(settings.optional("eraserBackground"), version: version)) else {
+                  eraserBackground: eraserBackground(settings.optional("eraserBackground"), version: version),
+                  paintMode: options.paintMode, spacing: options.spacing,
+                  fade: options.fade, fadeBackground: options.fadeBackground) else {
             throw RecorderFileError.invalid("Invalid recorded tablet brush settings.")
         }
         let facts = try Object(value.get("facts"), required: ["brush", "fingerprint"])

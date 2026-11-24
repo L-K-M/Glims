@@ -49,12 +49,15 @@ extension RecorderFileCodec {
                 }
             case .success(.completeTabletStroke(let stroke), _):
                 pointCount += try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
-                fileVersion = max(fileVersion, stroke.settings.eraserBackground == nil ? tabletStrokeVersion : eraserBackgroundVersion)
+                let required = stroke.settings.hasRecordedPaintOptions ? paintOptionsStrokeVersion :
+                    (stroke.settings.eraserBackground == nil ? tabletStrokeVersion : eraserBackgroundVersion)
+                fileVersion = max(fileVersion, required)
             case .success(.completeStroke(let stroke), _):
                 let count = try RecorderFileLimits.strokePointCount(stroke.trace, remaining: RecorderFileLimits.points - pointCount)
                 pointCount += count
-                let required = stroke.settings.eraserBackground != nil ? eraserBackgroundVersion :
-                    (stroke.settings.tool.isSponge ? spongeStrokeVersion : strokeVersion)
+                let required = stroke.settings.hasRecordedPaintOptions ? paintOptionsStrokeVersion :
+                    (stroke.settings.eraserBackground != nil ? eraserBackgroundVersion :
+                    (stroke.settings.tool.isSponge ? spongeStrokeVersion : strokeVersion))
                 fileVersion = max(fileVersion, required)
             case .success(.channelToSelection, _):
                 // Version 3 covers both extensions; keep the highest.
@@ -264,6 +267,26 @@ extension RecorderFileCodec {
                         "first": try labStrokePointJSON(stroke.trace.first), "batches": .array(batches)])
     }
 
+    /// The recorded paint options: absent fields stay absent in the file.
+    private static func paintOptionsJSON(_ brush: RecorderStrokeCommand.Settings,
+                                         into settings: inout [String: RecorderJSON]) throws {
+        if let paintMode = brush.paintMode { settings["paintMode"] = .string(paintMode) }
+        if let spacing = brush.spacing { settings["spacing"] = try d(spacing) }
+        if let fade = brush.fade {
+            var fadeFields: [String: RecorderJSON] = ["steps": j(fade.steps)]
+            switch fade.target {
+            case .transparent:
+                fadeFields["target"] = .string("transparent")
+            case .background:
+                fadeFields["target"] = .string("background")
+                if let background = brush.fadeBackground {
+                    fadeFields["background"] = .object(["red": try d(background.red), "green": try d(background.green), "blue": try d(background.blue)])
+                }
+            }
+            settings["fade"] = .object(fadeFields)
+        }
+    }
+
     private static func tabletStrokeJSON(_ value: RecorderTabletStrokeCommand) throws -> RecorderJSON {
         let stroke = try value.validated()
         _ = try RecorderFileLimits.tabletStrokePointCount(stroke.trace, remaining: RecorderFileLimits.points)
@@ -277,6 +300,7 @@ extension RecorderFileCodec {
         if let background = brush.eraserBackground {
             settings["eraserBackground"] = .object(["red": try d(background.red), "green": try d(background.green), "blue": try d(background.blue)])
         }
+        try paintOptionsJSON(brush, into: &settings)
         let identity = stroke.facts.brush
         var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
         if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
@@ -307,6 +331,7 @@ extension RecorderFileCodec {
         if let background = brush.eraserBackground {
             settings["eraserBackground"] = .object(["red": try d(background.red), "green": try d(background.green), "blue": try d(background.blue)])
         }
+        try paintOptionsJSON(brush, into: &settings)
         let identity = value.facts.brush
         var brushIdentity: [String: RecorderJSON] = ["name": .string(identity.name), "isInternal": .bool(identity.isInternal)]
         if let collection = identity.collection { brushIdentity["collection"] = .string(collection) }
