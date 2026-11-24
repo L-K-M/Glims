@@ -267,7 +267,7 @@ enum RecorderFileCodec {
                     guard let description = descriptions[produced] else {
                         throw RecorderFileError.invalid("A produced symbol is missing.")
                     }
-                    guard description.kind != .channel, description.kind != .quickMask else {
+                    guard description.kind.describesLayer else {
                         throw RecorderFileError.invalid("A produced symbol must describe a layer.")
                     }
                     guard usedSymbols.insert(produced).inserted else {
@@ -1334,7 +1334,7 @@ enum RecorderFileCodec {
     private static func validate(_ binding: RecorderBindingDescription, for command: RecorderFileCommand,
                                  descriptions: [UUID: RecorderTargetDescription]) throws {
         for id in try referencedSymbols(binding) where descriptions[id] == nil { throw RecorderFileError.invalid("A binding references a missing symbol.") }
-        func layer(_ id: UUID) -> Bool { descriptions[id].map { $0.kind != .channel && $0.kind != .quickMask } ?? false }
+        func layer(_ id: UUID) -> Bool { descriptions[id].map { $0.kind.describesLayer } ?? false }
         switch (command, binding) {
         case (.layerProperties, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("Layer properties need a layer description.") }

@@ -113,6 +113,10 @@ extension EngineSmokeTest {
         if case .success(.mergeVisible)? = rows.dropFirst(5).first?.resolution {
             check(true, "Merge Visible records a row without fields")
         } else { check(false, "the sixth row is Merge Visible") }
+        if case .success(.selectionShape(let shape, _))? = rows.dropFirst(7).first?.resolution {
+            check(shape == .rectangle(CGRect(x: 8, y: 8, width: 20, height: 20)),
+                  "the rectangle selection records its shape")
+        } else { check(false, "the eighth row is the rectangle selection") }
         if case .success(.selectSimilar(let threshold, let antialias, let sampleMerged))?
             = rows.dropFirst(8).first?.resolution {
             check(threshold == 15.0 / 255.0 && antialias && sampleMerged,
@@ -160,7 +164,9 @@ extension EngineSmokeTest {
         // produced copy and merged layer resolve during replay itself.
         let choices = try RecorderBatchBindings.resolve(
             file: file, candidates: b.recorderBatchCandidates(), policy: .matchingNamesAndKinds)
-        check(choices.count == 1, "only the pasted layer needs an install choice (\(choices.count))")
+        guard choices.count == 1 else {
+            return check(false, "only the pasted layer needs an install choice (\(choices.count))")
+        }
         var installed: Result<Void, Error>?
         b.installRecording(try RecorderFileSemanticBridge.prepare(file),
                            checkpoint: try b.recorderInstallCheckpoint(),

@@ -43,6 +43,8 @@ final class ImageDocument {
     private var recorderProducedSymbols: [Int: UUID] = [:]
     /// The installed file's explicit choices, keyed by symbol, kept so a
     /// deferred row can resolve its non-produced inputs at replay time.
+    /// Symbol keys survive record removal unchanged, so unlike the
+    /// ordinal-keyed maps above this one needs no reindexing.
     private var recorderInstalledTargets: [UUID: RecorderRuntimeTarget] = [:]
     /// The layer each replayed producing step actually created, keyed by its
     /// produced symbol. Filled only after that step's native work succeeds.
@@ -8308,6 +8310,9 @@ final class ImageDocument {
                                                   choices: [UUID: RecorderInstallChoice],
                                                   session: EngineSession, image: Int32) throws -> RecorderInstallation {
         let file = prepared.file
+        // Failure and cancelled rows never carry `produces` (the codec and
+        // settleRecording both leave it nil there), so this collects only
+        // the producing success rows.
         let producedByRow = file.records.reduce(into: [Int: UUID]()) { result, row in
             if let symbol = row.produces { result[row.ordinal] = symbol }
         }
@@ -8719,7 +8724,7 @@ final class ImageDocument {
         // Its result still reaches the error channel but cannot restart replay.
         if case .failure(let error) = result { onError?(String(describing: error)) }
         guard generation == recorderReplayGeneration, recorder.isReplaying, !isClosing else { return }
-        if case .success(.some(let created)) = result,
+        if case .success(.some(let created)) = result, created > 0,
            let symbol = recorderProducedSymbols[index] {
             recorderProducedLayers[symbol] = created
         }
@@ -8947,7 +8952,7 @@ final class ImageDocument {
                                                            produced: [UUID: Int32],
                                                            session: EngineSession, image: Int32) throws -> RecorderContext {
         func layer(_ symbol: UUID) throws -> Int32 {
-            if let id = produced[symbol] { return id }
+            if let id = produced[symbol], id > 0 { return id }
             guard case .layer(let id)? = installed[symbol], id > 0 else {
                 throw RecorderReplayError(message: "The layer an earlier step created is not available.")
             }
@@ -9091,6 +9096,9 @@ final class ImageDocument {
     private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil,
                                   explicitChannel: Int32? = nil) throws -> RecorderCapture? {
         guard let command, recorder.isRecording else { return nil }
+        // The context is captured before reserve() runs (it is this call's
+        // argument), so a capture failure throws before any row exists and
+        // can never strand an unsettled reservation.
         return try reserveRecording(context: captureRecorderContext(for: command, explicitLayer: explicitLayer,
                                                                    explicitChannel: explicitChannel))
     }
