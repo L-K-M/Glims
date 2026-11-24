@@ -40,9 +40,9 @@ file references, never native IDs, persistent native tattoos or Recorder epochs.
 
 Records remain in acceptance order with contiguous integer `ordinal` values
 starting at zero. A `success` outcome has exactly `ordinal`, `outcome`,
-`command` and `binding`, plus a `produces` symbol UUID that is required on
-`duplicateLayers` and `mergeVisible` success rows and forbidden on every
-other row. A `failure` or
+`command` and `binding`. `duplicateLayers` and `mergeVisible` success rows
+additionally carry a required `produces` symbol UUID; every other row must
+omit it. A `failure` or
 `cancelled` outcome instead has `reason`, including an empty reason. The codec
 preserves every settled row. Failed/cancelled rows do not contain an invented
 attempted command; the current log discards that payload. Their presence
