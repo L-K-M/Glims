@@ -111,6 +111,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// validation and the smoke test can reach its state. The panel owns
     /// the canvas sampler hook and clears it when it closes.
     private(set) var colorRangePanel: ColorRangePanel?
+    /// Image ▸ Blend With Image…'s utility panel, retained while it is open
+    /// so validation and the smoke test can reach its state.
+    private(set) var blendImagePanel: BlendImagePanel?
+    /// Image ▸ Blend Channels…'s utility panel, retained while it is open so
+    /// validation and the smoke test can reach its state.
+    private(set) var blendChannelsPanel: BlendChannelsPanel?
     /// View ▸ Show Grid's cached per-window state, defaulting to off.
     private(set) var gridViewState = GridViewState()
 
@@ -648,7 +654,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc override func deleteBackward(_ sender: Any?) { clearPixels(sender) }
     @objc override func cancelOperation(_ sender: Any?) {
-        if let colorRangePanel { colorRangePanel.cancel() }
+        if let blendImagePanel { blendImagePanel.cancel() }
+        else if let blendChannelsPanel { blendChannelsPanel.cancel() }
+        else if let colorRangePanel { colorRangePanel.cancel() }
         else if let previewPanel { previewPanel.cancel() }
         else if let inkLevelsPanel { inkLevelsPanel.cancel() }
         else if let inkCurvesPanel { inkCurvesPanel.cancel() }
@@ -2103,6 +2111,45 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         panel.showWindow(nil)
         stateDidChange()
     }
+    /// Image ▸ Blend With Image…: opens this document's utility panel.
+    /// The panel keeps this document's canvas for other work; edits are
+    /// refused through the same preview gate a filter panel uses, so no
+    /// second blend panel or Color Range panel can open meanwhile. The menu
+    /// validation already read the cached refusal; OK queues one command and
+    /// closes.
+    @objc func blendWithImage(_ sender: Any?) {
+        guard let window, !closeStarted, !previewBusy, colorRangePanel == nil, blendImagePanel == nil,
+              blendChannelsPanel == nil, imageDocument.blendImageRefusal() == nil else { return }
+        endPendingEdits()
+        let panel = BlendImagePanel(document: imageDocument)
+        panel.onClose = { [weak self, weak panel] in
+            guard let self, let panel, self.blendImagePanel === panel else { return }
+            self.blendImagePanel = nil
+            self.imageDocument.filterPreviewIsOpen = false
+        }
+        blendImagePanel = panel
+        imageDocument.filterPreviewIsOpen = true
+        panel.showWindow(nil)
+        stateDidChange()
+    }
+
+    /// Image ▸ Blend Channels…: opens this document's utility panel with
+    /// the same single-panel and preview-gate guards as Blend With Image.
+    @objc func blendChannels(_ sender: Any?) {
+        guard let window, !closeStarted, !previewBusy, colorRangePanel == nil, blendImagePanel == nil,
+              blendChannelsPanel == nil, imageDocument.blendChannelsRefusal() == nil else { return }
+        endPendingEdits()
+        let panel = BlendChannelsPanel(document: imageDocument)
+        panel.onClose = { [weak self, weak panel] in
+            guard let self, let panel, self.blendChannelsPanel === panel else { return }
+            self.blendChannelsPanel = nil
+            self.imageDocument.filterPreviewIsOpen = false
+        }
+        blendChannelsPanel = panel
+        imageDocument.filterPreviewIsOpen = true
+        panel.showWindow(nil)
+        stateDidChange()
+    }
     @objc func addTransparency(_ sender: Any?) { applyAdjustment(.addAlpha) }
     @objc func removeTransparency(_ sender: Any?) { applyAdjustment(.removeAlpha) }
 
@@ -3544,6 +3591,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             menuItem.toolTip = refusal
             return refusal == nil && !closeStarted && !editingBlocked && !previewBusy
                 && colorRangePanel == nil
+        case #selector(blendWithImage(_:)):
+            // Cached admission only; the engine revalidates the source and
+            // target documents. The panel holds this document's preview
+            // gate, so neither blend panel nor Color Range can stack.
+            let refusal = imageDocument.blendImageRefusal()
+            menuItem.toolTip = refusal
+            return refusal == nil && !closeStarted && !editingBlocked && !previewBusy
+                && colorRangePanel == nil && blendImagePanel == nil && blendChannelsPanel == nil
+        case #selector(blendChannels(_:)):
+            let refusal = imageDocument.blendChannelsRefusal()
+            menuItem.toolTip = refusal
+            return refusal == nil && !closeStarted && !editingBlocked && !previewBusy
+                && colorRangePanel == nil && blendImagePanel == nil && blendChannelsPanel == nil
         case #selector(selectSimilar(_:)):
             let refusal = imageDocument.selectSimilarRefusal
             menuItem.toolTip = refusal ?? Self.similarHint
@@ -4456,6 +4516,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         adjustmentSheet?.invalidate()
 
         colorRangePanel?.cancel()
+        blendImagePanel?.cancel()
+        blendChannelsPanel?.cancel()
         previewPanel?.cancel()
         if let token = inkPreviewToken { cancelInkAdjustment(token: token) }
         if let token = labPreviewToken { cancelLabAdjustment(token: token) }

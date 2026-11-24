@@ -5964,6 +5964,377 @@ final class EngineSession: @unchecked Sendable {
         return raw
     }
 
+    /// Image > Blend With Image and Image > Blend Channels' blend modes
+    /// (GlimsBlendMode). The values are the facade's own and never encode
+    /// a native GIMP enum.
+    enum BlendMode: UInt32, CaseIterable {
+        case normal = 0, multiply, screen, overlay, softLight, hardLight,
+             darken, lighten, difference, exclusion, add, subtract
+
+        var title: String {
+            switch self {
+            case .normal: return "Normal"
+            case .multiply: return "Multiply"
+            case .screen: return "Screen"
+            case .overlay: return "Overlay"
+            case .softLight: return "Soft Light"
+            case .hardLight: return "Hard Light"
+            case .darken: return "Darken"
+            case .lighten: return "Lighten"
+            case .difference: return "Difference"
+            case .exclusion: return "Exclusion"
+            case .add: return "Add"
+            case .subtract: return "Subtract"
+            }
+        }
+    }
+
+    /// One channel of an open image (GlimsChannelKind). NONE is meaningful
+    /// only as an optional mask and means "no mask".
+    enum ChannelKind: UInt32, CaseIterable {
+        case composite = 0, red, green, blue, gray, alpha, selection, saved
+        case none = 255
+
+        var title: String {
+            switch self {
+            case .composite: return "RGB"
+            case .red: return "Red"
+            case .green: return "Green"
+            case .blue: return "Blue"
+            case .gray: return "Gray"
+            case .alpha: return "Alpha"
+            case .selection: return "Selection"
+            case .saved: return "Saved Channel"
+            case .none: return "None"
+            }
+        }
+    }
+
+    /// A channel of an open image: `layer` 0 reads the merged visible
+    /// image, `item` names a saved channel when `kind` is `.saved`, and
+    /// `invert` flips the source color (or the mask value) before blending.
+    struct ChannelRef: Equatable {
+        var image: Int32 = 0
+        var layer: Int32 = 0
+        var kind: ChannelKind = .composite
+        var item: Int32 = 0
+        var invert: Bool = false
+
+        static let noMask = ChannelRef(kind: .none)
+
+        init(image: Int32 = 0, layer: Int32 = 0, kind: ChannelKind = .composite,
+             item: Int32 = 0, invert: Bool = false) {
+            self.image = image
+            self.layer = layer
+            self.kind = kind
+            self.item = item
+            self.invert = invert
+        }
+
+        init(kind: ChannelKind) {
+            self.init(image: 0, layer: 0, kind: kind, item: 0, invert: false)
+        }
+    }
+
+    /// Image > Blend With Image's settings. `mask` with `kind` `.none` means
+    /// no mask; every other kind contributes one scalar value per pixel.
+    struct BlendImageSettings: Equatable {
+        /// A command starts with no source; the panel fills it from its
+        /// document, layer and channel choices.
+        var source = ChannelRef.noMask
+        var mode: BlendMode = .normal
+        var opacity: Double = 1
+        var scale: Double = 1
+        var offset: Double = 0
+        var mask = ChannelRef.noMask
+
+        var validationError: String? {
+            guard source.kind != .none else { return "Choose a source channel." }
+            return EngineSession.blendNumericError(mode: mode, opacity: opacity, scale: scale, offset: offset)
+        }
+    }
+
+    /// Where Image > Blend Channels puts its one-channel result.
+    enum BlendChannelsDestination: Equatable {
+        case newChannel(String)
+        case newSelection
+        case newImage
+
+        var title: String {
+            switch self {
+            case .newChannel: return "New Channel"
+            case .newSelection: return "Selection"
+            case .newImage: return "New Document"
+            }
+        }
+
+        var rawValue: UInt32 {
+            switch self {
+            case .newChannel: return UInt32(GLIMS_CALCULATIONS_NEW_CHANNEL.rawValue)
+            case .newSelection: return UInt32(GLIMS_CALCULATIONS_NEW_SELECTION.rawValue)
+            case .newImage: return UInt32(GLIMS_CALCULATIONS_NEW_IMAGE.rawValue)
+            }
+        }
+    }
+
+    /// Image > Blend Channels' settings. `first` is the backdrop and `second`
+    /// the source; both must be single channels, never COMPOSITE or NONE.
+    struct BlendChannelsSettings: Equatable {
+        var first = ChannelRef()
+        var second = ChannelRef()
+        var mode: BlendMode = .normal
+        var opacity: Double = 1
+        var scale: Double = 1
+        var offset: Double = 0
+        var mask = ChannelRef.noMask
+        var destination: BlendChannelsDestination = .newChannel("Alpha 1")
+        /// Ignored by `.newImage`; required by the other destinations.
+        var destinationImage: Int32 = 0
+
+        /// The new channel's name; nil for the destinations that ignore it.
+        var channelName: String? {
+            if case .newChannel(let name) = destination { return name }
+            return nil
+        }
+
+        var validationError: String? {
+            guard first.kind != .none, first.kind != .composite else {
+                return "Choose a single channel for First."
+            }
+            guard second.kind != .none, second.kind != .composite else {
+                return "Choose a single channel for Second."
+            }
+            if let numeric = EngineSession.blendNumericError(mode: mode, opacity: opacity,
+                                                    scale: scale, offset: offset) {
+                return numeric
+            }
+            switch destination {
+            case .newChannel, .newSelection:
+                guard destinationImage != 0 else {
+                    return "Choose a document for the result."
+                }
+            case .newImage:
+                break
+            }
+            return nil
+        }
+    }
+
+    /// The two Image menu blend commands, named for user-visible copy and
+    /// the cached document-support refusal.
+    enum BlendCommand: String {
+        case withImage = "Blend With Image"
+        case channels = "Blend Channels"
+
+        var title: String { rawValue }
+    }
+
+    /// Why a blend command cannot run on a document with this storage layout
+    /// and color mode, or nil. Mirrors the engine's UNSUPPORTED wording;
+    /// callers add the busy and floating-selection checks.
+    static func blendDocumentRefusal(_ command: BlendCommand, layout: ImageStorageLayout,
+                                     mode: ColorMode) -> String? {
+        guard layout == .ordinary || layout == .legacyUnknown else {
+            return "\(command.title) is available for ordinary layered images only."
+        }
+        if mode == .indexed {
+            return "\(command.title) is unavailable for indexed images."
+        }
+        if mode == .lab || mode == .cmyk || mode == .multichannel {
+            return "\(command.title) is not available for component documents."
+        }
+        guard mode == .rgb || mode == .grayscale else {
+            return "\(command.title) is available for RGB and grayscale images only."
+        }
+        return nil
+    }
+
+    private static func blendNumericError(mode: BlendMode, opacity: Double,
+                                          scale: Double, offset: Double) -> String? {
+        guard mode.rawValue <= GLIMS_BLEND_SUBTRACT.rawValue else { return "Choose a blend mode." }
+        guard opacity.isFinite, opacity > 0, opacity <= 1 else {
+            return "Opacity must be greater than 0 and at most 100%."
+        }
+        guard scale.isFinite, (1...2).contains(scale) else {
+            return "Scale must be between 1 and 2."
+        }
+        guard offset.isFinite, (-1...1).contains(offset) else {
+            return "Offset must be between −1 and 1."
+        }
+        return nil
+    }
+
+    static func channelRefRaw(_ ref: ChannelRef) -> GlimsChannelRef {
+        var raw = GlimsChannelRef()
+        raw.struct_size = UInt32(MemoryLayout<GlimsChannelRef>.size)
+        raw.image = ref.image
+        raw.layer = ref.layer
+        raw.channel = ref.kind.rawValue
+        raw.item = ref.item
+        raw.invert = ref.invert ? 1 : 0
+        return raw
+    }
+
+    static func applyImageRaw(_ settings: BlendImageSettings) -> GlimsApplyImageSettings {
+        var raw = GlimsApplyImageSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsApplyImageSettings>.size)
+        raw.source = channelRefRaw(settings.source)
+        raw.mode = settings.mode.rawValue
+        raw.opacity = settings.opacity
+        raw.scale = settings.scale
+        raw.offset = settings.offset
+        raw.mask = channelRefRaw(settings.mask)
+        return raw
+    }
+
+    static func calculationsRaw(_ settings: BlendChannelsSettings,
+                                channelName: UnsafePointer<CChar>? = nil) -> GlimsCalculationsSettings {
+        var raw = GlimsCalculationsSettings()
+        raw.struct_size = UInt32(MemoryLayout<GlimsCalculationsSettings>.size)
+        raw.first = channelRefRaw(settings.first)
+        raw.second = channelRefRaw(settings.second)
+        raw.mode = settings.mode.rawValue
+        raw.opacity = settings.opacity
+        raw.scale = settings.scale
+        raw.offset = settings.offset
+        raw.mask = channelRefRaw(settings.mask)
+        raw.destination = settings.destination.rawValue
+        raw.destination_image = settings.destinationImage
+        raw.channel_name = channelName
+        return raw
+    }
+
+    /// Whether this adapter has both Blend With Image slots (261/262).
+    /// Older adapters keep their image commands and refuse cleanly.
+    var supportsBlendImage: Bool {
+        guard let applyOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_apply_image),
+              let previewOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_apply_image_preview) else {
+            return false
+        }
+        return Int(api.struct_size) >= applyOffset + MemoryLayout.size(ofValue: api.image_apply_image)
+            && Int(api.struct_size) >= previewOffset + MemoryLayout.size(ofValue: api.image_apply_image_preview)
+            && api.image_apply_image != nil
+            && api.image_apply_image_preview != nil
+    }
+
+    /// Whether this adapter has both Blend Channels slots (263/264).
+    var supportsBlendChannels: Bool {
+        guard let calculateOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_calculations),
+              let previewOffset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_calculations_preview) else {
+            return false
+        }
+        return Int(api.struct_size) >= calculateOffset + MemoryLayout.size(ofValue: api.image_calculations)
+            && Int(api.struct_size) >= previewOffset + MemoryLayout.size(ofValue: api.image_calculations_preview)
+            && api.image_calculations != nil
+            && api.image_calculations_preview != nil
+    }
+
+    /// Image > Blend With Image: blends `settings`'s source into `target`
+    /// of `image` as one undo step named "Blend With Image", limited by
+    /// the current selection. Throws the engine's error string.
+    func blendImage(image: Int32, target: Int32, settings: BlendImageSettings) throws {
+        guard supportsBlendImage, let apply = api.image_apply_image else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot blend with another image.")
+        }
+        if let reason = settings.validationError {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: reason)
+        }
+        var raw = Self.applyImageRaw(settings)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(apply(engine, image, target, &raw, &error), error)
+    }
+
+    /// Renders Blend With Image's blended result for display at most
+    /// `maxSide` on its long side, as straight-alpha sRGB 8-bit RGBA.
+    func blendImagePreview(image: Int32, target: Int32, settings: BlendImageSettings,
+                           maxSide: Int32) throws -> (rgba: [UInt8], width: Int, height: Int) {
+        guard supportsBlendImage, let preview = api.image_apply_image_preview else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot render a blend preview.")
+        }
+        if let reason = settings.validationError {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: reason)
+        }
+        guard (1...Int(GLIMS_APPLY_IMAGE_PREVIEW_MAX)).contains(Int(maxSide)) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a blend preview size from 1 to \(GLIMS_APPLY_IMAGE_PREVIEW_MAX) pixels.")
+        }
+        var raw = Self.applyImageRaw(settings)
+        var rgba = [UInt8](repeating: 0, count: Int(maxSide) * Int(maxSide) * 4)
+        var width: Int32 = 0
+        var height: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try rgba.withUnsafeMutableBufferPointer { buffer in
+            try check(preview(engine, image, target, &raw, maxSide,
+                             buffer.baseAddress, Int32(buffer.count),
+                             &width, &height, &error), error)
+        }
+        let w = Int(width), h = Int(height)
+        guard w > 0, h > 0, w * h * 4 <= rgba.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The blend preview size was invalid.")
+        }
+        return (rgba: Array(rgba.prefix(w * h * 4)), width: w, height: h)
+    }
+
+    /// Image > Blend Channels: blends `settings`'s two channels and puts the
+    /// result in the destination as one undo step named "Blend Channels".
+    func blendChannels(settings: BlendChannelsSettings) throws -> (image: Int32, channel: Int32) {
+        guard supportsBlendChannels, let calculate = api.image_calculations else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot blend channels.")
+        }
+        if let reason = settings.validationError {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: reason)
+        }
+        var resultImage: Int32 = 0
+        var resultItem: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        if let channelName = settings.channelName {
+            try channelName.withCString { name in
+                var raw = Self.calculationsRaw(settings, channelName: name)
+                try check(calculate(engine, &raw, &resultImage, &resultItem, &error), error)
+            }
+        } else {
+            var raw = Self.calculationsRaw(settings)
+            try check(calculate(engine, &raw, &resultImage, &resultItem, &error), error)
+        }
+        return (image: resultImage, channel: resultItem)
+    }
+
+    /// Renders Blend Channels' result as one byte per pixel, at most
+    /// `maxSide` on its long side.
+    func blendChannelsPreview(settings: BlendChannelsSettings,
+                              maxSide: Int32) throws -> (gray: [UInt8], width: Int, height: Int) {
+        guard supportsBlendChannels, let preview = api.image_calculations_preview else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine cannot render a channel blend preview.")
+        }
+        if let reason = settings.validationError {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue), message: reason)
+        }
+        guard (1...Int(GLIMS_APPLY_IMAGE_PREVIEW_MAX)).contains(Int(maxSide)) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a blend preview size from 1 to \(GLIMS_APPLY_IMAGE_PREVIEW_MAX) pixels.")
+        }
+        var raw = Self.calculationsRaw(settings)
+        var gray = [UInt8](repeating: 0, count: Int(maxSide) * Int(maxSide))
+        var width: Int32 = 0
+        var height: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        try gray.withUnsafeMutableBufferPointer { buffer in
+            try check(preview(engine, &raw, maxSide, buffer.baseAddress, Int32(buffer.count),
+                             &width, &height, &error), error)
+        }
+        let w = Int(width), h = Int(height)
+        guard w > 0, h > 0, w * h <= gray.count else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The channel blend preview size was invalid.")
+        }
+        return (gray: Array(gray.prefix(w * h)), width: w, height: h)
+    }
+
     /// Whether this adapter has both Select > Color Range slots (257/258).
     /// Older adapters keep their selection commands and refuse cleanly.
     var supportsColorRange: Bool {

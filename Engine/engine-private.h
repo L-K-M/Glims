@@ -795,6 +795,24 @@ GlimsStatus glims_image_layer_clipping (GlimsEngine *e, GlimsImageID image,
                                         int32_t *count);
 GlimsStatus glims_layer_clipping_edit (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
                                        uint32_t command, GlimsItemID *result, char **error);
+/* apply-image.c: facade slots 261-264. Apply Image blends one channel of
+ * an open image into a layer or saved channel as one "Apply Image" undo
+ * step, limited by the selection; Calculations blends two channels into a
+ * new channel, selection or grayscale image as one "Calculations" step.
+ * Both previews are read-only and return scaled pixels. */
+GlimsStatus glims_image_apply_image (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                                     const GlimsApplyImageSettings *settings, char **error);
+GlimsStatus glims_image_apply_image_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                                             const GlimsApplyImageSettings *settings,
+                                             int32_t max_side, uint8_t *rgba, int32_t capacity,
+                                             int32_t *width, int32_t *height, char **error);
+GlimsStatus glims_image_calculations (GlimsEngine *e, const GlimsCalculationsSettings *settings,
+                                      GlimsImageID *result_image, GlimsItemID *result_item,
+                                      char **error);
+GlimsStatus glims_image_calculations_preview (GlimsEngine *e,
+                                              const GlimsCalculationsSettings *settings,
+                                              int32_t max_side, uint8_t *gray, int32_t capacity,
+                                              int32_t *width, int32_t *height, char **error);
 GlimsStatus glims_image_align_layers (GlimsEngine *e, GlimsImageID image, const GlimsItemID *layers,
                                       int32_t count, GlimsItemID reference, uint32_t alignment,
                                       char **error);

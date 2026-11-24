@@ -1589,6 +1589,29 @@ MARSHAL (layer_clipping_edit, {
   return glims_layer_clipping_edit (e, a->image, a->item, (uint32_t) a->width,
                                     (GlimsItemID *) a->out, a->error);
 })
+MARSHAL (image_apply_image, {
+  const GlimsApplyImageSettings *settings = a->in;
+  return glims_image_apply_image (e, a->image, a->item, settings, a->error);
+})
+MARSHAL (image_apply_image_preview, {
+  const GlimsApplyImageSettings *settings = a->in;
+  return glims_image_apply_image_preview (e, a->image, a->item, settings, a->width,
+                                          a->pixels, (int32_t) a->stride,
+                                          (int32_t *) a->count, (int32_t *) a->in_out,
+                                          a->error);
+})
+MARSHAL (image_calculations, {
+  const GlimsCalculationsSettings *settings = a->in;
+  return glims_image_calculations (e, settings, (GlimsImageID *) a->out,
+                                  (GlimsItemID *) a->in2, a->error);
+})
+MARSHAL (image_calculations_preview, {
+  const GlimsCalculationsSettings *settings = a->in;
+  return glims_image_calculations_preview (e, settings, a->width, a->pixels,
+                                           (int32_t) a->stride,
+                                           (int32_t *) a->count, (int32_t *) a->in_out,
+                                           a->error);
+})
 MARSHAL (image_merge_visible, return glims_image_merge_visible (e, a->image, a->out, a->error);)
 MARSHAL (selection_to_new_layer, return glims_selection_to_new_layer (e, a->image, a->item,
                                                                       (uint32_t) a->width, a->out, a->error);)
@@ -2680,6 +2703,106 @@ api_layer_clipping_edit (GlimsEngine *e, GlimsImageID image, GlimsItemID layer,
   return glims_facade_call (e, GLIMS_FACADE_OP_layer_clipping_edit,
                             (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
                             layer_clipping_edit_on_engine, &a, error);
+}
+
+/* The item a channel reference names: a saved channel id for SAVED, the
+ * layer id otherwise. Merged and selection references name no item, so
+ * they contribute 0 to the facade's captured sources. */
+static GlimsItemID
+channel_ref_item (const GlimsChannelRef *ref)
+{
+  if (! ref)
+    return 0;
+  return ref->channel == GLIMS_CHANNEL_SAVED ? ref->item : ref->layer;
+}
+
+static GlimsItemID
+apply_image_source_item (const GlimsApplyImageSettings *settings)
+{
+  return settings ? channel_ref_item (&settings->source) : 0;
+}
+
+static GlimsItemID
+apply_image_mask_item (const GlimsApplyImageSettings *settings)
+{
+  return settings ? channel_ref_item (&settings->mask) : 0;
+}
+
+static GlimsItemID
+calculations_first_item (const GlimsCalculationsSettings *settings)
+{
+  return settings ? channel_ref_item (&settings->first) : 0;
+}
+
+static GlimsItemID
+calculations_second_item (const GlimsCalculationsSettings *settings)
+{
+  return settings ? channel_ref_item (&settings->second) : 0;
+}
+
+static GlimsImageID
+calculations_destination (const GlimsCalculationsSettings *settings)
+{
+  return settings ? settings->destination_image : 0;
+}
+
+static GlimsStatus
+api_image_apply_image (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                       const GlimsApplyImageSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .item = target, .in = settings, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_apply_image,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image,
+                              { apply_image_source_item (settings),
+                                apply_image_mask_item (settings) } },
+                            image_apply_image_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_apply_image_preview (GlimsEngine *e, GlimsImageID image, GlimsItemID target,
+                               const GlimsApplyImageSettings *settings, int32_t max_side,
+                               uint8_t *rgba, int32_t capacity,
+                               int32_t *width, int32_t *height, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .image = image, .item = target, .in = settings, .width = max_side,
+                  .pixels = rgba, .stride = (size_t) capacity,
+                  .count = width, .in_out = height, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_apply_image_preview,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image,
+                              { apply_image_source_item (settings),
+                                apply_image_mask_item (settings) } },
+                            image_apply_image_preview_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_calculations (GlimsEngine *e, const GlimsCalculationsSettings *settings,
+                        GlimsImageID *result_image, GlimsItemID *result_item, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .in = settings, .out = result_image, .in2 = result_item, .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_calculations,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE,
+      calculations_destination (settings),
+      { calculations_first_item (settings), calculations_second_item (settings) } },
+    image_calculations_on_engine, &a, error);
+}
+
+static GlimsStatus
+api_image_calculations_preview (GlimsEngine *e, const GlimsCalculationsSettings *settings,
+                                int32_t max_side, uint8_t *gray, int32_t capacity,
+                                int32_t *width, int32_t *height, char **error)
+{
+  if (error) *error = NULL;
+  GlimsArgs a = { .in = settings, .width = max_side, .pixels = gray,
+                  .stride = (size_t) capacity, .count = width, .in_out = height,
+                  .error = error };
+  return glims_facade_call (e, GLIMS_FACADE_OP_image_calculations_preview,
+    (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE,
+      calculations_destination (settings),
+      { calculations_first_item (settings), calculations_second_item (settings) } },
+    image_calculations_preview_on_engine, &a, error);
 }
 
 static GlimsStatus

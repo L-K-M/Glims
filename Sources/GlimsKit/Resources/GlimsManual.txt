@@ -373,6 +373,28 @@ modifier to combine with the selection that exists:
 
 Without a modifier the mode set in Tool Options is used.
 
+# Blending Images
+
+Image > Blend With Image… blends one channel of an open image into
+the active layer or saved channel of another open image. The panel lists
+every open document of the same pixel size, with yours first, then the
+source layer (Merged reads the visible composite), the source channel,
+Invert, the blend mode, opacity and, for Add and Subtract, scale and
+offset. The mask group is optional: choose None, or pick a document,
+layer and channel and optionally invert it. The preview updates as you
+change any control. OK applies the blend as one "Blend With Image" undo
+step, bounded by the selection when there is one. Cancel and Escape leave
+the image unchanged.
+
+Image > Blend Channels… blends two single channels from two open images.
+Choose First and Second documents, layers and channels (RGB is not a
+single channel here), then the mode, opacity, optional mask and where the
+result goes: a new channel with a name such as Alpha 1, a new selection,
+or a new grayscale document. OK applies it as one "Blend Channels" undo
+step; New Document opens the result in its own window. Only RGB and
+grayscale documents take part, and every referenced image must have the
+same pixel size.
+
 # Layers
 
 The Layers palette lists the image's layers and groups, top layer

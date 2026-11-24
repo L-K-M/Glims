@@ -5134,6 +5134,144 @@ final class ImageDocument {
         if !accepted { deliver(nil) }
     }
 
+    // MARK: Blend With Image and Blend Channels
+
+    /// Image > Blend With Image: why the command cannot run now, or nil.
+    /// Reads only cached state, so menu validation never calls the engine.
+    /// The target must be a raster layer or saved channel: groups, editable
+    /// text, link and vector layers and an editing mask refuse, as do
+    /// indexed and component documents and a floating selection.
+    func blendImageRefusal() -> String? {
+        guard session.supportsBlendImage else {
+            return "This image engine cannot blend with another image."
+        }
+        if let reason = EngineSession.blendDocumentRefusal(.withImage, layout: storage.layout,
+                                                          mode: colorInfo.mode) {
+            return reason
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        switch paintTarget {
+        case .mask:
+            return "Blend With Image works on a layer or channel; stop editing the mask first."
+        case .channel:
+            break
+        case .layer(let id):
+            if layers.first(where: { $0.id == id })?.kind == .group {
+                return "Blend With Image works on a layer, not a group."
+            }
+            if let source = layerSources[id], !source.isRasterized,
+               source.kind == .text || source.kind == .link || source.kind == .vector {
+                return "Rasterize the \(source.kind) layer before using Blend With Image."
+            }
+        case nil:
+            return "Choose a layer or channel first."
+        }
+        return nil
+    }
+
+    /// Image > Blend Channels: why the command cannot run now, or nil. Both
+    /// inputs and the destination come from open documents of one pixel
+    /// size, so only the document mode, busyness and a floating selection
+    /// are checked here.
+    func blendChannelsRefusal() -> String? {
+        guard session.supportsBlendChannels else {
+            return "This image engine cannot blend channels."
+        }
+        if let reason = EngineSession.blendDocumentRefusal(.channels, layout: storage.layout,
+                                                          mode: colorInfo.mode) {
+            return reason
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        return nil
+    }
+
+    /// Image > Blend With Image: blends `settings`'s source into the active
+    /// layer or saved channel through one queued command and one undo step
+    /// named "Blend With Image". Cancel never reaches this method. Neither
+    /// blend command is recorded yet, so the Recorder gets an explicit
+    /// unsupported row.
+    func blendImage(_ settings: EngineSession.BlendImageSettings) {
+        if let reason = blendImageRefusal() {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        guard let target = activeDrawable else {
+            onError?("Choose a layer or channel first.")
+            NSSound.beep()
+            return
+        }
+        endPendingUserEdits()
+        run(unsupported: "Blend With Image") { session, image in
+            try session.blendImage(image: image, target: target, settings: settings)
+        }
+    }
+
+    /// Image > Blend Channels: blends `settings`'s two channels through one
+    /// queued command and one undo step named "Blend Channels", then tells
+    /// the app to adopt a `.newImage` result as a new untitled document. The
+    /// Recorder gets an explicit unsupported row because neither blend
+    /// command is recorded yet.
+    func blendChannels(_ settings: EngineSession.BlendChannelsSettings) {
+        if let reason = blendChannelsRefusal() {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        if let reason = settings.validationError {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        endPendingUserEdits()
+        run(unsupported: "Blend Channels") { session, image in
+            let result = try session.blendChannels(settings: settings)
+            DispatchQueue.main.async {
+                guard case .newImage = settings.destination, result.image != 0 else { return }
+                if let adopt = self.blendChannelsHandler {
+                    adopt(self, result.image)
+                } else {
+                    // Nothing adopts the new image as a document, so close it
+                    // instead of leaving it open in the engine.
+                    EngineActivity.shared.closeImage(result.image, session: session) { _ in }
+                }
+            }
+        }
+    }
+
+    /// Renders Blend With Image's result off the main thread, through the
+    /// document's counted read queue, and delivers it on the main thread.
+    /// A refused read delivers nil; the panel drops stale generations.
+    func blendImagePreview(target: Int32, settings: EngineSession.BlendImageSettings,
+                            maxSize: Int32,
+                            deliver: @escaping @MainActor ((rgba: [UInt8], width: Int, height: Int)?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let preview = try? session.blendImagePreview(image: documentImage, target: target,
+                                                         settings: settings, maxSide: maxSize)
+            DispatchQueue.main.async { deliver(preview) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
+    /// Renders Blend Channels' gray result off the main thread, through the
+    /// document's counted read queue, and delivers it on the main thread.
+    func blendChannelsPreview(settings: EngineSession.BlendChannelsSettings, maxSize: Int32,
+                              deliver: @escaping @MainActor ((gray: [UInt8], width: Int, height: Int)?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, _ in
+            let preview = try? session.blendChannelsPreview(settings: settings, maxSide: maxSize)
+            DispatchQueue.main.async { deliver(preview) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.
@@ -5878,6 +6016,10 @@ final class ImageDocument {
 
     /// App-owned adoption keeps separate copy results counted through Quit.
     var labCopyHandler: ((ImageDocument, EngineSession.LabCopyDestination) -> Void)?
+
+    /// Image > Blend Channels' NEW_IMAGE result adoption entry point, wired
+    /// by whoever owns document lifetime; nil without one.
+    var blendChannelsHandler: ((ImageDocument, Int32) -> Void)?
 
     func labCopyRefusal(_ destination: EngineSession.LabCopyDestination) -> String? {
         let layered = storage.layout == .layeredLab

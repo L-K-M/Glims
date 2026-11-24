@@ -937,6 +937,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (Color Range)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "blend-image" {
+                try exerciseBlendImage(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Blend With Image)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "clipping-groups" {
                 try exerciseClipping(session, work: work, documents: documents)
                 print(failures == 0 ? "PASSED (Clipping Groups)" : "FAILED: \(failures) failure(s)")
@@ -1362,6 +1367,7 @@ enum EngineSmokeTest {
             try exerciseMatting(session, work: work, documents: documents)
             try exerciseVariations(session, work: work, documents: documents)
             try exerciseColorRange(session, work: work, documents: documents)
+            try exerciseBlendImage(session, work: work, documents: documents)
             try exerciseClipping(session, work: work, documents: documents)
             try exerciseReplaceColor(session, work: work, documents: documents)
             try exercisePurge(session, documents: documents)

@@ -16628,6 +16628,834 @@ test_replace_color (void)
   api->image_close (engine, image);
 }
 
+/* ---- Apply Image and Calculations (slots 261-264) ------------------ */
+
+static GlimsChannelRef
+apply_ref (GlimsImageID image, GlimsItemID layer, uint32_t channel, GlimsItemID item)
+{
+  return (GlimsChannelRef) { .struct_size = sizeof (GlimsChannelRef),
+                             .image = image, .layer = layer,
+                             .channel = channel, .item = item, .invert = 0 };
+}
+
+static void
+fill_solid (uint8_t *pixels, int32_t width, int32_t height, const uint8_t color[4])
+{
+  for (int32_t i = 0; i < width * height; i++)
+    memcpy (pixels + (size_t) i * 4, color, 4);
+}
+
+static bool
+solid_image (const uint8_t color[4], GlimsImageID *out)
+{
+  uint8_t pixels[8 * 8 * 4];
+
+  fill_solid (pixels, 8, 8, color);
+  return api->image_from_pixels (engine, 8, 8, pixels, sizeof pixels, out, NULL) ==
+         GLIMS_STATUS_OK && *out != 0;
+}
+
+/* A fresh 8x8 pair: the target holds mid-blue, the source warm red. */
+static bool
+fresh_pair (GlimsImageID *target, GlimsImageID *source, GlimsItemID *layer)
+{
+  if (*target) api->image_close (engine, *target);
+  if (*source) api->image_close (engine, *source);
+  *target = *source = 0;
+  if (! solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, target) ||
+      ! solid_image ((const uint8_t[]) { 200, 100, 50, 255 }, source))
+    return false;
+  *layer = first_layer (*target);
+  return *layer != 0;
+}
+
+/* Left half white, right half black: an exact two-zone mask. */
+static bool
+half_mask_image (GlimsImageID *mask)
+{
+  uint8_t pixels[8 * 8 * 4];
+
+  if (*mask) api->image_close (engine, *mask);
+  *mask = 0;
+  for (int y = 0; y < 8; y++)
+    for (int x = 0; x < 8; x++)
+      {
+        uint8_t *p = pixels + ((size_t) y * 8 + x) * 4;
+        uint8_t v = x < 4 ? 255 : 0;
+        p[0] = p[1] = p[2] = v;
+        p[3] = 255;
+      }
+  return api->image_from_pixels (engine, 8, 8, pixels, sizeof pixels, mask, NULL) ==
+         GLIMS_STATUS_OK && *mask != 0;
+}
+
+/* The exact expected average of the mid-blue target and the warm source:
+ * (64 + 200)/2 = 132, (128 + 100)/2 = 114, (192 + 50)/2 = 121. */
+static void
+test_apply_image (void)
+{
+  GlimsImageID target = 0, source = 0, mask = 0, small = 0, group = 0, channel = 0;
+  GlimsItemID layer = 0;
+  GlimsApplyImageSettings settings = { .struct_size = sizeof settings };
+  GlimsUndoInfo undo;
+  uint8_t pixel[4];
+  uint8_t preview[4 * 4 * 4];
+  int32_t depth, w = 0, h = 0, before;
+  char *error = NULL;
+
+  if ((size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, image_apply_image) + sizeof api->image_apply_image ||
+      ! api->image_apply_image ||
+      (size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, image_apply_image_preview) +
+        sizeof api->image_apply_image_preview ||
+      ! api->image_apply_image_preview)
+    {
+      CHECK (false, "the adapter exports slots 261/262 image_apply_image(_preview)");
+      return;
+    }
+
+  settings.source = apply_ref (0, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 0.5;
+  settings.scale = 1.0;
+  settings.offset = 0.0;
+
+  /* Normal at half opacity, then undo and redo. */
+  CHECK (fresh_pair (&target, &source, &layer), "the Blend With Image fixture pair exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  depth = undo_depth (target);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_OK, "Blend With Image runs%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (target) == depth + 1 &&
+         api->image_undo_info (engine, target, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Blend With Image") == 0,
+         "one undo step is named Blend With Image (next: %s)", undo.next_undo);
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 132 && pixel[1] == 114 && pixel[2] == 121 && pixel[3] == 255,
+         "Normal 50%% averages the colors (%d,%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2], pixel[3]);
+  CHECK (api->image_undo (engine, target) == GLIMS_STATUS_OK,
+         "undo succeeds");
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 64 && pixel[1] == 128 && pixel[2] == 192 && pixel[3] == 255,
+         "undo restores the exact bytes");
+  CHECK (api->image_redo (engine, target) == GLIMS_STATUS_OK,
+         "redo restores the blend");
+
+  /* Every mode, one fresh target each so the expected bytes stay exact. */
+  {
+    struct { uint32_t mode; double opacity, scale, offset; uint8_t r, g, b; } cases[] = {
+      { GLIMS_BLEND_MULTIPLY, 1.0, 1.0, 0.0, 50, 50, 38 },
+      { GLIMS_BLEND_SCREEN, 1.0, 1.0, 0.0, 214, 178, 204 },
+      { GLIMS_BLEND_DIFFERENCE, 1.0, 1.0, 0.0, 136, 28, 142 },
+      { GLIMS_BLEND_SUBTRACT, 1.0, 1.0, 0.0, 0, 28, 142 },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++)
+      {
+        CHECK (fresh_pair (&target, &source, &layer), "a fresh mode fixture exists");
+        settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+        settings.mode = cases[i].mode;
+        settings.opacity = cases[i].opacity;
+        settings.scale = cases[i].scale;
+        settings.offset = cases[i].offset;
+        CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+               GLIMS_STATUS_OK, "mode %u applies", cases[i].mode);
+        render_pixel (target, 0, 0, pixel);
+        CHECK (pixel[0] == cases[i].r && pixel[1] == cases[i].g &&
+               pixel[2] == cases[i].b && pixel[3] == 255,
+               "mode %u blends exactly (%d,%d,%d)",
+               cases[i].mode, pixel[0], pixel[1], pixel[2]);
+      }
+  }
+
+  /* Add with scale 2 and offset 0.5 saturates red and lands within one
+   * 8-bit step of 241.5 and 248.5 on green and blue; the tolerance is the
+   * rounding boundary, not a loose check. */
+  CHECK (fresh_pair (&target, &source, &layer), "the Add fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mode = GLIMS_BLEND_ADD;
+  settings.opacity = 1.0;
+  settings.scale = 2.0;
+  settings.offset = 0.5;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK, "Add applies");
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] >= 241 && pixel[1] <= 242 &&
+         pixel[2] >= 248 && pixel[2] <= 249,
+         "Add divides by scale, adds offset and clamps (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+
+  /* Source Invert flips the source color before Normal blends it. */
+  CHECK (fresh_pair (&target, &source, &layer), "the Invert fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.source.invert = 1;
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 1.0;
+  settings.scale = 1.0;
+  settings.offset = 0.0;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK, "an inverted source applies");
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 55 && pixel[1] == 155 && pixel[2] == 205,
+         "source Invert blends 1 - cs (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+
+  /* An exact two-zone mask limits the blend to the left half. */
+  CHECK (fresh_pair (&target, &source, &layer) && half_mask_image (&mask),
+         "the mask fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.source.invert = 0;
+  settings.mask = apply_ref (mask, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK, "a mask applies");
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 200 && pixel[1] == 100 && pixel[2] == 50,
+         "the masked half takes the source (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+  render_pixel (target, 7, 0, pixel);
+  CHECK (pixel[0] == 64 && pixel[1] == 128 && pixel[2] == 192,
+         "the unmasked half stays untouched (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+
+  /* A selection rectangle limits the edit the same way. */
+  CHECK (fresh_pair (&target, &source, &layer), "the selection fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  CHECK (api->select_shape (engine, target, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 4, 8 } }, 2,
+                            &(GlimsSelectOptions) { .struct_size = sizeof (GlimsSelectOptions),
+                                                    .operation = GLIMS_SELECT_REPLACE,
+                                                    .antialias = false }) == GLIMS_STATUS_OK,
+         "the selection rectangle exists");
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK, "the selection-limited apply succeeds");
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 200 && pixel[1] == 100 && pixel[2] == 50,
+         "inside the selection takes the source");
+  render_pixel (target, 7, 0, pixel);
+  CHECK (pixel[0] == 64 && pixel[1] == 128 && pixel[2] == 192,
+         "outside the selection is unchanged (%d,%d,%d)", pixel[0], pixel[1], pixel[2]);
+
+  /* A saved channel as the target: the channel is read back through the
+   * preview slot with itself as the source. */
+  CHECK (fresh_pair (&target, &source, &layer), "the channel fixture exists");
+  api->select_command (engine, target, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->select_shape (engine, target, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 4, 8 } }, 2,
+                            &(GlimsSelectOptions) { .struct_size = sizeof (GlimsSelectOptions),
+                                                    .operation = GLIMS_SELECT_REPLACE,
+                                                    .antialias = false }) == GLIMS_STATUS_OK &&
+         api->channel_from_selection (engine, target, "Saved", &channel, NULL) ==
+         GLIMS_STATUS_OK && channel != 0, "the saved channel exists");
+  api->select_command (engine, target, GLIMS_SELECT_NONE, 0, NULL);
+  before = undo_depth (target);
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 1.0;
+  CHECK (api->image_apply_image (engine, target, channel, &settings, &error) ==
+         GLIMS_STATUS_OK, "Blend With Image writes a saved channel%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (target) == before + 1,
+         "the channel write is one undo step");
+  {
+    GlimsApplyImageSettings readback = { .struct_size = sizeof readback };
+    uint8_t bytes[8 * 8 * 4];
+
+    readback.source = apply_ref (target, 0, GLIMS_CHANNEL_SAVED, channel);
+    readback.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+    readback.mode = GLIMS_BLEND_NORMAL;
+    readback.opacity = 1.0;
+    readback.scale = 1.0;
+    CHECK (api->image_apply_image_preview (engine, target, channel, &readback,
+                                           8, bytes, sizeof bytes, &w, &h, &error) ==
+           GLIMS_STATUS_OK && w == 8 && h == 8,
+           "the channel preview reports its size%s%s",
+           error ? ": " : "", error ? error : "");
+    api->free_string (error); error = NULL;
+    /* The channel stores the luma of (200, 100, 50): 124. */
+    CHECK (abs (bytes[0] - 124) <= 1 && bytes[1] == bytes[0] && bytes[2] == bytes[0] &&
+           bytes[3] == 255,
+           "the channel holds the source luma everywhere (%d,%d,%d,%d)",
+           bytes[0], bytes[1], bytes[2], bytes[3]);
+    CHECK (api->image_undo (engine, target) == GLIMS_STATUS_OK,
+           "undo restores the saved channel");
+    CHECK (api->image_apply_image_preview (engine, target, channel, &readback,
+                                           8, bytes, sizeof bytes, &w, &h, NULL) ==
+           GLIMS_STATUS_OK,
+           "the channel previews after undo");
+    CHECK (bytes[0] == 255 && bytes[7 * 4] == 0,
+           "undo restores the selection copy (%d outside, %d inside)",
+           bytes[7 * 4], bytes[0]);
+  }
+
+  /* Identity adds no undo step. */
+  CHECK (fresh_pair (&target, &source, &layer), "the identity fixture exists");
+  settings.source = apply_ref (target, layer, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 1.0;
+  before = undo_depth (target);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK && undo_depth (target) == before,
+         "an identical result adds no undo step");
+  render_pixel (target, 0, 0, pixel);
+  CHECK (pixel[0] == 64 && pixel[1] == 128 && pixel[2] == 192,
+         "the identity leaves every pixel alone");
+
+  /* A blend smaller than half an 8-bit step stores the same bytes, so it
+   * adds no undo step. */
+  CHECK (fresh_pair (&target, &source, &layer), "the sub-step fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 0.001;
+  before = undo_depth (target);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK && undo_depth (target) == before,
+         "a blend below half a step adds no undo step (%d -> %d)",
+         before, undo_depth (target));
+  settings.opacity = 1.0;
+
+  /* A target narrower than the canvas: the layer moves two pixels right,
+   * and every row must still read the source from its own canvas row. */
+  CHECK (fresh_pair (&target, &source, &layer) && half_mask_image (&mask),
+         "the offset-target fixtures exist");
+  CHECK (api->layer_move (engine, target, layer, 2, 0) == GLIMS_STATUS_OK,
+         "the target layer moves two pixels right");
+  settings.source = apply_ref (mask, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, NULL) ==
+         GLIMS_STATUS_OK, "Blend With Image writes an offset layer");
+  render_pixel (target, 3, 5, pixel);
+  CHECK (pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255,
+         "row 5 left of the middle takes the source's white (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  render_pixel (target, 5, 5, pixel);
+  CHECK (pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0,
+         "row 5 right of the middle takes the source's black (%d,%d,%d)",
+         pixel[0], pixel[1], pixel[2]);
+  /* The preview of the offset layer reads the same canvas window; the
+   * layer's last two columns lie off the canvas and stay transparent. */
+  memset (preview, 0, sizeof preview);
+  CHECK (api->image_apply_image_preview (engine, target, layer, &settings, 4,
+                                         preview, sizeof preview, &w, &h, NULL) ==
+         GLIMS_STATUS_OK && w == 4 && h == 4 &&
+         preview[0] == 255 && preview[3] == 255 &&
+         preview[4] == 0 && preview[7] == 255 && preview[15] == 0,
+         "the offset preview shows white, black, then the off-canvas margin "
+         "(%d/%d, %d/%d, alpha %d)", preview[0], preview[3], preview[4],
+         preview[7], preview[15]);
+
+  /* Size mismatch. */
+  CHECK (fresh_pair (&target, &source, &layer) && solid_image ((const uint8_t[]) { 1, 2, 3, 255 }, &small),
+         "the size-mismatch fixtures exist");
+  {
+    uint8_t small_pixels[4 * 8 * 4];
+    fill_solid (small_pixels, 4, 8, (const uint8_t[]) { 1, 2, 3, 255 });
+    api->image_close (engine, small);
+    small = 0;
+    CHECK (api->image_from_pixels (engine, 4, 8, small_pixels, sizeof small_pixels,
+                                    &small, NULL) == GLIMS_STATUS_OK,
+           "the smaller source exists");
+  }
+  settings.source = apply_ref (small, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  before = undo_depth (target);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_FAILED && error &&
+         strcmp (error, "Blend With Image needs images of the same pixel size.") == 0,
+         "a size mismatch refuses with its message (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (target) == before, "the mismatch changes nothing");
+  api->image_close (engine, small);
+  small = 0;
+
+  /* Indexed documents refuse. */
+  CHECK (fresh_pair (&target, &source, &layer), "the indexed fixture exists");
+  {
+    GlimsIndexedSettings indexed = { .struct_size = sizeof indexed,
+                                     .palette = GLIMS_INDEXED_PALETTE_MONO,
+                                     .max_colors = 2,
+                                     .dither = GLIMS_INDEXED_DITHER_NONE,
+                                     .preservation = GLIMS_INDEXED_PRESERVE_EDITABLE };
+    CHECK (api->image_convert_indexed (engine, target, &indexed, NULL, 0, NULL) ==
+           GLIMS_STATUS_OK, "the target converts to indexed");
+  }
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  before = undo_depth (target);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_UNSUPPORTED,
+         "an indexed target refuses (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (target) == before, "the indexed refusal changes nothing");
+
+  /* A group target refuses. */
+  CHECK (fresh_pair (&target, &source, &layer) &&
+         api->create_group (engine, target, 0, 0, "Block", &group, NULL) ==
+         GLIMS_STATUS_OK && group != 0, "the group target exists");
+  /* fresh_pair closed the previous source; refer to the new one so the
+   * refusal comes from the group target, not a stale handle. */
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  before = undo_depth (target);
+  CHECK (api->image_apply_image (engine, target, group, &settings, &error) ==
+         GLIMS_STATUS_UNSUPPORTED,
+         "a group target refuses (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (target) == before, "the group refusal changes nothing");
+
+  /* Malformed settings refuse without touching anything. */
+  CHECK (fresh_pair (&target, &source, &layer), "the malformed-settings fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  before = undo_depth (target);
+  settings.mode = 9999;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "an unknown mode is refused");
+  api->free_string (error); error = NULL;
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 0.0;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "opacity 0 is refused");
+  api->free_string (error); error = NULL;
+  settings.opacity = 1.0;
+  settings.scale = 3.0;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "scale 3 is refused");
+  api->free_string (error); error = NULL;
+  settings.scale = 1.0;
+  settings.offset = -2.0;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "offset -2 is refused");
+  api->free_string (error); error = NULL;
+  settings.offset = NAN;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "NaN offset is refused");
+  api->free_string (error); error = NULL;
+  settings.offset = 0.0;
+  settings.source.channel = 99;
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "an unknown channel kind is refused");
+  api->free_string (error); error = NULL;
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_NONE, 0);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "NONE as a source is refused");
+  api->free_string (error); error = NULL;
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.struct_size = offsetof (GlimsApplyImageSettings, source);
+  CHECK (api->image_apply_image (engine, target, layer, &settings, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "a short settings struct is refused");
+  api->free_string (error); error = NULL;
+  settings.struct_size = sizeof settings;
+  CHECK (undo_depth (target) == before, "every malformed request changes nothing");
+
+  /* The preview scales, queries its size and changes no history. */
+  CHECK (fresh_pair (&target, &source, &layer), "the preview fixture exists");
+  settings.source = apply_ref (source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 1.0;
+  before = undo_depth (target);
+  CHECK (api->image_apply_image_preview (engine, target, layer, &settings, 4,
+                                         NULL, 0, &w, &h, &error) ==
+         GLIMS_STATUS_OK && w == 4 && h == 4,
+         "a NULL buffer queries the reduced size (%dx%d)%s%s",
+         w, h, error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  memset (preview, 0, sizeof preview);
+  CHECK (api->image_apply_image_preview (engine, target, layer, &settings, 4,
+                                         preview, sizeof preview, &w, &h, &error) ==
+         GLIMS_STATUS_OK && w == 4 && h == 4,
+         "the reduced preview renders%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  {
+    int wrong = -1;
+    for (int k = 0; k < 16 && wrong < 0; k++)
+      if (preview[k * 4] != 200 || preview[k * 4 + 1] != 100 ||
+          preview[k * 4 + 2] != 50 || preview[k * 4 + 3] != 255)
+        wrong = k;
+    CHECK (wrong < 0, "the preview shows the blended source (pixel %d)", wrong);
+  }
+  CHECK (undo_depth (target) == before, "the preview changes no history");
+  CHECK (api->image_apply_image_preview (engine, target, layer, &settings, 0,
+                                         preview, sizeof preview, &w, &h, NULL) ==
+         GLIMS_STATUS_INVALID_ARGUMENT &&
+         api->image_apply_image_preview (engine, target, layer, &settings, 1025,
+                                         preview, sizeof preview, &w, &h, NULL) ==
+         GLIMS_STATUS_INVALID_ARGUMENT,
+         "a preview size outside 1...1024 is refused");
+  CHECK (api->image_apply_image_preview (engine, target, layer, &settings, 4,
+                                         preview, 15, &w, &h, NULL) ==
+         GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short preview buffer is refused");
+
+  /* A 16-megapixel pair previews within the memory budget: the preview
+   * holds one canvas snapshot at a time and no target-size copies. */
+  {
+    GlimsImageID big_target = 0, big_source = 0;
+
+    CHECK (api->image_new_filled (engine, 4096, 4096, GLIMS_NEW_IMAGE_WHITE, NULL,
+                                  &big_target, NULL) == GLIMS_STATUS_OK &&
+           api->image_new_filled (engine, 4096, 4096, GLIMS_NEW_IMAGE_WHITE, NULL,
+                                  &big_source, NULL) == GLIMS_STATUS_OK,
+           "the 16-megapixel pair exists");
+    settings.source = apply_ref (big_source, 0, GLIMS_CHANNEL_COMPOSITE, 0);
+    settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+    CHECK (api->image_apply_image_preview (engine, big_target, first_layer (big_target),
+                                           &settings, 4, preview, sizeof preview,
+                                           &w, &h, &error) == GLIMS_STATUS_OK &&
+           preview[0] == 255,
+           "a 16-megapixel image previews%s%s", error ? ": " : "", error ? error : "");
+    api->free_string (error); error = NULL;
+    api->image_close (engine, big_target);
+    api->image_close (engine, big_source);
+  }
+
+  api->image_close (engine, target); target = 0;
+  api->image_close (engine, source); source = 0;
+  api->image_close (engine, mask); mask = 0;
+}
+
+/* Two single channels blended into a new channel, a new selection or a
+ * new grayscale image, with the refusals and both previews. */
+static void
+test_calculations (void)
+{
+  GlimsImageID a = 0, b = 0, small = 0, result = 0;
+  GlimsItemID layer = 0, channel = 0;
+  GlimsCalculationsSettings settings = { .struct_size = sizeof settings };
+  GlimsApplyImageSettings readback = { .struct_size = sizeof readback };
+  GlimsChannelInfo channels[4];
+  GlimsImageInfo info;
+  GlimsUndoInfo undo;
+  GlimsRect bounds;
+  bool empty = true;
+  uint8_t pixel[4];
+  uint8_t preview[4 * 4];
+  int32_t count = 0, depth, w = 0, h = 0, before;
+  char *error = NULL;
+
+  if ((size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, image_calculations) + sizeof api->image_calculations ||
+      ! api->image_calculations ||
+      (size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, image_calculations_preview) +
+        sizeof api->image_calculations_preview ||
+      ! api->image_calculations_preview)
+    {
+      CHECK (false, "the adapter exports slots 263/264 image_calculations(_preview)");
+      return;
+    }
+
+  settings.first = apply_ref (0, 0, GLIMS_CHANNEL_RED, 0);
+  settings.second = apply_ref (0, 0, GLIMS_CHANNEL_GREEN, 0);
+  settings.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+  settings.mode = GLIMS_BLEND_NORMAL;
+  settings.opacity = 1.0;
+  settings.scale = 1.0;
+  settings.offset = 0.0;
+  settings.destination = GLIMS_CALCULATIONS_NEW_CHANNEL;
+  settings.channel_name = "Calc";
+
+  /* NEW_CHANNEL: the channel holds the second input's green plane. */
+  CHECK (solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, &a) &&
+         solid_image ((const uint8_t[]) { 200, 100, 50, 255 }, &b),
+         "the Blend Channels fixtures exist");
+  layer = first_layer (a);
+  settings.first = apply_ref (a, 0, GLIMS_CHANNEL_RED, 0);
+  settings.second = apply_ref (b, 0, GLIMS_CHANNEL_GREEN, 0);
+  settings.destination_image = a;
+  depth = undo_depth (a);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_OK && channel != 0 && result == 0,
+         "NEW_CHANNEL succeeds%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (a) == depth + 1 &&
+         api->image_undo_info (engine, a, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Blend Channels") == 0,
+         "one undo step is named Blend Channels (next: %s)", undo.next_undo);
+  {
+    uint8_t gray[8 * 8 * 4];
+
+    readback.source = apply_ref (a, 0, GLIMS_CHANNEL_SAVED, channel);
+    readback.mask = apply_ref (0, 0, GLIMS_CHANNEL_NONE, 0);
+    readback.mode = GLIMS_BLEND_NORMAL;
+    readback.opacity = 1.0;
+    readback.scale = 1.0;
+    CHECK (api->image_apply_image_preview (engine, a, layer, &readback, 8,
+                                           gray, sizeof gray, &w, &h, &error) ==
+           GLIMS_STATUS_OK && w == 8 && h == 8,
+           "the new channel previews%s%s",
+           error ? ": " : "", error ? error : "");
+    api->free_string (error); error = NULL;
+    CHECK (gray[0] == 100 && gray[1] == 100 && gray[2] == 100 && gray[3] == 255,
+           "the channel holds the source green value (%d,%d,%d,%d)",
+           gray[0], gray[1], gray[2], gray[3]);
+  }
+  CHECK (api->image_channels (engine, a, channels, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1, "the image lists the new channel (%d)", count);
+  CHECK (api->image_undo (engine, a) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, a, channels, 4, &count) == GLIMS_STATUS_OK &&
+         count == 0, "undo removes the channel");
+  CHECK (api->image_redo (engine, a) == GLIMS_STATUS_OK &&
+         api->image_channels (engine, a, channels, 4, &count) == GLIMS_STATUS_OK &&
+         count == 1, "redo restores the channel");
+  api->image_close (engine, a); a = 0;
+  api->image_close (engine, b); b = 0;
+
+  /* NEW_SELECTION: the whole canvas becomes selected. */
+  CHECK (solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, &a) &&
+         solid_image ((const uint8_t[]) { 200, 100, 50, 255 }, &b),
+         "the NEW_SELECTION fixtures exist");
+  settings.first = apply_ref (a, 0, GLIMS_CHANNEL_RED, 0);
+  settings.second = apply_ref (b, 0, GLIMS_CHANNEL_GREEN, 0);
+  settings.destination = GLIMS_CALCULATIONS_NEW_SELECTION;
+  settings.destination_image = a;
+  depth = undo_depth (a);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_OK && result == 0 && channel == 0,
+         "NEW_SELECTION succeeds%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (a) == depth + 1,
+         "NEW_SELECTION is one undo step");
+  CHECK (api->selection_bounds (engine, a, &empty, &bounds) == GLIMS_STATUS_OK &&
+         ! empty && rect_equals (bounds, 0, 0, 8, 8),
+         "the selection covers the whole canvas (%d,%d %dx%d)",
+         bounds.x, bounds.y, bounds.width, bounds.height);
+  depth = undo_depth (a);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, NULL) ==
+         GLIMS_STATUS_OK && undo_depth (a) == depth,
+         "the same NEW_SELECTION again adds no undo step (%d -> %d)",
+         depth, undo_depth (a));
+  CHECK (api->image_undo (engine, a) == GLIMS_STATUS_OK &&
+         api->selection_bounds (engine, a, &empty, &bounds) == GLIMS_STATUS_OK && empty,
+         "undo empties the selection");
+  CHECK (api->image_set_quick_mask (engine, a, true, NULL) == GLIMS_STATUS_OK,
+         "Quick Mask turns on");
+  depth = undo_depth (a);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_BUSY && undo_depth (a) == depth,
+         "NEW_SELECTION refuses while Quick Mask is on (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_set_quick_mask (engine, a, false, NULL) == GLIMS_STATUS_OK,
+         "Quick Mask turns off");
+  api->image_close (engine, a); a = 0;
+  api->image_close (engine, b); b = 0;
+
+  /* NEW_IMAGE: a clean grayscale document with the result. */
+  CHECK (solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, &a) &&
+         solid_image ((const uint8_t[]) { 200, 100, 50, 255 }, &b),
+         "the NEW_IMAGE fixtures exist");
+  settings.first = apply_ref (a, 0, GLIMS_CHANNEL_GRAY, 0);
+  settings.second = apply_ref (b, 0, GLIMS_CHANNEL_GRAY, 0);
+  settings.destination = GLIMS_CALCULATIONS_NEW_IMAGE;
+  settings.destination_image = 0;
+  settings.channel_name = NULL;
+  /* NEW_IMAGE edits no open image but still waits for a running stroke. */
+  {
+    GlimsImageID       busy_image = 0;
+    GlimsBrushSettings brush = brush_for (GLIMS_PAINT_PENCIL, 8);
+    GlimsStrokePoint   start = { 4.0, 4.0, 1.0, 0.0, 0.0, 0 };
+    GlimsStrokeID      stroke = 0;
+
+    CHECK (api->image_new_filled (engine, 16, 16, GLIMS_NEW_IMAGE_WHITE, NULL,
+                                  &busy_image, NULL) == GLIMS_STATUS_OK &&
+           api->stroke_begin (engine, busy_image, first_layer (busy_image), &brush,
+                              &start, &stroke, NULL) == GLIMS_STATUS_OK,
+           "a stroke runs on another image");
+    CHECK (api->image_calculations (engine, &settings, &result, &channel, NULL) ==
+           GLIMS_STATUS_BUSY && result == 0,
+           "NEW_IMAGE refuses while a stroke runs");
+    if (result)
+      {
+        api->image_close (engine, result);
+        result = 0;
+      }
+    if (stroke)
+      api->stroke_end (engine, stroke);
+    if (busy_image)
+      api->image_close (engine, busy_image);
+  }
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_OK && result != 0 && channel == 0,
+         "NEW_IMAGE succeeds%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  if (result)
+    {
+      CHECK (layer_count (result) == 1 && undo_depth (result) == 0 &&
+             api->image_info (engine, result, &info) == GLIMS_STATUS_OK &&
+             ! info.dirty,
+             "the new image has one layer, no history and no dirty mark");
+      render_pixel (result, 0, 0, pixel);
+      /* Luma of (200, 100, 50) is 124.2/255, so the byte is 124. */
+      CHECK (pixel[0] == 124 && pixel[1] == 124 && pixel[2] == 124 && pixel[3] == 255,
+             "the new image holds the second input's luma (%d,%d,%d,%d)",
+             pixel[0], pixel[1], pixel[2], pixel[3]);
+      api->image_close (engine, result);
+      result = 0;
+    }
+  /* The command inverts the first input too: Multiply of (1 - 116.16/255)
+   * and 124.2/255 stores 68 (57 without the Invert). */
+  settings.mode = GLIMS_BLEND_MULTIPLY;
+  settings.first.invert = 1;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, NULL) ==
+         GLIMS_STATUS_OK && result != 0,
+         "NEW_IMAGE runs with an inverted first input");
+  if (result)
+    {
+      render_pixel (result, 0, 0, pixel);
+      CHECK (abs (pixel[0] - 68) <= 1,
+             "the command multiplies by 1 - the first input (%d)", pixel[0]);
+      api->image_close (engine, result);
+      result = 0;
+    }
+  settings.first.invert = 0;
+  settings.mode = GLIMS_BLEND_NORMAL;
+  api->image_close (engine, a); a = 0;
+  api->image_close (engine, b); b = 0;
+
+  /* Size mismatch. */
+  CHECK (solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, &a) &&
+         solid_image ((const uint8_t[]) { 1, 2, 3, 255 }, &small),
+         "the size-mismatch fixtures exist");
+  {
+    uint8_t small_pixels[4 * 8 * 4];
+    api->image_close (engine, small);
+    small = 0;
+    fill_solid (small_pixels, 4, 8, (const uint8_t[]) { 1, 2, 3, 255 });
+    CHECK (api->image_from_pixels (engine, 4, 8, small_pixels, sizeof small_pixels,
+                                    &small, NULL) == GLIMS_STATUS_OK,
+           "the smaller source exists");
+  }
+  settings.first = apply_ref (a, 0, GLIMS_CHANNEL_RED, 0);
+  settings.second = apply_ref (small, 0, GLIMS_CHANNEL_GREEN, 0);
+  settings.destination = GLIMS_CALCULATIONS_NEW_SELECTION;
+  settings.destination_image = a;
+  before = undo_depth (a);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_FAILED && error &&
+         strcmp (error, "Blend Channels needs images of the same pixel size.") == 0,
+         "a size mismatch refuses with its message (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (result == 0 && channel == 0 && undo_depth (a) == before,
+         "the mismatch changes nothing");
+  api->image_close (engine, small); small = 0;
+  api->image_close (engine, a); a = 0;
+
+  /* Indexed source refuses. */
+  CHECK (solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, &a) &&
+         solid_image ((const uint8_t[]) { 200, 100, 50, 255 }, &b),
+         "the indexed Blend Channels fixture exists");
+  {
+    GlimsIndexedSettings indexed = { .struct_size = sizeof indexed,
+                                     .palette = GLIMS_INDEXED_PALETTE_MONO,
+                                     .max_colors = 2,
+                                     .dither = GLIMS_INDEXED_DITHER_NONE,
+                                     .preservation = GLIMS_INDEXED_PRESERVE_EDITABLE };
+    CHECK (api->image_convert_indexed (engine, a, &indexed, NULL, 0, NULL) ==
+           GLIMS_STATUS_OK, "the first input converts to indexed");
+  }
+  settings.first = apply_ref (a, 0, GLIMS_CHANNEL_RED, 0);
+  settings.second = apply_ref (b, 0, GLIMS_CHANNEL_GREEN, 0);
+  settings.destination = GLIMS_CALCULATIONS_NEW_CHANNEL;
+  settings.destination_image = b;
+  settings.channel_name = "Calc";
+  before = undo_depth (b);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_UNSUPPORTED,
+         "an indexed input refuses (%s)", error ? error : "");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (b) == before, "the indexed refusal changes nothing");
+  api->image_close (engine, a); a = 0;
+  api->image_close (engine, b); b = 0;
+
+  /* Malformed settings. */
+  CHECK (solid_image ((const uint8_t[]) { 64, 128, 192, 255 }, &a) &&
+         solid_image ((const uint8_t[]) { 200, 100, 50, 255 }, &b),
+         "the malformed Blend Channels fixture exists");
+  settings.first = apply_ref (a, 0, GLIMS_CHANNEL_RED, 0);
+  settings.second = apply_ref (b, 0, GLIMS_CHANNEL_GREEN, 0);
+  settings.destination = GLIMS_CALCULATIONS_NEW_SELECTION;
+  settings.destination_image = a;
+  before = undo_depth (a);
+  settings.first.channel = GLIMS_CHANNEL_COMPOSITE;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "COMPOSITE as an input is refused");
+  api->free_string (error); error = NULL;
+  settings.first.channel = GLIMS_CHANNEL_RED;
+  settings.second.channel = GLIMS_CHANNEL_NONE;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "NONE as an input is refused");
+  api->free_string (error); error = NULL;
+  settings.second.channel = GLIMS_CHANNEL_GREEN;
+  settings.destination = 99;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "an unknown destination is refused");
+  api->free_string (error); error = NULL;
+  settings.destination = GLIMS_CALCULATIONS_NEW_SELECTION;
+  settings.opacity = 0.0;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "opacity 0 is refused");
+  api->free_string (error); error = NULL;
+  settings.opacity = 1.0;
+  settings.scale = 2.5;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "scale 2.5 is refused");
+  api->free_string (error); error = NULL;
+  settings.scale = 1.0;
+  settings.offset = INFINITY;
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "an infinite offset is refused");
+  api->free_string (error); error = NULL;
+  settings.offset = 0.0;
+  settings.struct_size = offsetof (GlimsCalculationsSettings, first);
+  CHECK (api->image_calculations (engine, &settings, &result, &channel, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT, "a short settings struct is refused");
+  api->free_string (error); error = NULL;
+  settings.struct_size = sizeof settings;
+  CHECK (result == 0 && channel == 0 && undo_depth (a) == before,
+         "every malformed request changes nothing");
+
+  /* The preview scales, queries its size and ignores the destination. */
+  CHECK (api->image_calculations_preview (engine, &settings, 4, NULL, 0,
+                                          &w, &h, &error) ==
+         GLIMS_STATUS_OK && w == 4 && h == 4,
+         "a NULL buffer queries the reduced size (%dx%d)%s%s",
+         w, h, error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  memset (preview, 0, sizeof preview);
+  CHECK (api->image_calculations_preview (engine, &settings, 4, preview,
+                                          sizeof preview, &w, &h, &error) ==
+         GLIMS_STATUS_OK && w == 4 && h == 4,
+         "the reduced Blend Channels preview renders%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error); error = NULL;
+  {
+    int wrong = -1;
+    for (int k = 0; k < 16 && wrong < 0; k++)
+      if (preview[k] != 100)
+        wrong = k;
+    CHECK (wrong < 0, "the preview shows the second input's green (byte %d)", wrong);
+  }
+  /* Invert on the first input: Multiply of (1 - 64/255) and 100/255 is 75. */
+  settings.mode = GLIMS_BLEND_MULTIPLY;
+  settings.first.invert = 1;
+  CHECK (api->image_calculations_preview (engine, &settings, 4, preview,
+                                          sizeof preview, &w, &h, NULL) ==
+         GLIMS_STATUS_OK && abs (preview[0] - 75) <= 1,
+         "an inverted first input multiplies as 1 - red (%d)", preview[0]);
+  settings.first.invert = 0;
+  settings.mode = GLIMS_BLEND_NORMAL;
+  CHECK (api->image_calculations_preview (engine, &settings, 4, preview,
+                                          15, &w, &h, NULL) ==
+         GLIMS_STATUS_INVALID_ARGUMENT,
+         "a short preview buffer is refused");
+
+  api->image_close (engine, a); a = 0;
+  api->image_close (engine, b); b = 0;
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -18742,6 +19570,8 @@ main (int argc, char **argv)
   test_color_range ();
   test_clipping_groups (argv[2]);
   test_replace_color ();
+  test_apply_image ();
+  test_calculations ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();
