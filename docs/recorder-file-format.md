@@ -40,8 +40,9 @@ file references, never native IDs, persistent native tattoos or Recorder epochs.
 
 Records remain in acceptance order with contiguous integer `ordinal` values
 starting at zero. A `success` outcome has exactly `ordinal`, `outcome`,
-`command` and `binding`, plus a `produces` symbol UUID that `duplicateLayers`
-and `mergeVisible` require and no other command may carry. A `failure` or
+`command` and `binding`. `duplicateLayers` and `mergeVisible` success rows
+additionally carry a required `produces` symbol UUID; every other row must
+omit it. A `failure` or
 `cancelled` outcome instead has `reason`, including an empty reason. The codec
 preserves every settled row. Failed/cancelled rows do not contain an invented
 attempted command; the current log discards that payload. Their presence
@@ -687,9 +688,11 @@ version 33 file must contain at least one successful command from the six.
 - `duplicateLayers` and `deleteLayers` store no fields. They are recorded
   only when exactly one layer is selected and require that layer's
   `layer` binding. A multi-selection keeps the explicit failed row
-  instead.
-- `mergeVisible` stores no fields, is target independent and needs the
-  `none` binding. It merges the visible top-level layers on replay.
+  instead, so a recorded `duplicateLayers` always creates exactly one
+  layer and its `produces` symbol names that layer.
+- `mergeVisible` stores no command fields, is target independent and needs
+  the `none` binding. It merges the visible top-level layers on replay into
+  one layer, which its required `produces` symbol names.
 - `addLayerMask` stores `source` (one of the owned tags `white`, `black`,
   `alpha`, `alphaTransfer`, `selection`, `grayscale`, never a native enum
   value) and Boolean `edit`. It requires a `layer` binding. With `edit`
