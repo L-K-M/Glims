@@ -189,6 +189,15 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     private var shownBrushPresentationRevision = 0
     private var shownGradient: GradientPresentation?
     private var shownMoveTargetMode: MoveTargetMode?
+    /// Clone's source and the current pattern, so a change rebuilds its rows.
+    private struct ClonePresentation: Equatable {
+        let from: ToolState.CloneFrom
+        let pattern: EngineSession.ResourceIdentity?
+    }
+    private var shownClone: ClonePresentation?
+    private static func clonePresentation(of state: ToolState) -> ClonePresentation {
+        ClonePresentation(from: state.cloneFrom, pattern: state.patternStore.identity)
+    }
     /// The Crop tool's settings the rows show; a change from a control,
     /// Front Image or another window rebuilds them, so the fields' enabled
     /// state and text never go stale.
@@ -286,9 +295,10 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         let gradientChanged = state.current == .gradient
             && shownGradient != Self.gradientPresentation(of: state)
         let moveTargetChanged = state.current == .move && shownMoveTargetMode != state.moveTargetMode
+        let cloneChanged = state.current == .clone && shownClone != Self.clonePresentation(of: state)
         let cropTargetChanged = state.current == .crop && shownCropTarget != state.cropTarget
         let presentationChanged = fontsArrived || brushChanged || gradientChanged || moveTargetChanged
-            || cropTargetChanged
+            || cloneChanged || cropTargetChanged
         // Keep presentation rows until the active field finishes its normal
         // commit. A tool switch still replaces the options immediately.
         if shownTool != state.current || (presentationChanged && !Self.hasFieldEditor(in: view)) {
@@ -333,6 +343,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
             document = target
             if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
             if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
+            if ClonePatternChooser.shared.isOpen { ClonePatternChooser.shared.close() }
             rebindTransformObserver()
         }
         if (modeChanged || labTargetChanged || inkOwnerChanged) && isViewLoaded { rebuild() }
@@ -393,6 +404,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
     func paletteDidDismiss(_ presentation: PalettePresentation) {
         if BrushChooser.shared.isOpen { BrushChooser.shared.close() }
         if GradientChooser.shared.isOpen { GradientChooser.shared.close() }
+        if ClonePatternChooser.shared.isOpen { ClonePatternChooser.shared.close() }
     }
 
     private func rebuild() {
@@ -412,6 +424,7 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         shownBrushPresentationRevision = BrushChooser.shared.presentationRevision
         shownGradient = tool == .gradient ? Self.gradientPresentation(of: state) : nil
         shownMoveTargetMode = tool == .move ? state.moveTargetMode : nil
+        shownClone = tool == .clone ? Self.clonePresentation(of: state) : nil
         shownCropTarget = tool == .crop ? state.cropTarget : nil
         brushRefreshers.removeAll()
         transformRefreshers.removeAll()
@@ -968,6 +981,9 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                                        readBrush: { ($0.hardness ?? 0.5) * 100 }) { value in
             ToolState.shared.update(tool) { $0.hardness = value / 100 }
         })
+        if let paintTool = tool.paintTool {
+            addPaintOptionRows(for: tool, paintTool: paintTool, brush: brush)
+        }
 
         switch tool {
         case .airbrush, .smudge:
@@ -1002,10 +1018,15 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
                 ToolState.shared.update(tool) { $0.antiErase = on }
             })
         case .clone, .heal:
+            let fromPattern = tool == .clone && ToolState.shared.cloneFrom == .pattern
+            if tool == .clone { addCloneSourceRows() }
             stack.addArrangedSubview(checkbox("Aligned", ToolState.shared.cloneAlignment.isAligned) { on in
                 ToolState.shared.cloneAlignment.isAligned = on
             })
-            stack.addArrangedSubview(hint("Option-click the image to set the source."))
+            stack.addArrangedSubview(hint(fromPattern
+                ? "Paint to stamp the pattern. Aligned keeps it continuous across strokes; "
+                    + "otherwise each stroke starts it again."
+                : "Option-click the image to set the source."))
         default:
             break
         }
@@ -1024,6 +1045,91 @@ final class ToolOptionsPaletteController: NSViewController, PaletteContent, NSTe
         }
         stack.addArrangedSubview(pressure)
         stack.addArrangedSubview(presetsRow())
+    }
+
+    /// Blend mode (the tools whose engine core honors it), spacing (every
+    /// paint tool) and fade (Paintbrush, Pencil and Airbrush). Strokes
+    /// with any of them are not recorded yet, and paint only in RGB and
+    /// grayscale images on an engine that reads them.
+    private func addPaintOptionRows(for tool: ToolID, paintTool: EngineSession.Brush.Tool,
+                                    brush: EngineSession.Brush) {
+        typealias Modes = EngineSession.PaintModes
+        let defaultSpacing = 0.1
+        let defaultFadeSteps = 20
+
+        if let document {
+            let mode = document.colorInfo.mode
+            if mode == .lab || mode.usesInkChannels {
+                stack.addArrangedSubview(hint("Blend modes, spacing and fade do not paint in Lab, CMYK or multichannel images."))
+            } else if !document.session.supportsPaintOptions {
+                stack.addArrangedSubview(hint("This image engine cannot paint with a blend mode, spacing or fade."))
+            }
+        }
+        if Modes.applies(to: paintTool) {
+            let nicks = Modes.all
+            let index: (EngineSession.Brush) -> Int = { nicks.firstIndex(of: $0.paintMode) ?? 0 }
+            stack.addArrangedSubview(popUp("Mode", Modes.named.map(\.title), selected: index(brush),
+                                           identifier: "paint-mode", readBrush: index) { choice in
+                ToolState.shared.update(tool) { $0.paintMode = nicks[choice] }
+            })
+        }
+        stack.addArrangedSubview(slider("Spacing", 1...200, (brush.spacing ?? defaultSpacing) * 100, unit: "%",
+                                       readBrush: { ($0.spacing ?? defaultSpacing) * 100 }) { value in
+            ToolState.shared.update(tool) { $0.spacing = value / 100 }
+        })
+        stack.addArrangedSubview(checkbox("Default spacing", brush.spacing == nil,
+                                         readBrush: { $0.spacing == nil }) { on in
+            ToolState.shared.update(tool) { $0.spacing = on ? nil : defaultSpacing }
+        })
+        guard Modes.fadeTools.contains(paintTool) else { return }
+
+        stack.addArrangedSubview(checkbox("Fade", brush.fade != nil, readBrush: { $0.fade != nil }) { on in
+            ToolState.shared.update(tool) { $0.fade = on ? .init(steps: defaultFadeSteps, target: .transparent) : nil }
+        })
+        // Choosing a step count or a target turns the fade on.
+        stack.addArrangedSubview(slider("Fade steps", 1...999, Double(brush.fade?.steps ?? defaultFadeSteps), unit: "",
+                                       readBrush: { Double($0.fade?.steps ?? defaultFadeSteps) }) { value in
+            ToolState.shared.update(tool) {
+                $0.fade = .init(steps: Int(value.rounded()), target: $0.fade?.target ?? .transparent)
+            }
+        })
+        let target: (EngineSession.Brush) -> Int = { $0.fade?.target == .background ? 1 : 0 }
+        stack.addArrangedSubview(popUp("Fade to", ["Transparent", "Background color"], selected: target(brush),
+                                       identifier: "fade-target", readBrush: target) { index in
+            ToolState.shared.update(tool) {
+                $0.fade = .init(steps: $0.fade?.steps ?? defaultFadeSteps, target: index == 1 ? .background : .transparent)
+            }
+        })
+    }
+
+    /// Clone's Source menu and, for a pattern, the pattern button: the
+    /// current choice (shared with Edit ▸ Fill), which opens the chooser
+    /// for the front document.
+    private func addCloneSourceRows() {
+        let state = ToolState.shared
+        stack.addArrangedSubview(popUp("Source", ["Image", "Pattern"], selected: state.cloneFrom == .pattern ? 1 : 0,
+                                       identifier: "clone-source") { index in
+            ToolState.shared.cloneFrom = index == 1 ? .pattern : .image
+        })
+        guard state.cloneFrom == .pattern else { return }
+
+        let button = NSButton(title: state.patternStore.identity?.name ?? "Choose…", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        button.identifier = NSUserInterfaceItemIdentifier("clone-pattern")
+        button.setAccessibilityLabel("Pattern")
+        if document != nil {
+            button.toolTip = "Choose the pattern"
+            actionBindings.append(ActionBinding(control: button) { [weak self] _ in
+                guard let document = self?.document else { return }
+                ClonePatternChooser.shared.open(document: document)
+            })
+        } else {
+            button.isEnabled = false
+            button.toolTip = "Open an image to choose a pattern"
+        }
+        stack.addArrangedSubview(row("Pattern", button, onChange: nil))
     }
 
     /// The Presets… entry: opens the one retained presets panel for the global
