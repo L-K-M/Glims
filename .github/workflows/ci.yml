@@ -67,6 +67,8 @@ jobs:
         run: bash scripts/test-component-curves.sh
       - name: Check optimized and sanitized Color Range math
         run: python3 scripts/test-color-range-math.py
+      - name: Check optimized and sanitized Replace Color math
+        run: python3 scripts/test-replace-color-math.py
       - name: Check optimized and sanitized Lab samples
         run: python3 scripts/test-lab-samples.py
       - name: Check optimized and sanitized physical Lab fills
@@ -176,6 +178,10 @@ jobs:
       - name: Check Color Range math
         timeout-minutes: 5
         run: python3 scripts/test-color-range-math.py optimized
+
+      - name: Check Replace Color math
+        timeout-minutes: 5
+        run: python3 scripts/test-replace-color-math.py optimized
 
       - name: Check Lab samples
         timeout-minutes: 5

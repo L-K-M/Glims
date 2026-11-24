@@ -25,7 +25,7 @@ mask Curves 24, mask Brightness/Contrast 25, and `applyGaussianBlur` or
 `smoothSelection` 29, `adjustment` 30, `setResolution` or `resize` 31,
 `cropResize` 32, `moveLayer`, `duplicateLayers`, `deleteLayers`,
 `mergeVisible`, `addLayerMask` or `selectSimilar` 33, `matting` 34,
-`applyVariations` 35, `colorRange` 36, and `clipping` 37. A file declaring one of those versions must contain
+`applyVariations` 35, `colorRange` 36, `clipping` 37, and `applyReplaceColor` 38. A file declaring one of those versions must contain
 at least one successful command from that version's family. It may also
 contain commands from all earlier versions. Failure/cancelled rows do not
 raise the version. With no extended successful commands, the writer uses
@@ -89,6 +89,7 @@ Commands have an owned `tag` and the following exact fields:
 | `applyVariations` | `settings` with `shadows`, `midtones`, `highlights`, `lightness`, `saturation` (version 35) |
 | `colorRange` | `mode`, `fuzziness`, `invert`, `samples` (version 36) |
 | `clipping` | `command` (`groupWithPrevious`, `ungroup`, `mergeGroup`) (version 37) |
+| `applyReplaceColor` | `settings` with `fuzziness`, `samples`, `hue`, `saturation`, `lightness` (version 38) |
 | `rotateCanvas` | signed `degrees`, sRGB `fill` (version 28) |
 | `resizeCanvas` | integer `width`, `height`, `offset`, `fill` |
 | `crop` | `rect` |
@@ -121,8 +122,8 @@ symbol for a layer adjustment or a context for an editing-mask adjustment.
 Select Alpha, color selection with `sampleMerged:false`, mask Levels, Curves or Brightness/Contrast,
 and one-click adjustments require context; `mergeVisible` and sample-merged
 `selectSimilar` require none; `moveLayer`, `duplicateLayers`, `deleteLayers`,
-`addLayerMask`, `matting`, `clipping` and `applyVariations` require a layer symbol;
-`colorRange` requires none like the whole-image selection commands;
+`addLayerMask`, `matting`, `clipping`, `applyVariations` and `applyReplaceColor`
+require a layer symbol; `colorRange` requires none like the whole-image selection commands;
 non-sample-merged
 `selectSimilar` requires the captured context. Other non-ink commands require none. Native ink commands require the `ink`
 binding below. Context has ordered `layers`/`channels` UUID
@@ -775,3 +776,13 @@ Only `mergeGroup` carries a `produces` symbol naming the layer the merge
 created, so a later recorded row can bind it; the other two commands may
 not carry one. Version 37 requires at least one successful clipping row;
 earlier versions reject the tag.
+
+## Image > Adjust > Replace Color (version 38)
+
+`applyReplaceColor` has exactly `settings`, with finite `fuzziness` inside
+0...200, a `samples` array of `{red, green, blue, subtract}` objects with
+finite components and Boolean `subtract`, and finite `hue` inside -180...180,
+`saturation` and `lightness` inside -100...100. The array keeps at most eight
+samples and needs at least one add. It requires a `layer` binding and replays
+on that explicit layer through a fresh filter session. Version 38 requires at
+least one successful Replace Color row; earlier versions reject the tag.

@@ -43,10 +43,11 @@ enum RecorderFileCodec {
     static let variationsVersion = 35
     /// Select > Color Range; renumber if another branch takes 36 first.
     static let colorRangeVersion = 36
-    /// Layer > Group with Previous, Ungroup and Merge Group; renumber if
-    /// another branch takes 37 first.
+    /// Layer > Group with Previous, Ungroup and Merge Group.
     static let clippingVersion = 37
-    static let latestVersion = clippingVersion
+    /// Image > Adjust > Replace Color; renumber if another branch takes 38 first.
+    static let replaceColorVersion = 38
+    static let latestVersion = replaceColorVersion
 
     static func decode(_ data: Data) throws -> RecorderFileValue {
         var parser = try RecorderJSONParser(data)
@@ -176,6 +177,7 @@ enum RecorderFileCodec {
         var hasVariations = false
         var hasColorRange = false
         var hasClipping = false
+        var hasReplaceColor = false
         var usedSymbols: Set<UUID> = []
         var labIdentities: [UUID: RecorderLabIdentity] = [:]
         var inkIdentities: [UUID: RecorderInkIdentity] = [:]
@@ -215,6 +217,7 @@ enum RecorderFileCodec {
                 if case .applyVariations = command { hasVariations = true }
                 if case .colorRange = command { hasColorRange = true }
                 if case .clipping = command { hasClipping = true }
+                if case .applyReplaceColor = command { hasReplaceColor = true }
                 if case .moveLayer = command { hasLayerEdits = true }
                 if case .duplicateLayers = command { hasLayerEdits = true }
                 if case .deleteLayers = command { hasLayerEdits = true }
@@ -375,6 +378,9 @@ enum RecorderFileCodec {
         }
         if fileVersion == clippingVersion, !hasClipping {
             throw RecorderFileError.invalid("Version 37 requires a successful clipping command.")
+        }
+        if fileVersion == replaceColorVersion, !hasReplaceColor {
+            throw RecorderFileError.invalid("Version 38 requires a successful Replace Color command.")
         }
         if fileVersion == scaleInterpolationVersion, !hasScaleInterpolation {
             throw RecorderFileError.invalid("Version 27 requires a successful Image Size with a resampling method.")
@@ -1032,6 +1038,10 @@ enum RecorderFileCodec {
             guard version >= brightnessContrastVersion else { throw RecorderFileError.invalid("A Brightness/Contrast command needs recording version 10.") }
             let value = try Object(node, required: ["tag", "settings"])
             return .applyBrightnessContrast(try brightnessContrast(value.get("settings")))
+        case "applyReplaceColor":
+            guard version >= replaceColorVersion else { throw RecorderFileError.invalid("A Replace Color command needs recording version 38.") }
+            let value = try Object(node, required: ["tag", "settings"])
+            return .applyReplaceColor(try replaceColor(value.get("settings")))
         case "applyGaussianBlur":
             guard version >= blurFilterVersion else { throw RecorderFileError.invalid("A Gaussian Blur command needs recording version 26.") }
             let value = try Object(node, required: ["tag", "settings"])
@@ -1243,6 +1253,24 @@ enum RecorderFileCodec {
             contrast: number(value.get("contrast"))).validated()
     }
 
+    /// Whole Replace Color values: fuzziness, the sampled colors and the
+    /// three corrections. Every field follows the same finite contract as
+    /// the native typed settings.
+    private static func replaceColor(_ node: RecorderJSON) throws -> RecorderReplaceColorValue {
+        let value = try Object(node, required: ["fuzziness", "samples", "hue", "saturation", "lightness"])
+        let samples = try array(value.get("samples")).map { node -> RecorderReplaceColorValue.Sample in
+            let sample = try Object(node, required: ["red", "green", "blue", "subtract"])
+            return RecorderReplaceColorValue.Sample(red: try number(sample.get("red")),
+                                                     green: try number(sample.get("green")),
+                                                     blue: try number(sample.get("blue")),
+                                                     subtract: try bool(sample.get("subtract")))
+        }
+        return try RecorderReplaceColorValue(fuzziness: try number(value.get("fuzziness")),
+            samples: samples, hue: try number(value.get("hue")),
+            saturation: try number(value.get("saturation")),
+            lightness: try number(value.get("lightness"))).validated()
+    }
+
     /// Whole Gaussian Blur values: both sizes and the owned kernel, edge and
     /// clipping choices.
     private static func gaussianBlur(_ node: RecorderJSON) throws -> RecorderGaussianBlurValue {
@@ -1404,6 +1432,9 @@ enum RecorderFileCodec {
             return
         case (.applyUnsharpMask, .layer(let id)):
             guard layer(id) else { throw RecorderFileError.invalid("An Unsharp Mask needs a layer description.") }
+            return
+        case (.applyReplaceColor, .layer(let id)):
+            guard layer(id) else { throw RecorderFileError.invalid("A Replace Color adjustment needs a layer description.") }
             return
         case (.channelToSelection, .channel(let id)):
             guard descriptions[id]?.kind == .channel else { throw RecorderFileError.invalid("Channel to Selection needs a channel description.") }

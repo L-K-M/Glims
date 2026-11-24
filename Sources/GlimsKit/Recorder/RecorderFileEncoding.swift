@@ -116,6 +116,8 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, colorRangeVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
+            case .success(.applyReplaceColor, _):
+                fileVersion = max(fileVersion, replaceColorVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
                 fileVersion = max(fileVersion, inkVersion)
                 if case .ink(let symbol, let identity) = binding {
@@ -505,6 +507,15 @@ extension RecorderFileCodec {
             return .object(["tag": .string("applyUnsharpMask"), "settings": .object([
                 "radius": try d(value.radius), "amount": try d(value.amount),
                 "threshold": try d(value.threshold)])])
+        case .applyReplaceColor(let value):
+            let value = try value.validated()
+            return .object(["tag": .string("applyReplaceColor"), "settings": .object([
+                "fuzziness": try d(value.fuzziness),
+                "samples": .array(try value.samples.map {
+                    .object(["red": try d($0.red), "green": try d($0.green),
+                             "blue": try d($0.blue), "subtract": .bool($0.subtract)]) }),
+                "hue": try d(value.hue), "saturation": try d(value.saturation),
+                "lightness": try d(value.lightness)])])
         case .editInk(let edit):
             guard edit.isValid else { throw RecorderFileError.invalid("Invalid ink edit values.") }
             return .object(["tag": .string("editInk"), "operation": .string(edit.operation.rawValue),

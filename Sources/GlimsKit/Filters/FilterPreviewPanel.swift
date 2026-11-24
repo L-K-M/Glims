@@ -43,6 +43,11 @@ class FilterPreviewPanel: NSWindowController {
         finish(commit: false)
     }
 
+    /// Runs once when the panel finishes, committed or canceled, before
+    /// `onFinish`. A failed commit leaves the panel open and does not call
+    /// it. Subclasses release what they hold on the document here.
+    func panelDidFinish() {}
+
     private func finish(commit: Bool) {
         guard !finished, let filter else { return }
         if commit {
@@ -53,6 +58,7 @@ class FilterPreviewPanel: NSWindowController {
                 guard success, !finished else { return }
                 finished = true
                 self.filter = nil
+                panelDidFinish()
                 window?.orderOut(nil)
                 onFinish?()
             }
@@ -62,6 +68,7 @@ class FilterPreviewPanel: NSWindowController {
             finished = true
             self.filter = nil
             imageDocument.finishFilter(filter, commit: false) { _ in }
+            panelDidFinish()
             window?.orderOut(nil)
             onFinish?()
         }

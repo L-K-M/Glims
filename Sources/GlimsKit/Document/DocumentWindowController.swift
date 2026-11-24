@@ -832,7 +832,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self.startEffectPreview(title: operation.title, effect: effect, drawable: drawable,
                                     properties: properties) { [imageDocument] filter, values in
                 NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
-                                                 properties: properties, filter: filter, initialValues: values)
+                                                 properties: properties, filter: filter,
+                                                 initialValues: values, tools: self.canvas.tools)
             }
         }
     }
@@ -1216,6 +1217,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             performInkEdit(.invert)
             return
         }
+        if operation.name == ReplaceColorPanel.operation {
+            // Replace Color and Color Range both take the canvas eyedropper.
+            guard colorRangePanel == nil else { return }
+            if let reason = imageDocument.replaceColorRefusal() {
+                imageDocument.onError?(reason)
+                return
+            }
+        }
         guard !previewBusy, !imageDocument.isClosing, !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
         /// What an Apply records for Last Filter; nil when the entry was
@@ -1312,7 +1321,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                                     properties: properties, preset: preset,
                                     lastFilter: lastFilter) { [imageDocument] filter, values in
                 NativeFilterPanel.parameterPanel(document: imageDocument, operation: operation,
-                                                 properties: properties, filter: filter, initialValues: values)
+                                                 properties: properties, filter: filter,
+                                                 initialValues: values, tools: self.canvas.tools)
             }
         }
     }
@@ -2151,6 +2161,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
               !previewBusy, !imageDocument.isClosing, !imageDocument.filterPreviewIsOpen,
               !PlugInCommands.isRunning, !EngineActivity.shared.isBusy,
               !imageDocument.isSavingForClose, !imageDocument.isTransferringClipboard else { return }
+        // Replace Color keeps its own target policy (RGB only) on a repeat,
+        // as its menu item does.
+        if applied.operation == ReplaceColorPanel.operation,
+           let reason = imageDocument.replaceColorRefusal() {
+            statusBar.message = "\(applied.title): \(reason)"
+            return
+        }
         endPendingEdits()
         // No panel reads FilterStart.values on a repeat, so the begin
         // fetches no property list. The pending marks mirror startPreview,
@@ -3679,6 +3696,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             guard !editingBlocked, !previewBusy, imageDocument.activeLayer != nil else { return false }
             if NativeFilterMenuLayout.usesSourceChooser(command.operation), let target = imageDocument.activeLayer {
                 return imageDocument.sourceFilterRefusal(target: target) == nil
+            }
+            if command.operation.name == ReplaceColorPanel.operation {
+                // The Color Range panel holds the canvas eyedropper.
+                guard colorRangePanel == nil else {
+                    menuItem.toolTip = "Close Color Range first; both use the canvas eyedropper."
+                    return false
+                }
+                let reason = imageDocument.replaceColorRefusal()
+                menuItem.toolTip = reason
+                return reason == nil
             }
             return singleLayerItemAllowed(menuItem, action: command.operation.title)
         case #selector(repeatExport(_:)):

@@ -22,6 +22,7 @@
 #include "display-sample.h"
 #include "component-document.h"
 #include "operation-posterize.h"
+#include "operation-replace-color.h"
 #include "operation-selective-color.h"
 #include "resource-mutation.h"
 #include "resource-rename.h"
@@ -1057,6 +1058,7 @@ engine_initialize (GlimsEngine  *engine,
 
   gimp_gegl_init (gimp);
   glims_operation_selective_color_register ();
+  glims_operation_replace_color_register ();
 
   /* The adapter's own operations register the way GIMP's do inside
    * gimp_gegl_init(): the held class reference puts the type in GEGL's

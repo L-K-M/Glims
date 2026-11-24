@@ -5054,6 +5054,34 @@ final class ImageDocument {
         return nil
     }
 
+    /// Image > Adjust > Replace Color: why the command cannot run now, or
+    /// nil. Reads only cached state, so menu validation never calls the
+    /// engine. Only ordinary RGB documents with a raster pixel layer
+    /// qualify (a legacy layout counts as ordinary): a component layout
+    /// takes the layout refusal, grayscale and indexed documents the RGB
+    /// refusal, and an active floating selection refuses.
+    func replaceColorRefusal() -> String? {
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Replace Color is available for ordinary layered images only."
+        }
+        guard colorInfo.mode == .rgb else {
+            return "Replace Color is available for RGB images only."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        if let reason = LayerSelectionPolicy.refusal(count: selectedLayerIDs.count, action: "Replace Color") {
+            return reason
+        }
+        guard !isMaskTargetActive, !isChannelTargetActive,
+              let layer = activeLayer,
+              layers.first(where: { $0.id == layer })?.kind == .pixel else {
+            return "Choose a pixel layer."
+        }
+        return nil
+    }
+
     /// Select > Color Range: replaces the whole-image selection through one
     /// queued command and one undo step. The command reads the merged
     /// projection, so it carries no layer binding. Cancel never reaches
@@ -7646,7 +7674,8 @@ final class ImageDocument {
     /// The filter operations whose new Apply Recorder can replay.
     private static let recordedFilterOperations: Set<String> = [
         "gimp:levels", "gimp:curves", "gimp:color-balance", "gimp:hue-saturation", "gimp:brightness-contrast",
-        EngineSession.gaussianBlurOperation, EngineSession.unsharpMaskOperation]
+        EngineSession.gaussianBlurOperation, EngineSession.unsharpMaskOperation,
+        ReplaceColorPanel.operation]
 
     /// Aborting a preview is cleanup, so clipboard/save edit gates must
     /// never suppress it; it also runs while the image closes, so a
@@ -7710,6 +7739,8 @@ final class ImageDocument {
                         command = .applyGaussianBlur(try session.gaussianBlurSettings(filter))
                     } else if record?.operation == EngineSession.unsharpMaskOperation {
                         command = .applyUnsharpMask(try session.unsharpMaskSettings(filter))
+                    } else if record?.operation == ReplaceColorPanel.operation {
+                        command = .applyReplaceColor(try session.replaceColorSettings(filter))
                     } else {
                         command = .applyLevels(try session.levelsSettings(filter))
                     }
@@ -8844,6 +8875,9 @@ final class ImageDocument {
                         guard mode == .rgb || mode == .grayscale else {
                             throw RecorderReplayError(message: "Convert the image to RGB or grayscale before replaying this \(step.command.title) adjustment.")
                         }
+                        if case .applyReplaceColor = step.command, mode != .rgb {
+                            throw RecorderReplayError(message: "Replace Color is available for RGB images only.")
+                        }
                         guard try session.layerState(layer, image: image).effective.isDisjoint(with: [.pixels]) else {
                             throw RecorderReplayError(message: "Unlock the recorded layer's pixels before replaying this \(step.command.title) adjustment.")
                         }
@@ -8913,7 +8947,7 @@ final class ImageDocument {
         case .selectColor(_, let options): return !options.sampleMerged
         case .selectCommand(.fromAlpha, _): return true
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabCurves, .applyLabLevels, .completeLabStroke: return true
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .applyVariations, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping: return true
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .applyReplaceColor, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .adjustment, .applyVariations, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping: return true
         case .selectSimilar(_, _, let sampleMerged): return !sampleMerged
         default: return false
         }

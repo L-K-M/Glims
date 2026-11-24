@@ -230,11 +230,18 @@ extension NativeFilterPanel {
                                operation: EngineSession.FilterOperation,
                                properties: [EngineSession.FilterProperty],
                                filter: Int32,
-                               initialValues: [String: EngineSession.FilterValue]) -> NativeFilterPanel? {
+                               initialValues: [String: EngineSession.FilterValue],
+                               tools: CanvasToolController? = nil) -> NativeFilterPanel? {
         if NativeFilterMenuLayout.usesSelectiveColorEditor(operation),
            let panel = SelectiveColorPanel(document: document, operation: operation,
                                            properties: properties, filter: filter,
                                            initialValues: initialValues) {
+            return panel
+        }
+        if NativeFilterMenuLayout.usesReplaceColorEditor(operation),
+           let panel = ReplaceColorPanel(document: document, operation: operation,
+                                        properties: properties, filter: filter,
+                                        initialValues: initialValues, tools: tools) {
             return panel
         }
         return NativeFilterPanel(document: document, operation: operation,

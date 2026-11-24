@@ -23,9 +23,9 @@ Current capture covers these command families:
 - Supported layer property changes: name, visibility, opacity and blend mode.
 - Complete Pencil, Eraser, Paintbrush and Sponge gestures with supported brush settings,
   including accepted tablet rotation and tangential pressure.
-- A newly applied Levels, Curves, Color Balance, Hue/Saturation or
-  Brightness/Contrast adjustment on an explicitly bound layer, with the whole
-  accepted settings.
+- A newly applied Levels, Curves, Color Balance, Hue/Saturation,
+  Brightness/Contrast or Replace Color adjustment on an explicitly bound
+  layer, with the whole accepted settings.
 - A newly applied Levels, Curves or Brightness/Contrast adjustment on a bound layer mask.
 - A newly applied Gaussian Blur or Unsharp Mask on an explicitly bound layer,
   with the whole accepted settings.
@@ -70,8 +70,8 @@ open image. To use a saved recording in another image, load it in that
 image and choose its targets.
 
 Levels, Curves, Color Balance, Hue/Saturation, Brightness/Contrast, Gaussian
-Blur and Unsharp Mask record the final native settings when Apply is
-admitted. Preview updates, Cancel and refused Apply add no row. An admitted
+Blur, Unsharp Mask and Replace Color record the final native settings when
+Apply is admitted. Preview updates, Cancel and refused Apply add no row. An admitted
 Apply retains its place if recording stops while it is pending. A native
 failure becomes a failure row. Applying any of these commands to a channel,
 applying ones other than Levels, Curves or Brightness/Contrast to a mask, or
@@ -138,8 +138,9 @@ Visible, Add Layer Mask and Select Similar, Layer > Matting version 34:
 Defringe, Remove Black Matte and Remove White Matte, and Image > Adjust
 > Variations version 35 with its three tonal ranges, lightness and
 saturation, Select > Color Range version 36 with its mode, fuzziness,
-Invert and sampled colors, and clipping groups version 37 with the owned
-command tag. See
+Invert and sampled colors, clipping groups version 37 with the owned
+command tag, and Image > Adjust > Replace Color version 38 with its
+fuzziness, samples and corrections. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

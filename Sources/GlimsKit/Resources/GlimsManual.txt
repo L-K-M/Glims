@@ -492,6 +492,16 @@ one; Cancel changes nothing. Only RGB images qualify. Show Clipping marks
 the pixels whose result leaves the 8-bit range. Recorder saves the
 accumulated settings and replays them on the same layer.
 
+Image > Adjust > Replace Color... shifts only the colors near one or more
+sampled colors on the active layer. Click the image with the sample,
+add or subtract eyedropper to build the list (Shift adds, Option subtracts;
+at most eight samples). Fuzziness widens the match from 0 to 200, and the
+preview shows the matched area. Hue, Saturation and Lightness then transform
+the matched colors. OK applies the change as one undo step named Replace
+Color, bounded by the selection when there is one; Cancel changes nothing.
+Only ordinary RGB pixel layers qualify. Recorder saves the samples,
+fuzziness and corrections and replays them on the same layer.
+
 # History and Snapshots
 
 The History palette lists every edit state the image keeps, with the
@@ -583,7 +593,8 @@ visibility, opacity and blend mode changes; affine and perspective
 layer transforms with their resampling method; newly applied Levels, Curves, Color Balance,
 Hue/Saturation and Brightness/Contrast adjustments with their complete settings;
 newly applied Gaussian Blur and Unsharp Mask filters with their complete
-settings; a Move Layer offset from a Move-tool drag or an arrow-key nudge;
+settings; newly applied Replace Color adjustments with their fuzziness,
+samples and corrections; a Move Layer offset from a Move-tool drag or an arrow-key nudge;
 Duplicate Layer and Delete Layer with one selected layer; Merge Visible;
 Add Layer Mask; Select Similar; Select > Color Range with its mode,
 fuzziness, Invert and samples; and complete Pencil, Eraser, Paintbrush and

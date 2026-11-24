@@ -16238,6 +16238,396 @@ test_clipping_groups (const char *work)
   api->image_close (engine, image);
 }
 
+/* The owned glims:replace-color operation. Four solid quadrants (red,
+ * green, blue and white) make the sampled weight exact, and the parity
+ * pass runs gimp:hue-saturation's master range on a twin as the oracle. */
+static GlimsStatus
+replace_color_number (GlimsFilterID filter, const char *property, double number)
+{
+  GlimsFilterValue value = { .kind = GLIMS_FILTER_VALUE_NUMBER, .number = number };
+
+  return api->filter_set_property (engine, filter, property, &value);
+}
+
+static GlimsStatus
+replace_color_sample (GlimsFilterID filter, uint32_t index,
+                      double red, double green, double blue, bool subtract)
+{
+  char           name[32];
+  GlimsFilterValue value;
+  GlimsStatus     status;
+
+  snprintf (name, sizeof name, "sample-%u", index);
+  value.kind = GLIMS_FILTER_VALUE_COLOR;
+  value.color = (GlimsColor) { red, green, blue, 1.0 };
+  status = api->filter_set_property (engine, filter, name, &value);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  snprintf (name, sizeof name, "subtract-%u", index);
+  value.kind = GLIMS_FILTER_VALUE_BOOL;
+  value.boolean = subtract;
+  status = api->filter_set_property (engine, filter, name, &value);
+  if (status != GLIMS_STATUS_OK)
+    return status;
+  /* The operation reads only the first sample-count samples, so each call
+   * makes its sample the last one in use, as the panel does. */
+  value.kind = GLIMS_FILTER_VALUE_INTEGER;
+  value.integer = (int64_t) index + 1;
+  return api->filter_set_property (engine, filter, "sample-count", &value);
+}
+
+static void
+test_replace_color (void)
+{
+  uint8_t     blocks[8 * 8 * 4];
+  GlimsImageID image = 0, twin = 0;
+  GlimsItemID  layer;
+  GlimsFilterID filter = 0;
+  GlimsUndoInfo undo = { 0 };
+  bool          found = false, parity = true;
+  int32_t       depth, w, h, count, i, j;
+  uint8_t      *pixels = NULL, *oracle = NULL;
+  uint8_t       bad[4] = { 0, 0, 0, 0 };
+  int           bad_x = -1, bad_y = -1;
+  char         *error = NULL;
+  GlimsOperationInfo *operations = NULL;
+  GlimsFilterProperty *properties = NULL;
+
+  for (int y = 0; y < 8; y++)
+    for (int x = 0; x < 8; x++)
+      {
+        uint8_t *p = blocks + (y * 8 + x) * 4;
+
+        if (y < 4 && x < 4)
+          memcpy (p, (uint8_t[]) { 255, 0, 0, 255 }, 4);
+        else if (y < 4)
+          memcpy (p, (uint8_t[]) { 0, 255, 0, 255 }, 4);
+        else if (x < 4)
+          memcpy (p, (uint8_t[]) { 0, 0, 255, 255 }, 4);
+        else
+          memcpy (p, (uint8_t[]) { 255, 255, 255, 255 }, 4);
+      }
+
+  /* Discovery: the operation and its 21 scalar properties. */
+  count = 0;
+  if (api->filter_operations (engine, NULL, 0, &count) != GLIMS_STATUS_OK || count < 1)
+    {
+      CHECK (false, "Replace Color: the operation catalog counts");
+      return;
+    }
+  operations = calloc ((size_t) count, sizeof *operations);
+  if (! operations)
+    return;
+  if (api->filter_operations (engine, operations, count, &count) != GLIMS_STATUS_OK)
+    {
+      CHECK (false, "Replace Color: the operation catalog reads");
+      free (operations);
+      return;
+    }
+  for (i = 0; i < count; i++)
+    if (! strcmp (operations[i].name, "glims:replace-color"))
+      {
+        found = true;
+        CHECK (operations[i].support == GLIMS_FILTER_OP_SUPPORTED &&
+               ! strcmp (operations[i].title, "Replace Color"),
+               "Replace Color is discoverable as a supported owned operation");
+      }
+  if (! found)
+    {
+      printf ("SKIP Replace Color: this engine does not list glims:replace-color\n");
+      free (operations);
+      return;
+    }
+  free (operations);
+  operations = NULL;
+
+  properties = calloc (64, sizeof *properties);
+  if (! properties)
+    return;
+  count = 0;
+  CHECK (api->filter_operation_properties (engine, "glims:replace-color",
+                                           properties, 64, &count) == GLIMS_STATUS_OK &&
+         count == 21,
+         "Replace Color lists 21 typed properties (count %d)", count);
+  {
+    int numbers = 0, integers = 0, booleans = 0, colors = 0;
+
+    for (i = 0; i < count; i++)
+      {
+        const GlimsFilterProperty *p = &properties[i];
+
+        if (p->kind == GLIMS_FILTER_VALUE_NUMBER) numbers++;
+        if (p->kind == GLIMS_FILTER_VALUE_INTEGER) integers++;
+        if (p->kind == GLIMS_FILTER_VALUE_BOOL) booleans++;
+        if (p->kind == GLIMS_FILTER_VALUE_COLOR) colors++;
+        if (! strcmp (p->name, "fuzziness"))
+          CHECK (p->kind == GLIMS_FILTER_VALUE_NUMBER && p->min == 0.0 &&
+                 p->max == 200.0 && p->default_number == 40.0,
+                 "fuzziness is a 0...200 number defaulting to 40");
+        if (! strcmp (p->name, "sample-count"))
+          CHECK (p->kind == GLIMS_FILTER_VALUE_INTEGER && p->min == 0.0 &&
+                 p->max == 8.0 && p->default_number == 0.0,
+                 "sample-count is a 0...8 integer defaulting to 0");
+        if (! strcmp (p->name, "hue"))
+          CHECK (p->kind == GLIMS_FILTER_VALUE_NUMBER && p->min == -180.0 &&
+                 p->max == 180.0,
+                 "hue is a -180...180 number");
+        if (! strcmp (p->name, "saturation") || ! strcmp (p->name, "lightness"))
+          CHECK (p->kind == GLIMS_FILTER_VALUE_NUMBER && p->min == -100.0 &&
+                 p->max == 100.0,
+                 "saturation and lightness are -100...100 numbers");
+        if (! strcmp (p->name, "sample-0"))
+          CHECK (p->kind == GLIMS_FILTER_VALUE_COLOR && p->default_color.red == 0.0 &&
+                 p->default_color.green == 0.0 && p->default_color.blue == 0.0,
+                 "sample-0 is a color defaulting to black");
+        if (! strcmp (p->name, "subtract-0"))
+          CHECK (p->kind == GLIMS_FILTER_VALUE_BOOL && ! p->default_bool,
+                 "subtract-0 is a boolean defaulting to off");
+      }
+    CHECK (numbers == 4 && integers == 1 && booleans == 8 && colors == 8,
+           "Replace Color's property kinds are 4 numbers, 1 integer, 8 booleans, 8 colors");
+  }
+  free (properties);
+  properties = NULL;
+
+  CHECK (api->image_from_pixels (engine, 8, 8, blocks, sizeof blocks, &image, NULL) ==
+         GLIMS_STATUS_OK && image != 0,
+         "the Replace Color fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  depth = undo_depth (image);
+
+  /* One red add sample at fuzziness 40 and hue 180: only the red block
+   * matches, and it becomes cyan. */
+  CHECK (api->filter_begin (engine, image, layer, "glims:replace-color", &filter, &error) ==
+         GLIMS_STATUS_OK && filter != 0,
+         "filter_begin opens a glims:replace-color session%s%s",
+         error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  if (! filter)
+    {
+      api->image_close (engine, image);
+      return;
+    }
+  CHECK (replace_color_number (filter, "fuzziness", 40.0) == GLIMS_STATUS_OK &&
+         replace_color_sample (filter, 0, 1.0, 0.0, 0.0, false) == GLIMS_STATUS_OK &&
+         replace_color_number (filter, "hue", 180.0) == GLIMS_STATUS_OK,
+         "the red sample, fuzziness 40 and hue 180 are accepted");
+  CHECK (api->filter_commit (engine, filter, &error) == GLIMS_STATUS_OK,
+         "Replace Color commits%s%s", error ? ": " : "", error ? error : "");
+  api->free_string (error);
+  error = NULL;
+  filter = 0;
+  CHECK (undo_depth (image) == depth + 1 &&
+         api->image_undo_info (engine, image, &undo) == GLIMS_STATUS_OK &&
+         strcmp (undo.next_undo, "Replace Color") == 0,
+         "Replace Color is one undo step named Replace Color (next: %s)",
+         undo.next_undo);
+
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && w == 8 && h == 8, "the Replace Color composite renders");
+  if (pixels)
+    {
+      bool exact = true;
+
+      for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++)
+          {
+            const uint8_t *p = pixel_at (pixels, w, x, y);
+            const uint8_t *wanted;
+
+            if (y < 4 && x < 4)
+              wanted = (const uint8_t[]) { 0, 255, 255, 255 };
+            else if (y < 4)
+              wanted = (const uint8_t[]) { 0, 255, 0, 255 };
+            else if (x < 4)
+              wanted = (const uint8_t[]) { 0, 0, 255, 255 };
+            else
+              wanted = (const uint8_t[]) { 255, 255, 255, 255 };
+            if (memcmp (p, wanted, 4) != 0 && exact)
+              {
+                exact = false;
+                bad_x = x;
+                bad_y = y;
+                memcpy (bad, p, 4);
+              }
+          }
+      CHECK (exact, "the red block turns cyan and the other blocks stay exact "
+             "(first difference at %d,%d: %u %u %u %u)", bad_x, bad_y,
+             bad[0], bad[1], bad[2], bad[3]);
+    }
+  free (pixels);
+  pixels = NULL;
+
+  CHECK (api->image_undo (engine, image) == GLIMS_STATUS_OK &&
+         undo_depth (image) == depth,
+         "one undo restores the Replace Color source");
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && memcmp (pixels, blocks, sizeof blocks) == 0,
+         "undo restores every exact source pixel");
+  free (pixels);
+  pixels = NULL;
+
+  /* A rectangle selection limits the change to itself. */
+  {
+    GlimsSelectOptions select = { .struct_size = sizeof select,
+                                  .operation = GLIMS_SELECT_REPLACE };
+
+    CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                              (GlimsPoint[]) { { 0, 0 }, { 2, 2 } }, 2,
+                              &select) == GLIMS_STATUS_OK,
+           "the Replace Color selection fixture selects");
+  }
+  CHECK (api->filter_begin (engine, image, layer, "glims:replace-color", &filter, NULL) ==
+         GLIMS_STATUS_OK && filter != 0,
+         "the selection-limited session opens");
+  if (filter)
+    {
+      CHECK (replace_color_number (filter, "fuzziness", 40.0) == GLIMS_STATUS_OK &&
+             replace_color_sample (filter, 0, 1.0, 0.0, 0.0, false) == GLIMS_STATUS_OK &&
+             replace_color_number (filter, "hue", 180.0) == GLIMS_STATUS_OK &&
+             api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK,
+             "the selection-limited Replace Color commits");
+      filter = 0;
+    }
+  pixels = render_all (image, &w, &h);
+  CHECK (pixels && pixel_at (pixels, w, 0, 0)[0] == 0 &&
+         pixel_at (pixels, w, 0, 0)[1] == 255 &&
+         pixel_at (pixels, w, 3, 3)[0] == 255 &&
+         pixel_at (pixels, w, 3, 3)[1] == 0,
+         "only the selected part of the red block changes");
+  free (pixels);
+  pixels = NULL;
+  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  api->image_close (engine, image);
+  image = 0;
+
+  /* Parity: every block sampled at fuzziness 200 makes w = 1 everywhere,
+   * so the result equals gimp:hue-saturation's master range. */
+  CHECK (api->image_from_pixels (engine, 8, 8, blocks, sizeof blocks, &image, NULL) ==
+         GLIMS_STATUS_OK && image != 0 &&
+         api->image_from_pixels (engine, 8, 8, blocks, sizeof blocks, &twin, NULL) ==
+         GLIMS_STATUS_OK && twin != 0,
+         "the Replace Color parity fixtures exist");
+  if (! image || ! twin)
+    {
+      if (image) api->image_close (engine, image);
+      if (twin) api->image_close (engine, twin);
+      return;
+    }
+  layer = first_layer (image);
+  CHECK (api->filter_begin (engine, image, layer, "glims:replace-color", &filter, NULL) ==
+         GLIMS_STATUS_OK && filter != 0,
+         "the parity Replace Color session opens");
+  if (filter)
+    {
+      CHECK (replace_color_number (filter, "fuzziness", 200.0) == GLIMS_STATUS_OK &&
+             replace_color_sample (filter, 0, 1.0, 0.0, 0.0, false) == GLIMS_STATUS_OK &&
+             replace_color_sample (filter, 1, 0.0, 1.0, 0.0, false) == GLIMS_STATUS_OK &&
+             replace_color_sample (filter, 2, 0.0, 0.0, 1.0, false) == GLIMS_STATUS_OK &&
+             replace_color_sample (filter, 3, 1.0, 1.0, 1.0, false) == GLIMS_STATUS_OK &&
+             replace_color_number (filter, "hue", 90.0) == GLIMS_STATUS_OK &&
+             replace_color_number (filter, "saturation", 30.0) == GLIMS_STATUS_OK &&
+             replace_color_number (filter, "lightness", -20.0) == GLIMS_STATUS_OK &&
+             api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK,
+             "the whole-image Replace Color commits");
+      filter = 0;
+    }
+  {
+    GlimsHueSaturationSettings hs = { .struct_size = sizeof hs, .overlap = 0 };
+    GlimsItemID oracle_layer = first_layer (twin);
+
+    hs.master.hue = 90.0 / 180.0;
+    hs.master.saturation = 30.0 / 100.0;
+    hs.master.lightness = -20.0 / 100.0;
+    CHECK (api->filter_begin (engine, twin, oracle_layer, "gimp:hue-saturation",
+                              &filter, NULL) == GLIMS_STATUS_OK && filter != 0 &&
+             api->filter_hue_saturation_set (engine, filter, &hs, &error) ==
+             GLIMS_STATUS_OK &&
+             api->filter_commit (engine, filter, NULL) == GLIMS_STATUS_OK,
+             "the gimp:hue-saturation master oracle commits%s%s",
+             error ? ": " : "", error ? error : "");
+    api->free_string (error);
+    error = NULL;
+    filter = 0;
+  }
+  pixels = render_all (image, &w, &h);
+  oracle = render_all (twin, &w, &h);
+  parity = pixels != NULL && oracle != NULL;
+  if (parity)
+    for (i = 0; i < w * h; i++)
+      {
+        for (j = 0; j < 3; j++)
+          if (abs (pixels[i * 4 + j] - oracle[i * 4 + j]) > 1)
+            parity = false;
+        if (pixels[i * 4 + 3] != oracle[i * 4 + 3])
+          parity = false;
+      }
+  CHECK (parity, "whole-image Replace Color matches the Hue-Saturation master oracle");
+  free (pixels);
+  free (oracle);
+  pixels = oracle = NULL;
+  api->image_close (engine, image);
+  api->image_close (engine, twin);
+  image = twin = 0;
+
+  /* Bad property values are refused and change nothing. */
+  CHECK (api->image_from_pixels (engine, 8, 8, blocks, sizeof blocks, &image, NULL) ==
+         GLIMS_STATUS_OK && image != 0,
+         "the Replace Color refusal fixture exists");
+  if (! image)
+    return;
+  layer = first_layer (image);
+  depth = undo_depth (image);
+  pixels = render_all (image, &w, &h);
+  CHECK (api->filter_begin (engine, image, layer, "glims:replace-color", &filter, NULL) ==
+         GLIMS_STATUS_OK && filter != 0,
+         "the refusal session opens");
+  if (filter)
+    {
+      GlimsFilterValue wrong_kind = { .kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 40 };
+      GlimsFilterValue bad_color = { .kind = GLIMS_FILTER_VALUE_COLOR };
+
+      bad_color.color = (GlimsColor) { NAN, 0.0, 0.0, 1.0 };
+      CHECK (replace_color_number (filter, "fuzziness", 201.0) == GLIMS_STATUS_INVALID_ARGUMENT &&
+             replace_color_number (filter, "hue", 181.0) == GLIMS_STATUS_INVALID_ARGUMENT &&
+             replace_color_number (filter, "saturation", 101.0) == GLIMS_STATUS_INVALID_ARGUMENT &&
+             replace_color_number (filter, "lightness", -101.0) == GLIMS_STATUS_INVALID_ARGUMENT,
+             "out-of-range numbers are refused");
+      {
+        GlimsFilterValue value = { .kind = GLIMS_FILTER_VALUE_INTEGER, .integer = 9 };
+
+        CHECK (api->filter_set_property (engine, filter, "sample-count", &value) ==
+               GLIMS_STATUS_INVALID_ARGUMENT,
+               "sample-count 9 is refused");
+      }
+      CHECK (api->filter_set_property (engine, filter, "sample-0", &bad_color) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a non-finite color is refused");
+      CHECK (api->filter_set_property (engine, filter, "fuzziness", &wrong_kind) ==
+             GLIMS_STATUS_INVALID_ARGUMENT,
+             "a mismatched value kind is refused");
+      CHECK (api->filter_set_property (engine, filter, "sample-8", &bad_color) ==
+             GLIMS_STATUS_NOT_FOUND,
+             "an unknown sample property is NOT_FOUND");
+      CHECK (api->filter_abort (engine, filter) == GLIMS_STATUS_OK,
+             "the refusal session aborts");
+      filter = 0;
+    }
+  {
+    uint8_t *after = render_all (image, &w, &h);
+
+    CHECK (after && pixels && memcmp (after, pixels, (size_t) w * h * 4) == 0 &&
+           undo_depth (image) == depth,
+           "every refused value leaves the pixels and history unchanged");
+    free (after);
+  }
+  free (pixels);
+  api->image_close (engine, image);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -18351,6 +18741,7 @@ main (int argc, char **argv)
   test_image_variations ();
   test_color_range ();
   test_clipping_groups (argv[2]);
+  test_replace_color ();
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();
