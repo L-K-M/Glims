@@ -37,7 +37,11 @@ struct RecorderStrokeCommand: Equatable {
             self.eraserBackground = eraserBackground
         }
 
+        /// nil for a brush the codec cannot keep, including any paint
+        /// option (blend mode, spacing, fade, clone pattern): such strokes
+        /// stay explicit unrecorded rows.
         init?(_ brush: EngineSession.Brush) {
+            guard !brush.hasPaintOptions else { return nil }
             let tool: Tool
             switch brush.tool {
             case .pencil: tool = .pencil
