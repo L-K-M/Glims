@@ -43,6 +43,8 @@ final class ImageDocument {
     private var recorderProducedSymbols: [Int: UUID] = [:]
     /// The installed file's explicit choices, keyed by symbol, kept so a
     /// deferred row can resolve its non-produced inputs at replay time.
+    /// Symbol keys survive record removal unchanged, so unlike the
+    /// ordinal-keyed maps above this one needs no reindexing.
     private var recorderInstalledTargets: [UUID: RecorderRuntimeTarget] = [:]
     /// The layer each replayed producing step actually created, keyed by its
     /// produced symbol. Filled only after that step's native work succeeds.
@@ -8163,6 +8165,9 @@ final class ImageDocument {
                                                   choices: [UUID: RecorderInstallChoice],
                                                   session: EngineSession, image: Int32) throws -> RecorderInstallation {
         let file = prepared.file
+        // Failure and cancelled rows never carry `produces` (the codec and
+        // settleRecording both leave it nil there), so this collects only
+        // the producing success rows.
         let producedByRow = file.records.reduce(into: [Int: UUID]()) { result, row in
             if let symbol = row.produces { result[row.ordinal] = symbol }
         }

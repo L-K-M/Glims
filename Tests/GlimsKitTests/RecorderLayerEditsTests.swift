@@ -73,7 +73,7 @@ final class RecorderLayerEditsTests: XCTestCase {
 
         let moved = try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"moveLayer","offset":{"x":3,"y":-2}}"#, binding: layerBinding, symbols: layerSymbolJSON)))
-        guard case .success(.moveLayer(let offset), .layer(let bound)) = moved.records.first?.outcome else {
+        guard case .success(.moveLayer(let offset), .layer(let bound))? = moved.records.first?.outcome else {
             return XCTFail("The layer move was lost")
         }
         XCTAssertEqual(offset, .init(x: 3, y: -2))

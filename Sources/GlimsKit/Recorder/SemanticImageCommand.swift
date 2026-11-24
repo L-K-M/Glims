@@ -449,6 +449,11 @@ enum SemanticImageCommand {
                 try session.selectLayer(layer, image: image)
             }
             _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
+        case .selectSimilar(_, _, let sampleMerged) where !sampleMerged:
+            // The image-only path samples the active drawable; without
+            // Sample Merged the record must bind a paint target, whose
+            // replay route keeps that target active, not a bare layer.
+            throw MissingLayerBinding()
         default:
             return try applyCreating(session: session, image: image)
         }
