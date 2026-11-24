@@ -195,6 +195,7 @@ enum RecorderFileSemanticBridge {
         case .applyColorBalance(let value): return .applyColorBalance(try value.settings())
         case .applyHueSaturation(let value): return .applyHueSaturation(try value.settings())
         case .applyVariations(let value): return .applyVariations(try value.settings())
+        case .colorRange(let value): return .colorRange(try value.settings())
         case .applyBrightnessContrast(let value): return .applyBrightnessContrast(try value.settings())
         case .applyGaussianBlur(let value): return .applyGaussianBlur(try value.settings())
         case .applyUnsharpMask(let value): return .applyUnsharpMask(try value.settings())

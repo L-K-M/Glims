@@ -282,6 +282,8 @@ enum MainMenu {
             item("Deselect", #selector(DocumentWindowController.selectNone(_:)), "d"),
             inverse,
             .separator(),
+            item("Color Range…", #selector(DocumentWindowController.colorRange(_:))),
+            .separator(),
             item("Feather…", #selector(DocumentWindowController.featherSelection(_:))),
             item("Grow…", #selector(DocumentWindowController.growSelection(_:))),
             item("Shrink…", #selector(DocumentWindowController.shrinkSelection(_:))),

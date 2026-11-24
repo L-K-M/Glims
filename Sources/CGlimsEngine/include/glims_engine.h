@@ -972,6 +972,47 @@ typedef struct GlimsVariationsSettings {
   double saturation;              /* finite -1..1; positive is more saturated */
 } GlimsVariationsSettings;
 
+/* Select > Color Range's owned mode values. They never encode an upstream
+ * enum: Sampled Colors compares sampled pixels, the six hue ranges select a
+ * fixed sector of the color wheel, and Highlights/Midtones/Shadows are luma
+ * bands. */
+typedef enum GlimsColorRangeMode {
+  GLIMS_COLOR_RANGE_SAMPLED    = 1,
+  GLIMS_COLOR_RANGE_REDS       = 2,
+  GLIMS_COLOR_RANGE_YELLOWS    = 3,
+  GLIMS_COLOR_RANGE_GREENS     = 4,
+  GLIMS_COLOR_RANGE_CYANS      = 5,
+  GLIMS_COLOR_RANGE_BLUES      = 6,
+  GLIMS_COLOR_RANGE_MAGENTAS   = 7,
+  GLIMS_COLOR_RANGE_HIGHLIGHTS = 8,
+  GLIMS_COLOR_RANGE_MIDTONES   = 9,
+  GLIMS_COLOR_RANGE_SHADOWS    = 10
+} GlimsColorRangeMode;
+
+/* A sampled color. Components are finite straight nonlinear sRGB and may
+ * lie slightly outside 0...1; the kernel clamps them. `subtract` removes the
+ * sample's contribution instead of adding it. */
+typedef struct GlimsColorRangeSample {
+  double   red, green, blue;
+  uint32_t subtract;             /* exactly 0 or 1 */
+} GlimsColorRangeSample;
+
+#define GLIMS_COLOR_RANGE_MAX_SAMPLES 64u
+
+/* Select > Color Range's borrowed settings. Samples stay owned by the caller
+ * and must remain readable until the synchronous call returns. Extension
+ * tails are accepted and ignored. No native enum or layout crosses here. */
+typedef struct GlimsColorRangeSettings {
+  uint32_t struct_size;          /* >= sizeof(GlimsColorRangeSettings) */
+  uint32_t mode;                 /* GlimsColorRangeMode */
+  double   fuzziness;            /* finite 0...200 in every mode; only
+                                    sampled modes use it */
+  uint32_t invert;               /* exactly 0 or 1 */
+  uint32_t sample_count;         /* 0...GLIMS_COLOR_RANGE_MAX_SAMPLES */
+  const GlimsColorRangeSample *samples;  /* borrowed for the call; NULL
+                                            only with a zero count */
+} GlimsColorRangeSettings;
+
 typedef struct GlimsLevelsChannel {
   double low_input;         /* finite 0..1; default 0 */
   double high_input;        /* finite 0..1; default 1 */
@@ -4863,6 +4904,30 @@ typedef struct GlimsEngineAPI {
                                            int32_t max_size, uint8_t *pixels, size_t byte_count,
                                            uint8_t *clipping, size_t clipping_byte_count,
                                            int32_t *width, int32_t *height, char **error);
+  /* Slot 257: Select > Color Range. Replaces the selection with every
+   * projection pixel whose weight is near one or more sampled colors (the
+   * merged visible image in straight nonlinear sRGB), or inside a fixed hue
+   * or luma band, as ONE undo step named "Color Range". The weight ramp,
+   * the transparency rule, Invert and the current-selection limit follow
+   * the math in Engine/color-range-math.h. Every setting refusal is
+   * INVALID_ARGUMENT and changes nothing; indexed images are UNSUPPORTED;
+   * component documents are refused by policy. A range whose every final
+   * weight is below 0.5/255 is FAILED with "No pixels match the color
+   * range.". An unknown image is NOT_FOUND and a busy engine BUSY. */
+  GlimsStatus (*selection_color_range) (GlimsEngine *engine, GlimsImageID image,
+                                        const GlimsColorRangeSettings *settings, char **error);
+  /* Slot 258: Select > Color Range's preview. The same weights, including
+   * the current-selection limit, on a projection read scaled so its long
+   * side is at most `max_size` (1...512) and never larger than the
+   * image, one byte per pixel, 0...255, rows packed. `mask` NULL queries
+   * the size only and ignores `byte_count`; otherwise `byte_count` is the
+   * mask's capacity, at least width * height. Wrong buffer sizes are
+   * INVALID_ARGUMENT; an unknown image is NOT_FOUND; an indexed image is
+   * UNSUPPORTED. Read-only: no history change and no locks. */
+  GlimsStatus (*color_range_preview) (GlimsEngine *engine, GlimsImageID image,
+                                      const GlimsColorRangeSettings *settings,
+                                      int32_t max_size, uint8_t *mask, size_t byte_count,
+                                      int32_t *width, int32_t *height, char **error);
 } GlimsEngineAPI;
 
 /* Slot 253's operation codes and Defringe width limit. */

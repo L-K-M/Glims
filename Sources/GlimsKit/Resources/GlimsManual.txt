@@ -351,6 +351,19 @@ adds to the selection without feathering. Similar is one undo step but is
 not recorded. From Layer Transparency selects the visible area of the
 active layer, and From Path selects along the active path.
 
+Select > Color Range… opens a utility panel that keeps the canvas clickable.
+It selects every pixel of the merged image near one or more sampled colors,
+or inside a fixed hue range (Reds through Magentas) or a tonal band
+(Highlights, Midtones, Shadows). Click the image or the panel's preview to
+sample; the plain eyedropper replaces the samples with the clicked color,
+plus adds the clicked color, and minus adds it as a color to subtract.
+Shift-click acts as plus and Option-click as minus with any eyedropper.
+Fuzziness runs from 0 to 200 for Sampled Colors; the fixed ranges ignore it.
+Selection shows the weight mask and Image shows the picture. Invert swaps
+what is selected, and an existing selection limits the result. OK replaces
+the selection as one "Color Range" undo step; Cancel and Escape change
+nothing.
+
 When you start a selection drag or click with the Magic Wand, hold a
 modifier to combine with the selection that exists:
 
@@ -561,8 +574,9 @@ Hue/Saturation and Brightness/Contrast adjustments with their complete settings;
 newly applied Gaussian Blur and Unsharp Mask filters with their complete
 settings; a Move Layer offset from a Move-tool drag or an arrow-key nudge;
 Duplicate Layer and Delete Layer with one selected layer; Merge Visible;
-Add Layer Mask; Select Similar; and complete Pencil, Eraser, Paintbrush and Sponge strokes on
-ordinary pixel layers. A stroke keeps the settings used when it was
+Add Layer Mask; Select Similar; Select > Color Range with its mode,
+fuzziness, Invert and samples; and complete Pencil, Eraser, Paintbrush and
+Sponge strokes on ordinary pixel layers. A stroke keeps the settings used when it was
 drawn, including accepted tablet rotation and tangential pressure. Replay
 checks that the required brush and its supported paint dynamics still match
 the recording; unsupported brushes or dynamics

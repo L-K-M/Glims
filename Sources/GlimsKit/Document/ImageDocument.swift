@@ -4939,6 +4939,82 @@ final class ImageDocument {
         if !accepted { deliver(nil) }
     }
 
+    // MARK: Color Range
+
+    /// Select > Color Range: why the command cannot run now, or nil. Reads
+    /// only cached state, so menu validation never calls the engine. The
+    /// merged projection is evaluated, so any ordinary target qualifies;
+    /// indexed documents and component layouts refuse, as does an active
+    /// floating selection.
+    func colorRangeRefusal() -> String? {
+        guard session.supportsColorRange else {
+            return "This image engine cannot select a color range."
+        }
+        guard storage.layout == .ordinary || storage.layout == .legacyUnknown else {
+            return "Color Range is available for ordinary layered images only."
+        }
+        guard colorInfo.mode != .indexed else {
+            return "Color Range is available for RGB and grayscale images only."
+        }
+        guard !isClosing, acceptsEdits, !targetCommandIsPending else {
+            return "Wait for the current operation to finish."
+        }
+        if floatingState.isActive { return "Anchor or cancel the floating selection first." }
+        return nil
+    }
+
+    /// Select > Color Range: replaces the whole-image selection through one
+    /// queued command and one undo step. The command reads the merged
+    /// projection, so it carries no layer binding. Cancel never reaches
+    /// this method.
+    func selectColorRange(_ settings: EngineSession.ColorRangeSettings) {
+        if let reason = colorRangeRefusal() {
+            onError?(reason)
+            NSSound.beep()
+            return
+        }
+        guard !refuseWhileEditingUnavailable() else { return }
+        let command = SemanticImageCommand.colorRange(settings)
+        run(semantic: command, command.apply)
+    }
+
+    /// Renders the color-range mask off the main thread, through the
+    /// document's counted read queue, and delivers it on the main thread.
+    /// A refused read delivers nil; the panel drops stale generations.
+    func colorRangePreview(settings: EngineSession.ColorRangeSettings,
+                           maxSize: Int32,
+                           deliver: @escaping @MainActor ((width: Int, height: Int, mask: [UInt8])?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let preview = try? session.colorRangePreview(documentImage, settings: settings, maxSize: maxSize)
+            DispatchQueue.main.async { deliver(preview) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
+    /// Color Range's eyedropper: reads one merged-image color off the main
+    /// thread through the counted read queue (the panel holds the
+    /// filter-preview gate, which the canvas sampler's path refuses), and
+    /// delivers it on the main thread; nil when the read is refused or fails.
+    func colorRangeSample(x: Int, y: Int,
+                          deliver: @escaping @MainActor (EngineSession.SampledColor?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let sample = try? session.sampleColor(documentImage, x: x, y: y)
+            DispatchQueue.main.async { deliver(sample) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
+    /// Color Range's Image preview: renders the merged image at `scale`
+    /// through the counted read queue, so closing the document drains it.
+    func colorRangeThumbnail(scale: Double, area: CGRect,
+                             deliver: @escaping @MainActor (CGImage?) -> Void) {
+        let accepted = run(effect: .readsPixels) { session, documentImage in
+            let rendered = try? session.render(documentImage, scale: scale, area: area)
+            DispatchQueue.main.async { deliver(rendered) }
+        }
+        if !accepted { deliver(nil) }
+    }
+
     /// Resolve the selection behind preceding input, then crop and record
     /// those exact bounds as one accepted command. Later selection changes
     /// cannot overtake this read or change the saved Recorder rectangle.

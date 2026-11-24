@@ -7307,3 +7307,32 @@ and saturation, requires a layer binding and refuses the identity.
 (`GLIMS_SMOKE_CASE=variations`) drives the sheet's clicks, Cancel, OK,
 the twin-pixel oracle, undo/redo, the grayscale refusal and a
 save/load/replay comparison.
+
+### Select > Color Range (2026-11-23)
+
+Select > Color Range… selects every pixel of the merged projection near one
+or more sampled colors, or inside a fixed hue sector or luma band. Facade
+slots 257/258 append the command: `Engine/color-range.c` reads the same
+straight nonlinear sRGB projection as `glims_image_sample_color`, evaluates
+the pure `Engine/color-range-math` kernel (the by-color antialias ramp, hue
+sectors with their saturation gate, luma bands, transparency, Invert and the
+current-selection limit) and replaces the root mask through
+`gimp_channel_select_buffer` as one undo step named "Color Range", applying
+`select.c`'s cached-mask workaround afterwards. The preview slot returns a
+scaled one-byte-per-pixel mask and changes no history. An empty range is
+FAILED; indexed documents are UNSUPPORTED; malformed settings are
+INVALID_ARGUMENT.
+
+The utility panel keeps the canvas clickable through a new
+`CanvasToolController.canvasSampler` hook, which wins over every tool but
+Hand and Zoom, and marks `filterPreviewIsOpen` while it runs so other edits
+refuse. Its three eyedroppers map Shift to add and Option to subtract, and
+its preview renders off the main thread behind a generation counter. The
+Recorder writes `colorRange` at format version 36 with the mode,
+fuzziness, Invert and samples, target-independent and bound to `none`.
+`scripts/test-color-range-math.py` compiles the kernel standalone, optimized
+and under the sanitizers, `swift test` covers the settings rules and the
+codec, and the `color-range` smoke case (`GLIMS_SMOKE_CASE=color-range`)
+opens the panel, samples, checks the mask, applies, cancels, proves a
+canvas press samples instead of painting and replays a saved recording
+onto a twin.
