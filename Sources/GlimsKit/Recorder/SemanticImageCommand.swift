@@ -451,6 +451,9 @@ enum SemanticImageCommand {
                 try session.channelCommand(.select, channel: 0, image: image)
                 try session.selectLayer(layer, image: image)
             }
+            // The new mask re-resolves at replay through its owner layer's
+            // symbol (masks are described by owner, not by channel id), so
+            // the returned mask id needs no produced-symbol remapping.
             _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
         case .selectSimilar(_, _, let sampleMerged) where !sampleMerged:
             // The image-only path samples the active drawable; without

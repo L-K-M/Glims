@@ -8951,6 +8951,9 @@ final class ImageDocument {
     private func reserveRecording(_ command: SemanticImageCommand?, explicitLayer: Int32? = nil,
                                   explicitChannel: Int32? = nil) throws -> RecorderCapture? {
         guard let command, recorder.isRecording else { return nil }
+        // The context is captured before reserve() runs (it is this call's
+        // argument), so a capture failure throws before any row exists and
+        // can never strand an unsettled reservation.
         return try reserveRecording(context: captureRecorderContext(for: command, explicitLayer: explicitLayer,
                                                                    explicitChannel: explicitChannel))
     }
