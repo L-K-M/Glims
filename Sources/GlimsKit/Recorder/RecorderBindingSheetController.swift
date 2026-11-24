@@ -48,7 +48,7 @@ final class RecorderBindingSheetController: NSObject, NSWindowDelegate, NSTableV
         }
         // A produced symbol names a layer a recorded command creates; replay
         // binds it itself, so the sheet never offers it as a choice.
-        required.subtract(file.records.compactMap(\.produces))
+        required.subtract(file.producedSymbols)
         symbols = file.symbols.filter { required.contains($0.id) }
         maskOwners = masks
         inkTargets = inks

@@ -61,6 +61,9 @@ enum StrokeSelectionFormValidation {
     /// one fails there, never replaced silently here) and the sheet's
     /// local size, opacity and color. The color must convert to finite
     /// sRGB components in 0 ... 1 — exactly the range the facade accepts.
+    /// The sheet offers no paint options, so the stroke paints in Normal
+    /// at the default spacing, without a fade or pattern, whatever the
+    /// tool's options say.
     static func brush(tool: EngineSession.Brush.Tool,
                       capturedBrush: EngineSession.Brush,
                       sizeText: String, opacityText: String, color: NSColor) -> Result<EngineSession.Brush, Rejection> {
@@ -82,6 +85,7 @@ enum StrokeSelectionFormValidation {
             return .failure(Rejection(message: "The stroke color's components must be finite and within 0 to 1."))
         }
         var brush = capturedBrush
+        brush.clearPaintOptions()
         brush.tool = tool
         brush.size = size
         brush.opacity = opacity
