@@ -13,3 +13,6 @@ dist/
 
 # Python packaging-test caches
 __pycache__/
+
+# Local Claude Code approvals can contain secrets.
+**/.claude/settings.local.json
