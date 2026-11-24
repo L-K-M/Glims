@@ -14332,6 +14332,13 @@ test_layer_matting (void)
       }
       free (bytes);
       bytes = NULL;
+      CHECK (api->image_undo (engine, fringe_image) == GLIMS_STATUS_OK &&
+             undo_depth (fringe_image) == fringe_depth,
+             "undo restores the width 4 source");
+      CHECK (api->layer_matting (engine, fringe_image, fringe_layer,
+                                 GLIMS_MATTING_DEFRINGE, GLIMS_MATTING_MAX_WIDTH, NULL) ==
+             GLIMS_STATUS_OK && undo_depth (fringe_image) == fringe_depth + 1,
+             "Defringe accepts the documented maximum width as one step");
       api->image_close (engine, fringe_image);
     }
 
@@ -14356,7 +14363,8 @@ test_layer_matting (void)
          GLIMS_STATUS_INVALID_ARGUMENT && error, "Defringe width 0 is refused");
   api->free_string (error);
   error = NULL;
-  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_DEFRINGE, 201, &error) ==
+  CHECK (api->layer_matting (engine, image, layer, GLIMS_MATTING_DEFRINGE,
+                             GLIMS_MATTING_MAX_WIDTH + 1, &error) ==
          GLIMS_STATUS_INVALID_ARGUMENT && error, "Defringe width 201 is refused");
   api->free_string (error);
   error = NULL;

@@ -155,9 +155,13 @@ extension EngineSmokeTest {
         fringeController.defringe(nil)
         wait { window.attachedSheet != nil }
         let sheet = window.attachedSheet
-        let widthField = field(in: sheet?.contentView)
-        check(widthField?.stringValue == "1", "the Defringe sheet starts at width 1")
-        widthField?.stringValue = "2"
+        guard let widthField = field(in: sheet?.contentView) else {
+            button("Cancel", in: sheet?.contentView)?.performClick(nil)
+            wait { window.attachedSheet == nil }
+            return check(false, "the Defringe sheet has a width field")
+        }
+        check(widthField.stringValue == "1", "the Defringe sheet starts at width 1")
+        widthField.stringValue = "2"
         button("OK", in: sheet?.contentView)?.performClick(nil)
         wait { window.attachedSheet == nil }
         settle(fringe)
@@ -251,7 +255,8 @@ extension EngineSmokeTest {
                                 checkpoint: try replay.recorderInstallCheckpoint(),
                                 choices: choices) { installed = $0 }
         settle(replay)
-        try installed!.get()
+        guard let installed else { return check(false, "the matting recording installs") }
+        try installed.get()
         try replay.startReplay()
         settle(replay)
         check(try pixels(record.image) == pixels(replay.image),
