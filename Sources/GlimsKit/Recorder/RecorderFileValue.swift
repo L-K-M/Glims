@@ -22,6 +22,16 @@ struct RecorderFileValue: Equatable {
     struct Record: Equatable {
         let ordinal: Int
         let outcome: Outcome
+        /// A successful layer-creating command names the symbol its new
+        /// layer was described under, so later rows can bind it. Only
+        /// Duplicate Layers and Merge Visible produce a symbol.
+        let produces: UUID?
+
+        init(ordinal: Int, outcome: Outcome, produces: UUID? = nil) {
+            self.ordinal = ordinal
+            self.outcome = outcome
+            self.produces = produces
+        }
     }
 
     let recordingID: UUID
@@ -29,6 +39,15 @@ struct RecorderFileValue: Equatable {
     let origin: Origin
     let symbols: [Symbol]
     let records: [Record]
+
+    /// Symbols naming layers that recorded commands create. Replay binds
+    /// them itself, so they are outputs and never matchable inputs.
+    /// Symbols naming layers that recorded commands create. Replay binds
+    /// them itself, so they are outputs and never matchable inputs. Caveat:
+    /// removing the row that produced a symbol drops it from this set while
+    /// rows still bound to it remain, so the orphaned symbol becomes
+    /// matchable as an input even though no row will ever create that layer.
+    var producedSymbols: Set<UUID> { Set(records.compactMap(\.produces)) }
 
     /// Return an edited copy without losing the original target descriptions.
     /// Loaded files can intentionally include unused symbols, which remain part
@@ -40,7 +59,9 @@ struct RecorderFileValue: Equatable {
         }
         var remaining = records
         remaining.remove(at: index)
-        let renumbered = remaining.enumerated().map { Record(ordinal: $0.offset, outcome: $0.element.outcome) }
+        let renumbered = remaining.enumerated().map {
+            Record(ordinal: $0.offset, outcome: $0.element.outcome, produces: $0.element.produces)
+        }
         return RecorderFileValue(recordingID: recordingID, name: name, origin: origin,
                                  symbols: symbols, records: renumbered)
     }
@@ -49,6 +70,9 @@ struct RecorderFileValue: Equatable {
 enum RecorderFileCommand: Equatable {
     struct Point: Equatable { let x: Double; let y: Double }
     struct Rect: Equatable { let x: Double; let y: Double; let width: Double; let height: Double }
+    /// A whole-pixel layer offset. Live deltas are integral, so the file
+    /// stores integers and never a fractional or native value.
+    struct Offset: Equatable { let x: Int; let y: Int }
     enum Operation: String { case replace, add, subtract, intersect }
     enum Selection: String { case all, none, invert, feather, grow, shrink, border, sharpen, fromAlpha }
     enum Transform: String { case rotate90, rotate180, rotate270, flipHorizontal, flipVertical }
@@ -192,6 +216,9 @@ enum RecorderFileCommand: Equatable {
     /// Glims' owned interpolation tags, not native enum ordinals.
     enum LayerInterpolation: String { case none, linear, cubic, noHalo, loHalo }
 
+    /// Glims' owned layer-mask source tags, not native enum ordinals.
+    enum MaskSource: String { case white, black, alpha, alphaTransfer, selection, grayscale }
+
     /// Native scalar edits use paper intensity: zero is full ink, one paper.
     struct InkEdit: Equatable {
         enum Operation: String { case fill, clear, invert }
@@ -328,6 +355,25 @@ enum RecorderFileCommand: Equatable {
     /// resolutions (always both) keep the receiving image's own.
     case cropResize(rect: Rect, width: Int, height: Int, xResolution: Double?, yResolution: Double?,
                     interpolation: LayerInterpolation)
+    /// The Move tool's offset move. The explicit layer is the record's
+    /// `layer` binding; the offset is in whole image pixels.
+    case moveLayer(offset: Offset)
+    /// Layer ▸ Duplicate Layers with exactly one selected layer. The
+    /// explicit layer is the record's `layer` binding.
+    case duplicateLayers
+    /// Layer ▸ Delete Layers with exactly one selected layer. The explicit
+    /// layer is the record's `layer` binding.
+    case deleteLayers
+    /// Layer ▸ Merge Visible: image-wide, with the `none` binding.
+    case mergeVisible
+    /// Layer ▸ Mask ▸ Add: the owned source tag and whether the new mask
+    /// starts as the edit target. The explicit layer is the record's
+    /// `layer` binding.
+    case addLayerMask(source: MaskSource, edit: Bool)
+    /// Select ▸ Similar: threshold, antialiasing and sample-merged. The
+    /// sample-merged form needs the `none` binding; the drawable form
+    /// requires the captured context.
+    case selectSimilar(threshold: Double, antialias: Bool, sampleMerged: Bool)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine. The explicit layer is the record's
     /// `layer` binding; the command itself carries no native identity.
@@ -382,10 +428,11 @@ enum RecorderFileCommand: Equatable {
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask: return false
         case .selectColor(_, let options): return options.sampleMerged
+        case .selectSimilar(_, _, let sampleMerged): return sampleMerged
         case .selectCommand(.fromAlpha, _): return false
-        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize: return true
+        case .labSelection, .selectCommand, .smoothSelection, .selectionShape, .transformImage, .rotateCanvas, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .mergeVisible: return true
         case .adjustment: return false
         }
     }
@@ -484,6 +531,32 @@ extension RecorderFileCommand.LayerInterpolation {
         case .cubic: return .cubic
         case .noHalo: return .noHalo
         case .loHalo: return .loHalo
+        }
+    }
+}
+
+extension RecorderFileCommand.MaskSource {
+    /// The owned file name of a facade mask source. Never store the raw
+    /// enum value: upstream can renumber it in a micro release.
+    init(_ value: EngineSession.MaskSource) {
+        switch value {
+        case .white: self = .white
+        case .black: self = .black
+        case .alpha: self = .alpha
+        case .alphaTransfer: self = .alphaTransfer
+        case .selection: self = .selection
+        case .grayscale: self = .grayscale
+        }
+    }
+
+    var engine: EngineSession.MaskSource {
+        switch self {
+        case .white: return .white
+        case .black: return .black
+        case .alpha: return .alpha
+        case .alphaTransfer: return .alphaTransfer
+        case .selection: return .selection
+        case .grayscale: return .grayscale
         }
     }
 }

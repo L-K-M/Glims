@@ -120,6 +120,47 @@ final class RecorderBatchBindingsTests: XCTestCase {
             candidates: [.init(choice: .channel(90), description: quick, hasMask: false)], policy: .matchingNamesAndKinds))
     }
 
+    func testProducedSymbolsAreBoundByReplayNotMatching() throws {
+        let created = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let recording = RecorderFileValue(recordingID: UUID(), name: "Created",
+            origin: .init(imageLabel: "Source", initialWidth: 40, initialHeight: 40),
+            symbols: [.init(id: first, description: description()),
+                      .init(id: created, description: description("Copy"))],
+            records: [
+                .init(ordinal: 0, outcome: .success(.duplicateLayers, .layer(first)), produces: created),
+                .init(ordinal: 1, outcome: .success(.deleteLayers, .layer(created))),
+            ])
+        // Only the load-time input is matched; the produced layer is not.
+        let result = try Matcher.resolve(file: recording,
+            candidates: [candidate(70), candidate(71, "Copy")], policy: .matchingNamesAndKinds)
+        XCTAssertEqual(result, [first: .layer(70)])
+    }
+
+    func testMergeVisibleNeedsNoLoadChoices() throws {
+        let created = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let recording = RecorderFileValue(recordingID: UUID(), name: "Created",
+            origin: .init(imageLabel: "Source", initialWidth: 40, initialHeight: 40),
+            symbols: [.init(id: created, description: description("Copy"))],
+            records: [.init(ordinal: 0, outcome: .success(.mergeVisible, .none), produces: created)])
+        XCTAssertEqual(try Matcher.resolve(file: recording, candidates: [], policy: .requireNoTargets), [:])
+    }
+
+    func testUseBeforeProductionRefusesThroughEncode() {
+        let created = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let recording = RecorderFileValue(recordingID: UUID(), name: "Early",
+            origin: .init(imageLabel: "Source", initialWidth: 40, initialHeight: 40),
+            symbols: [.init(id: first, description: description()),
+                      .init(id: created, description: description("Copy"))],
+            records: [
+                .init(ordinal: 0, outcome: .success(.deleteLayers, .layer(created))),
+                .init(ordinal: 1, outcome: .success(.duplicateLayers, .layer(first)), produces: created),
+            ])
+        XCTAssertThrowsError(try Matcher.resolve(file: recording, candidates: [candidate(70)],
+                                                 policy: .matchingNamesAndKinds)) {
+            XCTAssertNotNil($0 as? RecorderFileError, "refusal must be a codec error, not \($0)")
+        }
+    }
+
     func testIncompleteAndInvalidRecordingsRefuseBeforeMatching() {
         XCTAssertThrowsError(try Matcher.resolve(file: file([]), candidates: [], policy: .requireNoTargets)) {
             XCTAssertEqual($0 as? Matcher.MatchError, .emptyRecording)

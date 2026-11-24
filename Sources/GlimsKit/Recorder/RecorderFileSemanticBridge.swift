@@ -128,6 +128,15 @@ enum RecorderFileSemanticBridge {
             return .cropResize(rect: rect(value), width: width, height: height,
                                xResolution: xResolution, yResolution: yResolution,
                                interpolation: interpolation.engine)
+        case .moveLayer(let offset):
+            return .moveLayer(offset: CGSize(width: CGFloat(offset.x), height: CGFloat(offset.y)))
+        case .duplicateLayers: return .duplicateLayers
+        case .deleteLayers: return .deleteLayers
+        case .mergeVisible: return .mergeVisible
+        case .addLayerMask(let source, let edit):
+            return .addLayerMask(source: source.engine, edit: edit)
+        case .selectSimilar(let threshold, let antialias, let sampleMerged):
+            return .selectSimilar(threshold: threshold, antialias: antialias, sampleMerged: sampleMerged)
         case .layerProperties(let value):
             let change = EngineSession.LayerChange(name: value.name, isVisible: value.visible,
                                                    opacity: value.opacity, mode: value.mode?.name)

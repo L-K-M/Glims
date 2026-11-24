@@ -99,6 +99,11 @@ extension EngineSmokeTest {
                                                              .init(CGPoint(x: 70, y: 70))],
                                                     isClosed: true)])
 
+        // The mask commands below need a mask. Add Layer Mask is recorded
+        // now, so create this one outside the recording.
+        _ = try session.addLayerMask(layer, image: image, source: .white, edit: false)
+        try document.reload()
+        settle(document)
         try document.startRecording()
         // A command the busy engine refuses changes nothing, so it must not
         // leave the row that makes a recording refuse replay.
@@ -170,7 +175,6 @@ extension EngineSmokeTest {
             document.gradient(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 50, y: 50),
                               shape: .linear, fromColor: .red, toColor: .blue)
         }
-        perform("Select Similar") { document.selectSimilar(options: .init()) { _ in } }
         perform("Save Selection to Channel") { document.saveSelectionToChannel(name: "Gap") { _ in } }
         channel = document.channels.first { $0.name == "Gap" }?.id
         perform("Channel Properties") {
@@ -212,11 +216,9 @@ extension EngineSmokeTest {
             guard let id = pathID else { return check(false, "the path was added") }
             document.fillPath(id, settings: EngineSession.PathFillSettings(color: .blue))
         }
-        perform("Add Layer Mask") { document.addMask(layer, source: .white, edit: false) }
         perform("Enable Layer Mask") { document.toggleMaskEnabled() }
         perform("Mask to Selection") { document.maskToSelection(.replace) }
         perform("Apply Layer Mask") { document.applyMask() }
-        perform("Duplicate Layers") { document.duplicateSelectedLayers { _ in } }
         perform("Layer to Image Size") { document.fitSelectedLayers { _ in } }
         perform("New Layer Group") { document.createGroup() }
         perform("New Adjustment Layer") {
@@ -232,8 +234,6 @@ extension EngineSmokeTest {
             guard let target = adjustment else { return check(false, "the adjustment layer exists") }
             document.effectCommand(.raise, effect: target.effect, on: target.layer)
         }
-        perform("Merge Visible") { document.mergeVisible() }
-        perform("Move Layer") { document.moveActiveLayer(by: CGSize(width: 3, height: 0)) }
         perform("Transform Layer") { document.transformActiveLayer(.flipHorizontal) }
         perform("Text") { document.addText("Gap", settings: .init(), at: CGPoint(x: 10, y: 10)) }
         textLayer = document.activeLayer
@@ -378,10 +378,10 @@ extension EngineSmokeTest {
         settle(moveDocument)
         let moveRows = moveDocument.recorder.records
         check(moveRows.count == 1
-              && moveRows.first.map { if case .failure(let reason) = $0.resolution {
-                  return reason == "Recorder does not yet save Move Layer."
+              && moveRows.first.map { if case .success(.moveLayer(let offset)) = $0.resolution {
+                  return offset == CGSize(width: 12, height: 0)
               } else { return false } } == true,
-              "a whole Move drag reserves one row, not one per event (\(moveRows.count) rows)")
+              "a whole Move drag records one offset move, not one per event (\(moveRows.count) rows)")
         try moveDocument.stopRecording()
         settle(moveDocument)
 

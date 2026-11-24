@@ -27,6 +27,16 @@ enum SemanticImageCommand {
     private struct MissingLayerBinding: LocalizedError {
         var errorDescription: String? { "This recorded edit has no explicit layer binding." }
     }
+    private struct MissingPaintTargetBinding: LocalizedError {
+        var errorDescription: String? { "This recorded edit needs a captured paint target, not an explicit layer binding." }
+    }
+
+    /// Replay refuses a producing command whose new layer the engine did
+    /// not report, as recording does, so the row that lost it fails
+    /// instead of a later row bound to it.
+    private struct MissingProducedLayer: LocalizedError {
+        var errorDescription: String? { "The engine did not report the layer this command created." }
+    }
 
     private struct MissingChannelBinding: LocalizedError {
         var errorDescription: String? { "This recorded edit has no explicit channel binding." }
@@ -69,6 +79,25 @@ enum SemanticImageCommand {
     /// as the live command kept its own.
     case cropResize(rect: CGRect, width: Int, height: Int, xResolution: Double?, yResolution: Double?,
                     interpolation: EngineSession.Interpolation)
+    /// The Move tool's offset move of the active layer, in image pixels.
+    /// The explicit layer lives in the document's runtime binding.
+    case moveLayer(offset: CGSize)
+    /// Layer ▸ Duplicate Layers with exactly one selected layer. The
+    /// explicit layer lives in the document's runtime binding.
+    case duplicateLayers
+    /// Layer ▸ Delete Layers with exactly one selected layer. The explicit
+    /// layer lives in the document's runtime binding.
+    case deleteLayers
+    /// Layer ▸ Merge Visible: image-wide, with no target binding.
+    case mergeVisible
+    /// Layer ▸ Mask ▸ Add: the source and whether the new mask starts as
+    /// the edit target. The explicit layer lives in the document's
+    /// runtime binding.
+    case addLayerMask(source: EngineSession.MaskSource, edit: Bool)
+    /// Select ▸ Similar: threshold, antialiasing and sample-merged. The
+    /// sample-merged form needs no target; the drawable form binds the
+    /// captured paint target context.
+    case selectSimilar(threshold: Double, antialias: Bool, sampleMerged: Bool)
     case layerProperties(LayerProperties)
     /// A committed Transform-tool affine in absolute image pixels, y down.
     /// The explicit layer lives in the document's runtime binding, never in
@@ -143,8 +172,8 @@ enum SemanticImageCommand {
     /// The same resolve-first policy used by these live image services.
     var requiresResolvedFloatingSelection: Bool {
         switch self {
-        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .completeStroke, .completeTabletStroke: return true
-        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties: return false
+        case .transformImage, .rotateCanvas, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .scale, .scaleWithInterpolation, .setResolution, .resize, .resizeCanvas, .crop, .cropResize, .moveLayer, .duplicateLayers, .deleteLayers, .mergeVisible, .addLayerMask, .completeStroke, .completeTabletStroke: return true
+        case .labSelection, .selectionShape, .selectColor, .selectCommand, .smoothSelection, .channelToSelection, .layerProperties, .selectSimilar: return false
         case .adjustment: return true
         }
     }
@@ -187,6 +216,12 @@ enum SemanticImageCommand {
         case .rotateCanvas: return "Rotate Canvas"
         case .resizeCanvas: return "Resize Canvas"
         case .crop, .cropResize: return "Crop Image"
+        case .moveLayer: return "Move Layer"
+        case .duplicateLayers: return "Duplicate Layers"
+        case .deleteLayers: return "Delete Layers"
+        case .mergeVisible: return "Merge Visible"
+        case .addLayerMask: return "Add Layer Mask"
+        case .selectSimilar: return "Select Similar"
         case .layerProperties: return "Layer Properties"
         case .transformLayer: return "Transform Layer"
         case .transformProjectiveLayer: return "Transform Layer Perspective"
@@ -215,6 +250,12 @@ enum SemanticImageCommand {
     /// Execute only on the document's engine queue. The image handle is supplied
     /// for this execution and is never retained in the semantic command.
     func apply(session: EngineSession, image: Int32) throws {
+        _ = try applyCreating(session: session, image: image)
+    }
+
+    /// `apply`, returning the runtime id of the layer a layer-creating
+    /// command made (Merge Visible) and nil for every other command.
+    func applyCreating(session: EngineSession, image: Int32) throws -> Int32? {
         switch self {
         case .labSelection(let command): try command.apply(session: session, image: image)
         case .selectionShape(let shape, let options):
@@ -257,11 +298,21 @@ enum SemanticImageCommand {
             }
             try session.cropResize(image, rect: rect, width: width, height: height,
                                    resolution: resolution, interpolation: interpolation)
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer:
+        case .mergeVisible:
+            guard let merged = try session.mergeVisible(image), merged > 0 else { throw MissingProducedLayer() }
+            return merged
+        case .selectSimilar(let threshold, let antialias, let sampleMerged):
+            var options = EngineSession.SelectOptions()
+            options.threshold = threshold
+            options.antialias = antialias
+            options.sampleMerged = sampleMerged
+            try session.selectSimilar(image, options: options)
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask:
             throw MissingLayerBinding()
         case .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke:
             throw MissingChannelBinding()
         }
+        return nil
     }
 
     var isMaskAdjustment: Bool {
@@ -280,6 +331,12 @@ enum SemanticImageCommand {
     /// The caller freshly confirms this runtime layer against the owning image.
     /// It is never stored in the command and never falls back to selection.
     func apply(session: EngineSession, image: Int32, layer: Int32) throws {
+        _ = try applyCreating(session: session, image: image, layer: layer)
+    }
+
+    /// `apply`, returning the runtime id of the layer a layer-creating
+    /// command made (Duplicate Layers, Merge Visible) and nil otherwise.
+    func applyCreating(session: EngineSession, image: Int32, layer: Int32) throws -> Int32? {
         switch self {
         case .completeLabLayerStroke, .fillLabLayer, .adjustment:
             // A logical Lab layer needs its captured UUID, not just a
@@ -374,9 +431,39 @@ enum SemanticImageCommand {
         case .completeTabletStroke(let stroke):
             guard layer > 0 else { throw MissingLayerBinding() }
             try stroke.apply(session: session, image: image, layer: layer)
+        case .moveLayer(let offset):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.moveLayer(layer, image: image, by: offset)
+        case .duplicateLayers:
+            guard layer > 0 else { throw MissingLayerBinding() }
+            let copies = try session.duplicateLayers(image, layers: [layer])
+            guard let copy = copies.first, copy > 0 else { throw MissingProducedLayer() }
+            return copy
+        case .deleteLayers:
+            guard layer > 0 else { throw MissingLayerBinding() }
+            try session.deleteLayers(image, layers: [layer])
+        case .addLayerMask(let source, let edit):
+            guard layer > 0 else { throw MissingLayerBinding() }
+            if edit {
+                // addLayerMask sets the mask's EDITING flag but does not
+                // select the layer; without selecting it first the new
+                // target could land on a layer the engine selected last.
+                try session.channelCommand(.select, channel: 0, image: image)
+                try session.selectLayer(layer, image: image)
+            }
+            // The new mask re-resolves at replay through its owner layer's
+            // symbol (masks are described by owner, not by channel id), so
+            // the returned mask id needs no produced-symbol remapping.
+            _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
+        case .selectSimilar(_, _, let sampleMerged) where !sampleMerged:
+            // The image-only path samples the active drawable; without
+            // Sample Merged the record must bind a paint target, whose
+            // replay route keeps that target active, not a bare layer.
+            throw MissingPaintTargetBinding()
         default:
-            try apply(session: session, image: image)
+            return try applyCreating(session: session, image: image)
         }
+        return nil
     }
 
     /// Both v4 affine and v6 projective replay use the captured native API:

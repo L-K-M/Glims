@@ -7,7 +7,7 @@ extension RecorderFileCodec {
     /// triggers a late lookup or a successfully encoded prefix.
     static func snapshot(_ log: RecorderLog<SemanticImageCommand>, recordingID: UUID, name: String,
                          origin: RecorderFileValue.Origin, descriptions: RecorderDescriptionCatalog,
-                         bindings: [Int: RecorderBindingDescription]) throws -> RecorderFileValue {
+                         bindings: [Int: RecorderBindingDescription], produced: [Int: UUID] = [:]) throws -> RecorderFileValue {
         guard !log.isRecording, !log.isReplaying, log.pendingCount == 0 else {
             throw RecorderFileError.invalid("Stop recording/replay and wait for every accepted command before saving.")
         }
@@ -46,12 +46,16 @@ extension RecorderFileCodec {
                 else if value.isTargetIndependent { binding = .none }
                 else { throw RecorderFileError.invalid("This older command has no capture-time binding description; record it again.") }
                 required.formUnion(try referencedSymbols(binding))
+                // A produced symbol's description is captured with its
+                // row, so it joins the emitted symbols without becoming an
+                // input anyone has to bind.
+                if let symbol = produced[record.ordinal] { required.insert(symbol) }
                 guard required.count <= RecorderFileLimits.symbols else { throw RecorderFileError.invalid("Too many recording symbols.") }
                 outcome = .success(value, binding)
             case .failure(let reason): outcome = .failure(reason)
             case .cancelled(let reason): outcome = .cancelled(reason)
             }
-            return .init(ordinal: record.ordinal, outcome: outcome)
+            return .init(ordinal: record.ordinal, outcome: outcome, produces: produced[record.ordinal])
         }
         let symbols = try required.sorted { $0.uuidString < $1.uuidString }.map { id -> RecorderFileValue.Symbol in
             guard let observation = descriptions.values[id] else { throw RecorderFileError.invalid("An original target description is missing; record it again.") }
@@ -69,6 +73,12 @@ extension RecorderFileCommand {
     init(_ command: SemanticImageCommand) throws {
         func point(_ value: CGPoint) -> Point { .init(x: Double(value.x), y: Double(value.y)) }
         func rect(_ value: CGRect) -> Rect { .init(x: Double(value.origin.x), y: Double(value.origin.y), width: Double(value.size.width), height: Double(value.size.height)) }
+        func wholePixel(_ value: CGFloat) throws -> Int {
+            guard value == value.rounded(), abs(value) <= 524288 else {
+                throw RecorderFileError.invalid("A recorded layer move offset must be a whole number of pixels within ±524288.")
+            }
+            return Int(value)
+        }
         func options(_ value: EngineSession.SelectOptions) -> Options {
             let operation: Operation
             switch value.operation {
@@ -154,6 +164,18 @@ extension RecorderFileCommand {
             self = .cropResize(rect: rect(value), width: width, height: height,
                                xResolution: xResolution, yResolution: yResolution,
                                interpolation: .init(interpolation))
+        case .moveLayer(let offset):
+            self = .moveLayer(offset: .init(x: try wholePixel(offset.width), y: try wholePixel(offset.height)))
+        case .duplicateLayers: self = .duplicateLayers
+        case .deleteLayers: self = .deleteLayers
+        case .mergeVisible: self = .mergeVisible
+        case .addLayerMask(let source, let edit):
+            self = .addLayerMask(source: RecorderFileCommand.MaskSource(source), edit: edit)
+        case .selectSimilar(let threshold, let antialias, let sampleMerged):
+            guard threshold.isFinite, (0...1).contains(threshold) else {
+                throw RecorderFileError.invalid("A recorded Similar threshold is outside 0...1.")
+            }
+            self = .selectSimilar(threshold: threshold, antialias: antialias, sampleMerged: sampleMerged)
         case .layerProperties(let value): self = .layerProperties(.init(name: value.name, visible: value.isVisible, opacity: value.opacity,
             mode: try value.mode.map { try RecorderFileLayerMode($0) }))
         case .transformLayer(let matrix, let interpolation):

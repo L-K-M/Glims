@@ -7205,3 +7205,25 @@ file must hold one and older versions refuse the tag. `swift test` covers
 the model and the codec rules; the `crop-target` smoke case
 (`GLIMS_SMOKE_CASE=crop-target`) drives the real canvas gesture, the one
 undo step, the recorded row and the plain-crop fallback.
+
+### Recording layer edits (2026-11-23)
+
+The Recorder saves six more layer edits at format version 33 (the number
+moves if another branch takes it first), with the usual anchor rule: a
+version 33 file holds at least one and older versions refuse the tags. The
+Move tool's offset move and arrow-key nudges record `moveLayer` with a
+whole-pixel offset and the active layer's `layer` binding; one nudge is one
+row, as live undo has one step per nudge. Duplicate Layers and Delete
+Layers record only with exactly one selected layer and that layer's
+`layer` binding; a multi-selection keeps the failed row "Recorder saves
+Duplicate and Delete for one selected layer only." The reparenting
+`moveLayer(_:toParent:atIndex:)` stays a failed row named Reorder Layer.
+Merge Visible records image-wide with the `none` binding. Add Layer Mask
+records an owned source tag and the edit flag, and replay selects the
+layer before adding an editing mask exactly as live. Select Similar
+records threshold, antialias and sample-merged, binding `none` when
+sample-merged and the captured context otherwise. `swift test` covers the
+codec round trip, the version anchor, strict fields and binding pairing;
+the `recorder-layer-edits` smoke case records all six on one document,
+checks every row, replays into a second identical document and compares
+pixels and the layer tree, including the multi-selection failed row.

@@ -103,6 +103,9 @@ extension RecorderFileCodec {
                 fileVersion = max(fileVersion, imageResolutionVersion)
             case .success(.cropResize, _):
                 fileVersion = max(fileVersion, cropResizeVersion)
+            case .success(.moveLayer, _), .success(.duplicateLayers, _), .success(.deleteLayers, _),
+                 .success(.mergeVisible, _), .success(.addLayerMask, _), .success(.selectSimilar, _):
+                fileVersion = max(fileVersion, layerEditsVersion)
             case .success(.applyGaussianBlur, _), .success(.applyUnsharpMask, _):
                 fileVersion = max(fileVersion, blurFilterVersion)
             case .success(.editInk, let binding), .success(.applyInkLevels, let binding):
@@ -137,6 +140,7 @@ extension RecorderFileCodec {
                 fields["outcome"] = .string("success")
                 fields["command"] = try commandJSON(command)
                 fields["binding"] = try bindingJSON(binding)
+                if let produces = record.produces { fields["produces"] = id(produces) }
             case .failure(let reason): fields["outcome"] = .string("failure"); fields["reason"] = .string(reason)
             case .cancelled(let reason): fields["outcome"] = .string("cancelled"); fields["reason"] = .string(reason)
             }
@@ -375,6 +379,21 @@ extension RecorderFileCodec {
                 throw RecorderFileError.invalid("A crop to a target size needs both resolutions or neither.")
             }
             return .object(fields)
+        case .moveLayer(let offset):
+            return .object(["tag": .string("moveLayer"),
+                            "offset": .object(["x": j(offset.x), "y": j(offset.y)])])
+        case .duplicateLayers:
+            return .object(["tag": .string("duplicateLayers")])
+        case .deleteLayers:
+            return .object(["tag": .string("deleteLayers")])
+        case .mergeVisible:
+            return .object(["tag": .string("mergeVisible")])
+        case .addLayerMask(let source, let edit):
+            return .object(["tag": .string("addLayerMask"), "source": .string(source.rawValue),
+                            "edit": .bool(edit)])
+        case .selectSimilar(let threshold, let antialias, let sampleMerged):
+            return .object(["tag": .string("selectSimilar"), "threshold": try d(threshold),
+                            "antialias": .bool(antialias), "sampleMerged": .bool(sampleMerged)])
         case .layerProperties(let properties):
             var fields: [String: RecorderJSON] = [:]
             if let name = properties.name { fields["name"] = .string(name) }
