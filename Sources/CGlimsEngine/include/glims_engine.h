@@ -282,9 +282,10 @@ typedef struct GlimsBrushSettings {
    * all of it, through clone_pattern, is present; zero in every field
    * paints exactly as before. A refused value is INVALID_ARGUMENT, and
    * any option on a CMYK or multichannel document or an ink target is
-   * UNSUPPORTED, with no stroke, pixel or undo change. Strokes that set
-   * any of them return no capture facts, so a recording keeps them as
-   * unrecorded steps. */
+   * UNSUPPORTED, with no stroke, pixel or undo change. Capture facts
+   * cover Pencil and Paintbrush strokes with any of them and Eraser
+   * strokes with spacing alone; every other combination still returns
+   * no capture facts, so a recording keeps it as an unrecorded step. */
   char        paint_mode[64];  /* blend mode nick, as GlimsLayerInfo reports it,
                                 * "behind" or "color-erase"; "" is "normal".
                                 * Paintbrush, Pencil, Airbrush and Clone only. */

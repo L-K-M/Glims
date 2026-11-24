@@ -40,15 +40,25 @@ final class PaintOptionsTests: XCTestCase {
         }
     }
 
-    func testStrokesWithPaintOptionsAreNotRecordedYet() {
+    func testStrokesWithPaintOptionsRecordByTool() {
         var brush = EngineSession.Brush()
         brush.tool = .pencil
         XCTAssertNotNil(RecorderStrokeCommand.Settings(brush))
         brush.spacing = 0.25
-        XCTAssertNil(RecorderStrokeCommand.Settings(brush))
-        brush.spacing = nil
+        XCTAssertNotNil(RecorderStrokeCommand.Settings(brush))
         brush.paintMode = "screen"
-        XCTAssertNil(RecorderStrokeCommand.Settings(brush))
+        XCTAssertNotNil(RecorderStrokeCommand.Settings(brush))
+        brush.tool = .spongeDesaturate
+        XCTAssertNil(RecorderStrokeCommand.Settings(brush), "a Sponge stroke keeps refusing options")
+        brush.tool = .eraser
+        brush.paintMode = "normal"
+        XCTAssertNotNil(RecorderStrokeCommand.Settings(brush), "the Eraser records spacing alone")
+        brush.paintMode = "screen"
+        XCTAssertNil(RecorderStrokeCommand.Settings(brush), "the Eraser does not record a blend mode")
+        brush.tool = .pencil
+        brush.clonePattern = .init(resource: .init(name: "Pine", collection: nil, isInternal: false),
+                                   aligned: true)
+        XCTAssertNil(RecorderStrokeCommand.Settings(brush), "a clone pattern stays unrecorded")
     }
 
     func testStrokeSelectionPaintsWithoutTheToolsPaintOptions() throws {

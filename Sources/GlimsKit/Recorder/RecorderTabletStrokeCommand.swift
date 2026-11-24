@@ -22,7 +22,15 @@ struct RecorderTabletStrokeCommand: Equatable {
                   $0.isFinite && (0...1).contains($0)
               }), settings.hardness.map({ $0.isFinite && (0...1).contains($0) }) != false,
               settings.tool == .eraser || (!settings.antiErase && settings.eraserBackground == nil),
-              settings.eraserBackground.map({ [$0.red, $0.green, $0.blue].allSatisfy { $0.isFinite && (0...1).contains($0) } }) != false else {
+              settings.eraserBackground.map({ [$0.red, $0.green, $0.blue].allSatisfy { $0.isFinite && (0...1).contains($0) } }) != false,
+              !settings.tool.isSponge || !settings.hasRecordedPaintOptions,
+              settings.paintMode == nil || ([.pencil, .paintbrush].contains(settings.tool) &&
+                                            EngineSession.PaintModes.all.contains(settings.paintMode!)),
+              settings.spacing.map({ EngineSession.PaintModes.spacingRange.contains($0) }) != false,
+              settings.fade.map({ (1...EngineSession.PaintModes.maxFadeSteps).contains($0.steps) &&
+                                  [.pencil, .paintbrush].contains(settings.tool) }) != false,
+              (settings.fadeBackground != nil) == (settings.fade?.target == .background),
+              settings.fadeBackground.map({ [$0.red, $0.green, $0.blue].allSatisfy { $0.isFinite && (0...1).contains($0) } }) != false else {
             throw RecorderFileError.invalid("The recorded tablet brush settings are outside the supported range.")
         }
         let strings = [facts.brush.name] + (facts.brush.collection.map { [$0] } ?? [])

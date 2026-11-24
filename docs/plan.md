@@ -6962,9 +6962,10 @@ stroke's own context, so the shared user context never changes. GIMP's
 cores honor the paint mode only in the Paintbrush family and Clone, so
 the engine refuses a mode elsewhere, a fade outside Paintbrush, Pencil
 and Airbrush, any option on CMYK and multichannel documents, and any
-option in Stroke Selection. Strokes with an option return no capture
-facts, so the Recorder keeps them as failed rows until the codec stores
-them; presets do not keep them yet.
+option in Stroke Selection. The Recorder now admits them for the Pencil,
+Paintbrush and Eraser (Recording paint options, below); Sponge, Ink and
+pattern Clone strokes still return no capture facts, and presets do not
+keep them yet.
 
 The fade's output switches off every input its class has and then
 turns on the fade: GIMP 3.0.8 and 3.2.0 have no `use-rotation`, and
@@ -6998,6 +6999,37 @@ paint. Heal still copies from the image. The source choice lasts for
 the session, like the source point and Aligned. No facade change.
 `GLIMS_SMOKE_CASE=clone-pattern` drives the menu, the chooser and
 strokes through the canvas.
+
+### Recording paint options (2026-11-23)
+
+Recorder admits the paint options above for the tools whose fingerprints
+can bind them: Pencil and Paintbrush strokes may carry the mode, spacing
+and fade; the Eraser spacing alone; Sponge, Ink, Lab strokes and pattern
+Clone strokes still return no capture facts. The stroke fingerprint
+gains a `glims-stroke-paint-options-v1` domain, appended only when the
+brush has options: it hashes the effective paint mode's enum nick, the
+fade steps and, for a real fade, the fade length, unit, direction,
+repeat, target and, for a background fade, the captured background color
+with the gradient's reverse flag, blend space and name. Spacing needs no
+new bytes; the existing settings digest already covers it. A fade
+stroke's private dynamics fingerprint under
+`glims-stroke-fade-dynamics-v1` replaces the ordinary pressure-size one,
+admitting exactly the fade-enabled output contract the adapter writes.
+Every earlier fingerprint keeps its bytes; an optionless stroke hashes
+exactly as before.
+
+On disk these strokes use version 39 (`paintOptionsStrokeVersion`):
+optional `paintMode`, `spacing` and `fade` fields on `completeStroke`
+and `completeTabletStroke` settings, refused by older versions and by
+ink and Lab settings. A version 39 file requires at least one successful
+option-carrying stroke, and the writer raises the version only when one
+exists. Guarded replay recomputes the same tail and refuses a changed
+mode, spacing, fade or dropped options before paint or Undo.
+`test_paint_options` covers capture, digest differences, Normal
+canonicalization, pixel-equal replay and pre-paint refusal on all four
+engines; `RecorderPaintOptionsStrokeTests` covers the admission matrix
+and version rules; `GLIMS_SMOKE_CASE=paint-options` records a Multiply
+fade and replays it on a new identical image.
 
 ### Presets keep paint options (2026-11-23)
 

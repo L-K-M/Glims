@@ -1577,8 +1577,9 @@ final class EngineSession: @unchecked Sendable {
         var clonePattern: ClonePattern?
 
         /// Any paint option other than its default: such strokes need an
-        /// engine with GLIMS_BRUSH_FEATURE_PAINT_OPTIONS, paint only in RGB
-        /// and grayscale images, and are not recorded yet.
+        /// engine with GLIMS_BRUSH_FEATURE_PAINT_OPTIONS and paint only in
+        /// RGB and grayscale images. Recorder keeps Pencil and Paintbrush
+        /// strokes with them and Eraser strokes with spacing alone.
         var hasPaintOptions: Bool {
             paintMode != PaintModes.normal || spacing != nil || fade != nil || clonePattern != nil
         }

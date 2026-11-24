@@ -10457,12 +10457,131 @@ test_paint_options (void)
   snprintf (brush.paint_mode, sizeof brush.paint_mode, "normal");
   CHECK (stroke_captures (image, layer, &brush, 100, 12, normal) == 1 && ! strcmp (plain, normal),
          "an explicit \"normal\" mode captures exactly as the default");
-  snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
-  CHECK (stroke_captures (image, layer, &brush, 100, 14, NULL) == 0, "a Multiply stroke paints without capture facts");
-  brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
-  brush.spacing = 0.5;
-  CHECK (stroke_captures (image, layer, &brush, 100, 16, NULL) == 0, "a stroke with its own spacing paints without capture facts");
-  CHECK (undo_depth (image) == before + 8, "each mode stroke is one undo step (%d)", undo_depth (image) - before);
+
+  /* Pencil and Paintbrush record their paint options, each bound to the
+   * digest; the Eraser records only spacing. */
+  {
+    char modes[65], gapped[65], denser[65];
+
+    snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+    CHECK (stroke_captures (image, layer, &brush, 100, 14, modes) == 1 && strcmp (plain, modes),
+           "a Multiply Pencil captures with a digest of its own");
+    brush = brush_for (GLIMS_PAINT_PENCIL, 3.0);
+    brush.spacing = 0.5;
+    CHECK (stroke_captures (image, layer, &brush, 100, 16, gapped) == 1 && strcmp (plain, gapped),
+           "spacing captures with a digest of its own");
+    snprintf (brush.paint_mode, sizeof brush.paint_mode, "normal");
+    CHECK (stroke_captures (image, layer, &brush, 100, 18, normal) == 1 && ! strcmp (gapped, normal),
+           "an explicit \"normal\" plus spacing captures as spacing alone");
+    brush.paint_mode[0] = 0;
+    brush.spacing = 0.6;
+    CHECK (stroke_captures (image, layer, &brush, 100, 20, denser) == 1 && strcmp (gapped, denser),
+           "different spacing changes the digest");
+    brush = brush_for (GLIMS_PAINT_PAINTBRUSH, 3.0);
+    brush.spacing = 0.5;
+    CHECK (stroke_captures (image, layer, &brush, 100, 22, normal) == 1 && strcmp (gapped, normal),
+           "a spaced Paintbrush captures in its own tool domain");
+    brush = brush_for (GLIMS_PAINT_SPONGE_DESATURATE, 6.0);
+    brush.spacing = 0.5;
+    CHECK (stroke_captures (image, layer, &brush, 100, 24, NULL) == 0,
+           "a Sponge with spacing still paints without capture facts");
+  }
+  CHECK (undo_depth (image) == before + 12, "each mode stroke is one undo step (%d)", undo_depth (image) - before);
+
+  /* A guarded replay under the recorded fingerprint paints the same
+   * pixels as the live stroke; a changed or removed option refuses
+   * before any paint or undo step. */
+  {
+    GlimsImageID            live = 0, again = 0;
+    GlimsItemID             live_layer, again_layer;
+    GlimsStrokeCaptureFacts facts = { .struct_size = sizeof facts }, matched = { .struct_size = sizeof matched };
+    GlimsStrokePoint        first = { 60, 20, 1.0, 0.0, 0.0, 0 };
+    GlimsStrokeID           stroke = 0;
+    GlimsResourceID         resource = 0;
+    GlimsStatus             status;
+    uint8_t                *live_pixels = NULL, *again_pixels = NULL;
+    int32_t                 lw = 0, lh = 0, aw = 0, ah = 0;
+
+    api->image_new (engine, 128, 48, &live, NULL);
+    live_layer = first_layer (live);
+    api->image_new (engine, 128, 48, &again, NULL);
+    again_layer = first_layer (again);
+    brush = brush_for (GLIMS_PAINT_PENCIL, 5.0);
+    snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+    brush.spacing = 0.5;
+    brush.fade_steps = 10;
+    brush.fade_target = GLIMS_FADE_TO_BACKGROUND;
+    brush.fade_background_blue = 1.0;
+    CHECK (api->stroke_begin_with_capture_facts (engine, live, live_layer, 0, &brush, &first, NULL,
+                                                 &stroke, &facts, NULL) == GLIMS_STATUS_OK && facts.fingerprint,
+           "a live stroke with options captures its facts");
+    api->stroke_end (engine, stroke); stroke = 0;
+    live_pixels = render_all (live, &lw, &lh);
+    CHECK (api->resource_resolve (engine, GLIMS_RESOURCE_BRUSH, facts.brush_name, facts.brush_collection,
+                                  facts.brush_internal, &resource, NULL) == GLIMS_STATUS_OK && resource,
+           "the captured brush identity resolves for replay");
+    before = undo_depth (again);
+    CHECK (api->stroke_begin_with_capture_facts (engine, again, again_layer, resource, &brush, &first,
+                                                 facts.fingerprint, &stroke, &matched, NULL) == GLIMS_STATUS_OK &&
+           matched.fingerprint && ! strcmp (matched.fingerprint, facts.fingerprint),
+           "the same options replay under the recorded fingerprint");
+    api->stroke_end (engine, stroke); stroke = 0;
+    api->free_string (matched.brush_name);
+    api->free_string (matched.brush_collection);
+    api->free_string (matched.fingerprint);
+    matched = (GlimsStrokeCaptureFacts) { .struct_size = sizeof matched };
+    again_pixels = render_all (again, &aw, &ah);
+    CHECK (lw == aw && lh == ah && live_pixels && again_pixels &&
+           ! memcmp (live_pixels, again_pixels, (size_t) lw * lh * 4),
+           "the replay paints the same pixels as the live stroke");
+
+    snprintf (brush.paint_mode, sizeof brush.paint_mode, "screen");
+    status = api->stroke_begin_with_capture_facts (engine, again, again_layer, resource, &brush, &first,
+                                                   facts.fingerprint, &stroke, &matched, NULL);
+    CHECK (status == GLIMS_STATUS_FAILED && stroke == 0 && undo_depth (again) == before + 1,
+           "a changed mode refuses before paint (%d)", status);
+    api->free_string (matched.fingerprint);
+    matched = (GlimsStrokeCaptureFacts) { .struct_size = sizeof matched };
+    snprintf (brush.paint_mode, sizeof brush.paint_mode, "multiply");
+    brush.fade_steps = 12;
+    status = api->stroke_begin_with_capture_facts (engine, again, again_layer, resource, &brush, &first,
+                                                   facts.fingerprint, &stroke, &matched, NULL);
+    CHECK (status == GLIMS_STATUS_FAILED && stroke == 0 && undo_depth (again) == before + 1,
+           "changed fade steps refuse before paint (%d)", status);
+    api->free_string (matched.fingerprint);
+    matched = (GlimsStrokeCaptureFacts) { .struct_size = sizeof matched };
+    brush.fade_steps = 10;
+    brush.spacing = 0.6;
+    status = api->stroke_begin_with_capture_facts (engine, again, again_layer, resource, &brush, &first,
+                                                   facts.fingerprint, &stroke, &matched, NULL);
+    CHECK (status == GLIMS_STATUS_FAILED && stroke == 0 && undo_depth (again) == before + 1,
+           "changed spacing refuses before paint (%d)", status);
+    api->free_string (matched.fingerprint);
+    matched = (GlimsStrokeCaptureFacts) { .struct_size = sizeof matched };
+    brush.spacing = 0.5;
+    brush.fade_background_red = 1.0;
+    status = api->stroke_begin_with_capture_facts (engine, again, again_layer, resource, &brush, &first,
+                                                   facts.fingerprint, &stroke, &matched, NULL);
+    CHECK (status == GLIMS_STATUS_FAILED && stroke == 0 && undo_depth (again) == before + 1,
+           "a changed fade background refuses before paint (%d)", status);
+    api->free_string (matched.fingerprint);
+    matched = (GlimsStrokeCaptureFacts) { .struct_size = sizeof matched };
+    brush = brush_for (GLIMS_PAINT_PENCIL, 5.0);
+    status = api->stroke_begin_with_capture_facts (engine, again, again_layer, resource, &brush, &first,
+                                                   facts.fingerprint, &stroke, &matched, NULL);
+    CHECK (status == GLIMS_STATUS_FAILED && stroke == 0 && undo_depth (again) == before + 1,
+           "plain settings under an options fingerprint refuse before paint (%d)", status);
+    api->free_string (matched.brush_name);
+    api->free_string (matched.brush_collection);
+    api->free_string (matched.fingerprint);
+    api->free_string (facts.brush_name);
+    api->free_string (facts.brush_collection);
+    api->free_string (facts.fingerprint);
+    free (live_pixels);
+    free (again_pixels);
+    api->image_close (engine, live);
+    api->image_close (engine, again);
+  }
 
   /* Refusals change nothing. */
   before = undo_depth (image);
@@ -10613,8 +10732,37 @@ test_paint_options (void)
   CHECK (stroke_line (faded, faded_layer, &brush, 10, 3, 130, 3, NULL) == GLIMS_STATUS_OK &&
          alpha_at (faded, 12, 3) > 100 && alpha_at (faded, 80, 3) == 0,
          "with pen pressure on, a Paintbrush still fades (%d, %d)", alpha_at (faded, 12, 3), alpha_at (faded, 80, 3));
-  CHECK (stroke_captures (faded, faded_layer, &brush, 20, 13, NULL) == 0, "a faded stroke paints without capture facts");
-  CHECK (undo_depth (faded) == before + 3, "each faded stroke is one undo step (%d)", undo_depth (faded) - before);
+
+  /* A fade binds its private dynamics under its own fingerprint. */
+  {
+    char pressured[65], transparent[65], shorter[65], background[65], recolored[65];
+
+    CHECK (stroke_captures (faded, faded_layer, &brush, 20, 13, pressured) == 1,
+           "a fade with pen pressure captures its facts");
+    brush = brush_for (GLIMS_PAINT_PENCIL, 4.0);
+    CHECK (stroke_captures (faded, faded_layer, &brush, 30, 13, shorter) == 1 && strcmp (pressured, shorter),
+           "a plain stroke on the same layer has its own facts");
+    brush.spacing = 0.25;
+    brush.fade_steps = 40;
+    CHECK (stroke_captures (faded, faded_layer, &brush, 40, 13, transparent) == 1 && strcmp (shorter, transparent),
+           "a fade to transparent captures with a digest of its own");
+    brush.fade_steps = 30;
+    CHECK (stroke_captures (faded, faded_layer, &brush, 50, 13, shorter) == 1 && strcmp (transparent, shorter),
+           "a different fade length changes the digest");
+    brush.fade_steps = 40;
+    brush.fade_target = GLIMS_FADE_TO_BACKGROUND;
+    brush.fade_background_blue = 1.0;
+    CHECK (stroke_captures (faded, faded_layer, &brush, 60, 13, background) == 1 && strcmp (transparent, background),
+           "a fade to the background has its own digest");
+    brush.fade_background_red = 1.0;
+    CHECK (stroke_captures (faded, faded_layer, &brush, 70, 13, recolored) == 1 && strcmp (background, recolored),
+           "a different fade background changes the digest");
+    brush = brush_for (GLIMS_PAINT_ERASER, 4.0);
+    brush.spacing = 0.5;
+    CHECK (stroke_captures (faded, faded_layer, &brush, 80, 13, recolored) == 1,
+           "the Eraser records its spacing on an alpha layer");
+  }
+  CHECK (undo_depth (faded) == before + 9, "each faded stroke is one undo step (%d)", undo_depth (faded) - before);
   api->image_close (engine, faded);
 
   /* Fade from red to a blue background over 40 dabs, then blue. */

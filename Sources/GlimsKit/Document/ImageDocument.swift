@@ -1552,7 +1552,9 @@ final class ImageDocument {
                     var draft = StrokeRecordingDraft(capture: capture, confirmed: confirmed, settings: nil, trace: nil)
                     var effective = brush
                     effective.pressureSize = brush.pressureSize && session.supportsLabLayerBrushPressure
-                    draft.labLayerSettings = RecorderStrokeCommand.Settings(effective)
+                    // Lab layer strokes cannot serialize paint options:
+                    // GlimsLabLayerBrushSettings has no tail for them.
+                    draft.labLayerSettings = effective.hasPaintOptions ? nil : RecorderStrokeCommand.Settings(effective)
                     do { draft.tabletTrace = .init(first: try .init(native: sample)) }
                     catch { draft.refuse(error) }
                     if case .layer = confirmed.binding {} else {

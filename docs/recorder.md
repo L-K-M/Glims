@@ -140,7 +140,8 @@ Defringe, Remove Black Matte and Remove White Matte, and Image > Adjust
 saturation, Select > Color Range version 36 with its mode, fuzziness,
 Invert and sampled colors, clipping groups version 37 with the owned
 command tag, and Image > Adjust > Replace Color version 38 with its
-fuzziness, samples and corrections. See
+fuzziness, samples and corrections. Strokes carrying paint mode, spacing
+or fade use version 39. See
 [the file format](recorder-file-format.md) for its closed schema and limits.
 
 Record starts a fresh log, replacing the prior recording. Stop stops accepting

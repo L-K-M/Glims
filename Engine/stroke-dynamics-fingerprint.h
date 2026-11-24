@@ -9,4 +9,10 @@
  * exclusively for native SIZE; every other output must be disabled. */
 gchar *glims_stroke_dynamics_fingerprint (gboolean enabled, GimpDynamics *dynamics);
 
+/* Same contract for a fade stroke's private dynamics: the SIZE output
+ * keeps its ordinary contract while exactly one other enabled output
+ * listens to the fade input alone (apply_fade). Returns the same
+ * fingerprint shape, or NULL for any other configuration. */
+gchar *glims_stroke_fade_dynamics_fingerprint (gboolean enabled, GimpDynamics *dynamics);
+
 #endif

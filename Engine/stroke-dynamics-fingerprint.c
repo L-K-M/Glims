@@ -118,6 +118,50 @@ output_supported (GimpDynamicsOutput *output, gboolean size_output)
          gimp_dynamics_output_is_enabled (output) == size_output;
 }
 
+/* The fade stroke's enabled output: every use-* input flag reads FALSE
+ * except use-fade, and every curve-typed property keeps the ordinary
+ * bounds. apply_fade builds this output on the private dynamics. */
+static gboolean
+fade_output_supported (GimpDynamicsOutput *output)
+{
+  if (!output || G_OBJECT_TYPE (output) != GIMP_TYPE_DYNAMICS_OUTPUT)
+    return FALSE;
+  guint count = 0, curves = 0;
+  g_autofree GParamSpec **properties = g_object_class_list_properties (G_OBJECT_GET_CLASS (output), &count);
+  if (count > DYNAMICS_MAX_PROPERTIES)
+    return FALSE;
+  gboolean saw_fade = FALSE;
+  for (guint i = 0; i < count; i++)
+    {
+      GParamSpec *spec = properties[i];
+      if (g_str_has_prefix (spec->name, "use-"))
+        {
+          if (!G_IS_PARAM_SPEC_BOOLEAN (spec) || !(spec->flags & G_PARAM_READABLE))
+            return FALSE;
+          gboolean active = FALSE;
+          g_object_get (output, spec->name, &active, NULL);
+          gboolean fade = !strcmp (spec->name, "use-fade");
+          if (active != fade)
+            return FALSE;
+          saw_fade |= fade;
+        }
+      else if (g_type_is_a (spec->value_type, GIMP_TYPE_CURVE))
+        {
+          if (!(spec->flags & G_PARAM_READABLE) || ++curves > DYNAMICS_MAX_CURVES)
+            return FALSE;
+          GimpCurve *curve = NULL;
+          g_object_get (output, spec->name, &curve, NULL);
+          gboolean supported = curve_supported (curve);
+          g_clear_object (&curve);
+          if (!supported) return FALSE;
+        }
+      else if ((spec->flags & GIMP_CONFIG_PARAM_SERIALIZE) &&
+               !(spec->flags & GIMP_CONFIG_PARAM_IGNORE))
+        return FALSE;
+    }
+  return saw_fade && gimp_dynamics_output_is_enabled (output);
+}
+
 static gboolean
 dynamics_supported (GimpDynamics *dynamics)
 {
@@ -165,6 +209,61 @@ dynamics_supported (GimpDynamics *dynamics)
   return size_outputs == 1;
 }
 
+/* The fade stroke's private dynamics (apply_fade): a clean GimpDynamics
+ * whose SIZE output keeps its ordinary contract and that carries exactly
+ * one other enabled output, listening to the fade input alone. Every
+ * remaining output keeps the disabled contract. */
+static gboolean
+fade_dynamics_supported (GimpDynamics *dynamics)
+{
+  if (!dynamics || G_OBJECT_TYPE (dynamics) != GIMP_TYPE_DYNAMICS ||
+      !viewable_metadata_supported (GIMP_VIEWABLE (dynamics)))
+    return FALSE;
+  const gchar *name = gimp_object_get_name (GIMP_OBJECT (dynamics));
+  if (name && strnlen (name, DYNAMICS_MAX_NAME_BYTES + 1) > DYNAMICS_MAX_NAME_BYTES)
+    return FALSE;
+  GimpDynamicsOutput *size_output = gimp_dynamics_get_output (dynamics, GIMP_DYNAMICS_OUTPUT_SIZE);
+  if (!size_output) return FALSE;
+
+  guint count = 0, outputs = 0, size_outputs = 0, fade_outputs = 0;
+  g_autofree GParamSpec **properties = g_object_class_list_properties (G_OBJECT_GET_CLASS (dynamics), &count);
+  if (count > DYNAMICS_MAX_PROPERTIES)
+    return FALSE;
+  for (guint i = 0; i < count; i++)
+    {
+      GParamSpec *spec = properties[i];
+      if (g_type_is_a (spec->value_type, GIMP_TYPE_DYNAMICS_OUTPUT))
+        {
+          if (!(spec->flags & G_PARAM_READABLE) || ++outputs > DYNAMICS_MAX_OUTPUTS)
+            return FALSE;
+          GimpDynamicsOutput *output = NULL;
+          g_object_get (dynamics, spec->name, &output, NULL);
+          gboolean is_size = output == size_output;
+          gboolean supported = is_size
+              ? (output_supported (output, TRUE) || output_supported (output, FALSE))
+              : (fade_output_supported (output) || output_supported (output, FALSE));
+          gboolean is_fade = supported && !is_size && gimp_dynamics_output_is_enabled (output);
+          g_clear_object (&output);
+          if (!supported || (is_size && ++size_outputs > 1)) return FALSE;
+          fade_outputs += is_fade;
+        }
+      else if ((spec->flags & GIMP_CONFIG_PARAM_SERIALIZE) &&
+               !(spec->flags & GIMP_CONFIG_PARAM_IGNORE))
+        {
+          /* Values were bounded through borrowed/native getters above. */
+          if ((!strcmp (spec->name, "name") || !strcmp (spec->name, "icon-name")) &&
+              spec->value_type == G_TYPE_STRING && (spec->flags & G_PARAM_READABLE))
+            continue;
+          else if (!strcmp (spec->name, "icon-pixbuf") &&
+                   g_type_is_a (spec->value_type, G_TYPE_OBJECT) &&
+                   (spec->flags & G_PARAM_READABLE))
+            continue;
+          else return FALSE;
+        }
+    }
+  return size_outputs == 1 && fade_outputs == 1;
+}
+
 gchar *
 glims_stroke_dynamics_fingerprint (gboolean enabled, GimpDynamics *dynamics)
 {
@@ -183,6 +282,34 @@ glims_stroke_dynamics_fingerprint (gboolean enabled, GimpDynamics *dynamics)
     }
 
   static const guchar domain[] = "Glims stroke dynamics fingerprint v1";
+  const guchar mode = enabled ? 1 : 0;
+  GChecksum *sum = g_checksum_new (G_CHECKSUM_SHA256);
+  g_checksum_update (sum, domain, sizeof domain);
+  g_checksum_update (sum, &mode, sizeof mode);
+  if (enabled) g_checksum_update (sum, (const guchar *) serialized, length + 1);
+  gchar *digest = g_strdup (g_checksum_get_string (sum));
+  g_checksum_free (sum);
+  return digest;
+}
+
+gchar *
+glims_stroke_fade_dynamics_fingerprint (gboolean enabled, GimpDynamics *dynamics)
+{
+  g_autofree gchar *serialized = NULL;
+  gsize length = 0;
+  if (enabled)
+    {
+      if (!fade_dynamics_supported (dynamics))
+        return NULL;
+      serialized = gimp_config_serialize_to_string (GIMP_CONFIG (dynamics), NULL);
+      if (!serialized) return NULL;
+      length = strnlen (serialized, DYNAMICS_CONFIG_MAX_BYTES + 1);
+      if (!length || length > DYNAMICS_CONFIG_MAX_BYTES ||
+          !g_utf8_validate (serialized, (gssize) length, NULL))
+        return NULL;
+    }
+
+  static const guchar domain[] = "Glims stroke fade dynamics fingerprint v1";
   const guchar mode = enabled ? 1 : 0;
   GChecksum *sum = g_checksum_new (G_CHECKSUM_SHA256);
   g_checksum_update (sum, domain, sizeof domain);
