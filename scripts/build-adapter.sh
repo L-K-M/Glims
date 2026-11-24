@@ -160,6 +160,13 @@ if [[ "$MODE" == test ]]; then
     python3 "$ROOT/scripts/test-color-range-math.py" || status=$?
   cat "$OUT/color-range-math-test.log"
   (( status == 0 )) || die "the Color Range math tests failed (status $status)"
+  # The Replace Color kernel is pure C too, and shares the Color Range
+  # weight kernel.
+  status=0
+  run_with_timeout 120 "$OUT/replace-color-math-test.log" \
+    python3 "$ROOT/scripts/test-replace-color-math.py" || status=$?
+  cat "$OUT/replace-color-math-test.log"
+  (( status == 0 )) || die "the Replace Color math tests failed (status $status)"
   # Each native runner below starts the engine cold with a fresh home, so
   # GIMP queries every plug-in before the first check. On a loaded Mac that
   # start alone has taken about three minutes; the checks take seconds.

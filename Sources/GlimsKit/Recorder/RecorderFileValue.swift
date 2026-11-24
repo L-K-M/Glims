@@ -444,12 +444,17 @@ enum RecorderFileCommand: Equatable {
     /// A newly applied Unsharp Mask with its whole accepted settings. The
     /// explicit layer is the record's `layer` binding.
     case applyUnsharpMask(RecorderUnsharpMaskValue)
+    /// A newly applied Replace Color adjustment with its whole accepted
+    /// settings: fuzziness, sampled colors and the three corrections. The
+    /// explicit layer is the record's `layer` binding; the command carries
+    /// no native filter/effect identity.
+    case applyReplaceColor(RecorderReplaceColorValue)
     case completeStroke(RecorderStrokeCommand)
     case completeTabletStroke(RecorderTabletStrokeCommand)
 
     var isTargetIndependent: Bool {
         switch self {
-        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .clipping, .applyVariations: return false
+        case .layerProperties, .transformLayer, .transformProjectiveLayer, .applyLevels, .applyCurves, .applyColorBalance, .applyHueSaturation, .applyBrightnessContrast, .applyGaussianBlur, .applyUnsharpMask, .applyReplaceColor, .completeStroke, .completeTabletStroke, .channelToSelection, .editInk, .applyInkLevels, .applyInkCurves, .completeInkStroke, .fillLab, .applyLabLevels, .applyLabCurves, .completeLabStroke, .completeLabLayerStroke, .fillLabLayer, .moveLayer, .duplicateLayers, .deleteLayers, .addLayerMask, .matting, .applyVariations, .clipping: return false
         case .selectColor(_, let options): return options.sampleMerged
         case .selectSimilar(_, _, let sampleMerged): return sampleMerged
         case .selectCommand(.fromAlpha, _): return false

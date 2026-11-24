@@ -7359,3 +7359,31 @@ palette presentation and the codec; the `clipping-groups` smoke case
 (`GLIMS_SMOKE_CASE=clipping-groups`) drives the menu action, the palette
 marker and Option-click toggle, Merge Group, and a save/load/replay
 comparison. Not checked here: a PSD export/import round trip.
+
+### Image > Adjust > Replace Color (2026-11-23)
+
+Image > Adjust > Replace Color... shifts only the colors near one or more
+sampled colors on the active layer. The adapter registers a new owned GEGL
+point filter, `glims:replace-color`, with every setting as an ordinary scalar
+property (`fuzziness`, `sample-count`, eight sample colors and subtract
+flags, then hue, saturation and lightness), so no facade slot is added and
+the app drives it through the existing filter session API. The weight comes
+from the Color Range kernel; the color transform copies GIMP's
+Hue-Saturation master range with overlap 0 and babl's HSLA conversion, cited
+in `Engine/replace-color-math.c`. Alpha stays exact, transparent and
+non-finite pixels pass through, and a filter session's applicator mask
+limits the change to the selection.
+
+`Sources/GlimsKit/Filters/ReplaceColorPanel.swift` subclasses
+`NativeFilterPanel`: Fuzziness, a 160 pt mask preview computed off the main
+thread behind a generation counter, three eyedroppers with Shift/Option, and
+the three correction sliders. It installs the same `canvasSampler` hook the
+Color Range panel uses. The command refuses non-pixel layers and every
+non-RGB document, with the grayscale message "Replace Color is available for
+RGB images only.". The Recorder writes `applyReplaceColor` at format version
+38, bound to the explicit layer. `scripts/test-replace-color-math.py`
+compiles the kernel standalone, optimized and under the sanitizers,
+`swift test` covers the settings rules and the codec, and the `replace-color` smoke case
+(`GLIMS_SMOKE_CASE=replace-color`) opens the panel, samples, sets hue, checks
+the live composite, applies, cancels and replays a saved recording onto a
+twin.

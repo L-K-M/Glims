@@ -3349,6 +3349,108 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
+    /// Image > Adjust > Replace Color's settings. The sample-list rules and
+    /// the scalar property encoding live here so the panel, the Recorder
+    /// codec and the tests share one validation path. Samples are sRGB;
+    /// components may lie slightly outside 0...1, as a sampled color can.
+    struct ReplaceColorSettings: Equatable {
+        struct Sample: Equatable {
+            var red: Double
+            var green: Double
+            var blue: Double
+            var subtract: Bool
+        }
+
+        static let maximumSamples = 8
+
+        /// The operation's editable property names in declaration order.
+        static let propertyNames: [String] = {
+            var names = ["fuzziness", "sample-count"]
+            names += (0..<maximumSamples).map { "sample-\($0)" }
+            names += (0..<maximumSamples).map { "subtract-\($0)" }
+            names += ["hue", "saturation", "lightness"]
+            return names
+        }()
+
+        var fuzziness: Double = 40
+        var samples: [Sample] = []
+        var hue: Double = 0
+        var saturation: Double = 0
+        var lightness: Double = 0
+
+        var isValid: Bool {
+            fuzziness.isFinite && (0...200).contains(fuzziness)
+                && samples.count <= Self.maximumSamples
+                && samples.allSatisfy {
+                    $0.red.isFinite && $0.green.isFinite && $0.blue.isFinite
+                }
+                && [hue, saturation, lightness].allSatisfy(\.isFinite)
+                && (-180...180).contains(hue)
+                && (-100...100).contains(saturation)
+                && (-100...100).contains(lightness)
+                && samples.contains { !$0.subtract }
+        }
+
+        /// The whole settings as the operation's scalar property values.
+        /// Unused sample slots keep the operation's black/off defaults.
+        var propertyValues: [String: FilterValue] {
+            var values: [String: FilterValue] = [
+                "fuzziness": .number(fuzziness),
+                "sample-count": .integer(Int64(samples.count)),
+                "hue": .number(hue),
+                "saturation": .number(saturation),
+                "lightness": .number(lightness),
+            ]
+            for index in 0..<Self.maximumSamples {
+                let sample = samples.indices.contains(index)
+                    ? samples[index]
+                    : Sample(red: 0, green: 0, blue: 0, subtract: false)
+                values["sample-\(index)"] = .color(NSColor(srgbRed: CGFloat(Self.clamped(sample.red)),
+                                                          green: CGFloat(Self.clamped(sample.green)),
+                                                          blue: CGFloat(Self.clamped(sample.blue)),
+                                                          alpha: 1))
+                values["subtract-\(index)"] = .boolean(sample.subtract)
+            }
+            return values
+        }
+
+        /// The facade's color property accepts 0...1; the kernel clamps
+        /// samples anyway, so a wide-gamut sample is stored at its edge.
+        private static func clamped(_ value: Double) -> Double {
+            min(1, max(0, value))
+        }
+
+        /// Reads the operation's scalar properties. A missing or unreadable
+        /// row keeps its default; `isValid` then decides whether the panel's
+        /// OK is enabled.
+        init(values: [String: FilterValue] = [:]) {
+            if case .number(let value)? = values["fuzziness"] { fuzziness = value }
+            if case .number(let value)? = values["hue"] { hue = value }
+            if case .number(let value)? = values["saturation"] { saturation = value }
+            if case .number(let value)? = values["lightness"] { lightness = value }
+
+            var count = 0
+            if case .integer(let value)? = values["sample-count"] {
+                count = Int(value)
+            }
+            count = max(0, min(count, Self.maximumSamples))
+            samples = (0..<count).map { index in
+                func rgb(_ name: String) -> (Double, Double, Double) {
+                    guard case .color(let color)? = values[name],
+                          let srgb = color.usingColorSpace(.sRGB) else { return (0, 0, 0) }
+                    return (Double(srgb.redComponent), Double(srgb.greenComponent),
+                            Double(srgb.blueComponent))
+                }
+                let components = rgb("sample-\(index)")
+                let subtract: Bool
+                if case .boolean(let value)? = values["subtract-\(index)"] { subtract = value }
+                else { subtract = false }
+                return Sample(red: components.0, green: components.1,
+                              blue: components.2, subtract: subtract)
+            }
+        }
+    }
+
     func colorBalanceSettings(_ filter: Int32) throws -> ColorBalanceSettings {
         var raw = GlimsColorBalanceSettings()
         raw.struct_size = UInt32(MemoryLayout<GlimsColorBalanceSettings>.size)
@@ -5950,6 +6052,35 @@ final class EngineSession: @unchecked Sendable {
                               message: "The color range preview size was invalid.")
         }
         return (width: w, height: h, mask: Array(mask.prefix(w * h)))
+    }
+
+    /// Reads an open Replace Color session's whole scalar settings. The
+    /// operation owns no config object, so every property crosses through
+    /// the generic filter property protocol.
+    func replaceColorSettings(_ filter: Int32) throws -> ReplaceColorSettings {
+        var values: [String: FilterValue] = [:]
+        for name in ReplaceColorSettings.propertyNames {
+            values[name] = try filterProperty(filter, name)
+        }
+        let settings = ReplaceColorSettings(values: values)
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The Replace Color settings could not be read.")
+        }
+        return settings
+    }
+
+    /// Writes a complete Replace Color settings to an open session. Every
+    /// property is written so a replay reproduces the committed value.
+    func setReplaceColorSettings(_ filter: Int32, to settings: ReplaceColorSettings) throws {
+        guard settings.isValid else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Replace Color needs fuzziness 0...200, hue -180...180, saturation and lightness -100...100, and one sample to add.")
+        }
+        for name in ReplaceColorSettings.propertyNames {
+            guard let value = settings.propertyValues[name] else { continue }
+            try setFilterProperty(filter, name, to: value)
+        }
     }
 
     /// Whether this adapter offers Layer > Merge Visible (facade slot 235).

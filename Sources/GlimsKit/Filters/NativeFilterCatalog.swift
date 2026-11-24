@@ -118,6 +118,12 @@ struct NativeFilterMenuLayout: Equatable {
         operation.name == SelectiveColorPanel.operation && operation.support == .supported
     }
 
+    /// Replace Color is another owned `.supported` operation; its editor adds
+    /// the canvas sampler and the mask preview, so the layout differs.
+    static func usesReplaceColorEditor(_ operation: EngineSession.FilterOperation) -> Bool {
+        operation.name == ReplaceColorPanel.operation && operation.support == .supported
+    }
+
     static func supportsParameterEditor(_ operation: EngineSession.FilterOperation?) -> Bool {
         guard let operation, operation.name != SourceFilterOperation.oilify.rawValue,
               operation.name != SourceFilterOperation.lensBlur.rawValue else { return false }
@@ -229,6 +235,7 @@ enum NativeFilterMenus {
         ("gimp:color-balance", "Color Balance"),
         ("gimp:hue-saturation", "Hue/Saturation"),
         ("glims:selective-color", "Selective Color"),
+        ("glims:replace-color", "Replace Color"),
         ("gimp:levels", "Levels"),
         ("gimp:curves", "Curves"),
         ("gimp:threshold", "Threshold"),
