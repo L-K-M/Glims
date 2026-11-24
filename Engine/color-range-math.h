@@ -7,8 +7,9 @@
  * Pixels are straight (non-premultiplied) nonlinear sRGB RGBA float
  * quadruples, channels clamped to [0,1] before comparison. Samples are
  * clamped the same way; they may hold finite values slightly outside the
- * range, as a wide-gamut source read does. A fully transparent projection
- * pixel always has weight 0. The ramp, the hue sectors and the luma bands
+ * range, as a wide-gamut source read does; a NaN channel counts as 0. A
+ * fully transparent projection pixel has weight 0 before Invert, so Invert
+ * selects it (docs/color-range.md). The ramp, the hue sectors and the luma bands
  * mirror the dialog's math in docs/color-range.md. */
 
 #include <stdbool.h>

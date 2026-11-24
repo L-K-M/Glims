@@ -2070,7 +2070,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// menu validation already read the cached refusal; OK queues one
     /// command and closes.
     @objc func colorRange(_ sender: Any?) {
-        guard let window, !closeStarted, colorRangePanel == nil,
+        // The menu's own checks, plus the preview gate itself: the panel
+        // takes the gate only when nothing else holds it, so its close can
+        // release it.
+        guard let window, !closeStarted, colorRangePanel == nil, !previewBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
+              !imageDocument.filterPreviewIsOpen,
               imageDocument.colorRangeRefusal() == nil else { return }
         endPendingEdits()
         let panel = ColorRangePanel(document: imageDocument, tools: canvas.tools)

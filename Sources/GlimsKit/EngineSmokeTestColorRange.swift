@@ -53,6 +53,15 @@ extension EngineSmokeTest {
             }
         }
 
+        func textField(labeled label: String, in view: NSView?) -> NSTextField? {
+            guard let view else { return nil }
+            if let field = view as? NSTextField, field.accessibilityLabel() == label { return field }
+            for subview in view.subviews {
+                if let field = textField(labeled: label, in: subview) { return field }
+            }
+            return nil
+        }
+
         var owned: [ImageDocument] = []
         var controllers: [DocumentWindowController] = []
         var errors: [String] = []
@@ -80,7 +89,9 @@ extension EngineSmokeTest {
                 controller.window?.orderOut(nil)
                 var stopped = false
                 controller.canvas.stopRendering { stopped = true }
-                while !stopped { spin(0.01) }
+                let stopDeadline = Date().addingTimeInterval(20)
+                while !stopped && Date() < stopDeadline { spin(0.01) }
+                check(stopped, "the Color Range canvas stops rendering in time")
             }
             for document in owned { document.closeImageWhenDrained() }
             wait { owned.allSatisfy { (try? session.info($0.image)) == nil } }
@@ -138,6 +149,30 @@ extension EngineSmokeTest {
         check(try session.undoInfo(document.image) == beforeCancel
               && session.selectionBounds(image: document.image) == CGRect(x: 0, y: 0, width: 4, height: 4),
               "Cancel changes neither history nor selection")
+
+        // OK applies a fuzziness still being typed into its field.
+        let (typedDoc, typedController) = try fixture("Color Range typed")
+        try typedDoc.startRecording()
+        typedController.colorRange(nil)
+        wait { typedController.colorRangePanel != nil }
+        guard let typedPanel = typedController.colorRangePanel, let typedWindow = typedPanel.window,
+              let field = textField(labeled: "Fuzziness value", in: typedWindow.contentView) else {
+            return check(false, "the typed-fuzziness panel opens with its field")
+        }
+        typedPanel.sample(at: CGPoint(x: 1.5, y: 1.5), flags: [])
+        wait { typedPanel.maskWidth == 8 && !typedPanel.maskBytes.isEmpty }
+        typedWindow.makeFirstResponder(field)
+        field.currentEditor()?.string = "150"
+        typedPanel.commit()
+        wait { typedController.colorRangePanel == nil }
+        settle(typedDoc)
+        try typedDoc.stopRecording()
+        settle(typedDoc)
+        if case .success(.colorRange(let typed))? = typedDoc.recorder.records.first?.resolution {
+            check(typed.fuzziness == 150, "OK applies a fuzziness still being typed (\(typed.fuzziness))")
+        } else {
+            check(false, "the typed-fuzziness Color Range records one row")
+        }
 
         // A canvas press samples while the panel is open; painting cannot run.
         let (canvasDoc, canvasController) = try fixture("Color Range canvas")

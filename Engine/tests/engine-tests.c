@@ -15168,7 +15168,7 @@ test_color_range (void)
   GlimsColorRangeSettings settings = { .struct_size = sizeof settings };
   GlimsSelectOptions none = { .struct_size = sizeof none,
                               .operation = GLIMS_SELECT_REPLACE };
-  GlimsUndoInfo undo;
+  GlimsUndoInfo undo = { 0 };
   GlimsRect bounds;
   bool      empty = true;
   int32_t   depth, w = 0, h = 0;
@@ -15240,7 +15240,8 @@ test_color_range (void)
 
   /* Invert selects everything the sample did not. With the sampled block
    * still selected the command would work only inside it, so clear it. */
-  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+         "the selection clears");
   settings.invert = 1;
   depth = undo_depth (image);
   CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
@@ -15254,9 +15255,11 @@ test_color_range (void)
   settings.invert = 0;
 
   /* An active rectangle limits the range to itself. */
-  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
-  api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
-                     (GlimsPoint[]) { { 0, 0 }, { 2, 2 } }, 2, &none);
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+         "the selection clears");
+  CHECK (api->select_shape (engine, image, GLIMS_SHAPE_RECTANGLE,
+                            (GlimsPoint[]) { { 0, 0 }, { 2, 2 } }, 2, &none) == GLIMS_STATUS_OK,
+         "the limiting rectangle is selected");
   depth = undo_depth (image);
   CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
          api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
@@ -15266,7 +15269,8 @@ test_color_range (void)
          selected_pixels (image, layer));
 
   /* Fixed ranges ignore Fuzziness and samples. */
-  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+         "the selection clears");
   settings.mode = GLIMS_COLOR_RANGE_REDS;
   settings.sample_count = 0;
   settings.samples = NULL;
@@ -15277,7 +15281,8 @@ test_color_range (void)
          "Reds selects only the red block (%.1f pixels)",
          selected_pixels (image, layer));
 
-  api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL);
+  CHECK (api->select_command (engine, image, GLIMS_SELECT_NONE, 0, NULL) == GLIMS_STATUS_OK,
+         "the selection clears");
   settings.mode = GLIMS_COLOR_RANGE_SHADOWS;
   CHECK (api->selection_color_range (engine, image, &settings, NULL) == GLIMS_STATUS_OK &&
          api->selection_bounds (engine, image, &empty, &bounds) == GLIMS_STATUS_OK &&
@@ -15332,6 +15337,13 @@ test_color_range (void)
                                       mask, sizeof mask, &w, &h, NULL) ==
              GLIMS_STATUS_INVALID_ARGUMENT,
              "a preview size outside 1...512 is refused");
+      CHECK (api->color_range_preview (engine, preview_image, &settings, 1,
+                                      NULL, 0, &w, &h, NULL) == GLIMS_STATUS_OK &&
+             w == 1 && h == 1 &&
+             api->color_range_preview (engine, preview_image, &settings, 512,
+                                      NULL, 0, &w, &h, NULL) == GLIMS_STATUS_OK &&
+             w == 8 && h == 8,
+             "preview sizes 1 and 512 are accepted, and a preview never enlarges (%dx%d)", w, h);
       CHECK (api->color_range_preview (engine, preview_image, &settings, 4,
                                       mask, 15, &w, &h, NULL) ==
              GLIMS_STATUS_INVALID_ARGUMENT,
@@ -15354,20 +15366,19 @@ test_color_range (void)
              "a fixed range with a sample is refused");
       api->free_string (error);
       error = NULL;
+      /* A valid sample list, so only the fuzziness can be refused. */
       settings.mode = GLIMS_COLOR_RANGE_SAMPLED;
-      settings.sample_count = 0;
-      settings.samples = NULL;
 
       settings.fuzziness = 201;
       CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
-             GLIMS_STATUS_INVALID_ARGUMENT,
-             "fuzziness 201 is refused");
+             GLIMS_STATUS_INVALID_ARGUMENT && error && strstr (error, "Fuzziness"),
+             "fuzziness 201 is refused for its fuzziness");
       api->free_string (error);
       error = NULL;
       settings.fuzziness = NAN;
       CHECK (api->selection_color_range (engine, preview_image, &settings, &error) ==
-             GLIMS_STATUS_INVALID_ARGUMENT,
-             "NaN fuzziness is refused");
+             GLIMS_STATUS_INVALID_ARGUMENT && error && strstr (error, "Fuzziness"),
+             "NaN fuzziness is refused for its fuzziness");
       api->free_string (error);
       error = NULL;
       settings.fuzziness = 40;

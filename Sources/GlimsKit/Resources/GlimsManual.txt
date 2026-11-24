@@ -336,13 +336,14 @@ Select > Color Range… opens a utility panel that keeps the canvas clickable.
 It selects every pixel of the merged image near one or more sampled colors,
 or inside a fixed hue range (Reds through Magentas) or a tonal band
 (Highlights, Midtones, Shadows). Click the image or the panel's preview to
-sample; the plain eyedropper replaces the sample, plus appends one, and
-minus appends one to subtract. Shift-click acts as plus and Option-click as
-minus with any eyedropper. Fuzziness runs from 0 to 200 for Sampled Colors;
-the fixed ranges ignore it. Selection shows the weight mask and Image shows
-the picture. Invert swaps what is selected, and an existing selection limits
-the result. OK replaces the selection as one "Color Range" undo step; Cancel
-and Escape change nothing.
+sample; the plain eyedropper replaces the samples with the clicked color,
+plus adds the clicked color, and minus adds it as a color to subtract.
+Shift-click acts as plus and Option-click as minus with any eyedropper.
+Fuzziness runs from 0 to 200 for Sampled Colors; the fixed ranges ignore it.
+Selection shows the weight mask and Image shows the picture. Invert swaps
+what is selected, and an existing selection limits the result. OK replaces
+the selection as one "Color Range" undo step; Cancel and Escape change
+nothing.
 
 When you start a selection drag or click with the Magic Wand, hold a
 modifier to combine with the selection that exists:

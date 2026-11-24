@@ -3,10 +3,11 @@
 
 #include <math.h>
 
+/* Clamps to [0,1]; NaN, which fails every comparison, becomes 0. */
 static double
 clamped (double value)
 {
-  return value < 0.0 ? 0.0 : value > 1.0 ? 1.0 : value;
+  return value > 0.0 ? (value < 1.0 ? value : 1.0) : 0.0;
 }
 
 bool
@@ -85,14 +86,6 @@ hue_and_saturation (const double rgb[3], double *hue, double *saturation)
     *hue += 360.0;
 }
 
-/* Clamps `value` to [0,1]; the gate's 0.02 floor and 0.08 transition are
- * the dialog's saturation threshold. */
-static double
-unit_range (double value)
-{
-  return value < 0.0 ? 0.0 : value > 1.0 ? 1.0 : value;
-}
-
 static double
 fixed_hue_weight (const double rgb[3], double center)
 {
@@ -105,8 +98,9 @@ fixed_hue_weight (const double rgb[3], double center)
 
   /* Full weight within 15 degrees of the center, linear to 0 at 45. */
   sector = distance <= 15.0 ? 1.0 : distance >= 45.0 ? 0.0 : (45.0 - distance) / 30.0;
-  /* Grays never match a hue range. */
-  gate = unit_range ((saturation - 0.02) / 0.08);
+  /* Grays never match a hue range: the 0.02 floor and 0.08 transition
+   * are the dialog's saturation threshold. */
+  gate = clamped ((saturation - 0.02) / 0.08);
   return sector * gate;
 }
 
@@ -179,8 +173,9 @@ glims_cr_weight (const float rgba[4], const GlimsCRSettings *settings,
       weight = fixed_luma_weight (rgb, settings->mode);
     }
 
-  /* Transparency wins before Invert; Invert then the selection limit. */
-  if (rgba[3] <= 0.0)
+  /* A transparent pixel (NaN alpha included) gets 0 before Invert, so
+   * Invert selects it; the selection limit applies last. */
+  if (! (rgba[3] > 0.0))
     weight = 0.0;
   if (settings->invert)
     weight = 1.0 - weight;

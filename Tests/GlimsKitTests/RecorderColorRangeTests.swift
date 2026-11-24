@@ -43,8 +43,7 @@ final class RecorderColorRangeTests: XCTestCase {
         XCTAssertEqual(settings.samples[1].green, 1)
         XCTAssertTrue(settings.samples[1].subtract)
 
-        let decoded = try RecorderFileCodec.decode(bytes(document(sampledCommand)))
-        guard case .success(.colorRange, .none)? = decoded.records.first?.outcome else {
+        guard case .success(.colorRange, .none)? = value.records.first?.outcome else {
             return XCTFail("The Color Range command or its binding was lost")
         }
 
@@ -98,6 +97,16 @@ final class RecorderColorRangeTests: XCTestCase {
         let samples = (0..<65).map { _ in #"{"red":0,"green":0,"blue":0,"subtract":false}"# }.joined(separator: ",")
         let oversized = #"{"tag":"colorRange","mode":"sampledColors","fuzziness":40,"invert":false,"samples":["# + samples + "]}"
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(oversized))))
+
+        // The inclusive limits decode: fuzziness 0 and 200, and 64 samples.
+        let limit = (0..<64).map { _ in #"{"red":0,"green":0,"blue":0,"subtract":false}"# }.joined(separator: ",")
+        for command in [
+            #"{"tag":"colorRange","mode":"sampledColors","fuzziness":0,"invert":false,"samples":[{"red":1,"green":1,"blue":1,"subtract":false}]}"#,
+            #"{"tag":"colorRange","mode":"sampledColors","fuzziness":200,"invert":false,"samples":[{"red":1,"green":1,"blue":1,"subtract":false}]}"#,
+            #"{"tag":"colorRange","mode":"sampledColors","fuzziness":40,"invert":false,"samples":["# + limit + "]}",
+        ] {
+            XCTAssertNoThrow(try RecorderFileCodec.decode(bytes(document(command))), command)
+        }
     }
 
     func testBindingPairingRules() {

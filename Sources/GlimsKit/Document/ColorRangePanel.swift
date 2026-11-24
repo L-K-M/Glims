@@ -238,7 +238,7 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
     // MARK: Actions
 
     @objc private func modeChanged(_ sender: NSPopUpButton) {
-        let fixed = sender.indexOfSelectedItem != 0
+        let fixed = settings.mode != .sampled
         fuzzinessSlider.isEnabled = !fixed
         fuzzinessField.isEnabled = !fixed
         updateOkEnabled()
@@ -287,6 +287,10 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc func commit() {
+        // End an unconfirmed fuzziness edit first: neither a click on OK nor
+        // its Return equivalent ends the field's editing, and the settings
+        // read the slider the field updates.
+        window?.makeFirstResponder(nil)
         let value = settings.engineSettings
         guard value.isValid, !finished else { return }
         // Close first: while the panel is open the window controller holds
@@ -313,8 +317,11 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
     /// subtracts, overriding the selected eyedropper.
     func sample(at imagePoint: CGPoint, flags: NSEvent.ModifierFlags) {
         let info = imageDocument.info
-        let x = Int(floor(imagePoint.x)), y = Int(floor(imagePoint.y))
-        guard x >= 0, y >= 0, x < info.width, y < info.height, !finished else { return }
+        // Bounds-check in floating point, so a non-finite point is a no-op
+        // rather than a trapping conversion.
+        guard imagePoint.x >= 0, imagePoint.y >= 0, imagePoint.x < CGFloat(info.width),
+              imagePoint.y < CGFloat(info.height), !finished else { return }
+        let x = Int(imagePoint.x), y = Int(imagePoint.y)
         // The modifiers and eyedropper count at the click, not at delivery.
         let kind: SampleAction = flags.contains(.shift) ? .add : flags.contains(.option) ? .subtract : action
         imageDocument.colorRangeSample(x: x, y: y) { [weak self] sampled in
@@ -356,8 +363,7 @@ final class ColorRangePanel: NSWindowController, NSWindowDelegate, NSTextFieldDe
             updatePreviewMode()
             return
         }
-        imageDocument.colorRangePreview(imageDocument.image, settings: value,
-                                    maxSize: Self.previewMax) { [weak self] result in
+        imageDocument.colorRangePreview(settings: value, maxSize: Self.previewMax) { [weak self] result in
             guard let self, expected == self.generation else { return }
             // A refused read clears the mask rather than leaving the previous
             // settings' mask on screen.

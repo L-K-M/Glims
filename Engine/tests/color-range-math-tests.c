@@ -69,12 +69,12 @@ test_validate (void)
   value.sample_count = 0;
   value.samples = NULL;
   CHECK (glims_cr_settings_valid (&value), "validate: a fixed range without samples is valid");
+  for (size_t i = 0; i < GLIMS_CR_MAX_SAMPLES + 1; i++)
+    samples[i] = (GlimsCRSample) { 0, 0, 0, 0 };
   value.mode = GLIMS_CR_SAMPLED;
   value.sample_count = GLIMS_CR_MAX_SAMPLES + 1;
   value.samples = samples;
   CHECK (! glims_cr_settings_valid (&value), "validate: 65 samples are refused");
-  for (size_t i = 0; i < GLIMS_CR_MAX_SAMPLES + 1; i++)
-    samples[i] = (GlimsCRSample) { 0, 0, 0, 0 };
   value.sample_count = GLIMS_CR_MAX_SAMPLES;
   CHECK (glims_cr_settings_valid (&value), "validate: 64 add samples are valid");
   samples[63].red = INFINITY;
@@ -245,6 +245,19 @@ test_transparency_invert_selection (void)
          "selection: a soft selection scales the weight");
   CHECK (glims_cr_weight (matching, &value, (const float[]) { 0.0f }) == 0.0f,
          "selection: an unselected pixel contributes nothing");
+
+  /* A NaN channel clamps to 0 like a negative one, in every mode. */
+  matching[0] = NAN;
+  CHECK (glims_cr_weight (matching, &value, NULL) == 1.0f,
+         "nan: a NaN channel matches a black sample as 0 does");
+  value = settings (GLIMS_CR_REDS, 40, 0);
+  CHECK (glims_cr_weight ((const float[]) { 1.0f, NAN, NAN, 1.0f }, &value, NULL) == 1.0f,
+         "nan: NaN green and blue read as pure red in a hue range");
+  value = settings (GLIMS_CR_SHADOWS, 40, 0);
+  CHECK (glims_cr_weight ((const float[]) { NAN, NAN, NAN, 1.0f }, &value, NULL) == 1.0f,
+         "nan: an all-NaN pixel reads as black in a luma band");
+  CHECK (glims_cr_weight ((const float[]) { 0.0f, 0.0f, 0.0f, NAN }, &value, NULL) == 0.0f,
+         "nan: a NaN alpha counts as transparent");
 }
 
 static void

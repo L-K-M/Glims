@@ -959,10 +959,12 @@ typedef struct GlimsColorRangeSample {
 typedef struct GlimsColorRangeSettings {
   uint32_t struct_size;          /* >= sizeof(GlimsColorRangeSettings) */
   uint32_t mode;                 /* GlimsColorRangeMode */
-  double   fuzziness;            /* finite 0...200; sampled modes only */
+  double   fuzziness;            /* finite 0...200 in every mode; only
+                                    sampled modes use it */
   uint32_t invert;               /* exactly 0 or 1 */
   uint32_t sample_count;         /* 0...GLIMS_COLOR_RANGE_MAX_SAMPLES */
-  const GlimsColorRangeSample *samples;  /* borrowed for the call */
+  const GlimsColorRangeSample *samples;  /* borrowed for the call; NULL
+                                            only with a zero count */
 } GlimsColorRangeSettings;
 
 typedef struct GlimsLevelsChannel {
@@ -4868,8 +4870,10 @@ typedef struct GlimsEngineAPI {
                                         const GlimsColorRangeSettings *settings, char **error);
   /* Slot 258: Select > Color Range's preview. The same weights, including
    * the current-selection limit, on a projection read scaled so its long
-   * side is at most `max_size` (1...512), one byte per pixel, 0...255.
-   * `mask` NULL queries the size only. Wrong buffer sizes are
+   * side is at most `max_size` (1...512) and never larger than the
+   * image, one byte per pixel, 0...255, rows packed. `mask` NULL queries
+   * the size only and ignores `byte_count`; otherwise `byte_count` is the
+   * mask's capacity, at least width * height. Wrong buffer sizes are
    * INVALID_ARGUMENT; an unknown image is NOT_FOUND; an indexed image is
    * UNSUPPORTED. Read-only: no history change and no locks. */
   GlimsStatus (*color_range_preview) (GlimsEngine *engine, GlimsImageID image,

@@ -5777,7 +5777,7 @@ final class EngineSession: @unchecked Sendable {
             }
         }
         let w = Int(width), h = Int(height)
-        guard w > 0, h > 0, w * h <= mask.count else {
+        guard (1...Int(maxSize)).contains(w), (1...Int(maxSize)).contains(h) else {
             throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
                               message: "The color range preview size was invalid.")
         }

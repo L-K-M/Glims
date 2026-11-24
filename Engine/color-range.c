@@ -278,7 +278,6 @@ glims_selection_color_range (GlimsEngine                 *engine,
   status = GLIMS_STATUS_OK;
 
 out:
-  projection = NULL;   /* borrowed from the projection; never unref */
   g_clear_object (&selection_buffer);
   g_clear_object (&weight_buffer);
   g_free (rgba);
@@ -351,7 +350,7 @@ glims_color_range_preview (GlimsEngine                 *engine,
   weights = g_try_malloc (count * sizeof (float));
   if (! rgba || ! weights)
     {
-      status = GLIMS_STATUS_FAILED;
+      status = glims_fail (error, NULL, "Not enough memory to preview the color range.");
       goto out;
     }
 
@@ -369,7 +368,10 @@ glims_color_range_preview (GlimsEngine                 *engine,
   status = read_selection (image, out_width, out_height, scale,
                             &selection, &selection_buffer);
   if (status != GLIMS_STATUS_OK)
-    goto out;
+    {
+      status = glims_fail (error, NULL, "The selection could not be read.");
+      goto out;
+    }
 
   glims_cr_apply (&kernel, rgba, count, selection, weights);
 
@@ -382,7 +384,6 @@ glims_color_range_preview (GlimsEngine                 *engine,
   status = GLIMS_STATUS_OK;
 
 out:
-  projection = NULL;   /* borrowed from the projection; never unref */
   g_clear_object (&selection_buffer);
   g_free (rgba);
   g_free (selection);

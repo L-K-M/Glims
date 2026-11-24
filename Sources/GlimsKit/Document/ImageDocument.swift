@@ -4964,7 +4964,7 @@ final class ImageDocument {
     /// Renders the color-range mask off the main thread, through the
     /// document's counted read queue, and delivers it on the main thread.
     /// A refused read delivers nil; the panel drops stale generations.
-    func colorRangePreview(_ image: Int32, settings: EngineSession.ColorRangeSettings,
+    func colorRangePreview(settings: EngineSession.ColorRangeSettings,
                            maxSize: Int32,
                            deliver: @escaping @MainActor ((width: Int, height: Int, mask: [UInt8])?) -> Void) {
         let accepted = run(effect: .readsPixels) { session, documentImage in
