@@ -132,18 +132,20 @@ extension EngineSmokeTest {
         guard let loaded, let file = try? loaded.get().file else {
             return check(false, "the layer-edit recording loads")
         }
-        check(file.records.count == 9, "the saved recording keeps every layer-edit row")
+        check(file.records.count == 9,
+              "the saved recording keeps every layer-edit row (\(file.records.count))")
+        // The row checks below index the recording, so stop on a wrong count.
+        guard file.records.count == 9 else { return }
 
         // Duplicate Layers (row 2) and Merge Visible (row 5) each produce a
         // symbol, and every produced description is saved as a symbol.
-        let producedIDs = Set(file.records.compactMap(\.produces))
-        guard file.records.count == 9,
-              let duplicateProduced = file.records[2].produces,
+        let producedIDs = file.producedSymbols
+        guard let duplicateProduced = file.records[2].produces,
               let mergeProduced = file.records[5].produces,
               producedIDs.contains(duplicateProduced), producedIDs.contains(mergeProduced) else {
             return check(false, "Duplicate Layers and Merge Visible record produced symbols")
         }
-        check(file.records.compactMap(\.produces).allSatisfy { id in
+        check(producedIDs.allSatisfy { id in
               file.symbols.contains { $0.id == id }
           }, "every produced symbol's description is saved as a symbol")
         if case .success(.deleteLayers, .layer(let deleted)) = file.records[3].outcome,
