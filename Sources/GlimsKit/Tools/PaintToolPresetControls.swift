@@ -10,16 +10,22 @@ import AppKit
 @MainActor
 enum PaintToolPresetControls {
 
-    /// Every stable `EngineSession.Brush` setting, minus the transient and
-    /// derived fields: `source` (the clone/heal source point) and the
-    /// per-read `tool`/color are never captured, and no session `ResourceID`
-    /// handle exists in a `Brush` value.
+    /// Every stable `EngineSession.Brush` setting, including the paint
+    /// options `paintMode`, `spacing` and `fade`. The transient and derived
+    /// fields are never captured: `source` (the clone/heal source point),
+    /// `fadeBackground` (the background color at the press), `clonePattern`
+    /// and the per-read `tool`/color; no session `ResourceID` handle exists
+    /// in a `Brush` value. Clone's Image/Pattern source choice and the pattern
+    /// itself are tool state shared with Edit > Fill, not preset settings.
     static func captureSettings(from brush: EngineSession.Brush) -> PaintToolPreset.Settings {
         PaintToolPreset.Settings(size: brush.size, opacity: brush.opacity,
                                  pressureSize: brush.pressureSize, hardness: brush.hardness,
                                  rate: brush.rate, flow: brush.flow, exposure: brush.exposure,
                                  tones: PaintToolPreset.ToneRange(brushTones: brush.tones),
-                                 antiErase: brush.antiErase)
+                                 antiErase: brush.antiErase,
+                                 paintMode: brush.paintMode,
+                                 spacing: brush.spacing,
+                                 fade: brush.fade.map { PaintToolPreset.Fade(brushFade: $0) })
     }
 
     /// The chosen brush resource as a typed `.brush` reference, or nil for
@@ -42,15 +48,17 @@ enum PaintToolPresetControls {
     }
 
     /// Applies `preset` to the global `state`: selects the preset's tool,
-    /// copies EVERY stable brush field, and hands the resource identity to
-    /// `setBrushResource(_:for:)` so the choice persists through the existing
-    /// brushStore path (nil resets to the native Default). The global
-    /// foreground changes only when the preset carries an explicit color.
+    /// copies EVERY stable brush field, including the paint mode, spacing and
+    /// fade, and hands the resource identity to `setBrushResource(_:for:)` so
+    /// the choice persists through the existing brushStore path (nil resets to
+    /// the native Default). A preset without those options returns the tool to
+    /// Normal at the default spacing with no fade. The global foreground
+    /// changes only when the preset carries an explicit color.
     ///
-    /// `ToolState.cloneSource` is deliberately untouched: `update` and
-    /// `setBrushResource` never write it, so the current clone/heal source
-    /// point survives an apply exactly — a clone/heal preset does NOT restore
-    /// its source point (docs/paint-tool-presets.md), and nothing here
+    /// `ToolState.cloneSource` and `ToolState.cloneFrom` are deliberately
+    /// untouched: `update` and `setBrushResource` never write them, so the
+    /// current clone/heal source point and Clone's Image/Pattern choice
+    /// survive an apply exactly (docs/paint-tool-presets.md), and nothing here
     /// pretends otherwise. The derived per-read `tool`/color/`source` fields
     /// of `Brush` are not written either; `brush(for:)` derives them.
     static func apply(_ preset: PaintToolPreset, to state: ToolState) {
@@ -66,6 +74,9 @@ enum PaintToolPresetControls {
             brush.exposure = preset.settings.exposure
             brush.tones = preset.settings.tones.brushTones
             brush.antiErase = preset.settings.antiErase
+            brush.paintMode = preset.settings.paintMode
+            brush.spacing = preset.settings.spacing
+            brush.fade = preset.settings.fade?.brushFade
         }
         state.setBrushResource(preset.brushResource?.identity, for: preset.tool)
         if let color = preset.foregroundColor {
@@ -483,8 +494,9 @@ final class PaintToolPresetPanelController: NSWindowController, NSTableViewDataS
     /// Apply: selects the preset's tool and copies every stable field, the
     /// resource identity (persisted through the brushStore path) and — only
     /// when the preset carries one — the foreground color. The current
-    /// cloneSource is preserved exactly. Pure `ToolState` writes; no engine
-    /// call, no document state, no stroke snapshot is touched.
+    /// cloneSource and cloneFrom choice are preserved exactly. Pure
+    /// `ToolState` writes; no engine call, no document state, no stroke
+    /// snapshot is touched.
     @objc func applySelected(_ sender: Any?) {
         applySelected()
     }

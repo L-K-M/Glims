@@ -345,6 +345,11 @@ glims_facade_brush_source (const GlimsBrushSettings *settings)
 {
   if (!settings || settings->struct_size < offsetof (GlimsBrushSettings, has_eraser_background) ||
       (settings->tool != GLIMS_PAINT_CLONE && settings->tool != GLIMS_PAINT_HEAL)) return 0;
+  /* A pattern clone reads no drawable (complete paint options tail only,
+   * as glims_read_brush reads it). */
+  if (settings->struct_size >= GLIMS_BRUSH_PAINT_OPTIONS_END &&
+      settings->clone_source == GLIMS_CLONE_FROM_PATTERN)
+    return 0;
   return settings->source_drawable;
 }
 

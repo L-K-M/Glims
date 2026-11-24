@@ -32,10 +32,19 @@ final class PaintToolPresetTests: XCTestCase {
                                  hardness: Double? = 0.5, rate: Double? = 50, flow: Double? = 10,
                                  exposure: Double? = 50,
                                  tones: PaintToolPreset.ToneRange = .midtones,
-                                 antiErase: Bool = false) -> PaintToolPreset.Settings {
+                                 antiErase: Bool = false,
+                                 paintMode: String = EngineSession.PaintModes.normal,
+                                 spacing: Double? = nil,
+                                 fade: PaintToolPreset.Fade? = nil) -> PaintToolPreset.Settings {
         PaintToolPreset.Settings(size: size, opacity: opacity, pressureSize: pressureSize,
                                  hardness: hardness, rate: rate, flow: flow, exposure: exposure,
-                                 tones: tones, antiErase: antiErase)
+                                 tones: tones, antiErase: antiErase,
+                                 paintMode: paintMode, spacing: spacing, fade: fade)
+    }
+
+    /// A real non-normal blend mode nick for the option tests.
+    private static var paintMode: String {
+        EngineSession.PaintModes.all.first { $0 != EngineSession.PaintModes.normal }!
     }
 
     private static func brushResource(_ name: String = "2. Hardness 025",
@@ -210,6 +219,200 @@ final class PaintToolPresetTests: XCTestCase {
             let identity = try XCTUnwrap(try XCTUnwrap(rewritten["brushResource"] as? [String: Any])["identity"] as? [String: Any])
             XCTAssertEqual(identity["collection"] as? String, "",
                            "an empty collection stays an empty string, not nil")
+        }
+    }
+
+    // MARK: Paint options (schema 2)
+
+    func testSchema2RoundTripsPaintModeSpacingAndFade() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            let created = try store.create(tool: .airbrush, name: "Faded screen",
+                                           settings: Self.settings(paintMode: Self.paintMode,
+                                                                   spacing: 0.35,
+                                                                   fade: PaintToolPreset.Fade(steps: 7, target: .background)))
+            let doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
+            XCTAssertEqual(doc["schemaVersion"] as? Int, 2)
+            let presets = try XCTUnwrap(doc["presets"] as? [[String: Any]])
+            let settings = try XCTUnwrap(presets[0]["settings"] as? [String: Any])
+            XCTAssertEqual(settings["paintMode"] as? String, Self.paintMode)
+            XCTAssertEqual(settings["spacing"] as? Double, 0.35)
+            let storedFade = try XCTUnwrap(settings["fade"] as? [String: Any])
+            XCTAssertEqual(Set(storedFade.keys), ["steps", "target"])
+            XCTAssertEqual(storedFade["steps"] as? Int, 7)
+            XCTAssertEqual(storedFade["target"] as? String, "background")
+            XCTAssertTrue(created.settings.hasPaintOptions)
+            XCTAssertEqual(try PaintToolPresetStore(defaults: defaults).load(), [created])
+        }
+    }
+
+    func testDocumentWithoutPaintOptionsStaysSchema1() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            _ = try store.create(tool: .paintbrush, name: "Plain", settings: Self.settings())
+            let doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
+            XCTAssertEqual(doc["schemaVersion"] as? Int, 1)
+            let presets = try XCTUnwrap(doc["presets"] as? [[String: Any]])
+            let settings = try XCTUnwrap(presets[0]["settings"] as? [String: Any])
+            for key in ["paintMode", "spacing", "fade"] {
+                XCTAssertNil(settings[key], "\(key) stays absent for a preset without options")
+            }
+        }
+    }
+
+    func testAddingOrRemovingAPresetWithAnOptionChoosesTheSchemaVersion() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            _ = try store.create(tool: .paintbrush, name: "Plain", settings: Self.settings())
+            var doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
+            XCTAssertEqual(doc["schemaVersion"] as? Int, 1)
+
+            let spaced = try store.create(tool: .pencil, name: "Spaced",
+                                          settings: Self.settings(spacing: 0.2))
+            doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
+            XCTAssertEqual(doc["schemaVersion"] as? Int, 2,
+                           "one preset with an option needs schema 2")
+
+            try store.delete(id: spaced.id)
+            doc = try XCTUnwrap(try jsonObject(try XCTUnwrap(store.storedData)) as? [String: Any])
+            XCTAssertEqual(doc["schemaVersion"] as? Int, 1,
+                           "the lowest expressible version is written")
+        }
+    }
+
+    func testSchema1RejectsPaintOptionKeysAndKeepsBytes() throws {
+        try withDefaults { defaults in
+            let id = #""3F2504E0-4F89-41D3-9A0C-0305E82C3301""#
+            let fields = #""size":10,"opacity":1,"pressureSize":true,"tones":"midtones","antiErase":false"#
+            let extras: [(String, String)] = [
+                ("paintMode", #""paintMode":"normal""#),
+                ("spacing", #""spacing":0.5"#),
+                ("fade", #""fade":{"steps":5,"target":"transparent"}"#),
+            ]
+            for (name, extra) in extras {
+                let data = Data(("{\"schemaVersion\":1,\"presets\":[{\"id\":\(id),\"tool\":\"paintbrush\","
+                    + "\"name\":\"x\",\"settings\":{\(fields),\(extra)}}]}").utf8)
+                defaults.set(data, forKey: PaintToolPresetStore.presetsKey)
+                let store = PaintToolPresetStore(defaults: defaults)
+                assertPresetError({ _ = try store.load() }) {
+                    if case .malformed(let detail) = $0 { return detail.contains(name) }
+                    return false
+                }
+                assertPresetError({ try store.create(tool: .paintbrush, name: "ok", settings: Self.settings()) }) {
+                    _ in true
+                }
+                XCTAssertEqual(store.storedData, data, "\(name): the rejected bytes stay untouched")
+            }
+        }
+    }
+
+    func testPaintOptionValueValidation() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            assertPresetError({
+                try store.create(tool: .paintbrush, name: "m",
+                                 settings: Self.settings(paintMode: "bogus"))
+            }) {
+                if case .unknownPaintMode(let tag) = $0 { return tag == "bogus" }
+                return false
+            }
+            for bad in [0.001, 11.0, -1.0, Double.nan, Double.infinity] {
+                assertPresetError({
+                    try store.create(tool: .paintbrush, name: "s\(bad)",
+                                     settings: Self.settings(spacing: bad))
+                }, fieldError("settings.spacing"))
+            }
+            for bad in [0, -1, 10_000] {
+                assertPresetError({
+                    try store.create(tool: .pencil, name: "f\(bad)",
+                                     settings: Self.settings(fade: PaintToolPreset.Fade(steps: bad, target: .transparent)))
+                }) {
+                    if case .outOfRange(let field, _, _) = $0 { return field == "settings.fade.steps" }
+                    return false
+                }
+            }
+            // The boundaries are accepted.
+            _ = try store.create(tool: .airbrush, name: "edges",
+                                 settings: Self.settings(paintMode: Self.paintMode, spacing: 0.01,
+                                                         fade: PaintToolPreset.Fade(steps: 9999, target: .transparent)))
+            XCTAssertEqual(try store.load().count, 1)
+        }
+    }
+
+    func testStoredPaintOptionTagsAndUnknownFieldsRejected() throws {
+        try withDefaults { defaults in
+            let id = #""3F2504E0-4F89-41D3-9A0C-0305E82C3301""#
+            let fields = #""size":10,"opacity":1,"pressureSize":true,"tones":"midtones","antiErase":false"#
+            let seeds: [(String, String, (PaintToolPresetError) -> Bool)] = [
+                ("unknown fade target", "\"fade\":{\"steps\":5,\"target\":\"white\"}",
+                 { if case .unknownFadeTarget(let tag) = $0 { return tag == "white" }; return false }),
+                ("extra key inside fade", "\"fade\":{\"steps\":5,\"target\":\"transparent\",\"soften\":true}",
+                 { if case .malformed = $0 { return true }; return false }),
+                ("unknown paint mode", "\"paintMode\":\"bogus\"",
+                 { if case .unknownPaintMode(let tag) = $0 { return tag == "bogus" }; return false }),
+                ("spacing out of range", "\"spacing\":11",
+                 { if case .outOfRange(let field, _, _) = $0 { return field == "settings.spacing" }; return false }),
+            ]
+            for (name, extra, check) in seeds {
+                let data = Data(("{\"schemaVersion\":2,\"presets\":[{\"id\":\(id),\"tool\":\"paintbrush\","
+                    + "\"name\":\"x\",\"settings\":{\(fields),\(extra)}}]}").utf8)
+                defaults.set(data, forKey: PaintToolPresetStore.presetsKey)
+                let store = PaintToolPresetStore(defaults: defaults)
+                assertPresetError({ _ = try store.load() }, check)
+                assertPresetError({ try store.create(tool: .paintbrush, name: "ok", settings: Self.settings()) }) {
+                    _ in true
+                }
+                XCTAssertEqual(store.storedData, data, "\(name): the rejected bytes stay untouched")
+            }
+        }
+    }
+
+    func testPaintOptionsRestrictedToTheirTools() throws {
+        try withDefaults { defaults in
+            let store = PaintToolPresetStore(defaults: defaults)
+            XCTAssertThrowsError(try store.create(tool: .eraser, name: "mode",
+                                                 settings: Self.settings(paintMode: Self.paintMode))) { error in
+                guard let presetError = error as? PaintToolPresetError else {
+                    return XCTFail("expected PaintToolPresetError, got \(error)")
+                }
+                XCTAssertEqual(presetError, PaintToolPresetError.optionNotForTool(option: "a blend mode", tool: .eraser))
+                XCTAssertEqual(presetError.description, "The Eraser tool cannot keep a blend mode.")
+            }
+            XCTAssertThrowsError(try store.create(tool: .clone, name: "fade",
+                                                 settings: Self.settings(fade: PaintToolPreset.Fade(steps: 5, target: .transparent)))) { error in
+                guard let presetError = error as? PaintToolPresetError else {
+                    return XCTFail("expected PaintToolPresetError, got \(error)")
+                }
+                XCTAssertEqual(presetError, PaintToolPresetError.optionNotForTool(option: "a fade", tool: .clone))
+                XCTAssertEqual(presetError.description, "The Clone tool cannot keep a fade.")
+            }
+            // Spacing applies to every paint tool, and the mode and fade tools
+            // accept their own options.
+            _ = try store.create(tool: .eraser, name: "spacing", settings: Self.settings(spacing: 0.4))
+            _ = try store.create(tool: .clone, name: "clone mode",
+                                 settings: Self.settings(paintMode: Self.paintMode))
+            _ = try store.create(tool: .airbrush, name: "brush fade",
+                                 settings: Self.settings(fade: PaintToolPreset.Fade(steps: 1, target: .transparent)))
+            XCTAssertEqual(try store.load().count, 3)
+        }
+    }
+
+    func testFutureSchemaVersionMessageNamesTheReadRange() throws {
+        try withDefaults { defaults in
+            let seed = Data(#"{"schemaVersion":3,"presets":[]}"#.utf8)
+            defaults.set(seed, forKey: PaintToolPresetStore.presetsKey)
+            let store = PaintToolPresetStore(defaults: defaults)
+            XCTAssertThrowsError(try store.load()) { error in
+                guard let presetError = error as? PaintToolPresetError else {
+                    return XCTFail("expected PaintToolPresetError, got \(error)")
+                }
+                XCTAssertEqual(presetError, PaintToolPresetError.unsupportedSchemaVersion(found: 3, supported: 2))
+                XCTAssertEqual(presetError.description,
+                               "The stored paint tool presets use schema version 3; "
+                                   + "this version reads schema versions 1 through 2. "
+                                   + "The stored data was left untouched.")
+            }
+            XCTAssertEqual(store.storedData, seed, "the rejected bytes stay untouched")
         }
     }
 
@@ -508,9 +711,9 @@ final class PaintToolPresetTests: XCTestCase {
                 ("missing schema version", Data(#"{"presets":[]}"#.utf8), {
                     if case .missingSchemaVersion = $0 { return true }; return false
                 }),
-                ("future schema version", Data(#"{"schemaVersion":2,"presets":[]}"#.utf8), {
+                ("future schema version", Data(#"{"schemaVersion":3,"presets":[]}"#.utf8), {
                     if case .unsupportedSchemaVersion(let found, let supported) = $0 {
-                        return found == 2 && supported == 1
+                        return found == 3 && supported == 2
                     }
                     return false
                 }),

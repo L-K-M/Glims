@@ -7,7 +7,7 @@ extension EngineSmokeTest {
     /// through real canvas events.
     static func exerciseChannelTransform(_ session: EngineSession, documents: DocumentList) throws {
         guard session.supportsChannelTransform else {
-            print("     channel transform: this engine cannot transform channels; skipped")
+            check(false, "channel transform: this engine can transform channels")
             return
         }
         let image = try session.newImage(width: 120, height: 80)
@@ -42,7 +42,10 @@ extension EngineSmokeTest {
             guard let event = NSEvent.mouseEvent(
                 with: type, location: controller.canvas.convert(CGPoint(x: point.x * scale, y: point.y * scale), to: nil),
                 modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                clickCount: 1, pressure: 1) else { return }
+                clickCount: 1, pressure: 1) else {
+                check(false, "channel transform: a \(type) mouse event can be made")
+                return
+            }
             switch type {
             case .leftMouseDown: controller.canvas.mouseDown(with: event)
             case .leftMouseDragged: controller.canvas.mouseDragged(with: event)

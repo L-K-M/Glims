@@ -696,6 +696,11 @@ glims_selection_stroke (GlimsEngine              *engine,
       glims_fail (error, NULL, "The brush settings are not valid.");
       return GLIMS_STATUS_INVALID_ARGUMENT;
     }
+  if (glims_brush_has_paint_options (&settings))
+    {
+      glims_fail (error, NULL, "Stroke Selection takes no blend mode, spacing, fade or pattern.");
+      return GLIMS_STATUS_INVALID_ARGUMENT;
+    }
 
   /* brush_id 0 keeps stroke_begin's convention: the stroke inherits the
    * shared user context's current brush. Any other handle is resolved

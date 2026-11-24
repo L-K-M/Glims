@@ -40,7 +40,10 @@ enum ResourceReferenceMigration {
         do {
             switch source.kind {
             case .brush, .gradient: try tools.migrateResourceIdentity(kind: source.kind, from: source.identity, to: identity)
-            case .pattern: _ = try patterns.migrateIdentity(from: source.identity, to: identity)
+            case .pattern:
+                _ = try patterns.migrateIdentity(from: source.identity, to: identity)
+                // Clone's Pattern button names the shared pattern.
+                tools.notifyChange()
             }
         } catch { failures.append("Saved resource choices could not be updated: \(error)") }
         return failures.isEmpty ? nil : failures.joined(separator: "\n")

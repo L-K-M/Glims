@@ -32,7 +32,10 @@
 #include "core/gimpdata.h"
 #include "core/gimpdatafactory.h"
 #include "core/gimpdrawable.h"
+#include "core/gimp-gradients.h"
+#include "core/gimpcurve.h"
 #include "core/gimpdynamics.h"
+#include "core/gimpdynamicsoutput.h"
 #include "core/gimpgrouplayer.h"
 #include "core/gimpimage.h"
 #include "core/gimpimage-symmetry.h"
@@ -41,6 +44,8 @@
 #include "core/gimplayer.h"
 #include "core/gimppaintinfo.h"
 #include "core/gimpsymmetry.h"
+
+#include "operations/layer-modes/gimp-layer-modes.h"
 
 #include "paint/gimpairbrush.h"
 #include "paint/gimppaintcore.h"
@@ -385,6 +390,23 @@ glims_set_tool_options (GimpPaintOptions         *options,
 
     case GLIMS_PAINT_CLONE:
     case GLIMS_PAINT_HEAL:
+      if (brush->tool == GLIMS_PAINT_CLONE && brush->clone_source == GLIMS_CLONE_FROM_PATTERN)
+        {
+          /* The pattern sits on the stroke's context (apply_paint_options).
+           * Registered alignment keeps the source offset at zero, so the
+           * tiles keep one phase of the drawable for every stroke; None
+           * with the source at 0,0 puts the pattern's center under the
+           * stroke's first point (app/paint/gimpsourcecore.c paint, and
+           * app/paint/gimpclone.c motion, which adds half a tile). */
+          g_object_set (object,
+                        "clone-type", GIMP_CLONE_PATTERN,
+                        "src-x",      0,
+                        "src-y",      0,
+                        "align-mode", brush->clone_pattern_aligned ? GIMP_SOURCE_ALIGN_REGISTERED
+                                                                   : GIMP_SOURCE_ALIGN_NO,
+                        NULL);
+          break;
+        }
       {
         GList *sources = g_list_prepend (NULL, source);
 
@@ -515,7 +537,23 @@ glims_read_brush (const GlimsBrushSettings *brush,
   if (brush->struct_size < offsetof (GlimsBrushSettings, record_eraser_background) +
                            sizeof (settings->record_eraser_background))
     settings->record_eraser_background = FALSE;
+  /* The paint options tail is read whole or not at all. */
+  if (brush->struct_size < GLIMS_BRUSH_PAINT_OPTIONS_END)
+    memset ((guint8 *) settings + offsetof (GlimsBrushSettings, paint_mode), 0,
+            sizeof (*settings) - offsetof (GlimsBrushSettings, paint_mode));
   settings->struct_size = sizeof (*settings);
+
+  if (! memchr (settings->paint_mode, '\0', sizeof settings->paint_mode) ||
+      (settings->spacing != 0 &&
+       ! (isfinite (settings->spacing) && settings->spacing >= 0.01 && settings->spacing <= 10)) ||
+      settings->fade_steps > 9999 || settings->fade_target > GLIMS_FADE_TO_BACKGROUND ||
+      settings->clone_source > GLIMS_CLONE_FROM_PATTERN)
+    return FALSE;
+  if (settings->fade_steps && settings->fade_target == GLIMS_FADE_TO_BACKGROUND &&
+      ! (isfinite (settings->fade_background_red) && settings->fade_background_red >= 0 && settings->fade_background_red <= 1 &&
+         isfinite (settings->fade_background_green) && settings->fade_background_green >= 0 && settings->fade_background_green <= 1 &&
+         isfinite (settings->fade_background_blue) && settings->fade_background_blue >= 0 && settings->fade_background_blue <= 1))
+    return FALSE;
 
   if (settings->tool == GLIMS_PAINT_ERASER && settings->has_eraser_background &&
       (!isfinite (settings->eraser_background_red) || settings->eraser_background_red < 0 || settings->eraser_background_red > 1 ||
@@ -523,6 +561,219 @@ glims_read_brush (const GlimsBrushSettings *brush,
        !isfinite (settings->eraser_background_blue) || settings->eraser_background_blue < 0 || settings->eraser_background_blue > 1))
     return FALSE;
   return settings->tool < G_N_ELEMENTS (paint_infos);
+}
+
+gboolean
+glims_brush_has_paint_options (const GlimsBrushSettings *settings)
+{
+  return (settings->paint_mode[0] && strcmp (settings->paint_mode, "normal") != 0) ||
+         settings->spacing != 0 || settings->fade_steps != 0 ||
+         settings->clone_source != GLIMS_CLONE_FROM_IMAGE;
+}
+
+/* The blend modes a stroke may paint in: the layer modes the app lists
+ * (non-legacy, app/operations/operations-enums.c), plus GIMP's two
+ * paint-only modes that change pixels by themselves. Erase, anti-erase,
+ * merge, split and the legacy modes are internal to GIMP's tools. */
+static const gchar *const paint_mode_nicks[] = {
+  "normal", "dissolve", "behind", "color-erase",
+  "lighten-only", "luma-lighten-only", "screen", "dodge", "addition",
+  "darken-only", "luma-darken-only", "multiply", "burn", "linear-burn",
+  "overlay", "softlight", "hardlight", "vivid-light", "pin-light", "linear-light", "hard-mix",
+  "difference", "exclusion", "subtract", "grain-extract", "grain-merge", "divide",
+  "hsv-hue", "hsv-saturation", "hsl-color", "hsv-value",
+  "lch-hue", "lch-chroma", "lch-color", "lch-lightness", "luminance"
+};
+
+static gboolean
+paint_mode_from_nick (const gchar   *nick,
+                      GimpLayerMode *mode)
+{
+  GEnumClass *modes;
+  GEnumValue *value = NULL;
+  gboolean    listed = FALSE;
+
+  *mode = GIMP_LAYER_MODE_NORMAL;
+  if (! nick[0])
+    return TRUE;
+  for (gsize i = 0; i < G_N_ELEMENTS (paint_mode_nicks); i++)
+    if (! strcmp (nick, paint_mode_nicks[i]))
+      listed = TRUE;
+  if (! listed)
+    return FALSE;
+
+  modes = g_type_class_ref (GIMP_TYPE_LAYER_MODE);
+  value = g_enum_get_value_by_nick (modes, nick);
+  if (value)
+    *mode = value->value;
+  g_type_class_unref (modes);
+  return value && (gimp_layer_mode_get_context (*mode) & GIMP_LAYER_MODE_CONTEXT_PAINT);
+}
+
+/* GIMP's paint cores honor the context's paint mode in the Paintbrush
+ * family and Clone (app/paint/gimppaintbrush.c get_paint_params,
+ * app/paint/gimpclone.c motion); Heal, Smudge, Convolve and Dodge/Burn
+ * paint in their own mode and Eraser forces erase. */
+static gboolean
+tool_takes_paint_mode (uint32_t tool)
+{
+  return tool == GLIMS_PAINT_PAINTBRUSH || tool == GLIMS_PAINT_PENCIL ||
+         tool == GLIMS_PAINT_AIRBRUSH || tool == GLIMS_PAINT_CLONE;
+}
+
+static gboolean
+tool_fades (uint32_t tool)
+{
+  return tool == GLIMS_PAINT_PAINTBRUSH || tool == GLIMS_PAINT_PENCIL ||
+         tool == GLIMS_PAINT_AIRBRUSH;
+}
+
+static GlimsStatus
+refuse (char        **error,
+        GlimsStatus   status,
+        const gchar  *message)
+{
+  glims_fail (error, NULL, message);
+  return status;
+}
+
+/* Refusals that need no engine state beyond the target; run before the
+ * stroke exists. */
+static GlimsStatus
+check_paint_options (const GlimsBrushSettings *brush,
+                     gboolean                  plain_target,
+                     GimpLayerMode            *mode,
+                     char                    **error)
+{
+  if (! paint_mode_from_nick (brush->paint_mode, mode))
+    return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT, "The engine has no such paint mode.");
+  if (! glims_brush_has_paint_options (brush))
+    return GLIMS_STATUS_OK;
+  if (! plain_target)
+    return refuse (error, GLIMS_STATUS_UNSUPPORTED,
+                   "Blend modes, spacing, fade and patterns do not paint in CMYK or multichannel images.");
+  if (*mode != GIMP_LAYER_MODE_NORMAL && ! tool_takes_paint_mode (brush->tool))
+    return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT,
+                   "Only Paintbrush, Pencil, Airbrush and Clone paint in a blend mode.");
+  if (brush->fade_steps && ! tool_fades (brush->tool))
+    return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT, "Only Paintbrush, Pencil and Airbrush fade.");
+  if (brush->clone_source == GLIMS_CLONE_FROM_PATTERN && brush->tool != GLIMS_PAINT_CLONE)
+    return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT, "Only Clone paints from a pattern.");
+  return GLIMS_STATUS_OK;
+}
+
+/* A private dynamics for the stroke's own context, never the shared
+ * factory object: the stock Pressure Size copy when pen pressure scales
+ * the size, otherwise an empty one, with one output listening to the
+ * fade alone through an identity curve. GIMP feeds that output the
+ * position along the fade (gimp_paint_options_get_fade in
+ * app/paint/gimppaintoptions.c): opacity falls to nothing, or the color
+ * walks the FG to BG (RGB) gradient and stays at the background. */
+static GlimsStatus
+apply_fade (Gimp                     *gimp,
+            GimpPaintOptions         *options,
+            const GlimsBrushSettings *brush,
+            char                    **error)
+{
+  GimpContext        *context = GIMP_CONTEXT (options);
+  GimpDynamics       *dynamics;
+  GimpDynamicsOutput *output;
+  GimpCurve          *curve = NULL;
+  gboolean            to_background = brush->fade_target == GLIMS_FADE_TO_BACKGROUND;
+  /* A dab every spacing x brush size pixels, and at least one pixel
+   * apart (gimp_brush_core_interpolate in app/paint/gimpbrushcore.c). */
+  gdouble             length = brush->fade_steps * MAX (options->brush_spacing * options->brush_size, 1.0);
+
+  if (! (length <= 32767.0))
+    return refuse (error, GLIMS_STATUS_INVALID_ARGUMENT,
+                   "The fade is longer than 32767 pixels. Use fewer steps, a smaller brush or closer spacing.");
+
+  if (gimp_paint_options_are_dynamics_enabled (options))
+    dynamics = GIMP_DYNAMICS (gimp_data_duplicate (GIMP_DATA (gimp_context_get_dynamics (context))));
+  else
+    dynamics = GIMP_DYNAMICS (gimp_dynamics_new (context, "Glims fade"));
+  output = dynamics ? gimp_dynamics_get_output (dynamics, to_background ? GIMP_DYNAMICS_OUTPUT_COLOR
+                                                                        : GIMP_DYNAMICS_OUTPUT_OPACITY) : NULL;
+  if (output)
+    g_object_get (output, "fade-curve", &curve, NULL);
+  if (! curve)
+    {
+      g_clear_object (&dynamics);
+      return glims_fail (error, NULL, "The fade could not be set up.");
+    }
+  gimp_curve_reset (curve, TRUE);
+  g_object_unref (curve);
+  /* Each engine has its own inputs (3.2.6 added "use-rotation"), and
+   * g_object_set stops at the first name a class lacks: switch off
+   * every input the class has, then the fade on. */
+  {
+    guint        count = 0;
+    GParamSpec **inputs = g_object_class_list_properties (G_OBJECT_GET_CLASS (output), &count);
+
+    for (guint i = 0; i < count; i++)
+      if (G_IS_PARAM_SPEC_BOOLEAN (inputs[i]) && g_str_has_prefix (inputs[i]->name, "use-") &&
+          (inputs[i]->flags & G_PARAM_WRITABLE))
+        g_object_set (output, inputs[i]->name, ! strcmp (inputs[i]->name, "use-fade"), NULL);
+    g_free (inputs);
+  }
+  if (! gimp_dynamics_output_is_enabled (output))
+    {
+      g_object_unref (dynamics);
+      return glims_fail (error, NULL, "The fade could not be set up.");
+    }
+  gimp_context_define_property (context, GIMP_CONTEXT_PROP_DYNAMICS, TRUE);
+  gimp_context_set_dynamics (context, dynamics);
+  g_object_unref (dynamics);
+  gimp_paint_options_enable_dynamics (options, TRUE);
+
+  /* Opacity runs 1 to 0 with the fade reversed; the gradient runs from
+   * the foreground (0) to the background (1) with it forward. */
+  g_object_set (options, "fade-length", length, "fade-unit", gimp_unit_pixel (),
+                "fade-reverse", ! to_background, "fade-repeat", GIMP_REPEAT_NONE, NULL);
+  if (to_background)
+    {
+      GeglColor *color = gegl_color_new (NULL);
+
+      gegl_color_set_rgba_with_space (color, brush->fade_background_red, brush->fade_background_green,
+                                     brush->fade_background_blue, 1.0, NULL);
+      gimp_context_define_property (context, GIMP_CONTEXT_PROP_BACKGROUND, TRUE);
+      gimp_context_set_background (context, color);
+      g_object_unref (color);
+      gimp_context_define_property (context, GIMP_CONTEXT_PROP_GRADIENT, TRUE);
+      gimp_context_set_gradient (context, gimp_gradients_get_fg_bg_rgb (gimp));
+      g_object_set (options, "gradient-reverse", FALSE,
+                    "gradient-blend-color-space", GIMP_GRADIENT_BLEND_RGB_PERCEPTUAL, NULL);
+    }
+  return GLIMS_STATUS_OK;
+}
+
+/* Mode, spacing, fade and the clone pattern on the stroke's own options
+ * (after glims_make_paint_options and glims_set_tool_options). */
+static GlimsStatus
+apply_paint_options (Gimp                     *gimp,
+                     GimpPaintOptions         *options,
+                     const GlimsBrushSettings *brush,
+                     GimpLayerMode             mode,
+                     GimpPattern              *pattern,
+                     char                    **error)
+{
+  GimpContext *context = GIMP_CONTEXT (options);
+
+  if (! glims_brush_has_paint_options (brush))
+    return GLIMS_STATUS_OK;
+  if (mode != GIMP_LAYER_MODE_NORMAL)
+    {
+      gimp_context_define_property (context, GIMP_CONTEXT_PROP_PAINT_MODE, TRUE);
+      gimp_context_set_paint_mode (context, mode);
+    }
+  if (brush->spacing > 0)
+    g_object_set (options, "brush-spacing", brush->spacing, NULL);
+  if (pattern)
+    {
+      gimp_context_define_property (context, GIMP_CONTEXT_PROP_PATTERN, TRUE);
+      gimp_context_set_pattern (context, pattern);
+    }
+  return brush->fade_steps ? apply_fade (gimp, options, brush, error) : GLIMS_STATUS_OK;
 }
 
 static void
@@ -565,7 +816,7 @@ capture_stroke_facts (GlimsEngine               *engine,
   if ((brush->tool != GLIMS_PAINT_PAINTBRUSH &&
        brush->tool != GLIMS_PAINT_PENCIL && brush->tool != GLIMS_PAINT_ERASER &&
        !(sponge && !ink)) ||
-      !recordable_first_point (first) ||
+      !recordable_first_point (first) || glims_brush_has_paint_options (brush) ||
       (ink ? (brush->tool == GLIMS_PAINT_ERASER || !GIMP_IS_CHANNEL (drawable)) :
              (G_OBJECT_TYPE (drawable) != GIMP_TYPE_LAYER ||
               !gimp_drawable_is_rgb (drawable) ||
@@ -767,6 +1018,8 @@ stroke_begin_common (GlimsEngine              *engine,
   GlimsStatus         status;
   uint32_t            locks = GLIMS_LOCK_PIXELS;
   GType               component_type = 0;
+  GimpLayerMode       paint_mode = GIMP_LAYER_MODE_NORMAL;
+  GimpPattern        *pattern = NULL;
 
   if (out)
     *out = 0;  /* a refused call leaves no stroke id behind */
@@ -813,13 +1066,21 @@ stroke_begin_common (GlimsEngine              *engine,
     }
   status = glims_check_sponge_target (drawable, brush, error);
   if (status != GLIMS_STATUS_OK) return status;
+  status = check_paint_options (brush, ! open->component_document && ! ink_target, &paint_mode, error);
+  if (status != GLIMS_STATUS_OK) return status;
 
   if (brush->tool == GLIMS_PAINT_ERASER && gimp_drawable_has_alpha (drawable))
     locks |= GLIMS_LOCK_ALPHA;
   status = glims_check_item_locks (GIMP_ITEM (drawable), locks, error);
   if (status != GLIMS_STATUS_OK) return status;
 
-  if (brush->tool == GLIMS_PAINT_CLONE || brush->tool == GLIMS_PAINT_HEAL)
+  if (brush->tool == GLIMS_PAINT_CLONE && brush->clone_source == GLIMS_CLONE_FROM_PATTERN)
+    {
+      status = glims_lookup_pattern (engine, (GlimsResourceID) brush->clone_pattern, &pattern);
+      if (status != GLIMS_STATUS_OK)
+        return refuse (error, status, "Choose an available pattern to clone from.");
+    }
+  else if (brush->tool == GLIMS_PAINT_CLONE || brush->tool == GLIMS_PAINT_HEAL)
     {
       GimpItem *item = gimp_item_get_by_id (engine->gimp, brush->source_drawable);
 
@@ -842,6 +1103,12 @@ stroke_begin_common (GlimsEngine              *engine,
   stroke->input_version = first_coords_v2 ? GLIMS_STROKE_INPUT_V2 : GLIMS_STROKE_INPUT_V1;
   stroke->last_time_ms = first->time_ms;
   glims_set_tool_options (stroke->options, brush, source);
+  status = apply_paint_options (engine->gimp, stroke->options, brush, paint_mode, pattern, error);
+  if (status != GLIMS_STATUS_OK)
+    {
+      glims_strokes_free (stroke);
+      return status;
+    }
   stroke->component_stroke = open->component_document;
   if (ink_target)
     {
