@@ -110,6 +110,12 @@ final class CropTargetTests: XCTestCase {
         XCTAssertEqual(target.height, "150")
         XCTAssertEqual(target.resolutionUnit, .pixelsPerInch)
         XCTAssertEqual(target.resolution, "144")
+        // One field cannot hold 300 x 150; leaving it empty keeps the
+        // image's own resolution instead of setting 300 x 300.
+        target.fillFromImage(width: 200, height: 150, resolution: .init(x: 300, y: 150))
+        XCTAssertEqual(target.resolution, "")
+        target.enabled = true
+        XCTAssertNil(target.resolved(imageResolution: .init(x: 300, y: 150))?.resolution)
     }
 
     func testCropResizeRoundTrips() throws {
@@ -137,9 +143,15 @@ final class CropTargetTests: XCTestCase {
         let encoded = String(decoding: try RecorderFileCodec.encode(value), as: UTF8.self)
         XCTAssertFalse(encoded.contains("xResolution"))
         XCTAssertEqual(try RecorderFileCodec.decode(Data(encoded.utf8)), value)
-        // One resolution without the other is refused.
+        // One resolution without the other is refused, reading and writing.
         XCTAssertThrowsError(try RecorderFileCodec.decode(bytes(document(
             #"{"tag":"cropResize","rect":{"x":0,"y":0,"width":10,"height":10},"width":10,"height":10,"xResolution":144,"interpolation":"cubic"}"#))))
+        let half = RecorderFileValue(
+            recordingID: value.recordingID, name: value.name, origin: value.origin, symbols: [],
+            records: [.init(ordinal: 0, outcome: .success(
+                .cropResize(rect: .init(x: 0, y: 0, width: 10, height: 10), width: 10, height: 10,
+                            xResolution: 144, yResolution: nil, interpolation: .cubic), .none))])
+        XCTAssertThrowsError(try RecorderFileCodec.encode(half))
     }
 
     func testVersionRules() throws {

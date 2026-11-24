@@ -618,7 +618,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// only while the general pasteboard still holds Glims's own copy, the
     /// system pasteboard too. Another application's copy is left alone.
     @objc func purgeClipboard(_ sender: Any?) {
-        confirmPurge([.clipboard], image: nil) { [weak self] in self?.purgeClipboardConfirmed() }
+        confirmPurge("Clipboard") { [weak self] in self?.purgeClipboardConfirmed() }
     }
 
     /// The confirmed work for Edit > Purge > Clipboard, without the alert.
@@ -632,7 +632,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// Edit > Purge > Histories: clears the undo and redo history of every
     /// open document.
     @objc func purgeHistories(_ sender: Any?) {
-        confirmPurge([.histories], image: nil) { [weak self] in self?.purgeHistoriesConfirmed() }
+        confirmPurge("Histories") { [weak self] in self?.purgeHistoriesConfirmed() }
     }
 
     /// The confirmed work for Edit > Purge > Histories, without the alert.
@@ -649,7 +649,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// confirmation was open.
     @objc func purgeAll(_ sender: Any?) {
         let targets: EngineSession.PurgeTargets = [.clipboard, .histories]
-        confirmPurge(targets, image: nil) { [weak self] in
+        confirmPurge("All") { [weak self] in
             guard let self, let session else { return }
             self.purgeAllConfirmed(targets, image: nil, session: session)
         }
@@ -687,10 +687,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
     /// Edit > Purge's confirmation. The sheet attaches to the key document
     /// window when there is one, so the command reads as document-modal;
     /// otherwise it is application-modal. Cancel changes nothing.
-    private func confirmPurge(_ targets: EngineSession.PurgeTargets, image: Int32?,
-                              work: @escaping () -> Void) {
+    private func confirmPurge(_ item: String, work: @escaping () -> Void) {
         let alert = NSAlert()
-        alert.messageText = "Purge?"
+        alert.messageText = "Purge \(item)?"
         alert.informativeText = "This cannot be undone."
         alert.addButton(withTitle: "Purge")
         alert.addButton(withTitle: "Cancel")
@@ -1560,7 +1559,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 return false
             }
             menuItem.toolTip = owned ? nil : "The clipboard does not hold a copy from Glims."
-            return !terminationRequested && owned
+            // A plug-in dialog is modal for the engine (glims_engine.h).
+            return !terminationRequested && !PlugInCommands.isRunning && owned
         case #selector(purgeHistories(_:)):
             let anyHistory = documents.contains {
                 $0.imageDocument.undoInfo.undoCount > 0 || $0.imageDocument.undoInfo.redoCount > 0
@@ -1574,7 +1574,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
                 return false
             }
             menuItem.toolTip = anyHistory ? nil : "No open image has an undo history to purge."
-            return !terminationRequested && anyHistory
+            return !terminationRequested && !PlugInCommands.isRunning && anyHistory
         case #selector(purgeAll(_:)):
             let anyHistory = documents.contains {
                 $0.imageDocument.undoInfo.undoCount > 0 || $0.imageDocument.undoInfo.redoCount > 0
@@ -1591,7 +1591,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuItemValidation
             }
             let enabled = !terminationRequested && (anyHistory || clipboard)
             menuItem.toolTip = enabled ? nil : "There is nothing to purge."
-            return enabled
+            return enabled && !PlugInCommands.isRunning
         case #selector(newDocument(_:)), #selector(openDocument(_:)), #selector(openRecentDocument(_:)):
             // A plug-in dialog is modal for the engine (glims_engine.h).
             return session != nil && !PlugInCommands.isRunning && !terminationRequested

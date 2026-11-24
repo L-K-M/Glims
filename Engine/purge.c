@@ -76,7 +76,7 @@ glims_edit_purge (GlimsEngine *engine,
   for (guint i = 0; i < history_images->len; i++)
     if (! purge_image_ready (engine, g_ptr_array_index (history_images, i)))
       {
-        if (error) *error = strdup ("Finish the stroke or close the filter dialog first.");
+        if (error) *error = strdup ("Finish the current operation before purging.");
         status = GLIMS_STATUS_BUSY;
         goto done;
       }

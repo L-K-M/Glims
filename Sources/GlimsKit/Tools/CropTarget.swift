@@ -51,9 +51,9 @@ struct CropTargetSettings: Codable, Equatable {
     func resolved(imageResolution: EngineSession.ImageResolution?) -> CropTarget? {
         guard enabled else { return nil }
         let target = enteredResolution
-        guard !resolution.trimmingCharacters(in: .whitespaces).isEmpty == (target != nil) else {
-            return nil
-        }
+        // Entered text must parse; only an empty field means "keep".
+        let hasResolutionText = !resolution.trimmingCharacters(in: .whitespaces).isEmpty
+        if hasResolutionText != (target != nil) { return nil }
         let conversionX = target?.x ?? imageResolution?.x ?? ImageSizeModel.defaultResolution
         let conversionY = target?.y ?? imageResolution?.y ?? ImageSizeModel.defaultResolution
         guard let widthValue = ImageSizeModel.number(width),
@@ -68,13 +68,20 @@ struct CropTargetSettings: Codable, Equatable {
 
     /// Front Image: fills width, height and resolution from an image of
     /// `width` x `height` pixels at `resolution` pixels per inch, in
-    /// pixels and pixels/inch.
+    /// pixels and pixels/inch. The field holds one resolution for both
+    /// axes, so a non-square resolution empties it: the crop then keeps
+    /// the image's own instead of replacing the vertical resolution with
+    /// the horizontal one.
     mutating func fillFromImage(width: Int, height: Int,
                                 resolution: EngineSession.ImageResolution?) {
         unit = .pixels
         self.width = String(width)
         self.height = String(height)
-        enteredResolution = resolution
+        if let resolution, resolution.x == resolution.y {
+            enteredResolution = resolution
+        } else {
+            enteredResolution = nil
+        }
     }
 }
 
