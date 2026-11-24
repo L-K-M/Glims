@@ -21,7 +21,20 @@ struct RecorderColor: Equatable, Sendable {
 /// Symbols belong to the recording; neither these values nor their ancestors
 /// contain native IDs. They do not establish identity when reopening an image.
 struct RecorderTargetDescription: Equatable {
-    enum Kind: Equatable { case pixel, group, text, link, vector, channel, quickMask }
+    enum Kind: Equatable {
+        case pixel, group, text, link, vector, channel, quickMask
+
+        /// The kinds that describe a layer (as opposed to a channel or the
+        /// Quick Mask); a produced symbol must have one of these. The switch
+        /// is exhaustive, so adding a non-layer kind stops compiling here
+        /// until it is explicitly classified.
+        var describesLayer: Bool {
+            switch self {
+            case .pixel, .group, .text, .link, .vector: return true
+            case .channel, .quickMask: return false
+            }
+        }
+    }
     struct Bounds: Equatable {
         let x: Double
         let y: Double
