@@ -27,6 +27,9 @@ enum SemanticImageCommand {
     private struct MissingLayerBinding: LocalizedError {
         var errorDescription: String? { "This recorded edit has no explicit layer binding." }
     }
+    private struct MissingPaintTargetBinding: LocalizedError {
+        var errorDescription: String? { "This recorded edit needs a captured paint target, not an explicit layer binding." }
+    }
 
     /// Replay refuses a producing command whose new layer the engine did
     /// not report, as recording does, so the row that lost it fails
@@ -471,7 +474,15 @@ enum SemanticImageCommand {
                 try session.channelCommand(.select, channel: 0, image: image)
                 try session.selectLayer(layer, image: image)
             }
+            // The new mask re-resolves at replay through its owner layer's
+            // symbol (masks are described by owner, not by channel id), so
+            // the returned mask id needs no produced-symbol remapping.
             _ = try session.addLayerMask(layer, image: image, source: source, edit: edit)
+        case .selectSimilar(_, _, let sampleMerged) where !sampleMerged:
+            // The image-only path samples the active drawable; without
+            // Sample Merged the record must bind a paint target, whose
+            // replay route keeps that target active, not a bare layer.
+            throw MissingPaintTargetBinding()
         default:
             return try applyCreating(session: session, image: image)
         }

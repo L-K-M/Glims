@@ -42,6 +42,11 @@ struct RecorderFileValue: Equatable {
 
     /// Symbols naming layers that recorded commands create. Replay binds
     /// them itself, so they are outputs and never matchable inputs.
+    /// Symbols naming layers that recorded commands create. Replay binds
+    /// them itself, so they are outputs and never matchable inputs. Caveat:
+    /// removing the row that produced a symbol drops it from this set while
+    /// rows still bound to it remain, so the orphaned symbol becomes
+    /// matchable as an input even though no row will ever create that layer.
     var producedSymbols: Set<UUID> { Set(records.compactMap(\.produces)) }
 
     /// Return an edited copy without losing the original target descriptions.
