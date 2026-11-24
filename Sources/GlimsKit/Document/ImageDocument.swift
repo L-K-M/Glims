@@ -6016,6 +6016,10 @@ final class ImageDocument {
 
     /// App-owned adoption keeps separate copy results counted through Quit.
     var labCopyHandler: ((ImageDocument, EngineSession.LabCopyDestination) -> Void)?
+    /// Same owner contract for the CMYK copy: destination, precision and the
+    /// CMYK profile bytes the CMYK direction requires (nil for RGB output).
+    var cmykCopyHandler: ((ImageDocument, EngineSession.CmykCopyDestination,
+                           EngineSession.ColorComponent, Data?) -> Void)?
 
     /// Image > Blend Channels' NEW_IMAGE result adoption entry point, wired
     /// by whoever owns document lifetime; nil without one.
@@ -6072,6 +6076,56 @@ final class ImageDocument {
                          admission: { self.labCopyRefusal(destination) == nil && (self.storage.layout == .layeredLab) == layered },
                          rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
             let result = Result { try session.convertedLabCopy(image: image, destination: destination, layered: layered) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func cmykCopyRefusal(_ destination: EngineSession.CmykCopyDestination) -> String? {
+        guard session.supportsCmykCopy else {
+            return "This image engine cannot create converted CMYK copies."
+        }
+        guard acceptsEdits, !targetCommandIsPending, !strokeIsActive else {
+            return "Finish the current edit before creating a converted copy."
+        }
+        guard quickMaskState?.enabled != true, !floatingState.isActive else {
+            return "Anchor the floating selection and leave Quick Mask first."
+        }
+        switch destination {
+        case .cmyk:
+            guard colorInfo.mode == .rgb, [.u8, .u16, .float].contains(colorInfo.component) else {
+                return "Choose an 8-bit, 16-bit or 32-bit RGB document."
+            }
+        case .rgb:
+            guard colorInfo.mode == .cmyk else { return "Choose a CMYK document." }
+        }
+        return nil
+    }
+
+    func newCmykCopy(_ destination: EngineSession.CmykCopyDestination,
+                     component: EngineSession.ColorComponent, profile: Data?) {
+        guard let handler = cmykCopyHandler else { return }
+        guard !refuseWhileEditingUnavailable() else { return }
+        if let reason = cmykCopyRefusal(destination) { onError?(reason); return }
+        handler(self, destination, component, profile)
+    }
+
+    /// The source stays unchanged; close drains the accepted read before freeing
+    /// its image. The app owns either adopting or closing every successful result.
+    func convertedCmykCopy(_ destination: EngineSession.CmykCopyDestination,
+                           component: EngineSession.ColorComponent,
+                           profile: Data?,
+                           completion: @escaping @MainActor (Result<Int32, Error>) -> Void) {
+        if let reason = cmykCopyRefusal(destination) {
+            return completion(.failure(RecorderReplayError(message: reason)))
+        }
+        endPendingUserEdits()
+        if let reason = cmykCopyRefusal(destination) {
+            return completion(.failure(RecorderReplayError(message: reason)))
+        }
+        enqueueExclusive(effect: .readsPixels, label: "Creating a converted copy",
+                         admission: { self.cmykCopyRefusal(destination) == nil },
+                         rejected: { completion(.failure(DocumentError.busy)) }) { [session, image] in
+            let result = Result { try session.convertedCmykCopy(image: image, destination: destination, component: component, profile: profile) }
             DispatchQueue.main.async { completion(result) }
         }
     }

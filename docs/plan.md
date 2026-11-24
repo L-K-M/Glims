@@ -7439,3 +7439,26 @@ smoke case (`GLIMS_SMOKE_CASE=blend-image`) drives both commands through
 the real menus and panels: Multiply over a second 8x8 document within one
 level, the named undo step, Undo restoring the exact bytes, a red/green
 Normal blend creating the Alpha 1 channel, and a new grayscale document.
+
+### CMYK converted copies (2026-11-23)
+
+Image > Create CMYK Copy… (Create RGB Copy… on a CMYK document) adds the
+same pixel-only converted-copy model slot 197 built for Lab. Facade slot
+265 `image_convert_cmyk_copy` takes a size-checked settings prefix with a
+destination mode, an output precision (U8/U16/FLOAT) and a required CMYK
+profile for CMYK output (must be NULL for RGB output). `Engine/cmyk-copy.c`
+reads the merged visible canvas full-frame regardless of the selection,
+converts linear sRGB through a private relative-colorimetric
+black-point-compensated LittleCMS transform with its own context
+(`glims_cmyk_dest_transform_new`/`_pixels` in `Engine/cmyk-transform.c`),
+and writes four native ink planes through `glims_component_image_prepare`;
+CMYK to RGB reuses `glims_cmyk_transform_new`/`_pixels` on the document's
+stored profile and writes one opaque RGB layer (FLOAT keeps linear sRGB,
+U8/U16 encode to standard sRGB through babl). Ink intensity keeps the
+native convention 0 = full ink, 1 = paper. The RGB-source admission helpers
+moved to `Engine/copy-admission.h` shared with `lab-copy.c`: standard or
+linear sRGB only, opaque canvas, no linked layers. The confirmation sheet
+offers installed CMYK profiles (`PsdCmykProfileCatalog`) and a precision
+popup defaulting to the source class; the window title flips by document
+mode. App adoption mirrors the Lab copy owner path. Verification is in
+`docs/cmyk-converted-copy.md`.

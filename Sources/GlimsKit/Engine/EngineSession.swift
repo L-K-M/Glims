@@ -815,6 +815,23 @@ final class EngineSession: @unchecked Sendable {
         return api.image_convert_lab_copy != nil && supportsLabCreation && supportsLabAxes && supportsLabFill
     }
 
+    enum CmykCopyDestination {
+        case cmyk, rgb
+
+        fileprivate var facadeMode: UInt32 {
+            switch self {
+            case .cmyk: return GLIMS_COLOR_MODE_CMYK.rawValue
+            case .rgb: return GLIMS_COLOR_MODE_RGB.rawValue
+            }
+        }
+    }
+
+    var supportsCmykCopy: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_convert_cmyk_copy),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_convert_cmyk_copy) else { return false }
+        return api.image_convert_cmyk_copy != nil
+    }
+
     var supportsNativeCMYKPSDImport: Bool {
         guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_import_native_cmyk_psd),
               Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_import_native_cmyk_psd) else { return false }
@@ -1911,6 +1928,59 @@ final class EngineSession: @unchecked Sendable {
         var result: Int32 = 0
         var error: UnsafeMutablePointer<CChar>?
         let status = convert(engine, image, &settings, &result, &error)
+        // Ownership transfers only on success. A malformed failure result may
+        // name an existing document, so only the producer can clean up a failed
+        // conversion safely; the caller must not close an arbitrary handle.
+        try check(status, error)
+        guard result > 0, result != image else {
+            throw EngineError(status: Int32(GLIMS_STATUS_FAILED.rawValue),
+                              message: "The converted copy has no independent image identity.")
+        }
+        return result
+    }
+
+    /// An independent, unsaved converted CMYK or RGB image. The CMYK direction
+    /// requires a CMYK destination profile; the RGB direction takes none.
+    /// The caller owns the returned image and must close it if document
+    /// adoption fails. This call can take time and must run off the main thread.
+    func convertedCmykCopy(image: Int32, destination: CmykCopyDestination,
+                           component: ColorComponent, profile: Data?) throws -> Int32 {
+        guard supportsCmykCopy, let convert = api.image_convert_cmyk_copy else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support converted CMYK copies.")
+        }
+        guard image > 0 else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose a valid image to convert.")
+        }
+        guard [.u8, .u16, .float].contains(component) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Choose an 8-bit, 16-bit or 32-bit float copy precision.")
+        }
+        if destination == .cmyk {
+            guard let profile, !profile.isEmpty else {
+                throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                                  message: "Choose a CMYK profile for the CMYK copy.")
+            }
+        }
+        var settings = GlimsCmykCopySettings()
+        settings.struct_size = UInt32(MemoryLayout<GlimsCmykCopySettings>.size)
+        settings.destination_mode = destination.facadeMode
+        settings.output_component = component.rawValue
+        var result: Int32 = 0
+        var error: UnsafeMutablePointer<CChar>?
+        let status: GlimsStatus
+        if let profile {
+            status = profile.withUnsafeBytes { bytes in
+                settings.profile_icc = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self)
+                settings.profile_length = bytes.count
+                return convert(engine, image, &settings, &result, &error)
+            }
+        } else {
+            settings.profile_icc = nil
+            settings.profile_length = 0
+            status = convert(engine, image, &settings, &result, &error)
+        }
         // Ownership transfers only on success. A malformed failure result may
         // name an existing document, so only the producer can clean up a failed
         // conversion safely; the caller must not close an arbitrary handle.

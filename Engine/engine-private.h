@@ -308,6 +308,10 @@ GlimsStatus glims_image_convert_lab_copy (GlimsEngine *engine, GlimsImageID imag
 GlimsStatus glims_image_convert_layered_lab_copy (GlimsEngine *engine, GlimsImageID image,
                                                  const GlimsLabCopySettings *settings,
                                                  GlimsImageID *result, char **error);
+/* cmyk-copy.c: publishes only fully converted, independent images. */
+GlimsStatus glims_image_convert_cmyk_copy (GlimsEngine *engine, GlimsImageID image,
+                                           const GlimsCmykCopySettings *settings,
+                                           GlimsImageID *result, char **error);
 
 /* history.c */
 GlimsStatus glims_image_duplicate_merged (GlimsEngine *e, GlimsImageID image, const char *name,

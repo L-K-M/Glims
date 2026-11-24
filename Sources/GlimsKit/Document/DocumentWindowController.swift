@@ -975,6 +975,118 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// True while Create CMYK Copy… is reading installed profiles off the
+    /// main thread; a second invocation during that window does nothing.
+    private var cmykCopyProfilesLoading = false
+
+    /// Image ▸ Create CMYK Copy… (Create RGB Copy… on a CMYK document): an
+    /// NSAlert confirmation carrying a profile popup for the CMYK direction
+    /// and a precision popup for both, mirroring the Lab copy sheet. The
+    /// CMYK direction reads installed profiles through the catalog loader,
+    /// off the main thread as New Image and Export do.
+    @objc func createConvertedCmykCopy(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
+              imageDocument.cmykCopyHandler != nil, !cmykCopyProfilesLoading else { return }
+        let destination: EngineSession.CmykCopyDestination = imageDocument.colorInfo.mode == .cmyk ? .rgb : .cmyk
+        if let reason = imageDocument.cmykCopyRefusal(destination) { showStatusError(reason); return }
+        guard destination == .cmyk else {
+            presentConvertedCmykCopyConfirmation(for: destination, profiles: [])
+            return
+        }
+
+        cmykCopyProfilesLoading = true
+        let loader = LivePsdCmykProfileCatalogLoader()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try loader.loadCatalog() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cmykCopyProfilesLoading = false
+                // Recheck on the main actor: the window may have closed or
+                // the document stopped accepting the command meanwhile, and
+                // then nothing is presented at all.
+                guard let window = self.window, window.attachedSheet == nil,
+                      !self.closeStarted, !self.previewBusy,
+                      self.imageDocument.cmykCopyHandler != nil,
+                      !self.imageDocument.isClosing else { return }
+                guard self.imageDocument.cmykCopyRefusal(destination) == nil else { return }
+                switch result {
+                case .success(let profiles):
+                    if profiles.isEmpty {
+                        self.showStatusError(PsdCmykProfileCatalog.emptyMessage)
+                        return
+                    }
+                    self.presentConvertedCmykCopyConfirmation(for: destination, profiles: profiles)
+                case .failure:
+                    self.showStatusError("\(PsdCmykProfileCatalog.failedPrefix) \(PsdCmykProfileCatalog.installMessage)")
+                }
+            }
+        }
+    }
+
+    /// The converted-copy sheet's accessory: an installed-profile popup
+    /// for CMYK output (`profileNames` non-nil) plus a precision popup
+    /// defaulting to the source's precision class. Internal for the
+    /// layout tests.
+    static func convertedCopyAccessory(profileNames: [String]?,
+                                       precision: EngineSession.ColorComponent)
+        -> (view: NSView, profilePopup: NSPopUpButton?, precisionPopup: NSPopUpButton) {
+        let accessory = NSStackView()
+        accessory.orientation = .vertical
+        accessory.alignment = .leading
+        accessory.spacing = 8
+        accessory.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)
+        var profilePopup: NSPopUpButton?
+        if let profileNames {
+            let popup = NSPopUpButton()
+            popup.addItems(withTitles: profileNames)
+            let row = NSStackView(views: [NSTextField(labelWithString: "CMYK profile"), popup])
+            row.spacing = 8
+            accessory.addArrangedSubview(row)
+            profilePopup = popup
+        }
+        let precisionPopup = NSPopUpButton()
+        precisionPopup.addItems(withTitles: ["8-bit", "16-bit", "32-bit float"])
+        precisionPopup.selectItem(at: precision == .u8 ? 0 : precision == .u16 ? 1 : 2)
+        let precisionRow = NSStackView(views: [NSTextField(labelWithString: "Precision"), precisionPopup])
+        precisionRow.spacing = 8
+        accessory.addArrangedSubview(precisionRow)
+        // NSAlert keeps the accessory at its own frame size, so without
+        // this the popups lay out zero-sized and the sheet shows none.
+        accessory.setFrameSize(accessory.fittingSize)
+        return (accessory, profilePopup, precisionPopup)
+    }
+
+    /// Builds and shows the converted-copy confirmation for a destination,
+    /// carrying the loaded CMYK profiles for the CMYK direction.
+    private func presentConvertedCmykCopyConfirmation(for destination: EngineSession.CmykCopyDestination,
+                                                     profiles: [PsdCmykProfileCatalogEntry]) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy else { return }
+        let alert = NSAlert()
+        alert.messageText = destination == .cmyk ? "Create CMYK Copy" : "Create RGB Copy"
+        alert.informativeText = destination == .cmyk
+            ? "Creates a separate CMYK document from the full visible canvas using the chosen profile, relative colorimetric with black-point compensation. The original keeps its layers and edits. The canvas must be opaque and use sRGB; other metadata is not copied."
+            : "Creates a separate, opaque RGB document from all four ink channels using the document's profile, relative colorimetric with black-point compensation. The full canvas is copied regardless of the selection. The original remains open; other metadata is not copied."
+
+        let form = Self.convertedCopyAccessory(profileNames: destination == .cmyk
+                                                   ? profiles.map { $0.profile.displayName } : nil,
+                                               precision: imageDocument.colorInfo.component)
+        let profilePopup = form.profilePopup
+        let precisionPopup = form.precisionPopup
+        alert.accessoryView = form.view
+
+        alert.addButton(withTitle: "Create Copy")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn,
+                  !self.closeStarted, !self.previewBusy, !self.imageDocument.isClosing else { return }
+            let component: EngineSession.ColorComponent = precisionPopup.indexOfSelectedItem == 0
+                ? .u8 : precisionPopup.indexOfSelectedItem == 1 ? .u16 : .float
+            let index = profilePopup?.indexOfSelectedItem ?? -1
+            let profile = index >= 0 && index < profiles.count ? profiles[index].profile.iccData : nil
+            self.imageDocument.newCmykCopy(destination, component: component, profile: profile)
+        }
+    }
+
 
     // MARK: Guides
 
@@ -3077,6 +3189,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 (operation == "gimp:curves" && imageDocument.session.supportsInkCurveSnapshots)
         case #selector(exportDocument(_:)), #selector(repeatExport(_:)):
             return supportsNativeCmykPSD
+        case #selector(createConvertedCmykCopy(_:)):
+            return imageDocument.session.supportsCmykCopy
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
              #selector(revertDocument(_:)), #selector(newSnapshot(_:)), #selector(duplicateImage(_:)),
              #selector(channelAttributesMenu(_:)), #selector(imageInformation(_:)),
@@ -3133,6 +3247,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        // The converted-copy title names the destination, so set it before
+        // any capability or state gate can return early.
+        if menuItem.action == #selector(createConvertedCmykCopy(_:)) {
+            let destination: EngineSession.CmykCopyDestination = imageDocument.colorInfo.mode == .cmyk ? .rgb : .cmyk
+            menuItem.title = destination == .cmyk ? "Create CMYK Copy…" : "Create RGB Copy…"
+        }
         if imageDocument.storage.readOnly || imageDocument.storage.layout == .layeredLab {
             switch menuItem.action {
             case #selector(bringLayerToFront(_:)), #selector(bringLayerForward(_:)),
@@ -3732,6 +3852,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let reason = imageDocument.labCopyRefusal(destination)
             menuItem.toolTip = reason
             return reason == nil && imageDocument.labCopyHandler != nil && !closeStarted && !editingBlocked && !previewBusy
+        case #selector(createConvertedCmykCopy(_:)):
+            let destination: EngineSession.CmykCopyDestination = imageDocument.colorInfo.mode == .cmyk ? .rgb : .cmyk
+            let reason = imageDocument.cmykCopyRefusal(destination)
+            menuItem.toolTip = reason
+            return reason == nil && imageDocument.cmykCopyHandler != nil && !closeStarted && !editingBlocked && !previewBusy
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy

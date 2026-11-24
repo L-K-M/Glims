@@ -140,6 +140,15 @@ copy combines visible layers and keeps transparency; the original keeps
 its layers and edits. An older engine may not offer this command for
 layered Lab documents.
 
+For an RGB image, choose Image > Create CMYK Copy… to make a separate
+CMYK document from the full visible canvas using an installed CMYK profile
+and a chosen precision. The canvas must be opaque and use sRGB. For a CMYK
+image the command becomes Create RGB Copy… and uses the document's own
+profile. It converts all four ink channels, including hidden ones, because
+channel visibility only changes the view. Both directions run relative
+colorimetric with black-point compensation, regardless of the selection.
+Your original keeps its layers and edits; other metadata is not copied.
+
 # Editing and the Clipboard
 
 Edit > Undo (Command-Z) and Redo (Shift-Command-Z) step through the

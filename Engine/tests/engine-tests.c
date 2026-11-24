@@ -17456,6 +17456,230 @@ test_calculations (void)
   api->image_close (engine, b); b = 0;
 }
 
+/* Slot 265: converted CMYK copies. A 2x2 RGB fixture converts to native
+ * CMYK at U8 and FLOAT with fresh identities and empty history, the source
+ * keeps every pixel and its undo depth, and the CMYK copy converts back to
+ * RGB within quantization tolerance. Uniform sources verify the plane
+ * convention through the copy's own preview: white stays white, black
+ * stays near black, and a cyan field keeps red as its weakest channel. */
+static uint8_t *
+cmyk_test_profile (size_t *out_len)
+{
+  const char *path = getenv ("GLIMS_TEST_CMYK_PROFILE");
+  FILE       *file;
+  long        size;
+  uint8_t    *icc = NULL;
+
+  if (! path || ! *path)
+    path = "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc";
+  file = fopen (path, "rb");
+  if (! file) return NULL;
+  fseek (file, 0, SEEK_END);
+  size = ftell (file);
+  fseek (file, 0, SEEK_SET);
+  if (size >= 128 && size <= 4L * 1024 * 1024)
+    {
+      icc = malloc ((size_t) size);
+      if (icc && fread (icc, 1, (size_t) size, file) == (size_t) size)
+        *out_len = (size_t) size;
+      else
+        { free (icc); icc = NULL; }
+    }
+  fclose (file);
+  return icc;
+}
+
+static void
+test_cmyk_copy (const char *work)
+{
+  (void) work;
+  if ((size_t) api->struct_size <
+        offsetof (GlimsEngineAPI, image_convert_cmyk_copy) + sizeof api->image_convert_cmyk_copy ||
+      ! api->image_convert_cmyk_copy)
+    {
+      CHECK (false, "the adapter exports slot 265 image_convert_cmyk_copy");
+      return;
+    }
+
+  size_t icc_len = 0;
+  uint8_t *icc = cmyk_test_profile (&icc_len);
+  CHECK (icc != NULL && icc_len >= 128,
+         "a bounded CMYK profile is available (GLIMS_TEST_CMYK_PROFILE or Generic CMYK)");
+  if (! icc) return;
+
+  uint8_t px[2 * 2 * 4] = { 255, 255, 255, 255, 0, 0, 0, 255, 0, 200, 200, 255, 64, 128, 192, 255 };
+  GlimsImageID src = 0, copy = 0, back = 0, fcopy = 0;
+  char *error = NULL;
+  GlimsCmykCopySettings req = { .struct_size = sizeof req,
+                                .destination_mode = GLIMS_COLOR_MODE_CMYK,
+                                .output_component = GLIMS_COLOR_COMPONENT_U8,
+                                .profile_icc = icc, .profile_length = icc_len };
+
+  CHECK (api->image_from_pixels (engine, 2, 2, px, sizeof px, &src, NULL) == GLIMS_STATUS_OK && src,
+         "the 2x2 opaque RGB fixture exists");
+  if (! src) { free (icc); return; }
+  int32_t undo_before = undo_depth (src);
+  uint8_t before[4][4];
+  for (int i = 0; i < 4; i++)
+    render_pixel (src, i % 2, i / 2, before[i]);
+
+  /* Refusals change nothing and publish no image. */
+  GlimsImageID out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, src, NULL, &out, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && out == 0 && error, "NULL settings refuse");
+  api->free_string (error); error = NULL;
+  GlimsCmykCopySettings bad = req;
+  bad.struct_size = sizeof bad - 1;
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, src, &bad, &out, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && out == 0, "a short settings prefix refuses");
+  api->free_string (error); error = NULL;
+  bad = req; bad.profile_icc = NULL; bad.profile_length = 0;
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, src, &bad, &out, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && out == 0, "a missing CMYK profile is INVALID_ARGUMENT");
+  api->free_string (error); error = NULL;
+  bad = req; bad.destination_mode = GLIMS_COLOR_MODE_RGB;
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, src, &bad, &out, &error) ==
+         GLIMS_STATUS_INVALID_ARGUMENT && out == 0, "a profile on the RGB direction is INVALID_ARGUMENT");
+  api->free_string (error); error = NULL;
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, 999999, &req, &out, &error) ==
+         GLIMS_STATUS_NOT_FOUND && out == 0, "an unknown image is NOT_FOUND");
+  api->free_string (error); error = NULL;
+
+  /* Grayscale and transparency refuse UNSUPPORTED. */
+  GlimsImageID gray = 0, alpha_img = 0;
+  api->image_new (engine, 2, 2, &gray, NULL);
+  api->image_convert_mode (engine, gray, GLIMS_COLOR_MODE_GRAYSCALE, NULL);
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, gray, &req, &out, &error) ==
+         GLIMS_STATUS_UNSUPPORTED && out == 0, "grayscale refuses UNSUPPORTED");
+  api->free_string (error); error = NULL;
+  uint8_t tpx[4] = { 255, 0, 0, 128 };
+  api->image_from_pixels (engine, 1, 1, tpx, sizeof tpx, &alpha_img, NULL);
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, alpha_img, &req, &out, &error) ==
+         GLIMS_STATUS_UNSUPPORTED && out == 0, "a transparent canvas refuses UNSUPPORTED");
+  api->free_string (error); error = NULL;
+  CHECK (undo_depth (src) == undo_before, "every refusal adds no undo step to the source");
+
+  /* U8 conversion. */
+  GlimsStatus st = api->image_convert_cmyk_copy (engine, src, &req, &copy, &error);
+  CHECK (st == GLIMS_STATUS_OK && copy && copy != src, "RGB -> CMYK returns an owned copy (%d)", st);
+  if (st != GLIMS_STATUS_OK) printf ("     convert: %s\n", error ? error : "");
+  api->free_string (error); error = NULL;
+  GlimsImageInfo info = { 0 };
+  GlimsColorInfo cinfo = { 0 };
+  CHECK (api->image_info (engine, copy, &info) == GLIMS_STATUS_OK &&
+         info.width == 2 && info.height == 2, "the copy keeps the source dimensions");
+  double xr = 0, yr = 0, sxr = 0, syr = 0;
+  api->image_resolution (engine, copy, &xr, &yr, NULL);
+  api->image_resolution (engine, src, &sxr, &syr, NULL);
+  CHECK (xr == sxr && yr == syr, "the copy keeps the source resolution");
+  CHECK (api->image_color_info (engine, copy, &cinfo) == GLIMS_STATUS_OK &&
+         cinfo.mode == GLIMS_COLOR_MODE_CMYK && cinfo.component == GLIMS_COLOR_COMPONENT_U8,
+         "the copy is native CMYK at U8");
+  CHECK (undo_depth (copy) == 0, "the copy starts with empty history");
+  GlimsChannelInfo chans[8]; int32_t nch = 0;
+  CHECK (api->image_channels (engine, copy, chans, 8, &nch) == GLIMS_STATUS_OK && nch == 4,
+         "the copy carries four ink planes (%d)", nch);
+
+  /* Source pixels and history are untouched. */
+  CHECK (undo_depth (src) == undo_before, "conversion adds no undo step to the source");
+  {
+    bool same = true;
+    for (int i = 0; i < 4; i++)
+      {
+        uint8_t now[4];
+        render_pixel (src, i % 2, i / 2, now);
+        if (memcmp (now, before[i], 4) != 0) same = false;
+      }
+    CHECK (same, "source pixels are unchanged by the conversion");
+  }
+  out = 12345;
+  CHECK (api->image_convert_cmyk_copy (engine, copy, &req, &out, &error) ==
+         GLIMS_STATUS_UNSUPPORTED && out == 0, "a CMYK to CMYK copy is UNSUPPORTED");
+  api->free_string (error); error = NULL;
+
+  /* FLOAT conversion too. */
+  bad = req; bad.output_component = GLIMS_COLOR_COMPONENT_FLOAT;
+  CHECK (api->image_convert_cmyk_copy (engine, src, &bad, &fcopy, &error) ==
+         GLIMS_STATUS_OK && fcopy && fcopy != copy, "a FLOAT CMYK copy succeeds independently");
+  api->free_string (error); error = NULL;
+
+  /* CMYK -> RGB round trip on the U8 copy. */
+  GlimsCmykCopySettings back_req = { .struct_size = sizeof back_req,
+                                     .destination_mode = GLIMS_COLOR_MODE_RGB,
+                                     .output_component = GLIMS_COLOR_COMPONENT_FLOAT };
+  CHECK (api->image_convert_cmyk_copy (engine, copy, &back_req, &back, &error) ==
+         GLIMS_STATUS_OK && back && back != copy && back != src,
+         "the CMYK copy converts back to RGB");
+  api->free_string (error); error = NULL;
+  CHECK (api->image_color_info (engine, back, &cinfo) == GLIMS_STATUS_OK &&
+         cinfo.mode == GLIMS_COLOR_MODE_RGB && cinfo.component == GLIMS_COLOR_COMPONENT_FLOAT,
+         "the round trip is FLOAT linear RGB");
+  {
+    /* White and black survive within the profile's paper and black point.
+     * The two saturated pixels are outside Generic CMYK's gamut and are
+     * clipped by the relative colorimetric intent, so only their channel
+     * order is stable. */
+    uint8_t rt[4][4];
+    for (int i = 0; i < 4; i++)
+      render_pixel (back, i % 2, i / 2, rt[i]);
+    CHECK (rt[0][3] == 255 && rt[0][0] >= 250 && rt[0][1] >= 250 && rt[0][2] >= 250,
+           "white round-trips to white (%u,%u,%u)", rt[0][0], rt[0][1], rt[0][2]);
+    CHECK (rt[1][3] == 255 && rt[1][0] <= 16 && rt[1][1] <= 16 && rt[1][2] <= 16,
+           "black round-trips to near black (%u,%u,%u)", rt[1][0], rt[1][1], rt[1][2]);
+    CHECK (rt[2][3] == 255 && rt[2][0] + 60 < rt[2][1] && rt[2][0] + 60 < rt[2][2],
+           "cyan keeps red as its weakest channel (%u,%u,%u)", rt[2][0], rt[2][1], rt[2][2]);
+    CHECK (rt[3][3] == 255 && rt[3][0] < rt[3][1] && rt[3][1] < rt[3][2],
+           "a blue-gray keeps its channel order (%u,%u,%u)", rt[3][0], rt[3][1], rt[3][2]);
+  }
+
+  /* Uniform sources, judged through each CMYK copy's own preview. */
+  uint8_t white[4] = { 255, 255, 255, 255 }, black[4] = { 0, 0, 0, 255 }, cyan[4] = { 0, 200, 200, 255 };
+  const uint8_t *uniforms[3] = { white, black, cyan };
+  for (int u = 0; u < 3; u++)
+    {
+      GlimsImageID usrc = 0, ucopy = 0;
+      GlimsChannelInfo uc[8];
+      int32_t un = 0;
+      uint8_t view[4];
+
+      api->image_from_pixels (engine, 1, 1, (uint8_t *) uniforms[u], 4, &usrc, NULL);
+      if (api->image_convert_cmyk_copy (engine, usrc, &req, &ucopy, NULL) != GLIMS_STATUS_OK)
+        {
+          CHECK (false, "a uniform %s source converts", u == 0 ? "white" : u == 1 ? "black" : "cyan");
+          if (usrc) api->image_close (engine, usrc);
+          continue;
+        }
+      api->image_channels (engine, ucopy, uc, 8, &un);
+      render_pixel (ucopy, 0, 0, view);
+      if (u == 0)
+        CHECK (un == 4 && strcmp (uc[0].name, "Cyan") == 0 && strcmp (uc[3].name, "Black") == 0 &&
+               view[0] >= 250 && view[1] >= 250 && view[2] >= 250,
+               "white becomes paper in C/M/Y/K order (%u,%u,%u)", view[0], view[1], view[2]);
+      else if (u == 1)
+        CHECK (view[0] <= 16 && view[1] <= 16 && view[2] <= 16,
+               "black becomes full ink (%u,%u,%u)", view[0], view[1], view[2]);
+      else
+        CHECK (view[0] + 60 < view[1] && view[0] + 60 < view[2],
+               "cyan becomes a cyan ink mix (%u,%u,%u)", view[0], view[1], view[2]);
+      api->image_close (engine, usrc);
+      api->image_close (engine, ucopy);
+    }
+
+  if (back) api->image_close (engine, back);
+  if (fcopy) api->image_close (engine, fcopy);
+  if (copy) api->image_close (engine, copy);
+  if (gray) api->image_close (engine, gray);
+  if (alpha_img) api->image_close (engine, alpha_img);
+  api->image_close (engine, src);
+  free (icc);
+}
+
 /* Slot 241: Duplicate with Merged Layers Only. A transparent base, a
  * half-opaque red layer moved partly off the canvas and a hidden blue
  * layer: the copy is one canvas-sized layer with the visible composite
@@ -19572,6 +19796,7 @@ main (int argc, char **argv)
   test_replace_color ();
   test_apply_image ();
   test_calculations ();
+  test_cmyk_copy (argv[2]);
   test_image_duplicate_merged ();
   test_image_rotate_arbitrary ();
   test_image_align_layers ();

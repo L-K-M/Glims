@@ -148,6 +148,7 @@ enum MainMenu {
             item("Duplicate…", #selector(DocumentWindowController.duplicateImage(_:))),
             item("New Snapshot", #selector(DocumentWindowController.newSnapshot(_:))),
             item("Create Lab Copy…", #selector(DocumentWindowController.createConvertedLabCopy(_:))),
+            item("Create CMYK Copy…", #selector(DocumentWindowController.createConvertedCmykCopy(_:))),
             .separator(),
             submenu("Channels", [
                 item("Channel Attributes…", #selector(DocumentWindowController.channelAttributesMenu(_:))),

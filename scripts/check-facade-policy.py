@@ -43,7 +43,8 @@ def check(root=ROOT):
                       'image_change_lab_layer_properties', 'image_lab_layer_snapshot'})
     component.add('image_fill_lab')
     component.update({'image_levels_lab', 'image_lab_snapshot_levels', 'image_lab_snapshot_apply_levels'})
-    component.update({'image_convert_lab_copy', 'image_convert_layered_lab_copy'})
+    component.update({'image_convert_lab_copy', 'image_convert_layered_lab_copy',
+                      'image_convert_cmyk_copy'})
     component.add('stroke_begin_lab')
     component.update({'stroke_begin_lab_layer', 'stroke_begin_lab_layer_pressure',
                       'stroke_begin_lab_layer_with_capture_facts', 'stroke_begin_lab_layer_empty_selection'})
