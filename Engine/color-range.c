@@ -369,7 +369,7 @@ glims_color_range_preview (GlimsEngine                 *engine,
                             &selection, &selection_buffer);
   if (status != GLIMS_STATUS_OK)
     {
-      status = glims_fail (error, NULL, "The selection could not be read.");
+      glims_fail (error, NULL, "The selection could not be read.");
       goto out;
     }
 
