@@ -7462,3 +7462,29 @@ offers installed CMYK profiles (`PsdCmykProfileCatalog`) and a precision
 popup defaulting to the source class; the window title flips by document
 mode. App adoption mirrors the Lab copy owner path. Verification is in
 `docs/cmyk-converted-copy.md`.
+
+### Image > Trap (2026-11-23)
+
+Image > Trap… spreads lighter cyan, magenta and yellow coverages under
+darker neighbours so small plate misregistration leaves no paper gaps.
+Facade slot 266 `image_trap` takes a size-checked `GlimsTrapSettings`
+prefix with width 1 ... 16 whole pixels. `Engine/trap-math.c` holds the
+pure darkness/disk kernel: D comes from (1-c)(1-k), (1-m)(1-k),
+(1-y)(1-k) with Rec. 709 luma, and only neighbours below D - 1/512 count
+as lighter; each of the C, M and Y planes keeps the greater of its own
+coverage and the greatest among them, K never changes, and an active
+selection blends per pixel while the neighbourhood still reads
+unselected pixels. U8/U16 round half up and FLOAT keeps exact values.
+Non-CMYK documents, pixel-locked C/M/Y planes, a floating selection,
+Quick Mask and a busy engine refuse; a changed result is one native Undo
+group named "Trap" and a byte-identical result adds none.
+`Engine/trap-cmyk.c` stages bounded copy-on-write candidates under the
+busy gate, `scripts/test-trap-cmyk.py` compiles the independent fixture
+against a producer, and the `trap` smoke case (`GLIMS_SMOKE_CASE=trap`)
+drives the real menu sheet on a painted yellow/cyan CMYK document,
+checks the Y-plane spread next to the boundary and its absence five
+pixels away, the single Trap Undo and its restore, and an RGB refusal.
+Checked locally on GIMP 3.2.8 before merging: the conformance suite with
+the native Trap oracle and its seam build, the kernel harness, the Swift
+tests and the smoke case. Not checked: other engine sets for this
+revision and a printed proof.

@@ -95,6 +95,12 @@ final class EngineSession: @unchecked Sendable {
         return api.image_edit_ink != nil
     }
 
+    var supportsTrap: Bool {
+        guard let offset = MemoryLayout<GlimsEngineAPI>.offset(of: \.image_trap),
+              Int(api.struct_size) >= offset + MemoryLayout.size(ofValue: api.image_trap) else { return false }
+        return api.image_trap != nil
+    }
+
     /// Scalar ink Levels settings (0 = full ink, 1 = paper); no RGB/TRC properties.
     struct InkLevelsSettings: Equatable {
         var value: LevelsSettings.Channel = .init()
@@ -1006,6 +1012,23 @@ final class EngineSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         try check(edit(engine, image, channel, settings.operation.rawValue,
                        settings.intensity, settings.opacity, &error), error)
+    }
+
+    /// Image ▸ Trap: spreads the lighter C, M and Y ink under darker
+    /// neighbours as one native Undo step, on a CMYK document only.
+    func trap(image: Int32, width: Int32) throws {
+        guard supportsTrap, let trap = api.image_trap else {
+            throw EngineError(status: Int32(GLIMS_STATUS_UNSUPPORTED.rawValue),
+                              message: "This image engine does not support Trap.")
+        }
+        guard image > 0, (1...16).contains(width) else {
+            throw EngineError(status: Int32(GLIMS_STATUS_INVALID_ARGUMENT.rawValue),
+                              message: "Trap width must be a whole number of pixels from 1 to 16.")
+        }
+        var settings = GlimsTrapSettings(struct_size: UInt32(MemoryLayout<GlimsTrapSettings>.size),
+                                         width: width)
+        var error: UnsafeMutablePointer<CChar>?
+        try check(trap(engine, image, &settings, &error), error)
     }
 
     private func inkLevels(_ settings: InkLevelsSettings) -> GlimsInkLevelsSettings {

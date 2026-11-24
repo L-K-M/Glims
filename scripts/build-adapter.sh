@@ -174,6 +174,12 @@ if [[ "$MODE" == test ]]; then
     python3 "$ROOT/scripts/test-apply-image-math.py" || status=$?
   cat "$OUT/apply-image-math-test.log"
   (( status == 0 )) || die "the Apply Image math tests failed (status $status)"
+  # The Trap kernel is pure C too.
+  status=0
+  run_with_timeout 120 "$OUT/trap-math-test.log" \
+    python3 "$ROOT/scripts/test-trap-math.py" || status=$?
+  cat "$OUT/trap-math-test.log"
+  (( status == 0 )) || die "the Trap math tests failed (status $status)"
   # Each native runner below starts the engine cold with a fresh home, so
   # GIMP queries every plug-in before the first check. On a loaded Mac that
   # start alone has taken about three minutes; the checks take seconds.
@@ -256,6 +262,21 @@ if [[ "$MODE" == test ]]; then
     python3 "$ROOT/scripts/test-guides-clear.py" --producer "$OUT" --timeout 180 || status=$?
   cat "$OUT/guides-clear-test.log"
   (( status == 0 )) || die "the Clear Guides tests failed (status $status)"
+  # Trap's native oracle needs a CMYK profile; every Mac ships this one.
+  TRAP_PROFILE="/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc"
+  if [[ -f "$TRAP_PROFILE" ]]; then
+    status=0
+    # Above the runner's own worst case, two variants of 120 s compile,
+    # 120 s link and 400 s run: its children run in their own sessions, so
+    # only its inner limits can stop them.
+    run_with_timeout 1500 "$OUT/trap-cmyk-test.log" \
+      python3 "$ROOT/scripts/test-trap-cmyk.py" --producer "$OUT" \
+        --cmyk-profile "$TRAP_PROFILE" --timeout 400 || status=$?
+    cat "$OUT/trap-cmyk-test.log"
+    (( status == 0 )) || die "the Trap CMYK tests failed (status $status)"
+  else
+    echo "Trap CMYK tests skipped: no Generic CMYK Profile.icc"
+  fi
 fi
 
 if [[ "$MODE" == perf ]]; then

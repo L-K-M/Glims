@@ -957,6 +957,11 @@ enum EngineSmokeTest {
                 print(failures == 0 ? "PASSED (CMYK Copy)" : "FAILED: \(failures) failure(s)")
                 return failures == 0 ? 0 : 1
             }
+            if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "trap" {
+                try exerciseTrap(session, work: work, documents: documents)
+                print(failures == 0 ? "PASSED (Trap)" : "FAILED: \(failures) failure(s)")
+                return failures == 0 ? 0 : 1
+            }
             if ProcessInfo.processInfo.environment["GLIMS_SMOKE_CASE"] == "purge" {
                 try exercisePurge(session, documents: documents)
                 print(failures == 0 ? "PASSED (Purge)" : "FAILED: \(failures) failure(s)")
@@ -1376,6 +1381,7 @@ enum EngineSmokeTest {
             try exerciseClipping(session, work: work, documents: documents)
             try exerciseReplaceColor(session, work: work, documents: documents)
             try exerciseCmykCopy(session, work: work, documents: documents)
+            try exerciseTrap(session, work: work, documents: documents)
             try exercisePurge(session, documents: documents)
             try exerciseAlignLayers(session, documents: documents)
             try exerciseSmoothSelection(session, documents: documents)

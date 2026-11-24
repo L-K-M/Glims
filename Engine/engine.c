@@ -5638,6 +5638,33 @@ api_image_convert_cmyk_copy (GlimsEngine *engine, GlimsImageID image,
 
 typedef struct {
   GlimsImageID image;
+  GlimsTrapSettings settings;
+  char **error;
+} TrapArgs;
+
+static GlimsStatus
+image_trap_on_engine (GlimsEngine *engine, gpointer data)
+{
+  TrapArgs *a = data;
+  return glims_image_trap (engine, a->image, &a->settings, a->error);
+}
+
+static GlimsStatus
+api_image_trap (GlimsEngine *engine, GlimsImageID image,
+                const GlimsTrapSettings *settings, char **error)
+{
+  if (error) *error = NULL;
+  if (!settings || settings->struct_size < sizeof *settings)
+    return GLIMS_STATUS_INVALID_ARGUMENT;
+  TrapArgs a = { .image = image, .error = error };
+  memcpy (&a.settings, settings, sizeof a.settings);
+  return glims_facade_call (engine, GLIMS_FACADE_OP_image_trap,
+                            (GlimsFacadeTarget) { GLIMS_FACADE_TARGET_IMAGE, image, { 0, 0 } },
+                            image_trap_on_engine, &a, error);
+}
+
+typedef struct {
+  GlimsImageID image;
   GlimsLabCurvesSettings settings;
   char **error;
 } LabCurvesArgs;

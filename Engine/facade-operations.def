@@ -265,3 +265,4 @@ GLIMS_FACADE(image_apply_image_preview, api_image_apply_image_preview, IMAGE, OR
 GLIMS_FACADE(image_calculations, api_image_calculations, IMAGE, ORDINARY)
 GLIMS_FACADE(image_calculations_preview, api_image_calculations_preview, IMAGE, ORDINARY)
 GLIMS_FACADE(image_convert_cmyk_copy, api_image_convert_cmyk_copy, IMAGE, COMPONENT)
+GLIMS_FACADE(image_trap, api_image_trap, IMAGE, COMPONENT)

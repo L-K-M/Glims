@@ -48,4 +48,10 @@ final class AlertAccessoryLayoutTests: XCTestCase {
         XCTAssertEqual(form.precisionPopup.indexOfSelectedItem, 2)
         assertLaidOut([form.precisionPopup], in: form.view)
     }
+
+    func testTrapWidthFieldIsVisible() {
+        let form = DocumentWindowController.trapWidthAccessory()
+        XCTAssertEqual(form.field.stringValue, "1")
+        assertLaidOut([form.field], in: form.view)
+    }
 }

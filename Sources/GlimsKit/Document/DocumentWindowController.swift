@@ -17,6 +17,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var textSourceAlert: NSAlert?
     private var batchRasterizeAlert: NSAlert?
     private var batchRestoreAlert: NSAlert?
+    private var trapWidthGate: IntegerFieldGate?
     private(set) var softProofController: SoftProofController?
     private var savedSoftProof: CanvasSoftProof?
     private let preferences: EditorPreferences
@@ -1084,6 +1085,47 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let index = profilePopup?.indexOfSelectedItem ?? -1
             let profile = index >= 0 && index < profiles.count ? profiles[index].profile.iccData : nil
             self.imageDocument.newCmykCopy(destination, component: component, profile: profile)
+        }
+    }
+
+    /// The Trap sheet's accessory: the width field and its unit label.
+    /// Internal for the layout tests.
+    static func trapWidthAccessory() -> (view: NSView, field: NSTextField) {
+        let field = NSTextField(string: "1")
+        field.setAccessibilityLabel("Width")
+        // A stack view sizes its views from constraints, and NSAlert keeps
+        // the accessory at its own frame size: without both, the field
+        // lays out zero-wide and the sheet shows no field.
+        field.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        let row = NSStackView(views: [field, NSTextField(labelWithString: "pixels")])
+        row.spacing = 6
+        row.setFrameSize(row.fittingSize)
+        return (row, field)
+    }
+
+    /// Image ▸ Trap…: asks for the trap width (1 ... 16 whole pixels),
+    /// then runs the CMYK trap as one undo step. OK is enabled only while
+    /// the field holds a whole number inside the range.
+    @objc func trap(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy else { return }
+        if let reason = imageDocument.trapRefusal() { showStatusError(reason); return }
+        let alert = NSAlert()
+        alert.messageText = "Trap"
+        alert.informativeText = "Spreads the lighter cyan, magenta and yellow inks under darker neighboring ink to hide small plate misregistration. Black never changes."
+        let (row, field) = Self.trapWidthAccessory()
+        alert.accessoryView = row
+        alert.addButton(withTitle: "Trap")
+        alert.addButton(withTitle: "Cancel")
+        let gate = IntegerFieldGate(field: field, button: alert.buttons[0], range: 1...16)
+        trapWidthGate = gate
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.trapWidthGate = nil
+            guard response == .alertFirstButtonReturn,
+                  !self.closeStarted, !self.imageDocument.isClosing,
+                  let width = Int32(field.stringValue), (1...16).contains(width) else { return }
+            self.imageDocument.trap(width: width)
         }
     }
 
@@ -3191,6 +3233,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return supportsNativeCmykPSD
         case #selector(createConvertedCmykCopy(_:)):
             return imageDocument.session.supportsCmykCopy
+        case #selector(trap(_:)):
+            return imageDocument.session.supportsTrap
         case #selector(saveDocument(_:)), #selector(saveDocumentAs(_:)), #selector(saveDocumentCopy(_:)),
              #selector(revertDocument(_:)), #selector(newSnapshot(_:)), #selector(duplicateImage(_:)),
              #selector(channelAttributesMenu(_:)), #selector(imageInformation(_:)),
@@ -3323,6 +3367,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             case #selector(fill(_:)), #selector(deleteBackward(_:)), #selector(clearPixels(_:)),
                  #selector(runNativeFilter(_:)):
                 let reason = imageDocument.inkEditRefusal(channel: imageDocument.activeChannel ?? 0)
+                menuItem.toolTip = reason
+                return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
+            case #selector(trap(_:)):
+                let reason = imageDocument.trapRefusal()
                 menuItem.toolTip = reason
                 return !closeStarted && !previewBusy && window?.attachedSheet == nil && reason == nil
             default: break
@@ -3857,6 +3905,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let reason = imageDocument.cmykCopyRefusal(destination)
             menuItem.toolTip = reason
             return reason == nil && imageDocument.cmykCopyHandler != nil && !closeStarted && !editingBlocked && !previewBusy
+        case #selector(trap(_:)):
+            let reason = imageDocument.trapRefusal()
+            menuItem.toolTip = reason
+            return reason == nil && !closeStarted && !editingBlocked && !previewBusy
         case #selector(newSnapshot(_:)):
             // Without an app to adopt the copy there is nothing to run.
             return imageDocument.snapshotHandler != nil && !editingBlocked && !previewBusy
@@ -4653,6 +4705,34 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 self.finishCloseRequest(true)
             }
         }
+    }
+}
+
+/// Keeps an alert's confirm button enabled only while its field holds a
+/// whole number inside an inclusive range. The owning controller retains
+/// the gate for the sheet's lifetime; the field's delegate is weak.
+@MainActor
+private final class IntegerFieldGate: NSObject, NSTextFieldDelegate {
+    private let field: NSTextField
+    private let button: NSButton
+    private let range: ClosedRange<Int32>
+
+    init(field: NSTextField, button: NSButton, range: ClosedRange<Int32>) {
+        self.field = field
+        self.button = button
+        self.range = range
+        super.init()
+        field.delegate = self
+        update()
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as? NSTextField === field else { return }
+        update()
+    }
+
+    private func update() {
+        button.isEnabled = Int32(field.stringValue).map(range.contains) == true
     }
 }
 
