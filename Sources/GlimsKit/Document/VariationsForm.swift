@@ -39,7 +39,6 @@ final class VariationsForm {
     private var actions: [ObjectIdentifier: ThumbnailAction] = [:]
     private var previews: [ObjectIdentifier: EngineSession.VariationsPreview] = [:]
     private weak var document: ImageDocument?
-    private var image: Int32 = 0
     private var layer: Int32 = 0
     private var generation = 0
     private let thumbnailSize: Int32 = 96
@@ -128,7 +127,6 @@ final class VariationsForm {
     /// Starts rendering the thumbnails for one layer of `document`.
     func attach(to document: ImageDocument, layer: Int32) {
         self.document = document
-        self.image = document.image
         self.layer = layer
         reloadThumbnails()
     }
@@ -205,7 +203,7 @@ final class VariationsForm {
 
     private func request(_ button: NSButton, settings: EngineSession.VariationsSettings,
                          generation expected: Int) {
-        document?.variationsPreview(image, layer: layer, settings: settings,
+        document?.variationsPreview(layer: layer, settings: settings,
                                     maxSize: thumbnailSize) { [weak self] preview in
             guard let self, expected == self.generation else { return }
             guard let preview else { return }

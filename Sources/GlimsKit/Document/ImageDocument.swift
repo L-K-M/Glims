@@ -4911,7 +4911,7 @@ final class ImageDocument {
     /// Renders one Variations thumbnail off the main thread, through the
     /// document's counted read queue, and delivers it on the main thread.
     /// A refused read delivers nil; the form drops stale generations itself.
-    func variationsPreview(_ image: Int32, layer: Int32,
+    func variationsPreview(layer: Int32,
                            settings: EngineSession.VariationsSettings, maxSize: Int32,
                            deliver: @escaping @MainActor (EngineSession.VariationsPreview?) -> Void) {
         let accepted = run(effect: .readsPixels) { session, documentImage in

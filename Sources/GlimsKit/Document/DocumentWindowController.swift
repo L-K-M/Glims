@@ -2044,6 +2044,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// sheet applies one queued command on OK only.
     @objc func variations(_ sender: Any?) {
         guard let window, window.attachedSheet == nil, !closeStarted, !previewBusy,
+              !imageDocument.isClosing, !imageDocument.isSavingForClose,
               let layer = imageDocument.activeLayer else { return }
         if let reason = imageDocument.variationsRefusal() {
             statusBar.message = reason
