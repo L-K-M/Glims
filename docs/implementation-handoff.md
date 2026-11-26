@@ -10,7 +10,8 @@ to these heads or that public distribution has been qualified.
 The last fetched GitHub main is `4a56b5ef646115ef414f0120f1414da60b9bbb89`.
 The original `Glims` checkout is stale and has a pre-existing modified
 `.gitignore`; preserve it. This handoff lives in the separate local branch
-`docs/glims-implementation-handoff` and has not been pushed. The persistent
+`docs/glims-implementation-handoff`; on 2026-11-26 the nightly janitor
+recovered that branch and preserved this document on main. The persistent
 local journal and logs are in `../.glims-work-notes/continuation.md` relative
 to the workspace's Glims worktrees. Read the latest entries: older entries are
 chronological and may be superseded. Existing worktrees and unmerged branches
